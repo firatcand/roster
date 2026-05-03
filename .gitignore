@@ -1,0 +1,47 @@
+# Secrets and credentials
+.env
+.env.local
+*.pem
+*.key
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Cron logs (committed example: keep .gitkeep, ignore actual logs)
+logs/cron/*.log
+
+# Large binary brand assets (use external storage)
+projects/*/brand/assets/
+*.mp4
+*.mov
+*.psd
+*.ai
+*.fig
+
+# Temp / scratch
+**/scratch/
+**/tmp/
+**/.cache/
+
+# Python / Node if you add scripts
+__pycache__/
+*.pyc
+node_modules/
+
+# Local Claude Code permission overrides
+.claude/settings.local.json
+
+# Operation logs and run/feedback bodies — preserve directories with .gitkeep
+chief-of-staff/logs/2*/
+dreamer/logs/2*/
+*/log/runs/2*/
+*/log/feedback/2*/
+
+# Dreamer pending candidates (regenerated each run)
+dreamer/pending/*
+!dreamer/pending/.gitkeep
+

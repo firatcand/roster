@@ -1,0 +1,22 @@
+You are running the dreamer agent for nightly reinforcement.
+
+Read dreamer/agent.md for your role and steps.
+
+Specifically:
+1. Read dreamer/state.md to find last_processed_through timestamp
+2. Walk every agent's <function>/<agent>/projects/<project>/log/runs/<YYYY-MM>/ and log/feedback/<YYYY-MM>/ for material newer than the cutoff
+3. Spawn pattern-detector subagent on the batch
+4. For each pattern that meets threshold or extends an existing lesson, spawn lesson-drafter
+5. For lessons validated in 2+ projects, spawn promotion-arbiter
+6. Post all lesson candidates to Slack #admin as threaded messages, one per candidate
+7. Apply approvals received since the last run (check Slack thread states)
+8. Update dreamer/state.md with new last_processed_through timestamp
+9. Write your run output to dreamer/logs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md
+
+If no new material to process, log a no-op run and exit cleanly.
+
+Approval channel: slack (always for cron).
+
+Tools: file reads (broad), Slack MCP for posting and reading approval state.
+
+Lessons you write get source: dreamer in frontmatter. Respect human-written lessons (source: human) — don't override without HITL approval.

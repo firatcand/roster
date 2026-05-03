@@ -1,0 +1,22 @@
+# Functions registry — single source of truth for function categories.
+# Edit only via chief-of-staff `create-function` operation when possible.
+# Manual edits OK; keep slugs lowercase kebab-case, alphanumeric + hyphens.
+#
+# Fields:
+#   slug         — folder name under repo root (must match an existing folder)
+#   description  — one-line summary, used in stub READMEs and audit reports
+#   has_expert   — true if this function has an EXPERT.md the audit should expect
+
+functions:
+  - slug: gtm
+    description: Go-to-market — outreach, lead gen, sales, marketing
+    has_expert: true
+  - slug: product
+    description: Product work — research, specs, roadmap, user feedback
+    has_expert: true
+  - slug: design
+    description: Design — brand, visual, content production assets
+    has_expert: true
+  - slug: ops
+    description: Operations — internal automations, reporting, admin
+    has_expert: false
