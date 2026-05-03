@@ -1,12 +1,14 @@
 # Roster
 
-> A scaffold for building durable, multi-agent systems on top of Claude Code.
+> A multi-agent Claude Code framework for running role-based agents across GTM, product, design, and ops — with plans, project substrate, and a reinforcement loop that compounds learning.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## What is this?
 
-Roster is an opinionated scaffold for organizing AI agents around real-world functions (GTM, product, design, ops) — the way humans organize work. It separates **substrate** (the strategic context: brand voice, ICPs, messaging) from **artifacts** (the daily output: emails, posts, components), and provides a reinforcement loop that improves agents over time.
+Roster is a multi-agent framework for Claude Code that organizes role-based agents around real-world functions — GTM, product, design, ops — the way humans organize work. It separates **substrate** (strategic context: brand voice, ICPs, messaging) from **artifacts** (daily output: emails, posts, components), and provides a reinforcement loop that compounds learning over time.
+
+Each function houses role-based agents (sdr, ux-designer, graphic-designer, etc.). Each agent runs named **plans** — YAML workflow recipes that are deterministic, auditable, and schedule-friendly. Strategic and judgment-heavy work goes through function-level **experts** instead.
 
 If you're a solo founder or small team building automation that needs to:
 - Scale across multiple projects without losing context
