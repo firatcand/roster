@@ -1,8 +1,9 @@
+![banner]()
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 # Roster
 
 > A multi-agent Claude Code framework for running role-based agents across GTM, product, design, and ops — with plans, project substrate, and a reinforcement loop that compounds learning.
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## What is this?
 
