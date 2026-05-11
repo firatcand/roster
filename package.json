@@ -49,6 +49,9 @@
   "bugs": {
     "url": "https://github.com/firatcand/roster/issues"
   },
+  "dependencies": {
+    "chalk": "^5.3.0"
+  },
   "devDependencies": {
     "@types/node": "^22.17.2",
     "tsdown": "^0.22.0",
