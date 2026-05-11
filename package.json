@@ -1,0 +1,57 @@
+{
+  "name": "@firatcand/roster",
+  "version": "0.1.0",
+  "description": "A CLI that scaffolds a structured multi-agent workspace on top of AI coding tools (Claude Code, Codex CLI, Cursor, Gemini)",
+  "type": "module",
+  "bin": {
+    "roster": "bin/roster.js"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "skills/",
+    "agents/",
+    "templates/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": "^22.18.0 || >=24.0.0"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsdown --watch"
+  },
+  "keywords": [
+    "claude-code",
+    "claude",
+    "codex",
+    "cursor",
+    "gemini",
+    "ai-agent",
+    "agentic",
+    "skills",
+    "subagents",
+    "agent-team",
+    "operations",
+    "gtm",
+    "linear",
+    "slack"
+  ],
+  "author": "Firat Can Basarir",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/firatcand/roster.git"
+  },
+  "homepage": "https://github.com/firatcand/roster#readme",
+  "bugs": {
+    "url": "https://github.com/firatcand/roster/issues"
+  },
+  "devDependencies": {
+    "@types/node": "^22.17.2",
+    "tsdown": "^0.22.0",
+    "typescript": "^5.6.0"
+  }
+}

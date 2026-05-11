@@ -45,3 +45,11 @@ dreamer/logs/2*/
 dreamer/pending/*
 !dreamer/pending/.gitkeep
 
+# Forge planning artifacts — internal framework design, not shipped
+spec/
+plans/
+
+# Build artifacts — produced by tsdown; included in npm pack via files allowlist
+/bin/
+/dist/
+
