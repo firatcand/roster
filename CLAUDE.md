@@ -1,135 +1,78 @@
-# Agent-Team Universal Context
+# roster — CLI Contributor Guide
 
-Loaded at every Claude Code session in this repo. Defines cross-cutting behavior. Agent-scoped context lives in `<function>/<agent>/CLAUDE.md` (when present). Project context lives in `projects/<project>/CLAUDE.md`.
+This repo builds and ships **`@firatcand/roster`**, an npm CLI that installs/scaffolds the agent-team pattern across Claude Code, Codex CLI, Cursor, and Gemini. See `README.md` for the user-facing pitch; this file is for contributors working on the CLI itself.
 
-## Identity
-
-You are operating inside the agent-team repo for the user. Repo organizes agents by function (`gtm/`, `product/`, `design/`, `ops/`). Each agent owns its logic, tools, and per-project instances. Project-level guidelines live separately under `projects/<project>/guidelines/`.
-
-## Path discovery
-
-When you start in a path like `gtm/sdr/projects/_demo/`, Claude Code's `.claude/` discovery walks UP and merges:
-- `gtm/sdr/.claude/` — agent-scoped skills, plugins, settings
-- `agent-team/.claude/` — universal skills, plugins, settings
-
-`.mcp.json` is discovered the same way. Agent-scoped MCPs at the agent level. Universal MCPs at root.
-
-## Reading order when an agent is invoked
-
-1. `<function>/<agent>/agent.md` — orchestrator contract
-2. The instance: `<function>/<agent>/projects/<project>/config/default.yaml`
-3. Project context: `projects/<project>/CLAUDE.md`, `state.md`
-4. Project guidelines: all files under `projects/<project>/guidelines/` referenced by agent.md or this session
-5. Project-scoped lessons: `<function>/<agent>/projects/<project>/playbook/`
-6. Global lessons: `<function>/<agent>/playbook/`
-7. Recent runs: last ~10 in `<function>/<agent>/projects/<project>/log/runs/`
-
-## Lesson conflict resolution
-
-Project-scoped lessons override global on conflict.
-
-## Session continuity
-
-- At session start, read `projects/<project>/state.md` if present.
-- When the user runs `/save-state` (or asks to save state), update `projects/<project>/state.md`. Five lines max.
-- Don't auto-save. Wait for explicit instruction.
-
-## Running an agent
-
-- Agent's `agent.md` is the contract — inputs, steps, tools, outputs.
-- Spawn subagents from `<function>/<agent>/subagents/` via Claude Code's Task tool.
-- Outputs go to `<function>/<agent>/projects/<project>/log/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md`.
-- After a run, prompt the user for feedback or note the path: `log/feedback/<YYYY-MM>/<same-filename>.md`.
-
-## HITL routing
-
-- Triggered in this session by a human → ask the user inline.
-- Triggered by cron (no interactive caller) → post to the agent's Slack channel:
-    - Function agents (anything under `<function>/<agent>/`) → `#<function>` (e.g., `#gtm`, `#design`).
-    - Cross-cutting agents (`dreamer/`, `chief-of-staff/`) → `#admin`.
-  The actual channel name comes from the per-function env var: `SLACK_HITL_CHANNEL_<FUNCTION>` (uppercase function name) or `SLACK_HITL_CHANNEL_ADMIN` for cross-cutting agents.
-- Workflow `approval_channel: auto` enables this routing automatically.
-
-## Lesson handling
-
-- Never write directly to a `playbook/` folder during a normal agent run. Only the dreamer writes there.
-- If you observe a candidate lesson during a run, log it inline in the run output under `## Candidate Lessons` for the dreamer to pick up later.
-- The user MAY directly write a lesson to a `playbook/` folder by hand — they will mark it `source: human, scope: global` (in agent's `playbook/`) or `source: human, scope: project` (in instance's `playbook/`). Respect human-written lessons.
-- See `conventions.md` § "Lesson schema".
-
-## Subagent discipline
-
-- Subagents have narrow jobs. If you're asking a subagent to do two unrelated things, split it.
-- The orchestrator (you, with `agent.md` loaded) coordinates. Subagents execute.
-
-## Tool calls
-
-- Use the agent's specified tools (named in `agent.md`). If a tool isn't specified, ask before introducing one.
-- For tools requiring connectors, use the configured MCPs.
-- For tools requiring API keys, read from `.env` — never hardcode.
-
-## File conventions
-
-- All filenames lowercase, kebab-case (`sdr`, `cv-tailor`).
-- Lesson files: `L-YYYY-MM-DD-NNN.md` where NNN is a 3-digit counter.
-- Run files: `YYYY-MM-DD-HHMM.md` (24-hour, local time).
-- Feedback files mirror run filenames exactly so they pair.
-- Configs in YAML with frontmatter, prose explanation below.
-
-## Experts vs agents
-
-Two distinct kinds of intelligence live in this repo:
-
-**Experts** (`<function>/EXPERT.md`) shape SUBSTRATE. They critique and generate the project guidelines that everything else reads — voice, ICPs, messaging, design principles, brand book. They're conversational, judgment-heavy, invoked when you need to think, develop, or refine the strategic context of a project. Output writes to `projects/<project>/guidelines/<file>.md`.
-
-**Agents** (`<function>/<agent-name>/agent.md`) produce ARTIFACTS. They run workflows that read substrate and generate specific outputs — emails, posts, components, content. They have subagents, runs, feedback loops, and learn over time via the dreamer. Output writes to `<function>/<agent>/projects/<project>/log/runs/<YYYY-MM>/...md`.
-
-The rule: **experts shape substrate; agents produce artifacts.** Don't ask experts to write a single email — that's an agent's job. Don't ask agents to redefine brand voice — that's an expert's job.
-
-When the user asks for something:
-- "Define ICPs for Acme Corp" → expert (judgment-heavy, project-shaping)
-- "Run outreach on these 20 prospects" → agent (repeatable workflow)
-- "Critique this email draft" → expert (one-off review)
-- "Generate cold email for Alice" → agent (writer subagent inside sdr)
-- "Should we go PLG or sales-led?" → expert (strategic question)
-
-To invoke an expert, the session reads `<function>/EXPERT.md` and follows its read-first protocol (read project context first, then ask only about gaps). Experts are configured per function in `.config/functions.yaml` via the `has_expert: true` flag.
-
-## Repo maintenance
-
-Structural changes to the repo (creating projects, archiving, renaming, auditing) are handled by the chief-of-staff agent at `chief-of-staff/agent.md`. When a user asks for one of these in any session, load `chief-of-staff/agent.md` and follow its operations contract.
-
-The chief-of-staff agent operates from repo root only. If asked to scaffold from inside a project or agent folder, surface this and offer to switch contexts.
-
-## Invoking agents and experts
-
-Two distinct invocation patterns:
-
-**Workflows (deterministic, plan-based)** — use slash commands like `/sdr`, `/graphic-designer`. These run named plans against named projects:
+## Repo layout
 
 ```
-/sdr run cold-outreach for _demo
+src/        CLI source (TypeScript, ESM, Node ^22.18 || >=24)
+  bin/      roster.ts — argv parsing, subcommand dispatch
+  commands/ init.ts, (doctor.ts coming Phase 2)
+  lib/      tools.ts (detection + install), paths.ts (ROSTER_ROOT, getPackageVersion)
+bin/        Build output — bin/roster.js is the executable entry. Gitignored.
+lib/        Build output for library exports. Gitignored.
+templates/  Files copied into a user's workspace by `roster init`.
+  scaffold/ Directory tree mirrored verbatim into the user's CWD.
+  CLAUDE.project.template.md, env.example, gitignore-defaults.txt
+skills/     Skills shipped to AI tools by `roster install`. One dir per skill.
+agents/     Agent .md files shipped alongside skills (Claude Code only).
+test/       Node test runner specs + smoke.sh integration test.
+docs/       Public docs — HOWTO.md, ARCHITECTURE.md, API.md, roadmap.md, retros.
+spec/       Local-only PRD/SPEC/CONTEXT (gitignored, forge planning workflow).
+plans/      Local-only phases.yaml (gitignored, forge planning workflow).
+.dogfood/   Active dogfood instance of the agent-team workspace. Not shipped.
 ```
 
-The slash command loads the agent's `agent.md`, executes the plan from `<function>/<role>/plans/`, and logs the run.
+**Shipped to npm** (verified via `npm pack --dry-run`): `bin/`, `lib/`, `skills/`, `agents/`, `templates/`, `README.md`, `LICENSE`. Allowlist is in `package.json` under `files`.
 
-**Strategic / generative work (judgment-heavy, ad-hoc)** — invoke the function-level expert:
+## Build & verify
 
+```bash
+pnpm install         # node 22+
+pnpm typecheck       # tsc --noEmit
+pnpm build           # tsdown → bin/roster.js with shebang
+pnpm test            # node --test on test/**/*.test.ts
+pnpm smoke           # bash test/smoke.sh — pack, install, init end-to-end
+npm pack --dry-run   # confirm tarball stays clean (~13kB, 11 files)
 ```
-"Use the GTM expert. Critique projects/_demo/guidelines/messaging.md."
-```
 
-Experts shape substrate (project guidelines). Agents produce artifacts (specific outputs). Don't conflate them.
+The Phase gate command (run before opening a PR): `pnpm typecheck && pnpm test && pnpm build`.
 
-If unsure: if the work is repeatable and deterministic, it's a plan. If it requires judgment and isn't structured the same each time, it's expert work.
+## Where things live in the CLI
 
-## What you do NOT do
+- **Subcommand entry**: `src/bin/roster.ts` — hand-rolled argv parsing; subcommands `install`, `init`, `doctor`. `--help`, `--version`, exit codes (0/1/2/3).
+- **Tool detection**: `src/lib/tools.ts` — `detectTools()` checks `~/.claude/`, `~/.codex/`, `~/.cursor/`, `~/.gemini/`. Each `Tool` has `key`, `name`, `skillsTarget`, `agentsTarget` (nullable for Cursor). Override via `ROSTER_CLAUDE_HOME` etc. for tests.
+- **Install logic**: `installToTool()` in `src/lib/tools.ts` — copies `skills/*` and `agents/*.md` into the tool's config dir. Idempotent. Handles symlinks (prompts before clobber). Handles EACCES with a sudo hint.
+- **Scaffold logic**: `src/commands/init.ts` — copies `templates/scaffold/**` into CWD, substitutes `{{PROJECT_NAME}}` in `CLAUDE.project.template.md`, appends gitignore-defaults idempotently.
 
-- Do not modify agent logic during a run — that's a separate, deliberate task.
-- Do not call agents across projects. An agent operating on Project A cannot invoke a different project's instance.
-- Do not invent tools, connectors, or capabilities. If something isn't available, say so.
-- Do not write secrets, API keys, or credentials to any file under version control.
+## Adding a new AI-tool target
+
+1. Add the tool's config-dir constant to `src/lib/tools.ts` (e.g., `~/.somewhere/skills/`).
+2. Add a `Tool` entry to `detectTools()` returning the key + name + targets.
+3. Extend `installToTool()` to handle that tool's layout (skills-only vs skills+agents).
+4. Add a test case in `test/install.test.ts` exercising the new target.
+5. Update `README.md` install matrix.
+
+## Phase status
+
+Phase 1 — Foundations: **complete** (closed 2026-05-12; retro at `docs/retros/phase-1.md`).
+Phase 2 — Core Features: **active**. Goals: all four AI tools supported, full skill/agent content, `doctor` command, full `init` scaffold tree. See `docs/roadmap.md`.
+
+Local planning (PRD/SPEC/phases.yaml) lives in `spec/` and `plans/` and is gitignored — public roadmap in `docs/roadmap.md`, work items tracked in Linear (ROS-*).
+
+## Conventions
+
+- TypeScript, ESM, strict mode. No CommonJS.
+- File names: lowercase kebab-case.
+- Prefer hand-rolled argv parsing over commander/yargs to keep tarball small.
+- No comments unless behavior is non-obvious. No docstrings.
+- Conventional commits: `feat(scope):`, `fix(scope):`, `chore(scope):`, `docs(scope):`. Include Linear ID (`ROS-N`) when applicable.
+- Never auto-commit. Show the diff, then ask.
+
+## Working on the dogfood
+
+If you're invoking `/sdr`, `/chief-of-staff`, or `/dreamer`, you're working on the **dogfood instance**, not the CLI. `cd .dogfood/` and Claude Code will load that directory's `CLAUDE.md` and `.claude/commands/`. Framework conventions live in `.dogfood/conventions.md`.
 
 ## When in doubt
 
-Read `conventions.md` for the full reference. If the convention isn't clear, ask before guessing — this repo is shared with future contractors and an inconsistent convention is worse than a missing one.
+Read this file end-to-end, then check `README.md` and `docs/HOWTO.md`. If a CLI convention isn't clear, ask before guessing — this is going on npm and inconsistent UX propagates to everyone who installs it.
