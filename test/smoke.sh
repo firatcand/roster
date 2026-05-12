@@ -79,6 +79,26 @@ TARBALL_KB=$(du -k "$TARBALL" | awk '{print $1}')
 assert "-f \"$TARBALL\"" "tarball produced: $TARBALL_NAME"
 assert "$TARBALL_KB -le 1024" "tarball ≤ 1 MB (${TARBALL_KB} KB)"
 
+# 2b. Tarball contents: scaffold templates ship
+TARBALL_LIST="$SMOKE_DIR/tarball.list"
+tar -tzf "$TARBALL" > "$TARBALL_LIST"
+for expected in \
+  package/templates/scaffold/conventions.md \
+  package/templates/scaffold/.config/functions.yaml \
+  package/templates/scaffold/scripts/new-project.sh \
+  package/templates/scaffold/scripts/lib/functions.sh \
+  package/templates/scaffold/chief-of-staff/agent.md \
+  package/templates/scaffold/dreamer/agent.md \
+  package/templates/scaffold/gtm/sdr/agent.md \
+  package/templates/scaffold/gtm/sdr/plans/cold-outreach.yaml \
+  package/templates/scaffold/projects/_demo/CLAUDE.md \
+  package/templates/scaffold/projects/_demo/state.md \
+  package/templates/scaffold/projects/_demo/config/default.yaml \
+  package/templates/scaffold/logs/cron/.gitkeep
+do
+  assert_contains "$TARBALL_LIST" "^$expected\$" "tarball contains $expected"
+done
+
 # 3. Global install (isolated prefix; no sudo, no touching host)
 echo ""
 echo "===> 3. Global install (isolated prefix)"
@@ -109,6 +129,23 @@ assert_contains CLAUDE.md "my-test-workspace" "CLAUDE.md contains project name"
 assert "! -z \"\$(grep -v '{{PROJECT_NAME}}' CLAUDE.md)\"" "no unresolved {{PROJECT_NAME}} tokens"
 assert "-d projects/_demo" "projects/_demo/ exists"
 assert "-f projects/_demo/README.md" "projects/_demo/README.md exists"
+assert "-f projects/_demo/CLAUDE.md" "projects/_demo/CLAUDE.md exists"
+assert "-f projects/_demo/state.md" "projects/_demo/state.md exists"
+assert "-f projects/_demo/config/default.yaml" "projects/_demo/config/default.yaml exists"
+assert "-f projects/_demo/guidelines/voice.md" "projects/_demo/guidelines/voice.md exists"
+assert "-f conventions.md" "conventions.md ported into workspace"
+assert "-f gtm/sdr/agent.md" "gtm/sdr/agent.md ported"
+assert "-f chief-of-staff/agent.md" "chief-of-staff/agent.md ported"
+assert "-f dreamer/agent.md" "dreamer/agent.md ported"
+assert "-x scripts/new-project.sh" "scripts/new-project.sh ported + executable"
+assert "-f .config/functions.yaml" ".config/functions.yaml ported"
+assert "-d logs/cron" "logs/cron/ ported"
+
+# 5b. new-project.sh actually runs against the freshly initialized workspace
+bash scripts/new-project.sh "Smoke Test Co" > /dev/null
+assert "-d projects/smoke-test-co" "new-project.sh creates projects/smoke-test-co/"
+assert "-f projects/smoke-test-co/state.md" "new-project.sh creates state.md"
+assert "-f projects/smoke-test-co/config/default.yaml" "new-project.sh creates config/default.yaml"
 assert "-f .env.example" ".env.example exists"
 assert "-f .gitignore" ".gitignore exists"
 assert_contains .gitignore "# Roster defaults" ".gitignore has Roster defaults marker"

@@ -46,9 +46,10 @@ node_modules/
 .dogfood/dreamer/pending/*
 !.dogfood/dreamer/pending/.gitkeep
 
-# Forge planning artifacts — internal framework design, not shipped
-spec/
-plans/
+# Forge planning artifacts — internal framework design, not shipped.
+# Anchored to repo root so nested `plans/`/`spec/` (e.g. inside templates/scaffold/) are not ignored.
+/spec/
+/plans/
 
 # Build artifacts — produced by tsdown; included in npm pack via files allowlist
 /bin/
