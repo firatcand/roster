@@ -18,7 +18,6 @@ const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>(['install', 'init',
 const TOOL_INSTALL_LINKS: ReadonlyArray<string> = [
   'Claude Code:  https://claude.ai/code',
   'Codex CLI:    https://github.com/openai/codex',
-  'Cursor:       https://cursor.sh',
   'Gemini CLI:   https://github.com/google-gemini/gemini-cli',
 ];
 
@@ -30,7 +29,7 @@ function tildify(path: string): string {
 function printBanner(version: string): void {
   console.log();
   console.log(`${chalk.bold.cyan('roster')}${chalk.dim(` v${version}`)}`);
-  console.log(chalk.dim('Multi-agent workspace scaffolder for Claude Code, Codex CLI, Cursor, Gemini.'));
+  console.log(chalk.dim('Multi-agent workspace scaffolder for Claude Code, Codex CLI, and Gemini.'));
   console.log();
 }
 

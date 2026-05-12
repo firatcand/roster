@@ -1,6 +1,6 @@
 # roster — CLI Contributor Guide
 
-This repo builds and ships **`@firatcand/roster`**, an npm CLI that installs/scaffolds the agent-team pattern across Claude Code, Codex CLI, Cursor, and Gemini. See `README.md` for the user-facing pitch; this file is for contributors working on the CLI itself.
+This repo builds and ships **`@firatcand/roster`**, an npm CLI that installs/scaffolds the agent-team pattern across Claude Code, Codex CLI, and Gemini. See `README.md` for the user-facing pitch; this file is for contributors working on the CLI itself.
 
 ## Repo layout
 
@@ -41,7 +41,7 @@ The Phase gate command (run before opening a PR): `pnpm typecheck && pnpm test &
 ## Where things live in the CLI
 
 - **Subcommand entry**: `src/bin/roster.ts` — hand-rolled argv parsing; subcommands `install`, `init`, `doctor`. `--help`, `--version`, exit codes (0/1/2/3).
-- **Tool detection**: `src/lib/tools.ts` — `detectTools()` checks `~/.claude/`, `~/.codex/`, `~/.cursor/`, `~/.gemini/`. Each `Tool` has `key`, `name`, `skillsTarget`, `agentsTarget` (nullable for Cursor). Override via `ROSTER_CLAUDE_HOME` etc. for tests.
+- **Tool detection**: `src/lib/tools.ts` — `detectTools()` checks `~/.claude/`, `~/.codex/`, `~/.gemini/`. Each `Tool` has `key`, `name`, `skillsTarget`, `agentsTarget`. Override via `ROSTER_CLAUDE_HOME` etc. for tests.
 - **Install logic**: `installToTool()` in `src/lib/tools.ts` — copies `skills/*` and `agents/*.md` into the tool's config dir. Idempotent. Handles symlinks (prompts before clobber). Handles EACCES with a sudo hint.
 - **Scaffold logic**: `src/commands/init.ts` — copies `templates/scaffold/**` into CWD, substitutes `{{PROJECT_NAME}}` in `CLAUDE.project.template.md`, appends gitignore-defaults idempotently.
 

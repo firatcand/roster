@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-export type ToolKey = 'claude' | 'codex' | 'cursor' | 'gemini';
+export type ToolKey = 'claude' | 'codex' | 'gemini';
 
 export type Tool = {
   key: ToolKey;
@@ -10,7 +10,7 @@ export type Tool = {
   skillsTarget: string;
   agentsTarget: string | null;
   // "dir": each skill is a directory copied wholesale (Claude, Gemini)
-  // "file": each skill is a single flat file under skillsTarget (Codex, Cursor)
+  // "file": each skill is a single flat file under skillsTarget (Codex)
   skillsLayout: 'dir' | 'file';
   // File extension when skillsLayout === 'file' (e.g., ".md", ".mdc"). null for dir layout.
   skillsFileExt: string | null;
@@ -47,15 +47,6 @@ function defaultDefinitions(): ToolDefinition[] {
       skillsFileExt: '.md',
     },
     {
-      key: 'cursor',
-      name: 'Cursor',
-      configRoot: join(home, '.cursor'),
-      skillsTarget: join(home, '.cursor', 'rules'),
-      agentsTarget: null,
-      skillsLayout: 'file',
-      skillsFileExt: '.mdc',
-    },
-    {
       key: 'gemini',
       name: 'Gemini CLI',
       configRoot: join(home, '.gemini'),
@@ -84,7 +75,7 @@ export function getToolByKey(key: ToolKey): Tool | undefined {
 }
 
 // installToTool moved to ./install.ts in ROS-5.
-// auditTool will land in ROS-19 (P2-T09) — its own module per the codex/cursor/gemini pattern.
+// auditTool will land in ROS-19 (P2-T09) — its own module per the codex/gemini pattern.
 
 export type AuditResult = {
   ok: boolean;

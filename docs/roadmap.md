@@ -25,7 +25,6 @@ Goal: every supported AI tool works end-to-end. After `install` and `init`, runn
 | ROS-9 | Port `dreamer` + `sdr` skills + agents | Skill content lives in `skills/`; agents in `agents/`. |
 | ROS-12 | Port `EXPERT.md` files into `templates/scaffold/` | Workspace-resident, not installed to AI-tool dirs. |
 | ROS-13 | Codex CLI tool target | Skills as flat `.md` in `~/.codex/prompts/`. |
-| ROS-14 | Cursor tool target | Skills renamed to `.mdc` in `~/.cursor/rules/`; no agents target. |
 | ROS-15 | Gemini CLI tool target | Skills as dirs in `~/.gemini/extensions/`. |
 | ROS-16 | Multi-tool selection (`--all`, `--tool <name>`) | Checkbox pre-selects all detected. |
 | ROS-17 | Full `templates/scaffold/` tree | Largest content task. |
@@ -51,6 +50,7 @@ Goal: every supported AI tool works end-to-end. After `install` and `init`, runn
 
 ## Out of scope
 
+- **Cursor** — its rule-file model (`.cursor/rules/*.mdc`) injects static markdown into every chat. That doesn't fit roster's skill/agent/subagent semantics: no first-class skill invocation, no subagents, no slash commands as workflow entry points. Shipping there would only bloat Cursor conversations without delivering the workflow value. Cursor users can still get value from `roster init` (the workspace pattern + conventions) without `install`.
 - PRD/SPEC/phases lifecycle — see [forge](https://github.com/firatcand/forge). Roster is complementary; the two don't bundle.
 - Hosted SaaS — roster runs locally.
 - Substrate-vs-artifacts model changes — core opinion, not up for redesign in this repo.
