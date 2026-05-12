@@ -1,395 +1,117 @@
-# How-to
+# HOWTO — roster v0.1
 
-Recipes for the 24 most common tasks. Each is short and self-contained. Examples use `_demo` (the included demo project) and `myproject` (a placeholder for your real project). For deeper rationale, see [ARCHITECTURE.md](ARCHITECTURE.md). For schemas and APIs, see [API.md](API.md).
+Step-by-step guide for the two commands that ship in v0.1: `install` and `init`. The full agent-team workflow lights up in v0.2. This doc is honest about what works today.
 
 ---
 
-## 1. Start a session
+## Install
 
 ```bash
-cd ~/repos/roster
-claude
+npx @firatcand/roster install
 ```
 
-Claude Code walks up from your cwd and merges `.claude/` settings, MCPs, and slash commands. To work specifically on one agent in one project, cd into the instance:
+**What it detects.** Roster looks for AI tool config dirs under your home directory:
+
+| Tool | Config root detected |
+|---|---|
+| Claude Code | `~/.claude/` |
+| Codex CLI | `~/.codex/` (Phase 2) |
+| Gemini CLI | `~/.gemini/` (Phase 2) |
+
+Detection is presence-only: if the config root directory exists, the tool is considered installed. Source: `src/lib/tools.ts:66-70`.
+
+**What Phase 1 actually installs.** `install` only writes to Claude Code in v0.1 — Codex and Gemini support lands in Phase 2. For Claude Code it copies:
+
+- `skills/chief-of-staff/` → `~/.claude/skills/chief-of-staff/`
+- Any `.md` files under `agents/` → `~/.claude/agents/`
+
+The copy is done with `fs-extra` `copy` (`overwrite: true`), so re-running is safe — existing files are updated in place. Source: `src/lib/install.ts:94-150`.
+
+**If you have multiple tools installed.** When more than one config root is detected, roster shows a checkbox prompt with every tool pre-selected (`src/bin/roster.ts:88-117`). **In v0.1, deselect Codex and Gemini before confirming** — `installToTool` throws for any non-Claude tool (`src/lib/install.ts:95-99`). Leave only Claude Code checked. Phase 2 will turn the others into real targets.
+
+**Symlink prompt.** If the target path is a symbolic link, roster asks before replacing it:
+
+```
+~/.claude/skills/chief-of-staff is a symbolic link. Replace it with the bundled skill?
+```
+
+Answer `n` to keep your symlink. Roster logs it as preserved and moves on.
+
+**EACCES (permission denied).** If the write fails with a permissions error, roster surfaces:
+
+```
+Permission denied: ~/.claude/skills/chief-of-staff
+  remedy: re-run with sudo, or run `sudo chown -R "$USER" ~/.claude/skills`
+```
+
+Re-run with `sudo npx @firatcand/roster install`, or fix directory ownership first.
+
+---
+
+## Init
 
 ```bash
-cd ~/repos/roster/gtm/sdr/projects/_demo/
-claude
+mkdir my-team && cd my-team
+npx @firatcand/roster init [name]
 ```
 
-This loads the merged context for that agent + project.
+`name` defaults to the current directory's basename if omitted.
+
+**What gets scaffolded.** v0.1 writes four things into the current directory:
+
+1. `CLAUDE.md` — workspace-level context, generated from `templates/CLAUDE.project.template.md` with `{{PROJECT_NAME}}` substituted. Source: `src/commands/init.ts:57-60`.
+2. `projects/_demo/README.md` — placeholder project directory copied from `templates/scaffold/`. Source: `src/commands/init.ts:131-135`.
+3. `.env.example` — credential placeholder, written if no `.env.example` already exists. Source: `src/commands/init.ts:62-65`.
+4. `.gitignore` — roster's default ignore patterns appended under a `# Roster defaults` marker. Idempotent: if the marker is already present, nothing is appended. Source: `src/commands/init.ts:68-82`.
+
+**Idempotency.** If `CLAUDE.md` already exists, roster asks before overwriting:
+
+```
+CLAUDE.md already exists in this directory. Overwrite?
+```
+
+Answer `n` to cancel. Nothing is written.
+
+**Git init prompt.** If the directory has no `.git/`, roster asks:
+
+```
+Initialize a git repo here?
+```
+
+Answer `n` to skip. This is the only prompt that has no destructive consequence either way.
+
+**After init.** Your workspace has the minimal skeleton. The function dirs (`gtm/`, `product/`, `design/`, `ops/`), `conventions.md`, role-based agents, and scripts that power the full agent-team workflow are Phase 2 additions. The `CLAUDE.md` that roster writes tells you what's coming.
 
 ---
 
-## 2. Create a new project
+## First run — confirming chief-of-staff is loaded
 
-Use the chief-of-staff slash command:
+After `roster install`, Claude Code can load the chief-of-staff skill from `~/.claude/skills/chief-of-staff/`. Slash command routing (`/chief-of-staff`) is not wired up yet — the `.claude/commands/` directory is not written by `install`. In v0.1 you invoke by natural language:
 
-```
-/chief-of-staff create-project myproject
-```
+> Open Claude Code in any directory, then write:
+>
+> `What plans does the chief-of-staff skill support?`
 
-Without a list of agents, it prompts a multi-select of all globally-discovered agents. Pick zero or more. Pick "None" to leave the project bare; you can add agents later.
+Claude Code will read `~/.claude/skills/chief-of-staff/SKILL.md` and list the plans (`create-project`, `audit-repo`, `archive-project`, etc.). That confirms install succeeded.
 
-Or via script:
-
-```bash
-bash scripts/new-project.sh myproject
-```
+**Don't try `audit-repo` against a v0.1 `init` workspace yet.** The skill aborts unless the cwd contains `conventions.md`, `gtm/`, and `projects/` (`skills/chief-of-staff/SKILL.md` — "Common preamble"). v0.1 `init` only writes `CLAUDE.md` + `projects/_demo/`; the rest of the scaffold lands in v0.2. Running an audit before then will exit with `Run chief-of-staff from your roster workspace root.`
 
 ---
 
-## 3. Create a new project with agents
+## Doctor
 
-Pass the agents inline to skip the prompt:
-
-```
-/chief-of-staff create-project myproject with gtm/sdr
-```
-
-For each agent, the underlying script prompts for tool bindings declared in the agent's `## Tools and bindings` section. Press Enter or type `skip` to leave any binding as `# TODO:`. Required bindings left as TODO will error on the agent's first run, prompting you to fill them then.
+Coming in v0.2. Will audit installed skills and agents for drift and report missing or stale components. Source: `src/lib/tools.ts:86-88`.
 
 ---
 
-## 4. Add an agent to an existing project
-
-```
-/chief-of-staff add-agent-to-project myproject gtm sdr
-```
-
-This is additive; no confirmation gate. The script prompts for tool bindings.
-
----
-
-## 5. Create a new global agent
-
-```
-/chief-of-staff create-agent gtm content-writer
-```
-
-Or:
-
-```bash
-bash scripts/new-agent.sh gtm content-writer
-```
-
-This scaffolds:
-- `gtm/content-writer/agent.md` (template — fill in)
-- `gtm/content-writer/subagents/` (template only)
-- `gtm/content-writer/plans/` (empty — add at least one plan before using)
-- `gtm/content-writer/projects/_template/` (instance template)
-- `.claude/commands/content-writer.md` (slash command router)
-
-It also runs an interactive tool-definition prompt. Press Enter to skip; you can add the `## Tools and bindings` section by hand later.
-
----
-
-## 6. Create a new function
-
-```
-/chief-of-staff create-function research --description "User research, interviews, survey synthesis"
-```
-
-Functions are top-level domains (gtm, product, design, ops). Adding a new one updates `.config/functions.yaml` and scaffolds the folder, README, and optionally an EXPERT.md stub.
-
-After creating: add the corresponding Slack channel `#research`, add `SLACK_HITL_CHANNEL_RESEARCH=#research` to `.env`.
-
----
-
-## 7. Run an agent (interactive)
-
-```
-/sdr run cold-outreach for _demo
-```
-
-Or in natural language:
-
-```
-Run gtm/sdr on _demo using cold-outreach plan
-```
-
-The agent:
-1. Loads the project context, instance config, and plan
-2. Validates required tool bindings are filled
-3. Executes each plan step
-4. Surfaces HITL approval gates in-session
-5. Logs the run to `gtm/sdr/projects/_demo/log/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md`
-
----
-
-## 8. Run an agent unattended (cron / /schedule)
-
-Two options.
-
-**Native /schedule** (recommended for interactive setup):
-
-In Claude Code, run `/schedule` and configure a recurring task with the prompt:
-
-```
-/sdr run cold-outreach for _demo
-```
-
-at e.g. `0 9 * * 1-5`.
-
-**Cron + claude -p** (recommended for headless / always-on setups):
-
-Use `scripts/new-cron.sh` to scaffold a wrapper, then add the line to your crontab. See `scripts/cron/crontab` for the format.
-
-For unattended runs, `approval_channel: auto` routes HITL to the function's Slack channel (`SLACK_HITL_CHANNEL_<FUNCTION>` from `.env`).
-
----
-
-## 9. Use an expert to develop project guidelines
-
-```
-Use the GTM expert. Help me define ICPs for _demo.
-```
-
-The expert reads `projects/_demo/CLAUDE.md` and existing guidelines first, then identifies gaps and asks. Output writes to `projects/_demo/guidelines/icps/<persona>.md`.
-
-Experts are different from agents — see [ARCHITECTURE.md § Substrate vs artifacts](ARCHITECTURE.md#substrate-vs-artifacts).
-
----
-
-## 10. Audit a project
-
-```
-/chief-of-staff audit-project _demo
-```
-
-Checks required guideline files exist and aren't template content, instance configs are valid, runs aren't stale, etc. Reports issues with suggested fixes. Never auto-fixes.
-
-Full report: `chief-of-staff/logs/<YYYY-MM>/audit-_demo-<timestamp>.md`.
-
----
-
-## 11. Audit an agent
-
-```
-/chief-of-staff audit-agent gtm sdr
-```
-
-Validates agent.md required sections, plans/, slash command, README, .mcp.json, subagents, projects/_template/, and per-instance config consistency.
-
----
-
-## 12. Audit the whole repo
-
-```
-/chief-of-staff audit-repo
-```
-
-Aggregates project audits and agent audits into one report. Also checks universal `.mcp.json`, root `CLAUDE.md`, `conventions.md`, `README.md`, and orphaned instances.
-
----
-
-## 13. Archive a project
-
-```
-/chief-of-staff archive-project oldproject reason="MVP shelved"
-```
-
-Moves the project root and all instance folders to `_archive/projects/<slug>-<date>/`. Always confirms before moving. Preserves run history and project-scoped lessons.
-
-To restore: `unarchive-project <slug>`.
-
----
-
-## 14. Rename a project
-
-```
-/chief-of-staff rename-project oldname newname
-```
-
-Renames folders everywhere AND replaces the slug in `CLAUDE.md`, `GUIDANCE.md`, instance configs (`project: <new>`), and asset-references. Does NOT auto-update lesson, run, or feedback bodies — those are historical evidence reviewed manually.
-
-Always confirms before executing. Surfaces unauto-updated mentions in the report.
-
----
-
-## 15. Remove an agent from a project
-
-```
-/chief-of-staff remove-agent-from-project _demo gtm sdr
-```
-
-Archives the instance to `_archive/<function>/<agent>/projects/<project>-<date>/`. Always preserves run history; does not hard-delete (you can `rm -rf` the archived copy manually if certain).
-
----
-
-## 16. Edit tool bindings later
-
-Open the instance config:
-
-```bash
-$EDITOR gtm/sdr/projects/_demo/config/default.yaml
-```
-
-Edit values under `tools:`. Save. The agent reads them on the next run. No restart needed.
-
-To see what bindings the agent expects, look at the agent's `## Tools and bindings` section in `gtm/sdr/agent.md`.
-
----
-
-## 17. Look at lessons (playbook)
-
-Project-scoped lessons:
-
-```bash
-ls gtm/sdr/projects/_demo/playbook/
-cat gtm/sdr/projects/_demo/playbook/L-2026-01-15-001.md
-```
-
-Global lessons (apply across all projects for that agent):
-
-```bash
-ls gtm/sdr/playbook/
-```
-
-Lessons follow a fixed schema; see [API.md § Lesson schema](API.md#lesson-schema).
-
----
-
-## 18. Write a lesson by hand
-
-Create a file at `<function>/<agent>/playbook/L-YYYY-MM-DD-NNN.md` (global) or `<function>/<agent>/projects/<project>/playbook/L-YYYY-MM-DD-NNN.md` (project-scoped).
-
-Use frontmatter `source: human` so the dreamer respects it (won't modify or supersede without explicit HITL approval).
-
-Schema:
-
-```markdown
----
-id: L-2026-05-03-001
-source: human
-scope: global
-project: —
-agent: sdr
-created: 2026-05-03
-last_observed: 2026-05-03
-status: validated
----
-
-## Pattern observed
-<short description>
-
-## Recommendation
-<what the agent should do next time>
-
-## Why this might be project-specific
-<when does this generalize, when not>
-
-## Retirement criteria
-<what evidence would invalidate this>
-```
-
----
-
-## 19. Look at recent runs
-
-```bash
-ls gtm/sdr/projects/_demo/log/runs/
-ls gtm/sdr/projects/_demo/log/runs/2026-05/
-cat gtm/sdr/projects/_demo/log/runs/2026-05/2026-05-03-0930.md
-```
-
-Each run pairs with an optional feedback file at `log/feedback/<same-filename>.md`.
-
----
-
-## 20. Commit changes to git
-
-The repo is git-tracked. Roster's chief-of-staff and agents NEVER auto-commit. You commit manually:
-
-```bash
-git status
-git diff
-git add -A
-git commit -m "Your message"
-git push  # only if you've configured a remote
-```
-
-Suggested cadence: commit after each meaningful chunk of work (not every file change, not weekly). The git log becomes a readable timeline of decisions.
-
----
-
-## 21. Connect remotely
-
-If you want to run roster on a different machine (a server, a Mac mini, anything always-on), the setup is:
-
-1. Install Claude Code on the target machine
-2. Clone the repo there
-3. Configure `.env` with the same credentials
-4. Use SSH or remote desktop to interact with Claude Code on that machine
-
-Typical patterns:
-- Run cron jobs on the always-on machine, push results back via git
-- Run interactive sessions remotely via tmux or screen
-- For multi-machine setups: pick one machine as the source of truth, sync via git
-
-There's no built-in multi-machine sync. The repo IS the sync mechanism.
-
----
-
-## 22. When something goes wrong
-
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| Agent errors "required tool binding is TODO" | Instance config has unfilled bindings | Edit `<fn>/<agent>/projects/<project>/config/default.yaml` and fill the `# TODO:` lines |
-| Slash command not recognized | Slash command file missing | Check `.claude/commands/<agent>.md` exists; if not, run `bash scripts/new-agent.sh <fn> <agent>` and copy the generated file |
-| `audit-repo` reports orphaned instance | Agent was deleted but instance folder remains | Move instance to `_archive/` or recreate the agent |
-| Cron job doesn't fire | Wrapper script missing or path wrong | Check `scripts/cron/wrappers/` for the wrapper; verify the cron line uses absolute paths |
-| Slack approvals never arrive | Bot token missing or channel name wrong | Verify `SLACK_BOT_TOKEN` and `SLACK_HITL_CHANNEL_<FUNCTION>` in `.env` |
-| Plan YAML parse error | Indentation or quote issue | `python3 -c "import yaml; yaml.safe_load(open('<path>'))"` to find the line |
-| Dreamer never picks up lessons | State cutoff is in the future, or no new material since last run | Edit `dreamer/state.md`'s `last_processed_through` to an earlier date |
-
-For audit issues with suggested fixes, run `/chief-of-staff audit-repo` and follow the suggestions.
-
----
-
-## 23. Routine cadence
-
-Suggested rhythm for solo / small-team use:
-
-- **Daily**: run agent plans as needed. Commit at end of day.
-- **Weekly**: run `/chief-of-staff audit-repo`. Review playbook additions from the dreamer. Commit lessons.
-- **Monthly**: review which functions/agents are stagnant; archive unused ones. Update guidelines that have drifted.
-- **Per project**: `/chief-of-staff audit-project <project>` after major substrate changes.
-
-The dreamer runs nightly via /schedule (configure once); approvals come through Slack `#admin`.
-
----
-
-## 24. Where things live (cheat sheet)
-
-```
-roster/
-├── CLAUDE.md, conventions.md, README.md  ← read once, refer back
-├── .env, .env.example                    ← credentials (only .example committed)
-├── .claude/commands/                     ← slash command routers
-├── .config/functions.yaml                ← registered functions
-├── docs/                                 ← you are here
-├── scripts/                              ← every backing script
-├── projects/<project>/
-│   ├── CLAUDE.md, state.md               ← session context
-│   └── guidelines/                       ← substrate (voice, ICPs, messaging, …)
-├── <function>/
-│   ├── EXPERT.md                         ← function-level expert
-│   └── <agent>/
-│       ├── agent.md                      ← contract
-│       ├── plans/<plan>.yaml             ← workflow recipes
-│       ├── subagents/                    ← reusable building blocks
-│       ├── playbook/                     ← global lessons (dreamer + human)
-│       └── projects/<project>/
-│           ├── config/default.yaml       ← per-project params + tool bindings
-│           ├── asset-references.md
-│           ├── log/runs/                 ← run output
-│           ├── log/feedback/             ← HITL feedback
-│           └── playbook/                 ← project-scoped lessons
-├── chief-of-staff/                       ← repo-maintenance agent
-├── dreamer/                              ← reinforcement agent
-└── _archive/                             ← archived projects and instances
-```
-
-When in doubt, search the file tree (`find . -type f -name "<pattern>"`) — the structure is grep-friendly.
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `Permission denied` on install | Re-run with `sudo`, or `sudo chown -R "$USER" ~/.claude/skills` |
+| Symlink prompt during install | Answer `y` to replace, `n` to keep your symlink |
+| No AI tool detected (install exits with no targets) | Install Claude Code first — roster looks for `~/.claude/` |
+| `CLAUDE.md already exists` prompt | Answer `y` to overwrite, `n` to cancel |
+| Skills not picked up by Claude Code after install | Restart Claude Code so it re-reads `~/.claude/skills/` |
+| `roster install` crashes with `installToTool: codex not implemented` or `gemini not implemented` | The multi-select pre-checks every detected tool. Deselect Codex/Gemini and leave only Claude Code. Phase 2 will make the others real targets. |
+| `Run chief-of-staff from your roster workspace root.` | The skill needs `conventions.md` + `gtm/` + `projects/`. v0.1 `init` doesn't create those yet — it's a v0.2 scaffold. |
