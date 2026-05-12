@@ -1,0 +1,48 @@
+plan: create-function
+description: |
+  Add a new function category to the registry. Scaffolds the folder, stub
+  README, and optionally an EXPERT.md stub. Surfaces a soft proliferation
+  reminder before scaffolding.
+
+inputs:
+  function:
+    required: true
+    description: Function slug (lowercase, kebab-case, must not exist as a folder or in .config/functions.yaml).
+  description:
+    required: false
+    description: Free-text description of the function. If omitted, prompted.
+  has_expert:
+    required: false
+    description: Whether to scaffold an EXPERT.md stub. If omitted, prompted.
+
+outputs:
+  function_path: string
+
+steps:
+  - id: validate
+    description: |
+      Validate slug. Confirm not registered in .config/functions.yaml and no
+      top-level folder collision. Resolve ${inputs.description} and
+      ${inputs.has_expert} (prompt if absent).
+
+  - id: proliferation_reminder
+    description: |
+      Soft prompt: "Will you have 2-3 agents in this function in ~90 days?"
+      Require keypress to continue. The script's own prompt counts as the
+      confirmation gate — chief-of-staff just surfaces what the script will do.
+    approval: session
+
+  - id: execute
+    tool: bash
+    args:
+      command: bash scripts/create-function.sh ${inputs.function} --description "${inputs.description}" ${inputs.has_expert:+--with-expert}
+    description: Run the backing script.
+
+  - id: report
+    description: |
+      Print scaffolded paths. Surface post-creation reminders the script
+      prints: create #<slug> Slack channel, add SLACK_HITL_CHANNEL_<SLUG> to
+      .env, fill EXPERT.md stub if applicable, add the first agent via
+      new-agent.sh.
+
+approval_channel: session

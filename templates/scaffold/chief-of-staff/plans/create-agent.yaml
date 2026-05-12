@@ -1,0 +1,67 @@
+plan: create-agent
+description: |
+  Create a new global agent under a registered function. Optionally instance
+  it into a list of existing projects (or prompt for which projects).
+
+inputs:
+  function:
+    required: true
+    description: Function slug (must be registered in .config/functions.yaml).
+  agent:
+    required: true
+    description: Agent slug (lowercase, kebab-case, starts with letter).
+  add-to-projects:
+    required: false
+    description: List of project slugs to instance into. If omitted, the cross-link prompt runs.
+
+outputs:
+  agent_path: string
+  instance_paths: list
+
+steps:
+  - id: validate
+    description: |
+      Confirm ${inputs.function} is registered. Validate ${inputs.agent} slug.
+      Confirm ${inputs.function}/${inputs.agent}/ does not exist.
+      If ${inputs.add-to-projects} provided, validate each project exists at
+      projects/<slug>/. If any are missing, abort.
+
+  - id: scaffold_agent
+    tool: bash
+    args:
+      command: bash scripts/new-agent.sh ${inputs.function} ${inputs.agent}
+    description: |
+      Create the global agent. The script also runs an interactive
+      tool-definition prompt (skipped under AGENT_TEAM_NO_CONFIRM=1 or
+      non-interactive stdin) and scaffolds plans/ + .claude/commands/<agent>.md.
+
+  - id: resolve_projects
+    description: |
+      Branch on whether ${inputs.add-to-projects} was provided.
+      - If provided: use the list directly.
+      - If omitted: discover all live projects (every dir under projects/ that
+        is not _template and does not start with _). If empty, skip instancing
+        and report "no live projects yet."
+        Otherwise present a multi-select via AskUserQuestion with options
+        [All projects, ...each project, None — agent stays global-only]
+        and multiSelect: true.
+
+  - id: instance_into_projects
+    tool: bash
+    args:
+      command: |
+        for proj in ${resolved_projects}; do
+          bash scripts/new-agent-instance.sh "$proj" ${inputs.function} ${inputs.agent}
+        done
+    description: |
+      For each resolved project, run new-agent-instance.sh and append the
+      instance line to projects/<project>/CLAUDE.md under
+      ## Active agent instances.
+
+  - id: report
+    description: |
+      Print global agent path + every instance path. Surface the script's
+      "next steps" output (fill agent.md, add subagents, configure MCPs,
+      add at least one plan, edit slash command description).
+
+approval_channel: session

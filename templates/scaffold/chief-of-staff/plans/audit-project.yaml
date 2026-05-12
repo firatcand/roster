@@ -1,0 +1,34 @@
+plan: audit-project
+description: |
+  Validate a project's completeness. Reports issues with suggested fixes;
+  never auto-fixes. Checks required guideline files (non-template content),
+  optional files (presence only), root files, agent instances, and
+  instance↔CLAUDE.md consistency.
+
+inputs:
+  project:
+    required: true
+    description: Project slug (must exist at projects/<slug>/).
+
+outputs:
+  status: string  # pass | warn | fail
+  report_path: string
+
+steps:
+  - id: execute
+    tool: bash
+    args:
+      command: bash scripts/audit-project.sh ${inputs.project}
+    description: Run the backing audit script.
+
+  - id: report
+    description: |
+      Print the condensed summary to stdout. Reference the full report at
+      chief-of-staff/logs/<YYYY-MM>/audit-${inputs.project}-<YYYY-MM-DD-HHMM>.md.
+      Severity rules:
+        - Failure: required file missing/template, instance config invalid YAML,
+          instance project field mismatches folder name.
+        - Warning: optional file missing, instance not listed in CLAUDE.md,
+          last run > 30 days old.
+
+approval_channel: session

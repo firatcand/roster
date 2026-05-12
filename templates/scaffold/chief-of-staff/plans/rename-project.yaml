@@ -1,0 +1,62 @@
+plan: rename-project
+description: |
+  Rename a project everywhere it appears: project root, every agent instance
+  folder, and content references in CLAUDE.md / GUIDANCE.md / config files /
+  asset-references. Does NOT auto-update lesson, run, or feedback bodies —
+  those are historical evidence reviewed manually.
+
+inputs:
+  old:
+    required: true
+    description: Current project slug (must exist at projects/<old>/).
+  new:
+    required: true
+    description: New slug (lowercase, kebab-case, must not exist live or in _archive).
+
+outputs:
+  paths_renamed: list
+  unauto_updated_files: list
+
+steps:
+  - id: validate
+    description: |
+      Confirm projects/${inputs.old}/ exists. Validate ${inputs.new} slug.
+      Confirm no collision live or archived. Find all instances at
+      <function>/<agent>/projects/${inputs.old}/ across the repo.
+
+  - id: confirmation
+    description: |
+      Show full list of folder moves AND in-file content updates:
+
+        Will rename folders:
+          projects/${inputs.old}/                                  → projects/${inputs.new}/
+          <function>/<agent>/projects/${inputs.old}/               → <function>/<agent>/projects/${inputs.new}/
+
+        Will replace project name in:
+          projects/${inputs.new}/CLAUDE.md
+          projects/${inputs.new}/GUIDANCE.md
+          <function>/*/projects/${inputs.new}/config/default.yaml         (project: ${inputs.new})
+          <function>/*/projects/${inputs.new}/asset-references.md
+
+        WILL NOT auto-update:
+          - lesson frontmatter project: fields (review manually)
+          - run/feedback frontmatter project: fields
+          - text references inside lesson, run, or feedback bodies
+
+        Proceed?
+
+      Wait for "proceed", "yes", "y". Abort cleanly if denied.
+    approval: session
+
+  - id: execute
+    tool: bash
+    args:
+      command: bash scripts/rename-project.sh ${inputs.old} ${inputs.new}
+    description: Run the backing script.
+
+  - id: report
+    description: |
+      Print renamed paths. Surface the list of files that mention ${inputs.old}
+      in their content but were NOT auto-updated, for manual review.
+
+approval_channel: session

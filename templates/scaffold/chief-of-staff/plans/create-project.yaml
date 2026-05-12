@@ -1,0 +1,65 @@
+plan: create-project
+description: |
+  Scaffold a new project at projects/<slug>/ and optionally instance a list of
+  agents into it. If no agent list is provided, prompt the user with a
+  multi-select of all globally-discovered agents.
+
+inputs:
+  project:
+    required: true
+    description: Project slug (lowercase, kebab-case, starts with letter, must not collide live or in _archive).
+  agents:
+    required: false
+    description: List of <function>/<agent> to instance immediately. If omitted, the cross-link prompt runs.
+
+outputs:
+  project_path: string
+  instance_paths: list
+
+steps:
+  - id: validate
+    description: |
+      Confirm cwd is repo root. Validate ${inputs.project} slug. Confirm
+      projects/${inputs.project}/ does not exist live or in _archive/projects/.
+      If ${inputs.agents} provided, validate every <function>/<agent>/ exists globally.
+      If any are missing, abort and tell the user to run create-agent first.
+
+  - id: scaffold_project
+    tool: bash
+    args:
+      command: bash scripts/new-project.sh ${inputs.project}
+    description: Create projects/<project>/ with template files.
+
+  - id: resolve_agents
+    description: |
+      Branch on whether ${inputs.agents} was provided.
+      - If provided: use the list directly.
+      - If omitted: discover all <function>/<agent>/ folders containing agent.md
+        across functions registered in .config/functions.yaml. If empty, skip
+        instancing and report "no agents exist yet — run create-agent first."
+        Otherwise present a multi-select via AskUserQuestion with options
+        [All agents, ...each discovered <function>/<agent>, None — leave project bare]
+        and multiSelect: true. Resolve "All agents" to the full list,
+        "None" or empty to an empty list.
+
+  - id: instance_agents
+    tool: bash
+    args:
+      command: |
+        for entry in ${resolved_agents}; do
+          fn="${entry%/*}"; agent="${entry#*/}"
+          bash scripts/new-agent-instance.sh ${inputs.project} "$fn" "$agent"
+        done
+    description: |
+      For each resolved agent, run new-agent-instance.sh. Script prompts
+      interactively for tool bindings declared in the agent's
+      ## Tools and bindings section. Skip with Enter or "skip" to leave
+      placeholders. After each instance, append a line to
+      projects/${inputs.project}/CLAUDE.md under ## Active agent instances.
+
+  - id: report
+    description: |
+      Print all paths created — project root + every instance — and surface
+      the instance count.
+
+approval_channel: session

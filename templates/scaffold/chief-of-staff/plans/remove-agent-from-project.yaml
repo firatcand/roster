@@ -1,0 +1,50 @@
+plan: remove-agent-from-project
+description: |
+  Remove an agent instance from a project. Always archives (no hard delete).
+  For permanent deletion, the user can manually rm -rf the archived copy.
+  Run history and project-scoped lessons live inside the instance — deletion
+  destroys evidence the dreamer needs.
+
+inputs:
+  project:
+    required: true
+    description: Project slug.
+  function:
+    required: true
+    description: Function slug.
+  agent:
+    required: true
+    description: Agent slug.
+
+outputs:
+  archive_path: string
+
+steps:
+  - id: validate
+    description: |
+      Confirm instance exists at
+      ${inputs.function}/${inputs.agent}/projects/${inputs.project}/.
+
+  - id: confirmation
+    description: |
+      Show the planned move and CLAUDE.md update:
+
+        Will move:
+          ${inputs.function}/${inputs.agent}/projects/${inputs.project}/  →  _archive/${inputs.function}/${inputs.agent}/projects/${inputs.project}-<date>/
+        And update:
+          projects/${inputs.project}/CLAUDE.md  (remove instance from ## Active agent instances)
+        Proceed?
+
+      Wait for "proceed", "yes", "y". Abort cleanly if denied.
+    approval: session
+
+  - id: execute
+    tool: bash
+    args:
+      command: bash scripts/remove-agent-from-project.sh ${inputs.project} ${inputs.function} ${inputs.agent}
+    description: Run the backing script.
+
+  - id: report
+    description: Print the archive path and the operation log entry.
+
+approval_channel: session
