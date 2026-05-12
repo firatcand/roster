@@ -10,6 +10,8 @@ type Fixture = {
   root: string;
   source: string;
   claudeHome: string;
+  codexHome: string;
+  geminiHome: string;
   cleanup: () => void;
 };
 
@@ -17,6 +19,8 @@ function makeFixture(): Fixture {
   const root = mkdtempSync(join(tmpdir(), 'roster-install-'));
   const source = join(root, 'source');
   const claudeHome = join(root, 'claude-home');
+  const codexHome = join(root, 'codex-home');
+  const geminiHome = join(root, 'gemini-home');
 
   mkdirSync(join(source, 'skills', 'sample-skill'), { recursive: true });
   writeFileSync(join(source, 'skills', 'sample-skill', 'SKILL.md'), '# sample\n');
@@ -33,6 +37,8 @@ function makeFixture(): Fixture {
     root,
     source,
     claudeHome,
+    codexHome,
+    geminiHome,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }
@@ -198,6 +204,381 @@ test('EACCES is caught and rethrown as RosterPermissionError with a remedy', asy
     chmodSync(f.claudeHome, 0o700);
   } finally {
     delete process.env['ROSTER_CLAUDE_HOME'];
+    f.cleanup();
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Codex CLI (ROS-13) — flat-file skills under ~/.codex/prompts, agents as .md
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('codex: ROSTER_CODEX_HOME redirects writes to the override path', async () => {
+  const f = makeFixture();
+  try {
+    process.env['ROSTER_CODEX_HOME'] = f.codexHome;
+    const tool = getToolByKey('codex');
+    assert.ok(tool, 'codex tool definition exists');
+    assert.equal(tool.skillsTarget, join(f.codexHome, 'prompts'));
+    assert.equal(tool.agentsTarget, join(f.codexHome, 'agents'));
+    assert.equal(tool.skillsLayout, 'file');
+    assert.equal(tool.skillsFileExt, '.md');
+  } finally {
+    delete process.env['ROSTER_CODEX_HOME'];
+    f.cleanup();
+  }
+});
+
+test('codex: skills written as flat .md files derived from SKILL.md body', async () => {
+  const f = makeFixture();
+  try {
+    process.env['ROSTER_CODEX_HOME'] = f.codexHome;
+    const tool = getToolByKey('codex')!;
+    const { logger } = silentLogger();
+
+    const result = await installToTool(tool, {
+      skills: skillsSrc(f),
+      agents: agentsSrc(f),
+      silent: true,
+      logger,
+    });
+
+    assert.equal(result.skillsCount, 2);
+    assert.equal(result.skillsTarget, join(f.codexHome, 'prompts'));
+
+    const samplePath = join(f.codexHome, 'prompts', 'sample-skill.md');
+    const otherPath = join(f.codexHome, 'prompts', 'other-skill.md');
+    assert.ok(existsSync(samplePath), 'flat-file skill written');
+    assert.ok(existsSync(otherPath), 'second flat-file skill written');
+    assert.equal(readFileSync(samplePath, 'utf8'), '# sample\n');
+    assert.equal(readFileSync(otherPath, 'utf8'), '# other\n');
+
+    // Non-SKILL.md assets must not leak into the flat layout.
+    assert.ok(!existsSync(join(f.codexHome, 'prompts', 'sample-skill')), 'no skill dir created');
+    assert.ok(!existsSync(join(f.codexHome, 'prompts', 'asset.txt')), 'asset not copied');
+  } finally {
+    delete process.env['ROSTER_CODEX_HOME'];
+    f.cleanup();
+  }
+});
+
+test('codex: agents copied as .md into agentsTarget; non-.md ignored', async () => {
+  const f = makeFixture();
+  try {
+    process.env['ROSTER_CODEX_HOME'] = f.codexHome;
+    const tool = getToolByKey('codex')!;
+    const { logger } = silentLogger();
+
+    const result = await installToTool(tool, {
+      skills: skillsSrc(f),
+      agents: agentsSrc(f),
+      silent: true,
+      logger,
+    });
+
+    assert.equal(result.agentsCount, 1);
+    assert.equal(result.agentsTarget, join(f.codexHome, 'agents'));
+    assert.ok(existsSync(join(f.codexHome, 'agents', 'lesson-drafter.md')));
+    assert.ok(!existsSync(join(f.codexHome, 'agents', 'ignored.txt')));
+  } finally {
+    delete process.env['ROSTER_CODEX_HOME'];
+    f.cleanup();
+  }
+});
+
+test('codex: install is idempotent — re-running produces identical files', async () => {
+  const f = makeFixture();
+  try {
+    process.env['ROSTER_CODEX_HOME'] = f.codexHome;
+    const tool = getToolByKey('codex')!;
+    const { logger } = silentLogger();
+
+    const first = await installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger });
+    const firstSnap = readFileSync(join(f.codexHome, 'prompts', 'sample-skill.md'), 'utf8');
+
+    const second = await installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger });
+    const secondSnap = readFileSync(join(f.codexHome, 'prompts', 'sample-skill.md'), 'utf8');
+
+    assert.deepEqual(first, second);
+    assert.equal(firstSnap, secondSnap);
+  } finally {
+    delete process.env['ROSTER_CODEX_HOME'];
+    f.cleanup();
+  }
+});
+
+test('codex: skill directory without SKILL.md is skipped + warns', async () => {
+  const f = makeFixture();
+  try {
+    process.env['ROSTER_CODEX_HOME'] = f.codexHome;
+    // Add a skill dir with no SKILL.md inside.
+    mkdirSync(join(f.source, 'skills', 'no-body-skill'), { recursive: true });
+    writeFileSync(join(f.source, 'skills', 'no-body-skill', 'README.md'), 'not a skill body\n');
+
+    const tool = getToolByKey('codex')!;
+    const { logger, warns } = silentLogger();
+
+    const result = await installToTool(tool, {
+      skills: skillsSrc(f),
+      agents: agentsSrc(f),
+      silent: true,
+      logger,
+    });
+
+    assert.equal(result.skillsCount, 2, 'only the two skills with SKILL.md counted');
+    assert.ok(!existsSync(join(f.codexHome, 'prompts', 'no-body-skill.md')));
+    assert.ok(
+      warns.some((w) => w.includes('no-body-skill') && w.includes('SKILL.md missing')),
+      'warns when SKILL.md missing',
+    );
+  } finally {
+    delete process.env['ROSTER_CODEX_HOME'];
+    f.cleanup();
+  }
+});
+
+test('codex: only SKILL.md is used — other .md siblings in a skill dir are ignored', async () => {
+  const f = makeFixture();
+  try {
+    process.env['ROSTER_CODEX_HOME'] = f.codexHome;
+    // Sibling notes.md inside an existing skill dir — must not leak into prompts/.
+    writeFileSync(join(f.source, 'skills', 'sample-skill', 'notes.md'), '# private notes\n');
+
+    const tool = getToolByKey('codex')!;
+    const { logger } = silentLogger();
+
+    await installToTool(tool, {
+      skills: skillsSrc(f),
+      agents: agentsSrc(f),
+      silent: true,
+      logger,
+    });
+
+    assert.equal(
+      readFileSync(join(f.codexHome, 'prompts', 'sample-skill.md'), 'utf8'),
+      '# sample\n',
+      'flat output equals SKILL.md body, not concatenated with siblings',
+    );
+    assert.ok(!existsSync(join(f.codexHome, 'prompts', 'notes.md')), 'sibling not promoted');
+  } finally {
+    delete process.env['ROSTER_CODEX_HOME'];
+    f.cleanup();
+  }
+});
+
+test('codex: EACCES is wrapped as RosterPermissionError with remedy', async () => {
+  if (process.getuid && process.getuid() === 0) return;
+
+  const f = makeFixture();
+  try {
+    process.env['ROSTER_CODEX_HOME'] = f.codexHome;
+    mkdirSync(f.codexHome, { recursive: true });
+    const { chmodSync } = await import('node:fs');
+    chmodSync(f.codexHome, 0o500);
+
+    const tool = getToolByKey('codex')!;
+    const { logger } = silentLogger();
+
+    await assert.rejects(
+      () => installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger }),
+      (err: unknown) => {
+        assert.ok(err instanceof RosterPermissionError, 'is RosterPermissionError');
+        assert.match(err.message, /Permission denied/);
+        assert.match(err.message, /sudo/);
+        return true;
+      },
+    );
+
+    chmodSync(f.codexHome, 0o700);
+  } finally {
+    delete process.env['ROSTER_CODEX_HOME'];
+    f.cleanup();
+  }
+});
+
+test('codex: symlink at flat-file target — decline-preserve leaves symlink intact', async () => {
+  const f = makeFixture();
+  try {
+    process.env['ROSTER_CODEX_HOME'] = f.codexHome;
+    const tool = getToolByKey('codex')!;
+
+    mkdirSync(join(f.codexHome, 'prompts'), { recursive: true });
+    const elsewhere = join(f.root, 'codex-elsewhere.md');
+    writeFileSync(elsewhere, 'live\n');
+    symlinkSync(elsewhere, join(f.codexHome, 'prompts', 'sample-skill.md'), 'file');
+
+    const { logger, warns } = silentLogger();
+    const declineConfirm: ConfirmFn = async () => false;
+
+    const result = await installToTool(tool, {
+      skills: skillsSrc(f),
+      agents: agentsSrc(f),
+      silent: true,
+      logger,
+      confirm: declineConfirm,
+    });
+
+    assert.ok(lstatSync(join(f.codexHome, 'prompts', 'sample-skill.md')).isSymbolicLink(), 'symlink preserved');
+    assert.equal(readFileSync(elsewhere, 'utf8'), 'live\n', 'symlink target untouched');
+    assert.equal(result.skillsCount, 1, 'only the non-symlink skill counted');
+    assert.ok(warns.some((w) => w.includes('preserved symlink')), 'warned about preservation');
+  } finally {
+    delete process.env['ROSTER_CODEX_HOME'];
+    f.cleanup();
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Gemini CLI (ROS-15) — directory-layout skills under ~/.gemini/extensions
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('gemini: ROSTER_GEMINI_HOME redirects writes to the override path', async () => {
+  const f = makeFixture();
+  try {
+    process.env['ROSTER_GEMINI_HOME'] = f.geminiHome;
+    const tool = getToolByKey('gemini');
+    assert.ok(tool, 'gemini tool definition exists');
+    assert.equal(tool.skillsTarget, join(f.geminiHome, 'extensions'));
+    assert.equal(tool.agentsTarget, join(f.geminiHome, 'agents'));
+    assert.equal(tool.skillsLayout, 'dir');
+    assert.equal(tool.skillsFileExt, null);
+  } finally {
+    delete process.env['ROSTER_GEMINI_HOME'];
+    f.cleanup();
+  }
+});
+
+test('gemini: skills copied as directories into extensions/, agents as .md', async () => {
+  const f = makeFixture();
+  try {
+    process.env['ROSTER_GEMINI_HOME'] = f.geminiHome;
+    const tool = getToolByKey('gemini')!;
+    const { logger } = silentLogger();
+
+    const result = await installToTool(tool, {
+      skills: skillsSrc(f),
+      agents: agentsSrc(f),
+      silent: true,
+      logger,
+    });
+
+    assert.equal(result.skillsCount, 2);
+    assert.equal(result.agentsCount, 1);
+    assert.equal(result.skillsTarget, join(f.geminiHome, 'extensions'));
+    assert.equal(result.agentsTarget, join(f.geminiHome, 'agents'));
+    assert.ok(existsSync(join(f.geminiHome, 'extensions', 'sample-skill', 'SKILL.md')));
+    assert.ok(existsSync(join(f.geminiHome, 'extensions', 'sample-skill', 'asset.txt')));
+    assert.ok(existsSync(join(f.geminiHome, 'extensions', 'other-skill', 'SKILL.md')));
+    assert.ok(existsSync(join(f.geminiHome, 'agents', 'lesson-drafter.md')));
+    assert.ok(!existsSync(join(f.geminiHome, 'agents', 'ignored.txt')));
+  } finally {
+    delete process.env['ROSTER_GEMINI_HOME'];
+    f.cleanup();
+  }
+});
+
+test('gemini: install is idempotent — re-running produces identical files', async () => {
+  const f = makeFixture();
+  try {
+    process.env['ROSTER_GEMINI_HOME'] = f.geminiHome;
+    const tool = getToolByKey('gemini')!;
+    const { logger } = silentLogger();
+
+    const first = await installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger });
+    const firstSnap = readFileSync(join(f.geminiHome, 'extensions', 'sample-skill', 'SKILL.md'), 'utf8');
+
+    const second = await installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger });
+    const secondSnap = readFileSync(join(f.geminiHome, 'extensions', 'sample-skill', 'SKILL.md'), 'utf8');
+
+    assert.deepEqual(first, second);
+    assert.equal(firstSnap, secondSnap);
+  } finally {
+    delete process.env['ROSTER_GEMINI_HOME'];
+    f.cleanup();
+  }
+});
+
+test('gemini: EACCES is wrapped as RosterPermissionError with remedy', async () => {
+  if (process.getuid && process.getuid() === 0) return;
+
+  const f = makeFixture();
+  try {
+    process.env['ROSTER_GEMINI_HOME'] = f.geminiHome;
+    mkdirSync(f.geminiHome, { recursive: true });
+    const { chmodSync } = await import('node:fs');
+    chmodSync(f.geminiHome, 0o500);
+
+    const tool = getToolByKey('gemini')!;
+    const { logger } = silentLogger();
+
+    await assert.rejects(
+      () => installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger }),
+      (err: unknown) => {
+        assert.ok(err instanceof RosterPermissionError, 'is RosterPermissionError');
+        assert.match(err.message, /Permission denied/);
+        assert.match(err.message, /sudo/);
+        return true;
+      },
+    );
+
+    chmodSync(f.geminiHome, 0o700);
+  } finally {
+    delete process.env['ROSTER_GEMINI_HOME'];
+    f.cleanup();
+  }
+});
+
+test('env overrides are re-read per call — changing ROSTER_*_HOME mid-process is honoured', async () => {
+  const f = makeFixture();
+  const secondCodexHome = join(f.root, 'codex-home-2');
+  try {
+    process.env['ROSTER_CODEX_HOME'] = f.codexHome;
+    const toolA = getToolByKey('codex')!;
+    assert.equal(toolA.skillsTarget, join(f.codexHome, 'prompts'));
+    const { logger } = silentLogger();
+    await installToTool(toolA, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger });
+    assert.ok(existsSync(join(f.codexHome, 'prompts', 'sample-skill.md')));
+
+    process.env['ROSTER_CODEX_HOME'] = secondCodexHome;
+    const toolB = getToolByKey('codex')!;
+    assert.equal(toolB.skillsTarget, join(secondCodexHome, 'prompts'), 'second call re-reads env');
+    await installToTool(toolB, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger });
+    assert.ok(existsSync(join(secondCodexHome, 'prompts', 'sample-skill.md')));
+    assert.ok(!existsSync(join(f.codexHome, 'prompts', 'should-not-exist.md')));
+  } finally {
+    delete process.env['ROSTER_CODEX_HOME'];
+    f.cleanup();
+  }
+});
+
+test('gemini: symlink at skill dir — accept-overwrite replaces with real dir', async () => {
+  const f = makeFixture();
+  try {
+    process.env['ROSTER_GEMINI_HOME'] = f.geminiHome;
+    const tool = getToolByKey('gemini')!;
+
+    mkdirSync(join(f.geminiHome, 'extensions'), { recursive: true });
+    const elsewhere = join(f.root, 'gemini-elsewhere');
+    mkdirSync(elsewhere, { recursive: true });
+    symlinkSync(elsewhere, join(f.geminiHome, 'extensions', 'sample-skill'), 'dir');
+
+    const { logger } = silentLogger();
+    const acceptConfirm: ConfirmFn = async () => true;
+
+    const result = await installToTool(tool, {
+      skills: skillsSrc(f),
+      agents: agentsSrc(f),
+      silent: true,
+      logger,
+      confirm: acceptConfirm,
+    });
+
+    const stat = lstatSync(join(f.geminiHome, 'extensions', 'sample-skill'));
+    assert.ok(stat.isDirectory(), 'replaced symlink with a real directory');
+    assert.ok(!stat.isSymbolicLink(), 'no symlink left');
+    assert.ok(existsSync(join(f.geminiHome, 'extensions', 'sample-skill', 'SKILL.md')));
+    assert.equal(result.skillsCount, 2);
+  } finally {
+    delete process.env['ROSTER_GEMINI_HOME'];
     f.cleanup();
   }
 });

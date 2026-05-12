@@ -18,15 +18,24 @@ export type Tool = {
 
 type ToolDefinition = Tool & { configRoot: string };
 
-// ROSTER_CLAUDE_HOME lets tests redirect Claude writes to a temp dir.
+// ROSTER_{CLAUDE,CODEX,GEMINI}_HOME let tests redirect writes to a temp dir.
 // Honoured here so detectTools() and downstream installs agree on paths.
 function claudeHome(): string {
   return process.env['ROSTER_CLAUDE_HOME'] ?? join(homedir(), '.claude');
 }
 
+function codexHome(): string {
+  return process.env['ROSTER_CODEX_HOME'] ?? join(homedir(), '.codex');
+}
+
+function geminiHome(): string {
+  return process.env['ROSTER_GEMINI_HOME'] ?? join(homedir(), '.gemini');
+}
+
 function defaultDefinitions(): ToolDefinition[] {
-  const home = homedir();
   const claude = claudeHome();
+  const codex = codexHome();
+  const gemini = geminiHome();
   return [
     {
       key: 'claude',
@@ -40,18 +49,18 @@ function defaultDefinitions(): ToolDefinition[] {
     {
       key: 'codex',
       name: 'Codex CLI',
-      configRoot: join(home, '.codex'),
-      skillsTarget: join(home, '.codex', 'prompts'),
-      agentsTarget: join(home, '.codex', 'agents'),
+      configRoot: codex,
+      skillsTarget: join(codex, 'prompts'),
+      agentsTarget: join(codex, 'agents'),
       skillsLayout: 'file',
       skillsFileExt: '.md',
     },
     {
       key: 'gemini',
       name: 'Gemini CLI',
-      configRoot: join(home, '.gemini'),
-      skillsTarget: join(home, '.gemini', 'extensions'),
-      agentsTarget: join(home, '.gemini', 'agents'),
+      configRoot: gemini,
+      skillsTarget: join(gemini, 'extensions'),
+      agentsTarget: join(gemini, 'agents'),
       skillsLayout: 'dir',
       skillsFileExt: null,
     },
