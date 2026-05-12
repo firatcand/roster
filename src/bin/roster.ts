@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { getPackageVersion, ROSTER_ROOT } from '../lib/paths.ts';
 import { detectTools, type Tool, type ToolKey } from '../lib/tools.ts';
 import { installToTool, RosterPermissionError, type InstallResult } from '../lib/install.ts';
+import { executeInit } from '../commands/init.ts';
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -160,9 +161,28 @@ async function runInstall(args: readonly string[]): Promise<number> {
   return EXIT_OK;
 }
 
-function runInit(_args: readonly string[]): number {
-  console.log(chalk.dim('init: not implemented yet (lands in ROS-7 / P1-T09)'));
-  return EXIT_OK;
+async function runInit(args: readonly string[]): Promise<number> {
+  const silent = args.includes('--silent');
+  const force = args.includes('--force');
+  const noGit = args.includes('--no-git') || args.includes('--skip-git');
+  // First non-flag positional arg is the project name.
+  const name = args.find((a) => !a.startsWith('-'));
+
+  if (!silent) printBanner(getPackageVersion());
+
+  try {
+    const result = await executeInit({
+      cwd: process.cwd(),
+      name,
+      silent,
+      force,
+      noGit,
+    });
+    return result.status === 'cancelled' ? EXIT_CANCELLED : EXIT_OK;
+  } catch (err: unknown) {
+    console.error(`${chalk.red.bold('roster:')} ${(err as Error).message ?? String(err)}`);
+    return EXIT_ERROR;
+  }
 }
 
 function runDoctor(_args: readonly string[]): number {
@@ -196,7 +216,7 @@ async function main(): Promise<number> {
 
   if (isSubcommand(first)) {
     if (first === 'install') return runInstall(rest);
-    if (first === 'init') return runInit(rest);
+    if (first === 'init') return await runInit(rest);
     if (first === 'doctor') return runDoctor(rest);
   }
 
