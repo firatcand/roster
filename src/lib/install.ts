@@ -92,12 +92,6 @@ async function copyOne(
 }
 
 export async function installToTool(tool: Tool, opts: InstallOptions): Promise<InstallResult> {
-  if (tool.key !== 'claude') {
-    throw new Error(
-      `installToTool: ${tool.key} not implemented in Phase 1 — lands in ROS-13/14/15 (Phase 2)`,
-    );
-  }
-
   const logger = opts.logger ?? consoleLogger;
   const confirm = opts.confirm ?? defaultConfirm;
   const silent = opts.silent ?? false;
@@ -120,8 +114,26 @@ export async function installToTool(tool: Tool, opts: InstallOptions): Promise<I
     const entries = readdirSync(opts.skills, { withFileTypes: true });
     for (const dirent of entries) {
       if (!dirent.isDirectory()) continue;
-      const srcPath = join(opts.skills, dirent.name);
-      const targetPath = join(tool.skillsTarget, dirent.name);
+      const srcDir = join(opts.skills, dirent.name);
+
+      let srcPath: string;
+      let targetPath: string;
+      if (tool.skillsLayout === 'file') {
+        // Codex-style: write SKILL.md body as a flat <name><ext> file.
+        const srcSkillMd = join(srcDir, 'SKILL.md');
+        if (!existsSync(srcSkillMd)) {
+          logger.warn(chalk.yellow(`  ! skill ${dirent.name}: SKILL.md missing — skipped`));
+          continue;
+        }
+        const ext = tool.skillsFileExt ?? '.md';
+        srcPath = srcSkillMd;
+        targetPath = join(tool.skillsTarget, `${dirent.name}${ext}`);
+      } else {
+        // Claude/Gemini-style: copy the whole skill directory.
+        srcPath = srcDir;
+        targetPath = join(tool.skillsTarget, dirent.name);
+      }
+
       info(chalk.dim(`  + skill ${dirent.name} -> ${targetPath}`));
       const written = await copyOne(srcPath, targetPath, 'skill', logger, confirm);
       if (written) skillsCount++;
