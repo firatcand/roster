@@ -83,21 +83,8 @@ export function getToolByKey(key: ToolKey): Tool | undefined {
   return def ? toPublic(def) : undefined;
 }
 
-export type InstallOptions = {
-  skills: string;
-  agents: string;
-};
-
-export type InstallResult = {
-  skillsCount: number;
-  skillsTarget: string;
-  agentsCount: number;
-  agentsTarget: string | null;
-};
-
-export function installToTool(_tool: Tool, _opts: InstallOptions): InstallResult {
-  throw new Error('installToTool: not implemented yet (ROS-5 / P1-T05)');
-}
+// installToTool moved to ./install.ts in ROS-5.
+// auditTool will land in ROS-19 (P2-T09) — its own module per the codex/cursor/gemini pattern.
 
 export type AuditResult = {
   ok: boolean;

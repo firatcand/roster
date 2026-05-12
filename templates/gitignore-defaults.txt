@@ -1,0 +1,28 @@
+# Roster defaults — managed by `roster init`; do not edit between markers
+
+# Secrets and credentials
+.env
+.env.local
+*.pem
+*.key
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Node
+node_modules/
+
+# Operation logs and run/feedback bodies — preserve directories with .gitkeep
+*/log/runs/2*/
+*/log/feedback/2*/
+
+# Temp / scratch
+**/scratch/
+**/tmp/
+**/.cache/
+
+# End Roster defaults
