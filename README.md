@@ -5,18 +5,18 @@
 
 # Roster
 
-> A CLI that installs and scaffolds an opinionated multi-agent workspace for Claude Code today, with Codex CLI / Cursor / Gemini support landing in v0.2 — role-based agents for GTM, product, design, and ops, with a reinforcement loop that compounds learning.
+> A CLI that installs and scaffolds an opinionated multi-agent workspace for Claude Code today, with Codex CLI and Gemini support landing in v0.2 — role-based agents for GTM, product, design, and ops, with a reinforcement loop that compounds learning.
 
 ## What is this?
 
 `@firatcand/roster` is an npm CLI. You run it once and it does two things:
 
-1. **`roster install`** — copies a curated set of skills and agent definitions into your AI coding tool's config dir. Today: `~/.claude/`. Coming in v0.2: `~/.codex/`, `~/.cursor/`, `~/.gemini/`.
+1. **`roster install`** — copies a curated set of skills and agent definitions into your AI coding tool's config dir. Today: `~/.claude/`. Coming in v0.2: `~/.codex/`, `~/.gemini/`.
 2. **`roster init`** — scaffolds a structured agent-team workspace in any directory. v0.1 produces the minimal scaffold (`CLAUDE.md` + `projects/_demo/`); v0.2 adds the full tree (function dirs, role-based agents, maintenance agent, reinforcement agent).
 
 The workspace it scaffolds separates **substrate** (strategic context: brand voice, ICPs, messaging) from **artifacts** (daily output: emails, posts, components), and runs work through named YAML **plans** that are deterministic, auditable, and schedule-friendly.
 
-If you're a solo founder or ≤5-person team using Claude Code (or Codex / Cursor / Gemini) and you need outbound, content, design, and ops work done without losing context between sessions — this might fit.
+If you're a solo founder or ≤5-person team using Claude Code (or Codex / Gemini) and you need outbound, content, design, and ops work done without losing context between sessions — this might fit.
 
 ## Quick start
 
@@ -48,8 +48,8 @@ See [docs/roadmap.md](docs/roadmap.md) for what's shipped today vs in flight. [d
 |---|---|
 | Claude Code | Phase 1 ✓ |
 | Codex CLI | Phase 2 |
-| Cursor | Phase 2 |
 | Gemini | Phase 2 |
+| Cursor | **Out of scope** — see [docs/roadmap.md](docs/roadmap.md) |
 
 ## What `init` scaffolds
 
