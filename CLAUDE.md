@@ -33,6 +33,7 @@ pnpm typecheck       # tsc --noEmit
 pnpm build           # tsdown → bin/roster.js with shebang
 pnpm test            # node --test on test/**/*.test.ts
 pnpm smoke           # bash test/smoke.sh — pack, install, init end-to-end
+pnpm e2e             # bash test/e2e-sdr.sh — init + SDR-contract gate (pass --keep to preserve the workspace for the manual Claude Code gate)
 npm pack --dry-run   # confirm tarball stays clean (~13kB, 11 files)
 ```
 

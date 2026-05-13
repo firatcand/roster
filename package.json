@@ -23,7 +23,8 @@
     "typecheck": "tsc --noEmit",
     "dev": "tsdown --watch",
     "test": "node --test --experimental-strip-types 'test/**/*.test.ts'",
-    "smoke": "bash test/smoke.sh"
+    "smoke": "bash test/smoke.sh",
+    "e2e": "bash test/e2e-sdr.sh"
   },
   "keywords": [
     "claude-code",
