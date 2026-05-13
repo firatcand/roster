@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { getPackageVersion, ROSTER_ROOT } from '../lib/paths.ts';
 import { detectTools, type Tool, type ToolKey } from '../lib/tools.ts';
 import { installToTool, RosterPermissionError, type InstallResult } from '../lib/install.ts';
+import { parseInstallArgs } from '../lib/install-args.ts';
 import { executeInit } from '../commands/init.ts';
 
 const EXIT_OK = 0;
@@ -47,6 +48,8 @@ function printHelp(version: string): void {
     `  -v, --version                ${chalk.dim('Print version and exit')}`,
     `  --silent                     ${chalk.dim('Suppress non-error output (install)')}`,
     `  --verbose                    ${chalk.dim('Log each file path written (install)')}`,
+    `  --all                        ${chalk.dim('Install to every detected tool (install)')}`,
+    `  --tool <name>                ${chalk.dim('Install to a single tool: claude | codex | gemini')}`,
     '',
     chalk.bold('Exit codes:'),
     `  ${EXIT_OK}  ${chalk.dim('success')}`,
@@ -117,8 +120,13 @@ async function promptForTools(detected: Tool[]): Promise<Tool[] | null> {
 }
 
 async function runInstall(args: readonly string[]): Promise<number> {
-  const silent = args.includes('--silent');
-  const verbose = args.includes('--verbose');
+  const parsed = parseInstallArgs(args);
+  if (parsed.kind === 'err') {
+    console.error(`${chalk.red.bold('roster:')} ${parsed.message}`);
+    console.error(`Run ${chalk.bold('roster --help')} for usage.`);
+    return EXIT_ERROR;
+  }
+  const { silent, verbose, target } = parsed;
   const version = getPackageVersion();
 
   if (!silent) printBanner(version);
@@ -129,7 +137,22 @@ async function runInstall(args: readonly string[]): Promise<number> {
     return EXIT_NO_TOOLS;
   }
 
-  const targetTools = await promptForTools(detected);
+  let targetTools: Tool[] | null;
+  if (target.mode === 'all') {
+    targetTools = detected;
+  } else if (target.mode === 'tool') {
+    const match = detected.find((t) => t.key === target.key);
+    if (!match) {
+      console.error(
+        `${chalk.red.bold('roster:')} ${target.key} not detected on this machine. Install it first or omit ${chalk.bold('--tool')}.`,
+      );
+      return EXIT_NO_TOOLS;
+    }
+    targetTools = [match];
+  } else {
+    targetTools = await promptForTools(detected);
+  }
+
   if (targetTools === null) {
     if (!silent) console.log(chalk.dim('Cancelled. Nothing written.'));
     return EXIT_CANCELLED;
@@ -138,12 +161,20 @@ async function runInstall(args: readonly string[]): Promise<number> {
   const skillsSrc = join(ROSTER_ROOT, 'skills');
   const agentsSrc = join(ROSTER_ROOT, 'agents');
 
+  // --all and --tool are documented as non-interactive (CI / scripted use).
+  // Suppress the symlink-replacement prompt by declining deterministically:
+  // preserves the user's symlink and surfaces a warning rather than hanging
+  // on a TTY-less stdin.
+  const nonInteractive = target.mode !== 'interactive';
+  const confirmFn = nonInteractive ? async (): Promise<boolean> => false : undefined;
+
   for (const tool of targetTools) {
     try {
       const result = await installToTool(tool, {
         skills: skillsSrc,
         agents: agentsSrc,
         silent: !verbose,
+        ...(confirmFn ? { confirm: confirmFn } : {}),
       });
       if (!silent) console.log(summarizeInstall(tool, result));
     } catch (err: unknown) {
