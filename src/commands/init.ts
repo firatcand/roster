@@ -1,11 +1,16 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { basename, join } from 'node:path';
-import fsExtra from 'fs-extra';
+import { basename, join, relative } from 'node:path';
 import chalk from 'chalk';
 import { ROSTER_ROOT } from '../lib/paths.ts';
-
-const { copy } = fsExtra;
 
 export type ConfirmFn = (message: string) => Promise<boolean>;
 
@@ -36,12 +41,92 @@ export type InitResult = {
 
 export const GITIGNORE_MARKER_START = '# Roster defaults';
 
+const FORGE_MARKERS = ['BRIEF.md', 'spec/PRD.md', 'plans/phases.yaml'];
+
+// Matches `<basename>.template` or `<basename>.template.<ext>`. Capture group
+// is the trailing extension (or empty), so the suffix can be replaced with the
+// captured ext to drop only `.template` from the filename.
+const TEMPLATE_SUFFIX_RE = /\.template(\.[^.]+)?$/;
+
 function readTemplate(name: string): string {
   return readFileSync(join(ROSTER_ROOT, 'templates', name), 'utf8');
 }
 
 export function substitute(template: string, vars: Record<string, string>): string {
   return template.replace(/\{\{(\w+)\}\}/g, (_, key: string) => vars[key] ?? `{{${key}}}`);
+}
+
+export function detectForgeMarkers(cwd: string): string[] {
+  return FORGE_MARKERS.filter((m) => existsSync(join(cwd, m)));
+}
+
+// Destination probes use lstat (not stat) so symlinks are detected as themselves
+// rather than followed. Non-template files: anything present at the path is
+// preserved (file, dir, symlink, broken symlink). Template files: a regular
+// file is overwritten; a symlink causes a hard error — refusing to write
+// through a link is a security boundary, not a UX choice.
+
+function entryAtPath(path: string): { exists: boolean; isSymlink: boolean } {
+  try {
+    const st = lstatSync(path);
+    return { exists: true, isSymlink: st.isSymbolicLink() };
+  } catch {
+    return { exists: false, isSymlink: false };
+  }
+}
+
+export function walkScaffold(
+  srcRoot: string,
+  dstRoot: string,
+  vars: Record<string, string>,
+): string[] {
+  const written: string[] = [];
+
+  function walk(srcDir: string, dstDir: string): void {
+    const entries = readdirSync(srcDir, { withFileTypes: true });
+    for (const entry of entries) {
+      const srcPath = join(srcDir, entry.name);
+
+      if (entry.isDirectory()) {
+        const subDst = join(dstDir, entry.name);
+        mkdirSync(subDst, { recursive: true });
+        walk(srcPath, subDst);
+        continue;
+      }
+
+      if (!entry.isFile()) {
+        throw new Error(
+          `roster: unexpected entry type in scaffold: ${srcPath}. ` +
+            `Scaffold must contain only regular files and directories.`,
+        );
+      }
+
+      if (TEMPLATE_SUFFIX_RE.test(entry.name)) {
+        const outName = entry.name.replace(TEMPLATE_SUFFIX_RE, '$1');
+        const dstPath = join(dstDir, outName);
+        const dst = entryAtPath(dstPath);
+        if (dst.isSymlink) {
+          throw new Error(
+            `roster: refusing to overwrite symlink at ${dstPath}. ` +
+              `Remove the symlink and re-run roster init.`,
+          );
+        }
+        const rendered = substitute(readFileSync(srcPath, 'utf8'), vars);
+        writeFileSync(dstPath, rendered, 'utf8');
+        written.push(relative(dstRoot, dstPath));
+        continue;
+      }
+
+      const dstPath = join(dstDir, entry.name);
+      if (entryAtPath(dstPath).exists) continue;
+      copyFileSync(srcPath, dstPath);
+      written.push(relative(dstRoot, dstPath));
+    }
+  }
+
+  mkdirSync(dstRoot, { recursive: true });
+  walk(srcRoot, dstRoot);
+  return written;
 }
 
 async function defaultConfirm(message: string): Promise<boolean> {
@@ -106,11 +191,19 @@ export async function executeInit(opts: InitOptions): Promise<InitResult> {
     if (!silent) logger.log(msg);
   };
 
+  const forgeMarkers = detectForgeMarkers(opts.cwd);
   const claudeMdPath = join(opts.cwd, 'CLAUDE.md');
-  if (existsSync(claudeMdPath) && !force) {
+  const claudeMdExists = existsSync(claudeMdPath);
+
+  if (claudeMdExists && !force) {
+    const message =
+      forgeMarkers.length > 0
+        ? `This looks like a forge-initialized project (found: ${forgeMarkers.join(', ')}). Running roster init will replace CLAUDE.md and add the agent-team scaffold. Continue?`
+        : `CLAUDE.md already exists in this directory. Overwrite?`;
+
     let ok: boolean;
     try {
-      ok = await confirm(`CLAUDE.md already exists in this directory. Overwrite?`);
+      ok = await confirm(message);
     } catch {
       ok = false;
     }
@@ -124,15 +217,25 @@ export async function executeInit(opts: InitOptions): Promise<InitResult> {
         gitInitialized: false,
       };
     }
+  } else if (forgeMarkers.length > 0 && !silent) {
+    logger.warn(
+      chalk.yellow(
+        `Detected forge artifacts (${forgeMarkers.join(', ')}); roster scaffold will be added alongside.`,
+      ),
+    );
   }
 
   const filesWritten: string[] = [];
 
   const scaffoldSrc = join(ROSTER_ROOT, 'templates', 'scaffold');
-  if (existsSync(scaffoldSrc)) {
-    await copy(scaffoldSrc, opts.cwd, { overwrite: true, errorOnExist: false });
-    filesWritten.push('projects/_demo/');
+  if (!existsSync(scaffoldSrc)) {
+    throw new Error(
+      `roster: scaffold templates missing at ${scaffoldSrc}. ` +
+        `This roster install is broken — reinstall with: npm install -g @firatcand/roster`,
+    );
   }
+  const scaffoldFiles = walkScaffold(scaffoldSrc, opts.cwd, { PROJECT_NAME: projectName });
+  filesWritten.push(...scaffoldFiles);
 
   writeClaudeMd(opts.cwd, projectName);
   filesWritten.push('CLAUDE.md');
@@ -150,7 +253,11 @@ export async function executeInit(opts: InitOptions): Promise<InitResult> {
   if (!silent) {
     info('');
     info(`${chalk.green('✓')} Initialized ${chalk.bold(projectName)} in ${opts.cwd}`);
-    info(chalk.dim('Files: ') + filesWritten.join(', '));
+    if (filesWritten.length > 8) {
+      info(chalk.dim(`Files: ${filesWritten.length} written`));
+    } else {
+      info(chalk.dim('Files: ') + filesWritten.join(', '));
+    }
     if (gitInitialized) info(chalk.dim('Git: initialized .git/'));
     info('');
     info(
