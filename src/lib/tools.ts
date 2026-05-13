@@ -7,6 +7,7 @@ export type ToolKey = 'claude' | 'codex' | 'gemini';
 export type Tool = {
   key: ToolKey;
   name: string;
+  configRoot: string;
   skillsTarget: string;
   agentsTarget: string | null;
   // "dir": each skill is a directory copied wholesale (Claude, Gemini)
@@ -16,7 +17,7 @@ export type Tool = {
   skillsFileExt: string | null;
 };
 
-type ToolDefinition = Tool & { configRoot: string };
+type ToolDefinition = Tool;
 
 // ROSTER_{CLAUDE,CODEX,GEMINI}_HOME let tests redirect writes to a temp dir.
 // Honoured here so detectTools() and downstream installs agree on paths.
@@ -67,31 +68,12 @@ function defaultDefinitions(): ToolDefinition[] {
   ];
 }
 
-function toPublic(def: ToolDefinition): Tool {
-  const { configRoot: _configRoot, ...tool } = def;
-  return tool;
-}
-
 export function detectTools(): Tool[] {
-  return defaultDefinitions()
-    .filter((def) => existsSync(def.configRoot))
-    .map(toPublic);
+  return defaultDefinitions().filter((def) => existsSync(def.configRoot));
 }
 
 export function getToolByKey(key: ToolKey): Tool | undefined {
-  const def = defaultDefinitions().find((d) => d.key === key);
-  return def ? toPublic(def) : undefined;
+  return defaultDefinitions().find((d) => d.key === key);
 }
 
-// installToTool moved to ./install.ts in ROS-5.
-// auditTool will land in ROS-19 (P2-T09) — its own module per the codex/gemini pattern.
-
-export type AuditResult = {
-  ok: boolean;
-  missing: string[];
-  stale: string[];
-};
-
-export function auditTool(_tool: Tool): AuditResult {
-  throw new Error('auditTool: not implemented yet (ROS-19 / P2-T09)');
-}
+// installToTool lives in ./install.ts (ROS-5). auditTool lives in ./audit.ts (ROS-19).
