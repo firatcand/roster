@@ -55,3 +55,8 @@ node_modules/
 /bin/
 /dist/
 
+# Personal learning store — local-only. The framework supports the workflow
+# (users get their own docs/learnings/ when they scaffold), but our entries
+# are CLI-development specific and don't ship with the open-source repo.
+docs/learnings/
+
