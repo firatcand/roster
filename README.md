@@ -38,6 +38,8 @@ See [docs/roadmap.md](docs/roadmap.md) for what's shipped today vs in flight. [d
 | Command | What it does |
 |---|---|
 | `roster install` | Detect installed AI tools, prompt for selection, copy skills + agents into each tool's config dir. Idempotent. |
+| `roster install --all` | Install to every detected tool, non-interactive (good for CI / scripted migration). |
+| `roster install --tool <name>` | Install to a single named tool (`claude`, `codex`, or `gemini`), non-interactive. |
 | `roster init [name]` | Scaffold the agent-team workspace into CWD. Substitutes `{{PROJECT_NAME}}`. |
 | `roster doctor` | (Phase 2) Audit installed skills/agents for drift; report missing or stale components. |
 | `roster --help` / `--version` | Usage + version from `package.json`. |
