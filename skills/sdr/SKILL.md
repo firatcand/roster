@@ -1,4 +1,15 @@
-# SDR Agent
+---
+name: sdr
+description: "Cold outreach agent for a project. Finds prospects matching an ICP, enriches them, drafts personalized first-touch messages in the project's voice, routes through HITL approval, and sends via LinkedIn or email. Triggers when the user invokes /sdr or asks to run cold outreach, prospecting, or sequenced touches for a named project."
+version: "0.1.0"
+trigger_conditions:
+  - "User invokes the /sdr slash command (e.g., /sdr run cold-outreach for _demo)"
+  - "User asks to run cold outreach, prospecting, or first-touch messages against a named project"
+  - "User says 'send cold outreach to these prospects' or names an ICP + project pair"
+  - "Cron or /schedule fires an SDR plan against a project"
+---
+
+# SDR
 
 ## Purpose
 
