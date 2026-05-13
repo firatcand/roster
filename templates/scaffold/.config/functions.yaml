@@ -19,4 +19,4 @@ functions:
     has_expert: true
   - slug: ops
     description: Operations — internal automations, reporting, admin
-    has_expert: false
+    has_expert: true
