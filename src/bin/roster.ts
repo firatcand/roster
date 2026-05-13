@@ -6,7 +6,9 @@ import { getPackageVersion, ROSTER_ROOT } from '../lib/paths.ts';
 import { detectTools, type Tool, type ToolKey } from '../lib/tools.ts';
 import { installToTool, RosterPermissionError, type InstallResult } from '../lib/install.ts';
 import { parseInstallArgs } from '../lib/install-args.ts';
+import { parseDoctorArgs } from '../lib/doctor-args.ts';
 import { executeInit } from '../commands/init.ts';
+import { executeDoctor } from '../commands/doctor.ts';
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -50,6 +52,7 @@ function printHelp(version: string): void {
     `  --verbose                    ${chalk.dim('Log each file path written (install)')}`,
     `  --all                        ${chalk.dim('Install to every detected tool (install)')}`,
     `  --tool <name>                ${chalk.dim('Install to a single tool: claude | codex | gemini')}`,
+    `  --json                       ${chalk.dim('Emit machine-readable JSON (doctor)')}`,
     '',
     chalk.bold('Exit codes:'),
     `  ${EXIT_OK}  ${chalk.dim('success')}`,
@@ -215,9 +218,13 @@ async function runInit(args: readonly string[]): Promise<number> {
   }
 }
 
-function runDoctor(_args: readonly string[]): number {
-  console.log(chalk.dim('doctor: not implemented yet (lands in ROS-19 / P2-T09)'));
-  return EXIT_OK;
+function runDoctor(args: readonly string[]): number {
+  const parsed = parseDoctorArgs(args);
+  if (parsed.kind === 'err') {
+    console.error(`${chalk.red.bold('roster:')} ${parsed.message}`);
+    return EXIT_ERROR;
+  }
+  return executeDoctor({ json: parsed.json, silent: parsed.silent });
 }
 
 function isSubcommand(value: string): value is Subcommand {
