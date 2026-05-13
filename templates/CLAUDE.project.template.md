@@ -12,8 +12,9 @@ config at the workspace root.
 ## Layout
 
 - `chief-of-staff/` — repo maintenance agent (CRUD on projects, agents, functions)
+- `dreamer/` — reflection agent; promotes lessons from runs to playbooks
 - `projects/_demo/` — placeholder project; copy + rename for real work
-- `gtm/`, `product/`, `design/`, `ops/` — function-level homes (added in Phase 2)
+- `gtm/`, `product/`, `design/`, `ops/` — function-level homes
 
 Each `<function>/<agent>/agent.md` is the contract that defines that agent's inputs,
 steps, tools, and outputs. Subagents live in `<function>/<agent>/subagents/`. Per-project
@@ -27,9 +28,8 @@ named plan against a named project, writing a run log on completion.
 
 ## Conventions
 
-See `conventions.md` (added in Phase 2 by `roster init`) for the full reference: file
-naming, lesson schema, run-log format, project structure. When the convention isn't
-clear, ask before guessing.
+See `conventions.md` for the full reference: file naming, lesson schema, run-log
+format, project structure. When the convention isn't clear, ask before guessing.
 
 ## What you should NOT do
 
@@ -41,5 +41,5 @@ clear, ask before guessing.
 
 ## When in doubt
 
-Read `conventions.md` once it exists, otherwise ask. This workspace is shared with
-collaborators and future-you; an inconsistent convention is worse than a missing one.
+Read `conventions.md`. This workspace is shared with collaborators and future-you;
+an inconsistent convention is worse than a missing one.
