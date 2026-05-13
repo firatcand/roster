@@ -42,12 +42,12 @@ When invoked without a plan, the agent lists available plans and asks which to r
 
 - `prospector.md` — finds prospects matching criteria. Read-only against external data sources.
 - `enricher.md` — fills missing fields on existing prospects.
-- `writer.md` — drafts outreach copy in project voice; also performs the send step using channel tools.
+- `writer.md` — drafts outreach copy in project voice. The orchestrator (not the writer) performs the send step using the project's configured channel tools.
 - `critic.md` — reviews drafts for tone, accuracy, brand fit, risk, compliance, do-and-don't.
 
 ## Tools and bindings
 
-Per-project tool bindings expected by this agent. Chief-of-staff prompts for these when scaffolding a new agent-instance. Values land in `projects/<project>/config/default.yaml` under a `tools:` key.
+Per-project tool bindings expected by this agent. Chief-of-staff prompts for these when scaffolding a new agent-instance. Values land in `gtm/sdr/projects/<project>/config/default.yaml` under a `tools:` key.
 
 `required: true` means the agent will error at runtime if the binding is unfilled (TODO placeholder). `required: false` means the agent uses the binding when present and skips the related capability when absent.
 
