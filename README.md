@@ -18,20 +18,31 @@ The workspace it scaffolds separates **substrate** (strategic context: brand voi
 
 If you're a solo founder or ≤5-person team using Claude Code (or Codex / Gemini) and you need outbound, content, design, and ops work done without losing context between sessions — this might fit.
 
-## Quick start
+## Getting started
+
+First-time install and first run — under 10 minutes on a Mac with Node ≥ 22.
 
 ```bash
-# Install — no clone, no setup
+# 1. Install skills + agents into your AI tool's config dir
 npx @firatcand/roster install
 
-# Scaffold a workspace in a fresh directory
+# 2. Scaffold a workspace in a fresh directory
 mkdir my-team && cd my-team
 npx @firatcand/roster init
+
+# 3. Open Claude Code in that directory
+claude
+
+# 4. Run the demo SDR plan
+/sdr run cold-outreach for _demo
+
+# 5. Read the run log and provide feedback — lessons surface
+#    in dreamer/pending/ on the next nightly reinforcement pass.
 ```
 
-**Heads-up on v0.1**: Phase 1 ships the CLI plumbing — `install` writes the `chief-of-staff` skill into `~/.claude/skills/`, `init` writes a minimal `CLAUDE.md` + `projects/_demo/`. The full agent-team workflow (running `/sdr`, `/chief-of-staff`, etc. against a populated workspace) lights up in v0.2 when `init` scaffolds the full tree (`conventions.md`, function dirs, scripts) and `install` ships the rest of the skills.
+> Until v0.1 is published to npm, install locally with `npm pack && npm install -g firatcand-roster-*.tgz` from a clone. See [docs/roadmap.md](docs/roadmap.md) for publish status.
 
-See [docs/roadmap.md](docs/roadmap.md) for what's shipped today vs in flight. [docs/HOWTO.md](docs/HOWTO.md) has the full step-by-step.
+[docs/HOWTO.md](docs/HOWTO.md) has the long-form step-by-step.
 
 ## Subcommands
 
@@ -41,24 +52,26 @@ See [docs/roadmap.md](docs/roadmap.md) for what's shipped today vs in flight. [d
 | `roster install --all` | Install to every detected tool, non-interactive (good for CI / scripted migration). |
 | `roster install --tool <name>` | Install to a single named tool (`claude`, `codex`, or `gemini`), non-interactive. |
 | `roster init [name]` | Scaffold the agent-team workspace into CWD. Substitutes `{{PROJECT_NAME}}`. |
-| `roster doctor` | (Phase 2) Audit installed skills/agents for drift; report missing or stale components. |
+| `roster doctor` | Audit installed skills/agents per AI tool; exits non-zero on drift. |
 | `roster --help` / `--version` | Usage + version from `package.json`. |
 
 ## Tool support
 
-| Tool | Status |
-|---|---|
-| Claude Code | Phase 1 ✓ |
-| Codex CLI | Phase 2 |
-| Gemini | Phase 2 |
-| Cursor | **Out of scope** — see [docs/roadmap.md](docs/roadmap.md) |
+| Tool | Status | Skills installed to | Agents installed to |
+|---|---|---|---|
+| Claude Code | Supported | `~/.claude/skills/<skill>/` (directory per skill) | `~/.claude/agents/<agent>.md` |
+| Codex CLI | Supported | `~/.codex/prompts/<skill>.md` (flat file per skill) | `~/.codex/agents/<agent>.md` |
+| Gemini CLI | Supported | `~/.gemini/extensions/<skill>/` (directory per skill) | `~/.gemini/agents/<agent>.md` |
+| Cursor | **Out of scope** — see [docs/roadmap.md](docs/roadmap.md) | — | — |
+
+Detection is presence-only: roster considers a tool installed if its config root exists. Override via `ROSTER_CLAUDE_HOME` / `ROSTER_CODEX_HOME` / `ROSTER_GEMINI_HOME` (used by the test suite).
 
 ## What `init` scaffolds
 
-The full target layout below shows the v0.2 scaffold. **v0.1 produces a minimal subset** — `CLAUDE.md` + `projects/_demo/` only. The rest lands as the Phase 2 scaffold work merges (see [docs/roadmap.md](docs/roadmap.md)).
+`roster init` is non-destructive — re-running merges new files in without overwriting your edits. The full scaffold:
 
 ```
-my-team/                            ← v0.2 full layout
+my-team/                            ← full layout
 ├── CLAUDE.md, conventions.md       ← workspace-level context
 ├── gtm/, product/, design/, ops/   ← functions (top-level domains)
 │   ├── EXPERT.md                   ← function-level expert (substrate-shaping)
@@ -79,6 +92,39 @@ The two big ideas behind the layout:
 
 1. **Substrate vs artifacts**: experts shape substrate (project guidelines), agents produce artifacts (specific outputs). Don't conflate them.
 2. **Plans**: each agent has named plans (YAML workflow recipes). Cron-friendly. Auditable. Reusable.
+
+## Migrating from agent-team
+
+If you've been running the original `~/repos/agent-team` layout, here's the verbatim migration. Project substrate and `.env` carry over; the framework (skills, agents, scripts, conventions) comes from `roster init`.
+
+```bash
+# 1. Install roster (locally until v0.1 publishes; npx after)
+npx @firatcand/roster install
+
+# 2. Scaffold a fresh workspace
+mkdir ~/repos/my-agent-team && cd ~/repos/my-agent-team
+npx @firatcand/roster init
+
+# 3. Copy project-level substrate (guidelines, ICPs, brand voice)
+cp -r ~/repos/agent-team/projects/{athelea,firatdogan} projects/
+
+# 4. Copy per-agent project instances (run logs, configs)
+cp -r ~/repos/agent-team/gtm/sdr/projects/* gtm/sdr/projects/
+
+# 5. Copy credentials
+cp ~/repos/agent-team/.env .env
+
+# 6. Archive the old repo
+mv ~/repos/agent-team ~/repos/_archived/agent-team
+```
+
+Adjust the project names in step 3 to match what's actually under your `agent-team/projects/`, and extend step 4 for every function that has its own `projects/` dir (e.g. `gtm/content/projects/`, `product/pm/projects/`).
+
+Audit after migration:
+
+```bash
+roster doctor          # confirms skills + agents are in place
+```
 
 ## Documentation
 
