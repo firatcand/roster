@@ -4,9 +4,12 @@ on:
     branches: [main]
   push:
     branches: [main]
+permissions:
+  contents: read
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v3
@@ -21,3 +24,5 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: npm pack --dry-run
+      - run: pnpm smoke
+      - run: pnpm e2e
