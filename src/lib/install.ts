@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, readdirSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import fsExtra from 'fs-extra';
 import chalk from 'chalk';
 import type { Tool } from './tools.ts';
@@ -41,6 +41,37 @@ export class RosterPermissionError extends Error {
     );
     this.name = 'RosterPermissionError';
     this.targetPath = targetPath;
+  }
+}
+
+export class RosterPathTraversalError extends Error {
+  public readonly target: string;
+  public readonly root: string;
+  public readonly label: string;
+  constructor(target: string, root: string, label: string) {
+    super(`Refusing to write ${label} outside configRoot: ${target} is not under ${root}`);
+    this.name = 'RosterPathTraversalError';
+    this.target = target;
+    this.root = root;
+    this.label = label;
+  }
+}
+
+// Internal invariant check. Not a defense against ROSTER_*_HOME=/etc; that env var is
+// trusted input on the same level as the invoking user. Catches future bugs where a
+// Tool is constructed with a target outside its own configRoot, and provides
+// defense-in-depth against per-entry name escapes during copy. See ROS-30 plan + the
+// security.test.ts header for the full threat-model writeup.
+// Exported so the per-entry defense-in-depth callsites can be unit-tested directly —
+// real POSIX `dirent.name` cannot contain `/`, so the validator's per-entry behavior
+// is otherwise unreachable from integration tests.
+export function assertWithinRoot(target: string, root: string, label: string): void {
+  const absRoot = resolve(root);
+  const absTarget = resolve(target);
+  const rel = relative(absRoot, absTarget);
+  if (rel === '' || rel === '.') return;
+  if (rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) {
+    throw new RosterPathTraversalError(absTarget, absRoot, label);
   }
 }
 
@@ -99,6 +130,11 @@ export async function installToTool(tool: Tool, opts: InstallOptions): Promise<I
     if (!silent) logger.log(msg);
   };
 
+  assertWithinRoot(tool.skillsTarget, tool.configRoot, 'skillsTarget');
+  if (tool.agentsTarget) {
+    assertWithinRoot(tool.agentsTarget, tool.configRoot, 'agentsTarget');
+  }
+
   try {
     await ensureDir(tool.skillsTarget);
     if (tool.agentsTarget) await ensureDir(tool.agentsTarget);
@@ -134,6 +170,7 @@ export async function installToTool(tool: Tool, opts: InstallOptions): Promise<I
         targetPath = join(tool.skillsTarget, dirent.name);
       }
 
+      assertWithinRoot(targetPath, tool.configRoot, 'skill targetPath');
       info(chalk.dim(`  + skill ${dirent.name} -> ${targetPath}`));
       const written = await copyOne(srcPath, targetPath, 'skill', logger, confirm);
       if (written) skillsCount++;
@@ -147,6 +184,7 @@ export async function installToTool(tool: Tool, opts: InstallOptions): Promise<I
       if (!dirent.isFile() || !dirent.name.endsWith('.md')) continue;
       const srcPath = join(opts.agents, dirent.name);
       const targetPath = join(tool.agentsTarget, dirent.name);
+      assertWithinRoot(targetPath, tool.configRoot, 'agent targetPath');
       info(chalk.dim(`  + agent ${dirent.name} -> ${targetPath}`));
       const written = await copyOne(srcPath, targetPath, 'agent', logger, confirm);
       if (written) agentsCount++;
