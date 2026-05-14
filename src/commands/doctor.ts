@@ -4,15 +4,12 @@ import { join } from 'node:path';
 import { auditTool, type ItemStatus, type ToolAuditResult } from '../lib/audit.ts';
 import { detectTools } from '../lib/tools.ts';
 import { ROSTER_ROOT, getPackageVersion } from '../lib/paths.ts';
+import { EXIT_OK, EXIT_ERROR, EXIT_NO_TOOLS } from '../lib/errors.ts';
 
 export type DoctorOptions = {
   json: boolean;
   silent: boolean;
 };
-
-const EXIT_OK = 0;
-const EXIT_ERROR = 1;
-const EXIT_NO_TOOLS = 3;
 
 type Summary = { ok: number; missing: number; stale: number };
 
@@ -83,11 +80,8 @@ export function executeDoctor(opts: DoctorOptions): number {
         note: 'no tools detected',
       };
       console.log(JSON.stringify(payload, null, 2));
-    } else {
-      console.error(`${chalk.red.bold('roster:')} no AI tools detected on this machine.`);
-      console.error('');
-      console.error('Install Claude Code, Codex CLI, or Gemini CLI, then re-run.');
     }
+    // Non-JSON: runner (runDoctor in roster.ts) renders the structured error.
     return EXIT_NO_TOOLS;
   }
 

@@ -131,12 +131,29 @@ test('doctor --json after deleting a skill: ok=false, item missing', () => {
   }
 });
 
-test('doctor with no tools detected exits 3 and prints hint to stderr', () => {
+test('doctor with no tools detected exits 3 and prints structured hint with install links', () => {
   const h = makeHomes([]);
   try {
     const doc = runCli(['doctor'], envFor(h));
     assert.equal(doc.status, 3, `stderr: ${doc.stderr}\nstdout: ${doc.stdout}`);
     assert.match(doc.stderr, /no AI tools/i);
+    assert.match(doc.stderr, /Claude Code/);
+    assert.match(doc.stderr, /https:\/\/claude\.ai\/code/);
+    assert.match(doc.stderr, /Codex CLI/);
+    assert.match(doc.stderr, /Gemini CLI/);
+    // No stack trace without --debug.
+    assert.doesNotMatch(doc.stderr, /\bat\s+.+:\d+:\d+\)/);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('doctor --debug with no tools includes a stack trace on stderr', () => {
+  const h = makeHomes([]);
+  try {
+    const doc = runCli(['doctor', '--debug'], envFor(h));
+    assert.equal(doc.status, 3, `stderr: ${doc.stderr}\nstdout: ${doc.stdout}`);
+    assert.match(doc.stderr, /\bat\s+/, 'stack frame present');
   } finally {
     h.cleanup();
   }

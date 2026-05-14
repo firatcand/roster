@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import fsExtra from 'fs-extra';
 import chalk from 'chalk';
 import type { Tool } from './tools.ts';
+import { permissionError } from './errors.ts';
 
 const { copy, ensureDir } = fsExtra;
 
@@ -28,21 +29,6 @@ export type InstallResult = {
   agentsCount: number;
   agentsTarget: string | null;
 };
-
-export class RosterPermissionError extends Error {
-  public readonly targetPath: string;
-  constructor(targetPath: string, cause: NodeJS.ErrnoException) {
-    super(
-      [
-        `Permission denied: ${targetPath}`,
-        `  cause: ${cause.code}${cause.syscall ? ` (${cause.syscall})` : ''}`,
-        `  remedy: re-run with sudo, or run \`sudo chown -R "$USER" ${targetPath}\``,
-      ].join('\n'),
-    );
-    this.name = 'RosterPermissionError';
-    this.targetPath = targetPath;
-  }
-}
 
 export class RosterPathTraversalError extends Error {
   public readonly target: string;
@@ -116,7 +102,7 @@ async function copyOne(
     return true;
   } catch (err: unknown) {
     if (isEacces(err)) {
-      throw new RosterPermissionError(targetPath, err);
+      throw permissionError(targetPath, err);
     }
     throw err;
   }
@@ -140,7 +126,7 @@ export async function installToTool(tool: Tool, opts: InstallOptions): Promise<I
     if (tool.agentsTarget) await ensureDir(tool.agentsTarget);
   } catch (err: unknown) {
     if (isEacces(err)) {
-      throw new RosterPermissionError(tool.skillsTarget, err);
+      throw permissionError(tool.skillsTarget, err);
     }
     throw err;
   }

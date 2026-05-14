@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process';
 import { basename, join, relative } from 'node:path';
 import chalk from 'chalk';
 import { ROSTER_ROOT } from '../lib/paths.ts';
+import { missingScaffoldError } from '../lib/errors.ts';
 
 export type ConfirmFn = (message: string) => Promise<boolean>;
 
@@ -208,7 +209,6 @@ export async function executeInit(opts: InitOptions): Promise<InitResult> {
       ok = false;
     }
     if (!ok) {
-      info(chalk.dim('Cancelled. Nothing written.'));
       return {
         status: 'cancelled',
         workspaceRoot: opts.cwd,
@@ -229,10 +229,7 @@ export async function executeInit(opts: InitOptions): Promise<InitResult> {
 
   const scaffoldSrc = join(ROSTER_ROOT, 'templates', 'scaffold');
   if (!existsSync(scaffoldSrc)) {
-    throw new Error(
-      `roster: scaffold templates missing at ${scaffoldSrc}. ` +
-        `This roster install is broken — reinstall with: npm install -g @firatcand/roster`,
-    );
+    throw missingScaffoldError(scaffoldSrc);
   }
   const scaffoldFiles = walkScaffold(scaffoldSrc, opts.cwd, { PROJECT_NAME: projectName });
   filesWritten.push(...scaffoldFiles);

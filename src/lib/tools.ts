@@ -15,6 +15,7 @@ export type Tool = {
   skillsLayout: 'dir' | 'file';
   // File extension when skillsLayout === 'file' (e.g., ".md", ".mdc"). null for dir layout.
   skillsFileExt: string | null;
+  installLink: string;
 };
 
 type ToolDefinition = Tool;
@@ -46,6 +47,7 @@ function defaultDefinitions(): ToolDefinition[] {
       agentsTarget: join(claude, 'agents'),
       skillsLayout: 'dir',
       skillsFileExt: null,
+      installLink: 'https://claude.ai/code',
     },
     {
       key: 'codex',
@@ -55,6 +57,7 @@ function defaultDefinitions(): ToolDefinition[] {
       agentsTarget: join(codex, 'agents'),
       skillsLayout: 'file',
       skillsFileExt: '.md',
+      installLink: 'https://github.com/openai/codex',
     },
     {
       key: 'gemini',
@@ -64,12 +67,17 @@ function defaultDefinitions(): ToolDefinition[] {
       agentsTarget: join(gemini, 'agents'),
       skillsLayout: 'dir',
       skillsFileExt: null,
+      installLink: 'https://github.com/google-gemini/gemini-cli',
     },
   ];
 }
 
 export function detectTools(): Tool[] {
   return defaultDefinitions().filter((def) => existsSync(def.configRoot));
+}
+
+export function allTools(): Tool[] {
+  return defaultDefinitions();
 }
 
 export function getToolByKey(key: ToolKey): Tool | undefined {
