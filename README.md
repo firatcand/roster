@@ -155,6 +155,14 @@ MIT. See [LICENSE](LICENSE).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Contributors working on the CLI itself should read [CLAUDE.md](CLAUDE.md) for build/test/layout conventions.
 
+### CI / branch protection
+
+PRs into `main` run [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — typecheck, test, build, `npm pack --dry-run`, `pnpm smoke`, `pnpm e2e`. Repo admins should enable branch protection on `main` (one-time manual step in **Settings → Branches → Branch protection rules → Add rule**):
+
+- Require status checks to pass before merging: `CI / verify`
+- Require branches to be up-to-date before merging
+- (Optional) Require linear history
+
 ## Acknowledgments
 
 Built on top of [Claude Code](https://claude.com/code) and the broader AI-coding-tool ecosystem.
