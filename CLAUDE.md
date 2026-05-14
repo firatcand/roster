@@ -37,7 +37,7 @@ pnpm e2e             # bash test/e2e-sdr.sh — init + SDR-contract gate (pass -
 npm pack --dry-run   # confirm tarball stays clean (~13kB, 11 files)
 ```
 
-The Phase gate command (run before opening a PR): `pnpm typecheck && pnpm test && pnpm build`.
+The Phase gate command (run before opening a PR): `pnpm typecheck && pnpm build && pnpm test`.
 
 ## Where things live in the CLI
 
