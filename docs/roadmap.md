@@ -14,34 +14,31 @@ Closed **2026-05-12**. Retro: [retros/phase-1.md](retros/phase-1.md).
 
 Status: not published to npm yet — locally installable via `npm pack && npm install -g <tarball>`.
 
-## v0.2.0 — Phase 2: Core Features (active)
+## v0.2.0 — Phase 2: Core Features (complete)
 
-Goal: every supported AI tool works end-to-end. After `install` and `init`, running `/sdr run cold-outreach for _demo` in Claude Code writes a real run log.
+Closed **2026-05-14**. Retro: [retros/phase-2.md](retros/phase-2.md).
 
-### In scope
+- Full skill/agent content shipped — `dreamer`, `sdr`, `chief-of-staff` skills with companion agents.
+- All four AI-tool targets — Claude Code, Codex CLI, Gemini, plus multi-tool selection (`--all`, `--tool <name>`).
+- Full `templates/scaffold/` tree — `init` lays down the complete workspace, non-destructive on re-run.
+- `roster doctor` — detects missing/stale skills and reports drift; exits 1 on mismatch.
+- Hardening — structured error UX with `--debug`, path-traversal security audit, GitHub Actions CI with smoke + e2e gates.
 
-| ID | Task | Notes |
-|---|---|---|
-| ROS-9 | Port `dreamer` + `sdr` skills + agents | Skill content lives in `skills/`; agents in `agents/`. |
-| ROS-12 | Port `EXPERT.md` files into `templates/scaffold/` | Workspace-resident, not installed to AI-tool dirs. |
-| ROS-13 | Codex CLI tool target | Skills as flat `.md` in `~/.codex/prompts/`. |
-| ROS-15 | Gemini CLI tool target | Skills as dirs in `~/.gemini/extensions/`. |
-| ROS-16 | Multi-tool selection (`--all`, `--tool <name>`) | Checkbox pre-selects all detected. |
-| ROS-17 | Full `templates/scaffold/` tree | Largest content task. |
-| ROS-18 | Extend `init` to copy full scaffold | Non-destructive merge on re-run. |
-| ROS-19 | `roster doctor` | Detect missing/stale skills; exit 1 if drift. |
-| ROS-29 | Node unit tests for core lib | `detectTools`, `installToTool`, path-traversal guard, `{{PROJECT_NAME}}` substitution. |
+## v0.2.5 — Phase 2.5: Scheduling primitives (planning)
 
-### Gate criteria
+Goal: schedule roster agents on macOS and Windows via each tool's native local scheduler (Claude Desktop Scheduled Tasks; Codex Automations or `codex exec` cron). All firing is subscription-billed — no Agent SDK or `claude -p`. Each scheduled fire is a fresh CLI session that loads `CONTEXT.md`, invokes the `roster-orchestrator` skill, and dispatches subagents in isolated context. HITL items flow through a filesystem queue surfaced as banners in any chat session.
 
-- `pnpm typecheck && pnpm test && pnpm build` exit 0.
-- `roster install` works on all four AI tools.
-- `roster doctor` exits 0 on a fresh install, exits 1 after a skill is deleted.
-- `roster init` produces the full workspace tree.
-- After `install` + `init`, `/sdr run cold-outreach for _demo` writes a run log in Claude Code.
-- Both commands remain idempotent across re-runs.
+Architecture decision: [ADR-0001 Scheduling architecture](adr/0001-scheduling-architecture.md).
 
-## v0.3.0+ — Phase 3 (planned)
+### In scope (highlights)
+
+- `CONTEXT.md` template + symlink (macOS/Linux) or dual-write (Windows) of `CLAUDE.md` / `AGENTS.md` from `roster init`.
+- `roster-orchestrator` skill that bootstraps from `CONTEXT.md` on every fresh session.
+- `roster schedule install --tool <claude|codex> [--via cron]` — writes crontab line or prints UI-import spec.
+- HITL queue + SessionStart banner surface.
+- `roster doctor` extended to detect symlink, crontab, and `.env` drift; static audit that no installed skill imports the Anthropic SDK or invokes `claude -p`.
+
+## v0.3.0+ — Phase 3: Polish and Launch (blocked on 2.5)
 
 - Published to npm under `@firatcand/roster`.
 - Migration docs for users coming from the original `~/repos/agent-team` layout.

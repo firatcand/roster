@@ -17,6 +17,7 @@ logs/cron/*.log
 
 # Large binary brand assets (use external storage)
 .dogfood/projects/*/brand/assets/
+roster-banner*.png
 *.mp4
 *.mov
 *.psd
