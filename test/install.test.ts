@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, lstatSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { installToTool, RosterPermissionError, type ConfirmFn, type InstallLogger } from '../src/lib/install.ts';
+import { installToTool, type ConfirmFn, type InstallLogger } from '../src/lib/install.ts';
 import { getToolByKey } from '../src/lib/tools.ts';
+import { RosterError, EXIT_ERROR } from '../src/lib/errors.ts';
 
 type Fixture = {
   root: string;
@@ -174,7 +175,7 @@ test('symlink at target path: accept-overwrite removes symlink + writes real fil
   }
 });
 
-test('EACCES is caught and rethrown as RosterPermissionError with a remedy', async () => {
+test('EACCES is caught and rethrown as a structured RosterError with a remedy', async () => {
   // Skip on root since chmod won't induce EACCES.
   if (process.getuid && process.getuid() === 0) return;
 
@@ -182,7 +183,6 @@ test('EACCES is caught and rethrown as RosterPermissionError with a remedy', asy
   try {
     process.env['ROSTER_CLAUDE_HOME'] = f.claudeHome;
     mkdirSync(f.claudeHome, { recursive: true });
-    // Make claudeHome read-only so ensureDir(skills) hits EACCES.
     const { chmodSync } = await import('node:fs');
     chmodSync(f.claudeHome, 0o500);
 
@@ -192,15 +192,16 @@ test('EACCES is caught and rethrown as RosterPermissionError with a remedy', asy
     await assert.rejects(
       () => installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger }),
       (err: unknown) => {
-        assert.ok(err instanceof RosterPermissionError, 'is RosterPermissionError');
-        assert.match(err.message, /Permission denied/);
-        assert.match(err.message, /sudo/, 'includes sudo remedy');
-        assert.match(err.message, new RegExp(f.claudeHome.replace(/[/\\]/g, '.')), 'includes target path');
+        assert.ok(err instanceof RosterError, 'is RosterError');
+        const e = err as RosterError;
+        assert.match(e.header, /permission denied/i, 'header mentions permission denied');
+        assert.match(e.remedy, /sudo/, 'remedy mentions sudo');
+        assert.match(e.body, new RegExp(f.claudeHome.replace(/[/\\]/g, '.')), 'body includes target path');
+        assert.equal(e.exitCode, EXIT_ERROR);
         return true;
       },
     );
 
-    // Restore perms so cleanup can rm the dir.
     chmodSync(f.claudeHome, 0o700);
   } finally {
     delete process.env['ROSTER_CLAUDE_HOME'];
@@ -365,7 +366,7 @@ test('codex: only SKILL.md is used — other .md siblings in a skill dir are ign
   }
 });
 
-test('codex: EACCES is wrapped as RosterPermissionError with remedy', async () => {
+test('codex: EACCES is wrapped as RosterError with remedy', async () => {
   if (process.getuid && process.getuid() === 0) return;
 
   const f = makeFixture();
@@ -381,9 +382,11 @@ test('codex: EACCES is wrapped as RosterPermissionError with remedy', async () =
     await assert.rejects(
       () => installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger }),
       (err: unknown) => {
-        assert.ok(err instanceof RosterPermissionError, 'is RosterPermissionError');
-        assert.match(err.message, /Permission denied/);
-        assert.match(err.message, /sudo/);
+        assert.ok(err instanceof RosterError, 'is RosterError');
+        const e = err as RosterError;
+        assert.match(e.header, /permission denied/i);
+        assert.match(e.remedy, /sudo/);
+        assert.equal(e.exitCode, EXIT_ERROR);
         return true;
       },
     );
@@ -497,7 +500,7 @@ test('gemini: install is idempotent — re-running produces identical files', as
   }
 });
 
-test('gemini: EACCES is wrapped as RosterPermissionError with remedy', async () => {
+test('gemini: EACCES is wrapped as RosterError with remedy', async () => {
   if (process.getuid && process.getuid() === 0) return;
 
   const f = makeFixture();
@@ -513,9 +516,11 @@ test('gemini: EACCES is wrapped as RosterPermissionError with remedy', async () 
     await assert.rejects(
       () => installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger }),
       (err: unknown) => {
-        assert.ok(err instanceof RosterPermissionError, 'is RosterPermissionError');
-        assert.match(err.message, /Permission denied/);
-        assert.match(err.message, /sudo/);
+        assert.ok(err instanceof RosterError, 'is RosterError');
+        const e = err as RosterError;
+        assert.match(e.header, /permission denied/i);
+        assert.match(e.remedy, /sudo/);
+        assert.equal(e.exitCode, EXIT_ERROR);
         return true;
       },
     );

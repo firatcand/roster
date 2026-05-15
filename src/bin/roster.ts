@@ -3,26 +3,28 @@ import chalk from 'chalk';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getPackageVersion, ROSTER_ROOT } from '../lib/paths.ts';
-import { detectTools, type Tool, type ToolKey } from '../lib/tools.ts';
-import { installToTool, RosterPermissionError, type InstallResult } from '../lib/install.ts';
+import { allTools, detectTools, type Tool, type ToolKey } from '../lib/tools.ts';
+import { installToTool, type InstallResult } from '../lib/install.ts';
 import { parseInstallArgs } from '../lib/install-args.ts';
 import { parseDoctorArgs } from '../lib/doctor-args.ts';
 import { executeInit } from '../commands/init.ts';
 import { executeDoctor } from '../commands/doctor.ts';
-
-const EXIT_OK = 0;
-const EXIT_ERROR = 1;
-const EXIT_CANCELLED = 2;
-const EXIT_NO_TOOLS = 3;
+import {
+  EXIT_OK,
+  EXIT_ERROR,
+  EXIT_CANCELLED,
+  EXIT_NO_TOOLS,
+  RosterError,
+  isRosterError,
+  noToolsError,
+  renderError,
+  unexpectedError,
+  userCancelledInit,
+  userCancelledInstall,
+} from '../lib/errors.ts';
 
 type Subcommand = 'install' | 'init' | 'doctor';
 const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>(['install', 'init', 'doctor']);
-
-const TOOL_INSTALL_LINKS: ReadonlyArray<string> = [
-  'Claude Code:  https://claude.ai/code',
-  'Codex CLI:    https://github.com/openai/codex',
-  'Gemini CLI:   https://github.com/google-gemini/gemini-cli',
-];
 
 function tildify(path: string): string {
   const home = homedir();
@@ -53,6 +55,7 @@ function printHelp(version: string): void {
     `  --all                        ${chalk.dim('Install to every detected tool (install)')}`,
     `  --tool <name>                ${chalk.dim('Install to a single tool: claude | codex | gemini')}`,
     `  --json                       ${chalk.dim('Emit machine-readable JSON (doctor)')}`,
+    `  --debug                      ${chalk.dim('Print full stack trace on error (global)')}`,
     '',
     chalk.bold('Exit codes:'),
     `  ${EXIT_OK}  ${chalk.dim('success')}`,
@@ -66,21 +69,17 @@ function printHelp(version: string): void {
   console.log();
 }
 
-function exitUnknown(command: string): never {
-  console.error(`${chalk.red.bold('roster:')} unknown command ${chalk.yellow(`'${command}'`)}`);
-  console.error(`Run ${chalk.bold('roster --help')} to see available commands.`);
-  process.exit(EXIT_ERROR);
+function unknownCommandError(command: string): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} unknown command ${chalk.yellow(`'${command}'`)}`,
+    body: '',
+    remedy: `  Run ${chalk.bold('roster --help')} to see available commands.`,
+    exitCode: EXIT_ERROR,
+  });
 }
 
-function printNoToolsHint(): void {
-  console.error(`${chalk.red.bold('roster:')} no AI tools detected on this machine.`);
-  console.error('');
-  console.error('Install at least one of:');
-  for (const link of TOOL_INSTALL_LINKS) {
-    console.error(`  ${link}`);
-  }
-  console.error('');
-  console.error(`Re-run ${chalk.bold('roster install')} after installing one.`);
+function toolHints(tools: ReadonlyArray<Tool>): ReadonlyArray<{ name: string; installLink: string }> {
+  return tools.map((t) => ({ name: t.name, installLink: t.installLink }));
 }
 
 function summarizeInstall(tool: Tool, result: InstallResult): string {
@@ -125,9 +124,12 @@ async function promptForTools(detected: Tool[]): Promise<Tool[] | null> {
 async function runInstall(args: readonly string[]): Promise<number> {
   const parsed = parseInstallArgs(args);
   if (parsed.kind === 'err') {
-    console.error(`${chalk.red.bold('roster:')} ${parsed.message}`);
-    console.error(`Run ${chalk.bold('roster --help')} for usage.`);
-    return EXIT_ERROR;
+    throw new RosterError({
+      header: `${chalk.red.bold('roster:')} ${parsed.message}`,
+      body: '',
+      remedy: `  Run ${chalk.bold('roster --help')} for usage.`,
+      exitCode: EXIT_ERROR,
+    });
   }
   const { silent, verbose, target } = parsed;
   const version = getPackageVersion();
@@ -136,8 +138,7 @@ async function runInstall(args: readonly string[]): Promise<number> {
 
   const detected = detectTools();
   if (detected.length === 0) {
-    printNoToolsHint();
-    return EXIT_NO_TOOLS;
+    throw noToolsError(toolHints(allTools()));
   }
 
   let targetTools: Tool[] | null;
@@ -146,10 +147,12 @@ async function runInstall(args: readonly string[]): Promise<number> {
   } else if (target.mode === 'tool') {
     const match = detected.find((t) => t.key === target.key);
     if (!match) {
-      console.error(
-        `${chalk.red.bold('roster:')} ${target.key} not detected on this machine. Install it first or omit ${chalk.bold('--tool')}.`,
-      );
-      return EXIT_NO_TOOLS;
+      throw new RosterError({
+        header: `${chalk.red.bold('roster:')} ${target.key} not detected on this machine`,
+        body: `  --tool ${target.key} was requested, but no ${target.key} install was found.`,
+        remedy: `  Install it first, or omit ${chalk.bold('--tool')} to install to all detected tools.`,
+        exitCode: EXIT_NO_TOOLS,
+      });
     }
     targetTools = [match];
   } else {
@@ -157,34 +160,26 @@ async function runInstall(args: readonly string[]): Promise<number> {
   }
 
   if (targetTools === null) {
-    if (!silent) console.log(chalk.dim('Cancelled. Nothing written.'));
-    return EXIT_CANCELLED;
+    throw userCancelledInstall();
   }
 
   const skillsSrc = join(ROSTER_ROOT, 'skills');
   const agentsSrc = join(ROSTER_ROOT, 'agents');
 
-  // --all and --tool are documented as non-interactive (CI / scripted use).
-  // Suppress the symlink-replacement prompt by declining deterministically:
-  // preserves the user's symlink and surfaces a warning rather than hanging
-  // on a TTY-less stdin.
+  // --all and --tool are non-interactive (CI / scripted use): decline the
+  // symlink-replacement prompt deterministically so install doesn't hang
+  // waiting on TTY-less stdin (ROS-16).
   const nonInteractive = target.mode !== 'interactive';
   const confirmFn = nonInteractive ? async (): Promise<boolean> => false : undefined;
 
   for (const tool of targetTools) {
-    try {
-      const result = await installToTool(tool, {
-        skills: skillsSrc,
-        agents: agentsSrc,
-        silent: !verbose,
-        ...(confirmFn ? { confirm: confirmFn } : {}),
-      });
-      if (!silent) console.log(summarizeInstall(tool, result));
-    } catch (err: unknown) {
-      const message = err instanceof RosterPermissionError ? err.message : (err as Error).message ?? String(err);
-      console.error(`${chalk.red.bold('roster:')} ${message}`);
-      return EXIT_ERROR;
-    }
+    const result = await installToTool(tool, {
+      skills: skillsSrc,
+      agents: agentsSrc,
+      silent: !verbose,
+      ...(confirmFn ? { confirm: confirmFn } : {}),
+    });
+    if (!silent) console.log(summarizeInstall(tool, result));
   }
 
   if (!silent) {
@@ -198,42 +193,48 @@ async function runInit(args: readonly string[]): Promise<number> {
   const silent = args.includes('--silent');
   const force = args.includes('--force');
   const noGit = args.includes('--no-git') || args.includes('--skip-git');
-  // First non-flag positional arg is the project name.
   const name = args.find((a) => !a.startsWith('-'));
 
   if (!silent) printBanner(getPackageVersion());
 
-  try {
-    const result = await executeInit({
-      cwd: process.cwd(),
-      name,
-      silent,
-      force,
-      noGit,
-    });
-    return result.status === 'cancelled' ? EXIT_CANCELLED : EXIT_OK;
-  } catch (err: unknown) {
-    console.error(`${chalk.red.bold('roster:')} ${(err as Error).message ?? String(err)}`);
-    return EXIT_ERROR;
-  }
+  const result = await executeInit({
+    cwd: process.cwd(),
+    name,
+    silent,
+    force,
+    noGit,
+  });
+  if (result.status === 'cancelled') throw userCancelledInit();
+  return EXIT_OK;
 }
 
 function runDoctor(args: readonly string[]): number {
   const parsed = parseDoctorArgs(args);
   if (parsed.kind === 'err') {
-    console.error(`${chalk.red.bold('roster:')} ${parsed.message}`);
-    return EXIT_ERROR;
+    throw new RosterError({
+      header: `${chalk.red.bold('roster:')} ${parsed.message}`,
+      body: '',
+      remedy: `  Run ${chalk.bold('roster --help')} for usage.`,
+      exitCode: EXIT_ERROR,
+    });
   }
-  return executeDoctor({ json: parsed.json, silent: parsed.silent });
+  const code = executeDoctor({ json: parsed.json, silent: parsed.silent });
+  if (code === EXIT_NO_TOOLS && !parsed.json) {
+    throw noToolsError(toolHints(allTools()));
+  }
+  return code;
 }
 
 function isSubcommand(value: string): value is Subcommand {
   return SUBCOMMANDS.has(value);
 }
 
+const rawArgs = process.argv.slice(2);
+const debugMode = rawArgs.includes('--debug');
+
 async function main(): Promise<number> {
-  const args = process.argv.slice(2);
   const version = getPackageVersion();
+  const args = debugMode ? rawArgs.filter((a) => a !== '--debug') : rawArgs;
 
   if (args.includes('--help') || args.includes('-h')) {
     printHelp(version);
@@ -257,13 +258,13 @@ async function main(): Promise<number> {
     if (first === 'doctor') return runDoctor(rest);
   }
 
-  exitUnknown(first);
+  throw unknownCommandError(first);
 }
 
 main()
   .then((code) => process.exit(code))
   .catch((err: unknown) => {
-    console.error(`${chalk.red.bold('roster:')} unhandled error`);
-    console.error(err);
-    process.exit(EXIT_ERROR);
+    const rosterErr = isRosterError(err) ? err : unexpectedError(err);
+    renderError(rosterErr, { debug: debugMode });
+    process.exit(rosterErr.exitCode);
   });

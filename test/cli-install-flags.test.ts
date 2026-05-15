@@ -172,3 +172,62 @@ test('install --help shows --all and --tool flags', () => {
   assert.match(r.stdout, /--all/);
   assert.match(r.stdout, /--tool/);
 });
+
+test('--help documents the global --debug flag', () => {
+  const r = runCli(['--help'], {});
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /--debug/);
+});
+
+test('install with no detected tools exits 3 and lists every tool with install link', () => {
+  const h = makeHomes([]);
+  try {
+    const r = runCli(['install'], {
+      ROSTER_CLAUDE_HOME: h.claude,
+      ROSTER_CODEX_HOME: h.codex,
+      ROSTER_GEMINI_HOME: h.gemini,
+    });
+    assert.equal(r.status, 3, `stderr: ${r.stderr}`);
+    assert.match(r.stderr, /no AI tools detected/i, 'header present');
+    assert.match(r.stderr, /Claude Code/);
+    assert.match(r.stderr, /https:\/\/claude\.ai\/code/);
+    assert.match(r.stderr, /Codex CLI/);
+    assert.match(r.stderr, /github\.com\/openai\/codex/);
+    assert.match(r.stderr, /Gemini CLI/);
+    assert.match(r.stderr, /google-gemini/);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('install --debug on success exits 0 with no extra stderr stack output', () => {
+  const h = makeHomes(['claude']);
+  try {
+    const r = runCli(['install', '--all', '--silent', '--debug'], {
+      ROSTER_CLAUDE_HOME: h.claude,
+      ROSTER_CODEX_HOME: h.codex,
+      ROSTER_GEMINI_HOME: h.gemini,
+    });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    // No stack frames printed on a successful run, regardless of --debug.
+    assert.doesNotMatch(r.stderr, /\bat\s+.+:\d+:\d+\)/);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('install --tool unknown exits 1 and stderr header is structured (no stack without --debug)', () => {
+  const h = makeHomes(['claude']);
+  try {
+    const r = runCli(['install', '--tool', 'foo'], {
+      ROSTER_CLAUDE_HOME: h.claude,
+      ROSTER_CODEX_HOME: h.codex,
+      ROSTER_GEMINI_HOME: h.gemini,
+    });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /roster:/i, 'has roster: prefix');
+    assert.doesNotMatch(r.stderr, /\bat\s+.+:\d+:\d+\)/, 'no stack without --debug');
+  } finally {
+    h.cleanup();
+  }
+});
