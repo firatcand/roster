@@ -247,6 +247,17 @@ The [publish workflow](.github/workflows/publish.yml) runs the full quality gate
 
 No additional setup is needed for provenance — the workflow's `id-token: write` permission handles OIDC attestation automatically.
 
+**One-time setup — `production` environment (manual `workflow_dispatch` approval gate):**
+
+The publish workflow's `workflow_dispatch` trigger lets a maintainer manually re-run a publish against an existing tag (used for partial-publish recovery). To prevent anyone with `Actions: write` from triggering an unreviewed publish, manual dispatches are gated behind a GitHub environment named `production` that requires maintainer approval. Tag-push releases (the canonical `git tag vX.Y.Z && git push --tags` path) are **not** gated — they run immediately.
+
+1. GitHub repo → **Settings → Environments → New environment**, name: `production`.
+2. **Required reviewers:** add the maintainer (Firat). Leave "Prevent self-review" **off** so the maintainer can approve their own dispatches.
+3. **Wait timer:** 0.
+4. **Deployment branches and tags:** "Selected branches and tags" → add a tag rule with pattern `v*`.
+
+After this, any manual `workflow_dispatch` of the publish workflow will pause in "Waiting for review" state until approved in the Actions UI.
+
 **Pre-release tags** (e.g. `v0.1.0-rc.1`) are detected by suffix and automatically published to the `next` dist-tag on npm and marked as pre-release on GitHub. Stable tags publish to `latest`.
 
 If a bad version ships, `npm deprecate @firatcand/roster@<version> "<reason>"` and publish a fix as the next patch — never reuse a version number.

@@ -18,6 +18,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    environment: ${{ github.event_name == 'workflow_dispatch' && 'production' || '' }}
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
