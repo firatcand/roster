@@ -163,6 +163,31 @@ PRs into `main` run [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — t
 - Require branches to be up-to-date before merging
 - (Optional) Require linear history
 
+### Publishing / Releases
+
+Releases are triggered by pushing a version tag:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+The [publish workflow](.github/workflows/publish.yml) runs the full quality gate (`typecheck`, `test`, `build`), asserts the tag matches `package.json` version, publishes to npm with provenance, and creates a GitHub Release with auto-generated notes.
+
+**One-time setup — `NPM_TOKEN` secret:**
+
+1. Mint a Granular Access Token at [npmjs.com](https://www.npmjs.com/) → Account → Access Tokens → Generate New Token → Granular.
+   - Permissions: **Read and write** scoped to `@firatcand/roster` (publish; deprecation is intentionally kept manual — see rollback note below).
+   - Set an expiry (90–365 days recommended).
+2. In this repo: **Settings → Secrets and variables → Actions → New repository secret**.
+   - Name: `NPM_TOKEN`
+   - Value: the token from step 1.
+
+No additional setup is needed for provenance — the workflow's `id-token: write` permission handles OIDC attestation automatically.
+
+**Pre-release tags** (e.g. `v0.1.0-rc.1`) are detected by suffix and automatically published to the `next` dist-tag on npm and marked as pre-release on GitHub. Stable tags publish to `latest`.
+
+If a bad version ships, `npm deprecate @firatcand/roster@<version> "<reason>"` and publish a fix as the next patch — never reuse a version number.
+
 ## Acknowledgments
 
 Built on top of [Claude Code](https://claude.com/code) and the broader AI-coding-tool ecosystem.
