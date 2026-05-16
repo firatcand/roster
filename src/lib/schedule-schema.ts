@@ -142,18 +142,16 @@ export const scheduleEntrySchema = z
     plan: kebabString('plan'),
     cron: cronString,
     tool: z.enum(TOOL_VALUES, {
-      errorMap: (issue, ctx) => ({
-        message: `tool: must be one of ${TOOL_VALUES.map((v) => `'${v}'`).join(' | ')}${
-          issue.code === 'invalid_enum_value' ? ` (got '${String(ctx.data)}')` : ''
-        }`,
-      }),
+      error: (issue) => {
+        const base = `tool: must be one of ${TOOL_VALUES.map((v) => `'${v}'`).join(' | ')}`;
+        return issue.code === 'invalid_value' ? `${base} (got '${String(issue.input)}')` : base;
+      },
     }),
     install_mode: z.enum(INSTALL_MODE_VALUES, {
-      errorMap: (issue, ctx) => ({
-        message: `install_mode: must be one of ${INSTALL_MODE_VALUES.map((v) => `'${v}'`).join(' | ')}${
-          issue.code === 'invalid_enum_value' ? ` (got '${String(ctx.data)}')` : ''
-        }`,
-      }),
+      error: (issue) => {
+        const base = `install_mode: must be one of ${INSTALL_MODE_VALUES.map((v) => `'${v}'`).join(' | ')}`;
+        return issue.code === 'invalid_value' ? `${base} (got '${String(issue.input)}')` : base;
+      },
     }),
     timezone: timezoneString.optional(),
     max_duration_minutes: z
@@ -197,7 +195,7 @@ export type FieldError = {
 };
 
 export function flattenZodErrors(error: z.ZodError): FieldError[] {
-  return error.errors.map((e) => ({
+  return error.issues.map((e) => ({
     path: e.path.length === 0 ? '<root>' : e.path.map((p) => String(p)).join('.'),
     message: e.message,
   }));
