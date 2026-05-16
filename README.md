@@ -248,6 +248,19 @@ The [publish workflow](.github/workflows/publish.yml) runs the full quality gate
 
 No additional setup is needed for provenance — the workflow's `id-token: write` permission handles OIDC attestation automatically.
 
+**One-time setup — `production` environment (manual `workflow_dispatch` approval gate):**
+
+The publish workflow's `workflow_dispatch` trigger lets a maintainer manually run a publish against an existing tag (used for partial-publish recovery). To prevent anyone with `Actions: write` from triggering an unreviewed publish, manual dispatches are gated behind a GitHub environment named `production` that requires maintainer approval. Tag-push releases (the canonical `git tag vX.Y.Z && git push --tags` path) are **not** gated — they run immediately.
+
+1. GitHub repo → **Settings → Environments → New environment**, name: `production`.
+2. **Required reviewers:** add the maintainer (Firat). **Do NOT enable "Prevent self-review"** — this is a solo-maintainer project and enabling it would leave every dispatch permanently stuck.
+3. **Wait timer:** 0.
+4. **Deployment branches and tags:** leave on the default "All branches and tags." A `v*` tag rule sounds appealing as belt-and-suspenders but actually blocks `workflow_dispatch` — on dispatch, `github.ref` is the default branch, not the tag (which is supplied separately via the `tag` input and checked out later in the job).
+
+Because self-approval is allowed, the maintainer account becomes the only barrier between an `Actions: write` actor and an npm publish. **Enable TOTP-based 2FA on the GitHub account** (and on the npm account that owns `NPM_TOKEN`) as the compensating control.
+
+After this, any manual `workflow_dispatch` of the publish workflow will pause in "Waiting for review" state until approved in the Actions UI.
+
 **Pre-release tags** (e.g. `v0.1.0-rc.1`) are detected by suffix and automatically published to the `next` dist-tag on npm and marked as pre-release on GitHub. Stable tags publish to `latest`.
 
 If a bad version ships, `npm deprecate @firatcand/roster@<version> "<reason>"` and publish a fix as the next patch — never reuse a version number.
