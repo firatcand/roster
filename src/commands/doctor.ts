@@ -6,6 +6,7 @@ import { detectTools } from '../lib/tools.ts';
 import { ROSTER_ROOT, getPackageVersion } from '../lib/paths.ts';
 import { EXIT_OK, EXIT_ERROR, EXIT_NO_TOOLS } from '../lib/errors.ts';
 import { auditWorkspace, type WorkspaceAuditResult, type SymlinkStatus } from '../lib/project-context.ts';
+import { validateSchedulesInCwd, type ValidationReport } from '../lib/schedule-validate.ts';
 
 export type DoctorOptions = {
   json: boolean;
@@ -53,6 +54,24 @@ function workspaceLabel(status: SymlinkStatus): string {
     case 'is-directory': return chalk.red('IS DIRECTORY');
     case 'unreadable': return chalk.red('UNREADABLE');
   }
+}
+
+function renderSchedulingSection(report: ValidationReport): string[] {
+  if (report.files.length === 0) return [];
+  const lines: string[] = [''];
+  lines.push(`Scheduling  ${tildify(report.cwd)}`);
+  for (const file of report.files) {
+    if (file.status === 'pass') {
+      const entryWord = file.entryCount === 1 ? 'entry' : 'entries';
+      lines.push(`  ${chalk.green('✓')} ${file.relativePath}   ${chalk.dim('OK')} ${chalk.dim(`(${file.entryCount} ${entryWord})`)}`);
+    } else {
+      lines.push(`  ${chalk.red('✗')} ${file.relativePath}   ${chalk.red('FAIL')}`);
+      for (const e of file.errors) {
+        lines.push(`      ${chalk.red('-')} ${chalk.dim(e.path + ':')} ${e.message}`);
+      }
+    }
+  }
+  return lines;
 }
 
 function renderWorkspaceSection(audit: WorkspaceAuditResult): string[] {
@@ -115,15 +134,17 @@ export function executeDoctor(opts: DoctorOptions): number {
   };
 
   const workspace = auditWorkspace(opts.cwd);
+  const scheduling = validateSchedulesInCwd(opts.cwd);
 
   if (detected.length === 0) {
     if (opts.json) {
       const payload = {
-        ok: true,
+        ok: scheduling.ok,
         rosterVersion: getPackageVersion(),
         tools: [],
         summary: { ok: 0, missing: 0, stale: 0 },
         workspace,
+        scheduling,
         note: 'no tools detected',
       };
       console.log(JSON.stringify(payload, null, 2));
@@ -134,7 +155,7 @@ export function executeDoctor(opts: DoctorOptions): number {
 
   const results = detected.map((t) => auditTool(t, sources));
   const summary = computeSummary(results);
-  const allOk = results.every((r) => r.ok) && workspace.ok;
+  const allOk = results.every((r) => r.ok) && workspace.ok && scheduling.ok;
 
   if (opts.json) {
     const payload = {
@@ -143,11 +164,13 @@ export function executeDoctor(opts: DoctorOptions): number {
       tools: results,
       summary,
       workspace,
+      scheduling,
     };
     console.log(JSON.stringify(payload, null, 2));
   } else if (!opts.silent) {
     for (const line of renderText(results, summary)) console.log(line);
     for (const line of renderWorkspaceSection(workspace)) console.log(line);
+    for (const line of renderSchedulingSection(scheduling)) console.log(line);
   }
 
   return allOk ? EXIT_OK : EXIT_ERROR;

@@ -69,7 +69,8 @@ Without `--all`, you'll get an interactive checkbox to pick which tools to recei
 | `roster install --all` | Install to every detected tool, non-interactive (good for CI / scripted migration). |
 | `roster install --tool <name>` | Install to a single named tool (`claude`, `codex`, or `gemini`), non-interactive. |
 | `roster init [name]` | Scaffold the agent-team workspace into CWD. Substitutes `{{PROJECT_NAME}}`. |
-| `roster doctor` | Audit installed skills/agents per AI tool; exits non-zero on drift. |
+| `roster doctor` | Audit installed skills/agents per AI tool; exits non-zero on drift. Includes a Scheduling section that runs `schedule validate` against the current workspace. |
+| `roster schedule validate` | Validate every `roster/<function>/schedules.yaml` file in the workspace. `--json` / `--silent` / `--cwd <dir>`. Exits non-zero on schema or cron errors. |
 | `roster --help` / `--version` | Usage + version from `package.json`. |
 
 ## Tool support
