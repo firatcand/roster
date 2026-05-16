@@ -11,7 +11,7 @@
 
 `@firatcand/roster` is an npm CLI. You run it once and it does two things:
 
-1. **`roster install`** — copies a curated set of skills and agent definitions into your AI coding tool's config dir. Today: `~/.claude/`. Coming in v0.2: `~/.codex/`, `~/.gemini/`.
+1. **`roster install`** — copies a curated set of skills and agent definitions into your AI coding tool's config dir. Detects and installs to `~/.claude/`, `~/.codex/`, and `~/.gemini/`.
 2. **`roster init`** — scaffolds a structured agent-team workspace in any directory. v0.1 produces the minimal scaffold (`CLAUDE.md` + `projects/_demo/`); v0.2 adds the full tree (function dirs, role-based agents, maintenance agent, reinforcement agent).
 
 The workspace it scaffolds separates **substrate** (strategic context: brand voice, ICPs, messaging) from **artifacts** (daily output: emails, posts, components), and runs work through named YAML **plans** that are deterministic, auditable, and schedule-friendly.
@@ -44,6 +44,23 @@ claude
 
 [docs/HOWTO.md](docs/HOWTO.md) has the long-form step-by-step.
 
+### What `roster install` looks like
+
+```
+$ npx --yes @firatcand/roster install --all
+
+roster v0.1.0
+Multi-agent workspace scaffolder for Claude Code, Codex CLI, and Gemini.
+
+✓ Claude Code — 3 skills → ~/.claude/skills, 7 agents → ~/.claude/agents
+✓ Codex CLI — 3 skills → ~/.codex/prompts, 7 agents → ~/.codex/agents
+✓ Gemini CLI — 3 skills → ~/.gemini/extensions, 7 agents → ~/.gemini/agents
+
+Next: roster init to scaffold a workspace.
+```
+
+Without `--all`, you'll get an interactive checkbox to pick which tools to receive the skills + agents. Exit codes: 0 success, 1 error, 2 cancelled, 3 no tools detected.
+
 ## Subcommands
 
 | Command | What it does |
@@ -65,6 +82,32 @@ claude
 | Cursor | **Out of scope** — see [docs/roadmap.md](docs/roadmap.md) | — | — |
 
 Detection is presence-only: roster considers a tool installed if its config root exists. Override via `ROSTER_CLAUDE_HOME` / `ROSTER_CODEX_HOME` / `ROSTER_GEMINI_HOME` (used by the test suite).
+
+## What roster installs
+
+`roster install` copies three skills and seven agents into each detected tool's config dir. Skills are the entry points (one per agent function); agents are the building blocks the skills call.
+
+**Skills**
+
+| Skill | Purpose |
+|---|---|
+| `chief-of-staff` | Repo maintenance for roster workspaces — create, archive, rename, and audit projects, agents, and functions. Wraps `scripts/` with confirmation gates for destructive operations. |
+| `dreamer` | Off-hours reflection. Reads recent runs + feedback, detects recurring patterns, drafts lesson candidates, and writes approved lessons to the right playbook scope. The only agent that writes to playbook files. |
+| `sdr` | Cold outreach for a project — find prospects matching an ICP, enrich, draft personalized first-touch messages in the project's voice, and route through HITL approval. |
+
+**Agents** (called by skills, not invoked directly)
+
+| Agent | Owner skill | Purpose |
+|---|---|---|
+| `critic` | `sdr` | Reviews drafts for tone, brand fit, risk, compliance. Returns pass/fail with specific feedback. Does not rewrite. |
+| `enricher` | `sdr` | Fills missing fields on prospects (recent posts, company news) via Apollo, HeyReach, web search. Does not score or contact. |
+| `prospector` | `sdr` | Finds prospects matching ICP criteria. Read-only — no enrichment beyond search, no contact, no CRM writes. |
+| `writer` | `sdr` | Drafts a single first-touch message for a single prospect using enrichment context and lessons. Does not send. |
+| `lesson-drafter` | `dreamer` | Takes a candidate pattern and drafts a lesson file in the schema defined by `conventions.md`. One lesson per invocation. |
+| `pattern-detector` | `dreamer` | Reads runs + matched feedback, returns raw candidate patterns with cited evidence. Returns everything that recurs. |
+| `promotion-arbiter` | `dreamer` | Decides whether a project-validated lesson should be promoted to global, kept project-specific, or marked as conflicting. Decisions only. |
+
+Every skill and agent ships with version `0.1.0` (frontmatter pin). `roster doctor` will surface drift between installed and shipped versions in v0.2.
 
 ## What `init` scaffolds
 
@@ -125,6 +168,26 @@ Audit after migration:
 ```bash
 roster doctor          # confirms skills + agents are in place
 ```
+
+## Security
+
+Three guarantees about what `npm install -g @firatcand/roster` and `npx @firatcand/roster` do — and don't — do on your machine.
+
+- **No `preinstall` / `install` / `postinstall` scripts.** The CLI runs only when you invoke it. `npm install -g @firatcand/roster` writes files to your global prefix and stops there. Asserted in `test/security.test.ts` ("no npm install lifecycle hooks in package.json").
+- **No telemetry.** v0.1 collects nothing — no analytics, no error reporting, no usage pings. If telemetry is ever added it will be opt-in, gated behind a `--no-telemetry` flag, and disclosed here before the release that introduces it.
+- **npm provenance.** Releases are signed via `npm publish --provenance` from GitHub Actions on `v*` tag push. Verify the signature with `npm info @firatcand/roster dist.integrity` or the provenance badge on the npm page.
+
+Path-traversal guards on `install` / `init` were audited under ROS-30 — see `test/security.test.ts` for the regression suite.
+
+## v0.2 roadmap
+
+Items the SPEC deferred from v0.1, in roughly the order they're likely to land. Open to feedback on priority.
+
+- **Companion-skill installers.** Install GTM / product / design domain expertise alongside the framework, similar to forge's `companions`. Will point at `firatcand/founder-skills`.
+- **Per-skill versioning gate in `doctor`.** Skills already ship with `version:` in frontmatter; `roster doctor` will surface drift between installed and shipped versions, mirroring how npm handles outdated globals.
+- **`roster sync`.** Pull the latest skills from the installed roster package into existing tool config dirs without re-running the full `install` flow.
+- **`roster migrate <path>`.** Replace the manual `cp`-based migration documented in [Migrating from agent-team](#migrating-from-agent-team) with a single command that copies project substrate + `.env` and runs `roster init`.
+- **Cursor support.** Promoted from "out of scope" once the Cursor skill API stabilizes — the layout maps cleanly to `~/.cursor/`.
 
 ## Documentation
 
