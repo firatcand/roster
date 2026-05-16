@@ -18,6 +18,8 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Gates manual workflow_dispatch behind the `production` environment's required-reviewer rule.
+    # Empty string on push.tags = no environment, no approval friction on the canonical release path.
     environment: ${{ github.event_name == 'workflow_dispatch' && 'production' || '' }}
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
