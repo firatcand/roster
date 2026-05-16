@@ -63,6 +63,6 @@
     "@types/fs-extra": "^11.0.4",
     "@types/node": "^22.17.2",
     "tsdown": "^0.22.0",
-    "typescript": "^5.6.0"
+    "typescript": "^6.0.3"
   }
 }
