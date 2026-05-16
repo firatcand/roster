@@ -1,9 +1,9 @@
-import { existsSync, lstatSync, readdirSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import fsExtra from 'fs-extra';
 import chalk from 'chalk';
-import type { Tool } from './tools.ts';
+import type { Tool, ToolKey } from './tools.ts';
 import { permissionError } from './errors.ts';
 
 const { copy, ensureDir } = fsExtra;
@@ -80,6 +80,23 @@ const consoleLogger: InstallLogger = {
   warn: (m) => console.warn(m),
 };
 
+// Inject `installed_for: <toolKey>` into a SKILL.md frontmatter block.
+// Idempotent: replaces any prior `installed_for:` line; appends if absent.
+// If the file has no YAML frontmatter, leaves it untouched.
+export function renderSkillFrontmatter(skillMdPath: string, toolKey: ToolKey): void {
+  if (!existsSync(skillMdPath)) return;
+  const content = readFileSync(skillMdPath, 'utf8');
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n/);
+  if (!fmMatch) return;
+
+  const fmBody = fmMatch[1] ?? '';
+  const lines = fmBody.split('\n').filter((l) => !/^installed_for:\s/.test(l));
+  lines.push(`installed_for: ${toolKey}`);
+  const newFm = `---\n${lines.join('\n')}\n---\n`;
+  const newContent = newFm + content.slice(fmMatch[0].length);
+  if (newContent !== content) writeFileSync(skillMdPath, newContent);
+}
+
 async function copyOne(
   srcPath: string,
   targetPath: string,
@@ -138,28 +155,36 @@ export async function installToTool(tool: Tool, opts: InstallOptions): Promise<I
       if (!dirent.isDirectory()) continue;
       const srcDir = join(opts.skills, dirent.name);
 
+      const srcSkillMd = join(srcDir, 'SKILL.md');
+      if (!existsSync(srcSkillMd)) {
+        logger.warn(chalk.yellow(`  ! skill ${dirent.name}: SKILL.md missing — skipped`));
+        continue;
+      }
+
       let srcPath: string;
       let targetPath: string;
+      let renderedSkillMd: string;
       if (tool.skillsLayout === 'file') {
-        // Codex-style: write SKILL.md body as a flat <name><ext> file.
-        const srcSkillMd = join(srcDir, 'SKILL.md');
-        if (!existsSync(srcSkillMd)) {
-          logger.warn(chalk.yellow(`  ! skill ${dirent.name}: SKILL.md missing — skipped`));
-          continue;
-        }
+        // Flat-file layout: write SKILL.md body as a single <name><ext> file.
+        // No current tool uses this; retained for future single-file targets.
         const ext = tool.skillsFileExt ?? '.md';
         srcPath = srcSkillMd;
         targetPath = join(tool.skillsTarget, `${dirent.name}${ext}`);
+        renderedSkillMd = targetPath;
       } else {
-        // Claude/Gemini-style: copy the whole skill directory.
+        // Directory layout (Claude, Codex, Gemini): copy the whole skill dir.
         srcPath = srcDir;
         targetPath = join(tool.skillsTarget, dirent.name);
+        renderedSkillMd = join(targetPath, 'SKILL.md');
       }
 
       assertWithinRoot(targetPath, tool.configRoot, 'skill targetPath');
       info(chalk.dim(`  + skill ${dirent.name} -> ${targetPath}`));
       const written = await copyOne(srcPath, targetPath, 'skill', logger, confirm);
-      if (written) skillsCount++;
+      if (written) {
+        renderSkillFrontmatter(renderedSkillMd, tool.key);
+        skillsCount++;
+      }
     }
   }
 

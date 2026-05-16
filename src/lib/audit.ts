@@ -2,6 +2,19 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Tool, ToolKey } from './tools.ts';
 
+// Mirror the installer's frontmatter injection so audit can compare apples-to-apples.
+// (install.ts owns the canonical implementation — kept here as a string transform
+// to avoid an import cycle.)
+function renderInstalledFor(content: string, toolKey: ToolKey): string {
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n/);
+  if (!fmMatch) return content;
+  const fmBody = fmMatch[1] ?? '';
+  const lines = fmBody.split('\n').filter((l) => !/^installed_for:\s/.test(l));
+  lines.push(`installed_for: ${toolKey}`);
+  const newFm = `---\n${lines.join('\n')}\n---\n`;
+  return newFm + content.slice(fmMatch[0].length);
+}
+
 export type ItemStatus = 'ok' | 'missing' | 'stale';
 export type ItemKind = 'skill' | 'agent';
 
@@ -48,7 +61,7 @@ function walkSourceFiles(root: string): string[] {
   return out;
 }
 
-function auditSkillDir(name: string, srcDir: string, targetDir: string): ItemAudit {
+function auditSkillDir(name: string, srcDir: string, targetDir: string, toolKey: ToolKey): ItemAudit {
   if (!existsSync(targetDir)) {
     return { kind: 'skill', name, status: 'missing', targetPath: targetDir };
   }
@@ -58,6 +71,17 @@ function auditSkillDir(name: string, srcDir: string, targetDir: string): ItemAud
       const tgt = join(targetDir, rel);
       if (!existsSync(tgt)) {
         return { kind: 'skill', name, status: 'stale', targetPath: targetDir, reason: `missing file: ${rel}` };
+      }
+      // SKILL.md is rendered through renderSkillFrontmatter on install; compare
+      // the rendered source to the target so the installed_for injection is not
+      // mistaken for drift.
+      if (rel === 'SKILL.md') {
+        const expected = renderInstalledFor(readFileSync(join(srcDir, rel), 'utf8'), toolKey);
+        const actual = readFileSync(tgt, 'utf8');
+        if (expected !== actual) {
+          return { kind: 'skill', name, status: 'stale', targetPath: targetDir, reason: `bytes differ: ${rel}` };
+        }
+        continue;
       }
       const srcBytes = readFileSync(join(srcDir, rel));
       const tgtBytes = readFileSync(tgt);
@@ -72,14 +96,14 @@ function auditSkillDir(name: string, srcDir: string, targetDir: string): ItemAud
   }
 }
 
-function auditSkillFlatFile(name: string, srcSkillMd: string, targetFile: string): ItemAudit {
+function auditSkillFlatFile(name: string, srcSkillMd: string, targetFile: string, toolKey: ToolKey): ItemAudit {
   if (!existsSync(targetFile)) {
     return { kind: 'skill', name, status: 'missing', targetPath: targetFile };
   }
   try {
-    const srcBytes = readFileSync(srcSkillMd);
-    const tgtBytes = readFileSync(targetFile);
-    if (Buffer.compare(srcBytes, tgtBytes) !== 0) {
+    const expected = renderInstalledFor(readFileSync(srcSkillMd, 'utf8'), toolKey);
+    const actual = readFileSync(targetFile, 'utf8');
+    if (expected !== actual) {
       return { kind: 'skill', name, status: 'stale', targetPath: targetFile, reason: 'bytes differ' };
     }
     return { kind: 'skill', name, status: 'ok', targetPath: targetFile };
@@ -106,6 +130,83 @@ function auditAgentFile(name: string, srcFile: string, targetFile: string): Item
   }
 }
 
+// Subscription-billing ban-list: any occurrence is a release blocker.
+// Lines that legitimately *document* the ban annotate with the opt-out marker.
+//
+// Pattern shape: { id: short tag, regex: matcher }. Matched against the trimmed
+// content of each line (after stripping the opt-out marker). The id surfaces
+// in violation reports so users can search for the exact rule.
+type BanRule = { id: string; regex: RegExp };
+
+const BAN_RULES: BanRule[] = [
+  { id: 'claude-p-flag', regex: /(^|[^A-Za-z0-9_-])claude\s+-p(\s|$)/ },
+  { id: 'claude-prompt-flag', regex: /(^|[^A-Za-z0-9_-])claude\s+--prompt(\s|$)/ },
+  { id: 'claude-api-cmd', regex: /(^|[^A-Za-z0-9_-])claude\s+api(\s|$)/ },
+  { id: 'anthropic-sdk-import', regex: /['"`]@anthropic-ai\/sdk['"`]/ },
+  { id: 'python-anthropic-import', regex: /(^|[^A-Za-z0-9_-])from\s+anthropic(\s|$|\.)/ },
+];
+
+const OPT_OUT_MARKER = /<!--\s*roster-audit-ok[\s\S]*?-->/;
+
+export type BanlistViolation = {
+  file: string;
+  line: number;
+  ruleId: string;
+  preview: string;
+};
+
+function isTextFile(name: string): boolean {
+  return /\.(ts|tsx|js|jsx|mjs|cjs|md|mdx|py|sh|yaml|yml|toml|json)$/i.test(name);
+}
+
+function walkAllFiles(root: string): string[] {
+  const out: string[] = [];
+  if (!existsSync(root)) return out;
+  function recurse(dir: string): void {
+    for (const dirent of readdirSync(dir, { withFileTypes: true })) {
+      if (dirent.name === 'node_modules' || dirent.name.startsWith('.')) continue;
+      const full = join(dir, dirent.name);
+      if (dirent.isDirectory()) recurse(full);
+      else if (dirent.isFile() && isTextFile(dirent.name)) out.push(full);
+    }
+  }
+  recurse(root);
+  return out;
+}
+
+// Scan a list of root paths for banned subscription-billing primitives.
+// Each line is checked against every ban rule. Lines containing the opt-out
+// marker are skipped. Returns one violation per (file, line, rule) tuple.
+export function scanForBannedPrimitives(roots: string[]): BanlistViolation[] {
+  const violations: BanlistViolation[] = [];
+  for (const root of roots) {
+    for (const file of walkAllFiles(root)) {
+      let content: string;
+      try {
+        content = readFileSync(file, 'utf8');
+      } catch {
+        continue;
+      }
+      const lines = content.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i] ?? '';
+        if (OPT_OUT_MARKER.test(line)) continue;
+        for (const rule of BAN_RULES) {
+          if (rule.regex.test(line)) {
+            violations.push({
+              file,
+              line: i + 1,
+              ruleId: rule.id,
+              preview: line.trim().slice(0, 120),
+            });
+          }
+        }
+      }
+    }
+  }
+  return violations;
+}
+
 export function auditTool(tool: Tool, sources: AuditSources): ToolAuditResult {
   const items: ItemAudit[] = [];
 
@@ -116,10 +217,14 @@ export function auditTool(tool: Tool, sources: AuditSources): ToolAuditResult {
       if (!existsSync(srcSkillMd)) continue;
       const ext = tool.skillsFileExt ?? '.md';
       const targetFile = join(tool.skillsTarget, `${skillName}${ext}`);
-      items.push(auditSkillFlatFile(skillName, srcSkillMd, targetFile));
+      items.push(auditSkillFlatFile(skillName, srcSkillMd, targetFile, tool.key));
     } else {
+      // Skip source dirs without SKILL.md — mirrors installToTool's behaviour;
+      // such dirs are not real skills and would never reach the target.
+      const srcSkillMd = join(srcDir, 'SKILL.md');
+      if (!existsSync(srcSkillMd)) continue;
       const targetDir = join(tool.skillsTarget, skillName);
-      items.push(auditSkillDir(skillName, srcDir, targetDir));
+      items.push(auditSkillDir(skillName, srcDir, targetDir, tool.key));
     }
   }
 

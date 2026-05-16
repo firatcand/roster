@@ -210,7 +210,7 @@ test('EACCES is caught and rethrown as a structured RosterError with a remedy', 
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Codex CLI (ROS-13) — flat-file skills under ~/.codex/prompts, agents as .md
+// Codex CLI (ROS-32 onward) — directory-layout skills under ~/.codex/skills/<name>/
 // ──────────────────────────────────────────────────────────────────────────────
 
 test('codex: ROSTER_CODEX_HOME redirects writes to the override path', async () => {
@@ -219,17 +219,17 @@ test('codex: ROSTER_CODEX_HOME redirects writes to the override path', async () 
     process.env['ROSTER_CODEX_HOME'] = f.codexHome;
     const tool = getToolByKey('codex');
     assert.ok(tool, 'codex tool definition exists');
-    assert.equal(tool.skillsTarget, join(f.codexHome, 'prompts'));
+    assert.equal(tool.skillsTarget, join(f.codexHome, 'skills'));
     assert.equal(tool.agentsTarget, join(f.codexHome, 'agents'));
-    assert.equal(tool.skillsLayout, 'file');
-    assert.equal(tool.skillsFileExt, '.md');
+    assert.equal(tool.skillsLayout, 'dir');
+    assert.equal(tool.skillsFileExt, null);
   } finally {
     delete process.env['ROSTER_CODEX_HOME'];
     f.cleanup();
   }
 });
 
-test('codex: skills written as flat .md files derived from SKILL.md body', async () => {
+test('codex: skills written as directories under ~/.codex/skills/<name>/', async () => {
   const f = makeFixture();
   try {
     process.env['ROSTER_CODEX_HOME'] = f.codexHome;
@@ -244,18 +244,17 @@ test('codex: skills written as flat .md files derived from SKILL.md body', async
     });
 
     assert.equal(result.skillsCount, 2);
-    assert.equal(result.skillsTarget, join(f.codexHome, 'prompts'));
+    assert.equal(result.skillsTarget, join(f.codexHome, 'skills'));
 
-    const samplePath = join(f.codexHome, 'prompts', 'sample-skill.md');
-    const otherPath = join(f.codexHome, 'prompts', 'other-skill.md');
-    assert.ok(existsSync(samplePath), 'flat-file skill written');
-    assert.ok(existsSync(otherPath), 'second flat-file skill written');
-    assert.equal(readFileSync(samplePath, 'utf8'), '# sample\n');
-    assert.equal(readFileSync(otherPath, 'utf8'), '# other\n');
+    assert.ok(existsSync(join(f.codexHome, 'skills', 'sample-skill', 'SKILL.md')), 'sample-skill SKILL.md written');
+    assert.ok(existsSync(join(f.codexHome, 'skills', 'sample-skill', 'asset.txt')), 'sample-skill asset copied');
+    assert.ok(existsSync(join(f.codexHome, 'skills', 'other-skill', 'SKILL.md')), 'other-skill SKILL.md written');
 
-    // Non-SKILL.md assets must not leak into the flat layout.
-    assert.ok(!existsSync(join(f.codexHome, 'prompts', 'sample-skill')), 'no skill dir created');
-    assert.ok(!existsSync(join(f.codexHome, 'prompts', 'asset.txt')), 'asset not copied');
+    // Bodies are byte-identical to source (fixture skills have no frontmatter, so
+    // no installed_for injection happens — see the frontmatter-injection test
+    // in test/orchestrator.test.ts for the rendered-output assertions).
+    assert.equal(readFileSync(join(f.codexHome, 'skills', 'sample-skill', 'SKILL.md'), 'utf8'), '# sample\n');
+    assert.equal(readFileSync(join(f.codexHome, 'skills', 'other-skill', 'SKILL.md'), 'utf8'), '# other\n');
   } finally {
     delete process.env['ROSTER_CODEX_HOME'];
     f.cleanup();
@@ -294,10 +293,10 @@ test('codex: install is idempotent — re-running produces identical files', asy
     const { logger } = silentLogger();
 
     const first = await installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger });
-    const firstSnap = readFileSync(join(f.codexHome, 'prompts', 'sample-skill.md'), 'utf8');
+    const firstSnap = readFileSync(join(f.codexHome, 'skills', 'sample-skill', 'SKILL.md'), 'utf8');
 
     const second = await installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger });
-    const secondSnap = readFileSync(join(f.codexHome, 'prompts', 'sample-skill.md'), 'utf8');
+    const secondSnap = readFileSync(join(f.codexHome, 'skills', 'sample-skill', 'SKILL.md'), 'utf8');
 
     assert.deepEqual(first, second);
     assert.equal(firstSnap, secondSnap);
@@ -326,40 +325,11 @@ test('codex: skill directory without SKILL.md is skipped + warns', async () => {
     });
 
     assert.equal(result.skillsCount, 2, 'only the two skills with SKILL.md counted');
-    assert.ok(!existsSync(join(f.codexHome, 'prompts', 'no-body-skill.md')));
+    assert.ok(!existsSync(join(f.codexHome, 'skills', 'no-body-skill')), 'no-body-skill dir not created');
     assert.ok(
       warns.some((w) => w.includes('no-body-skill') && w.includes('SKILL.md missing')),
       'warns when SKILL.md missing',
     );
-  } finally {
-    delete process.env['ROSTER_CODEX_HOME'];
-    f.cleanup();
-  }
-});
-
-test('codex: only SKILL.md is used — other .md siblings in a skill dir are ignored', async () => {
-  const f = makeFixture();
-  try {
-    process.env['ROSTER_CODEX_HOME'] = f.codexHome;
-    // Sibling notes.md inside an existing skill dir — must not leak into prompts/.
-    writeFileSync(join(f.source, 'skills', 'sample-skill', 'notes.md'), '# private notes\n');
-
-    const tool = getToolByKey('codex')!;
-    const { logger } = silentLogger();
-
-    await installToTool(tool, {
-      skills: skillsSrc(f),
-      agents: agentsSrc(f),
-      silent: true,
-      logger,
-    });
-
-    assert.equal(
-      readFileSync(join(f.codexHome, 'prompts', 'sample-skill.md'), 'utf8'),
-      '# sample\n',
-      'flat output equals SKILL.md body, not concatenated with siblings',
-    );
-    assert.ok(!existsSync(join(f.codexHome, 'prompts', 'notes.md')), 'sibling not promoted');
   } finally {
     delete process.env['ROSTER_CODEX_HOME'];
     f.cleanup();
@@ -398,16 +368,17 @@ test('codex: EACCES is wrapped as RosterError with remedy', async () => {
   }
 });
 
-test('codex: symlink at flat-file target — decline-preserve leaves symlink intact', async () => {
+test('codex: symlink at skill-dir target — decline-preserve leaves symlink intact', async () => {
   const f = makeFixture();
   try {
     process.env['ROSTER_CODEX_HOME'] = f.codexHome;
     const tool = getToolByKey('codex')!;
 
-    mkdirSync(join(f.codexHome, 'prompts'), { recursive: true });
-    const elsewhere = join(f.root, 'codex-elsewhere.md');
-    writeFileSync(elsewhere, 'live\n');
-    symlinkSync(elsewhere, join(f.codexHome, 'prompts', 'sample-skill.md'), 'file');
+    mkdirSync(join(f.codexHome, 'skills'), { recursive: true });
+    const elsewhere = join(f.root, 'codex-elsewhere');
+    mkdirSync(elsewhere, { recursive: true });
+    writeFileSync(join(elsewhere, 'SKILL.md'), 'live\n');
+    symlinkSync(elsewhere, join(f.codexHome, 'skills', 'sample-skill'), 'dir');
 
     const { logger, warns } = silentLogger();
     const declineConfirm: ConfirmFn = async () => false;
@@ -420,8 +391,8 @@ test('codex: symlink at flat-file target — decline-preserve leaves symlink int
       confirm: declineConfirm,
     });
 
-    assert.ok(lstatSync(join(f.codexHome, 'prompts', 'sample-skill.md')).isSymbolicLink(), 'symlink preserved');
-    assert.equal(readFileSync(elsewhere, 'utf8'), 'live\n', 'symlink target untouched');
+    assert.ok(lstatSync(join(f.codexHome, 'skills', 'sample-skill')).isSymbolicLink(), 'symlink preserved');
+    assert.equal(readFileSync(join(elsewhere, 'SKILL.md'), 'utf8'), 'live\n', 'symlink target untouched');
     assert.equal(result.skillsCount, 1, 'only the non-symlink skill counted');
     assert.ok(warns.some((w) => w.includes('preserved symlink')), 'warned about preservation');
   } finally {
@@ -538,17 +509,17 @@ test('env overrides are re-read per call — changing ROSTER_*_HOME mid-process 
   try {
     process.env['ROSTER_CODEX_HOME'] = f.codexHome;
     const toolA = getToolByKey('codex')!;
-    assert.equal(toolA.skillsTarget, join(f.codexHome, 'prompts'));
+    assert.equal(toolA.skillsTarget, join(f.codexHome, 'skills'));
     const { logger } = silentLogger();
     await installToTool(toolA, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger });
-    assert.ok(existsSync(join(f.codexHome, 'prompts', 'sample-skill.md')));
+    assert.ok(existsSync(join(f.codexHome, 'skills', 'sample-skill', 'SKILL.md')));
 
     process.env['ROSTER_CODEX_HOME'] = secondCodexHome;
     const toolB = getToolByKey('codex')!;
-    assert.equal(toolB.skillsTarget, join(secondCodexHome, 'prompts'), 'second call re-reads env');
+    assert.equal(toolB.skillsTarget, join(secondCodexHome, 'skills'), 'second call re-reads env');
     await installToTool(toolB, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger });
-    assert.ok(existsSync(join(secondCodexHome, 'prompts', 'sample-skill.md')));
-    assert.ok(!existsSync(join(f.codexHome, 'prompts', 'should-not-exist.md')));
+    assert.ok(existsSync(join(secondCodexHome, 'skills', 'sample-skill', 'SKILL.md')));
+    assert.ok(!existsSync(join(f.codexHome, 'skills', 'should-not-exist')));
   } finally {
     delete process.env['ROSTER_CODEX_HOME'];
     f.cleanup();

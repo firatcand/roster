@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { auditTool } from '../src/lib/audit.ts';
+import { auditTool, scanForBannedPrimitives } from '../src/lib/audit.ts';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { installToTool, type InstallLogger } from '../src/lib/install.ts';
 import { getToolByKey } from '../src/lib/tools.ts';
 
@@ -157,18 +159,18 @@ test('audit (claude/dir): extra user file inside skill dir does NOT trigger STAL
   }
 });
 
-test('audit (codex/file): deleting flat .md reports MISSING', async () => {
+test('audit (codex/dir): deleting SKILL.md inside a skill dir reports STALE', async () => {
   const f = makeFixture();
   try {
     process.env['ROSTER_CODEX_HOME'] = f.codexHome;
     const tool = getToolByKey('codex')!;
     await installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger: silentLogger });
 
-    rmSync(join(f.codexHome, 'prompts', 'sample-skill.md'));
+    rmSync(join(f.codexHome, 'skills', 'sample-skill', 'SKILL.md'));
 
     const result = auditTool(tool, sources(f));
     const sample = result.items.find((i) => i.name === 'sample-skill')!;
-    assert.equal(sample.status, 'missing');
+    assert.equal(sample.status, 'stale');
     assert.equal(result.ok, false);
   } finally {
     delete process.env['ROSTER_CODEX_HOME'];
@@ -176,14 +178,14 @@ test('audit (codex/file): deleting flat .md reports MISSING', async () => {
   }
 });
 
-test('audit (codex/file): modifying flat .md reports STALE', async () => {
+test('audit (codex/dir): modifying SKILL.md reports STALE', async () => {
   const f = makeFixture();
   try {
     process.env['ROSTER_CODEX_HOME'] = f.codexHome;
     const tool = getToolByKey('codex')!;
     await installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger: silentLogger });
 
-    writeFileSync(join(f.codexHome, 'prompts', 'sample-skill.md'), '# tampered\n');
+    writeFileSync(join(f.codexHome, 'skills', 'sample-skill', 'SKILL.md'), '# tampered\n');
 
     const result = auditTool(tool, sources(f));
     const sample = result.items.find((i) => i.name === 'sample-skill')!;
@@ -194,7 +196,7 @@ test('audit (codex/file): modifying flat .md reports STALE', async () => {
   }
 });
 
-test('audit (codex/file): source skill without SKILL.md is excluded from the report', async () => {
+test('audit (codex/dir): source skill without SKILL.md is excluded from the report', async () => {
   const f = makeFixture();
   try {
     process.env['ROSTER_CODEX_HOME'] = f.codexHome;
@@ -279,5 +281,65 @@ test('audit (gemini/dir): fresh install reports ok', async () => {
   } finally {
     delete process.env['ROSTER_GEMINI_HOME'];
     f.cleanup();
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Subscription-billing ban-list (ROS-32)
+// ──────────────────────────────────────────────────────────────────────────────
+
+const __filename = fileURLToPath(import.meta.url);
+const repoRoot = resolve(dirname(__filename), '..');
+
+test('ban-list: clean tree reports zero violations across skills/ and src/', () => {
+  const violations = scanForBannedPrimitives([
+    join(repoRoot, 'skills'),
+    join(repoRoot, 'src'),
+  ]);
+  if (violations.length > 0) {
+    const formatted = violations.map((v) => `  ${v.file}:${v.line} [${v.ruleId}] ${v.preview}`).join('\n');
+    assert.fail(`expected zero ban-list violations, got ${violations.length}:\n${formatted}`);
+  }
+});
+
+test('ban-list: detects claude -p literal in synthetic file', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-ban-'));
+  try {
+    mkdirSync(join(root, 'skills', 'bad'), { recursive: true });
+    writeFileSync(join(root, 'skills', 'bad', 'SKILL.md'), '---\nname: bad\n---\n\nrun `claude -p "hello"` for synthetic test\n');
+    const violations = scanForBannedPrimitives([join(root, 'skills')]);
+    assert.equal(violations.length, 1, 'one violation reported');
+    assert.equal(violations[0]!.ruleId, 'claude-p-flag');
+    assert.match(violations[0]!.preview, /claude -p/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ban-list: detects @anthropic-ai/sdk import in synthetic file', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-ban-'));
+  try {
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(join(root, 'src', 'bad.ts'), `import Anthropic from '@anthropic-ai/sdk';\nconst c = new Anthropic();\n`);
+    const violations = scanForBannedPrimitives([join(root, 'src')]);
+    assert.equal(violations.length, 1);
+    assert.equal(violations[0]!.ruleId, 'anthropic-sdk-import');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ban-list: respects <!-- roster-audit-ok --> opt-out marker', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-ban-'));
+  try {
+    mkdirSync(join(root, 'skills', 'doc'), { recursive: true });
+    writeFileSync(
+      join(root, 'skills', 'doc', 'SKILL.md'),
+      '---\nname: doc\n---\n\n- `claude -p` <!-- roster-audit-ok: documentation -->\n',
+    );
+    const violations = scanForBannedPrimitives([join(root, 'skills')]);
+    assert.equal(violations.length, 0, 'opt-out line not reported');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
