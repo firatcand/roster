@@ -176,7 +176,7 @@ The [publish workflow](.github/workflows/publish.yml) runs the full quality gate
 **One-time setup — `NPM_TOKEN` secret:**
 
 1. Mint a Granular Access Token at [npmjs.com](https://www.npmjs.com/) → Account → Access Tokens → Generate New Token → Granular.
-   - Permissions: **Read and write** scoped to `@firatcand/roster`.
+   - Permissions: **Read and write** scoped to `@firatcand/roster` (publish; deprecation is intentionally kept manual — see rollback note below).
    - Set an expiry (90–365 days recommended).
 2. In this repo: **Settings → Secrets and variables → Actions → New repository secret**.
    - Name: `NPM_TOKEN`

@@ -21,9 +21,15 @@ jobs:
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
+      - name: Validate tag format
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::TAG '$TAG' is not a valid SemVer tag (expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-PRERELEASE)."
+            exit 1
+          fi
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
       - uses: pnpm/action-setup@v3
         with:
           version: 9
@@ -56,7 +62,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          if [[ "$TAG" =~ -[a-zA-Z] ]]; then
+          if [[ "$TAG" =~ -.+ ]]; then
             npm publish --access public --provenance --tag next
           else
             npm publish --access public --provenance
@@ -65,8 +71,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — skipping create (workflow_dispatch re-run after partial publish)."
+            exit 0
+          fi
           PRERELEASE_FLAG=""
-          if [[ "$TAG" =~ -[a-zA-Z] ]]; then
+          if [[ "$TAG" =~ -.+ ]]; then
             PRERELEASE_FLAG="--prerelease"
           fi
           gh release create "$TAG" \
