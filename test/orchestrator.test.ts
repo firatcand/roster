@@ -122,6 +122,53 @@ test('renderSkillFrontmatter: leaves frontmatter-less files alone', () => {
   }
 });
 
+// Codex 2nd-pass review #9 / #1: frontmatter regex only matches LF-line-terminated
+// blocks. These tests pin the contract so the installer and audit stay symmetric
+// even on edge inputs that never receive the installed_for tag.
+
+test('renderSkillFrontmatter: CRLF-only frontmatter is left untouched (and audit treats target as canonical)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-render-'));
+  try {
+    const target = join(root, 'SKILL.md');
+    const original = '---\r\nname: x\r\ndescription: "d"\r\n---\r\n\r\nbody\r\n';
+    writeFileSync(target, original);
+    renderSkillFrontmatter(target, 'claude');
+    assert.equal(readFileSync(target, 'utf8'), original, 'CRLF frontmatter is not mutated');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('renderSkillFrontmatter: missing closing --- leaves file untouched (no false injection)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-render-'));
+  try {
+    const target = join(root, 'SKILL.md');
+    const original = '---\nname: x\ndescription: "no close marker"\n\nbody starts here\n';
+    writeFileSync(target, original);
+    renderSkillFrontmatter(target, 'claude');
+    assert.equal(readFileSync(target, 'utf8'), original, 'unclosed frontmatter is not mutated');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('renderSkillFrontmatter: pre-existing installed_for in source is replaced, not duplicated', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-render-'));
+  try {
+    const target = join(root, 'SKILL.md');
+    const original = '---\nname: x\ninstalled_for: gemini\ndescription: "d"\n---\n\nbody\n';
+    writeFileSync(target, original);
+    renderSkillFrontmatter(target, 'claude');
+    const out = readFileSync(target, 'utf8');
+    const matches = out.match(/^installed_for:\s/gm) ?? [];
+    assert.equal(matches.length, 1, 'exactly one installed_for line');
+    assert.match(out, /^installed_for: claude$/m, 'tag is claude');
+    assert.ok(!/installed_for: gemini/.test(out), 'prior gemini tag removed');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // End-to-end install of the real orchestrator skill into both tools
 // ─────────────────────────────────────────────────────────────────────────────

@@ -5,6 +5,7 @@ import fsExtra from 'fs-extra';
 import chalk from 'chalk';
 import type { Tool, ToolKey } from './tools.ts';
 import { permissionError } from './errors.ts';
+import { renderSkillFrontmatterContent } from './frontmatter.ts';
 
 const { copy, ensureDir } = fsExtra;
 
@@ -80,20 +81,13 @@ const consoleLogger: InstallLogger = {
   warn: (m) => console.warn(m),
 };
 
-// Inject `installed_for: <toolKey>` into a SKILL.md frontmatter block.
-// Idempotent: replaces any prior `installed_for:` line; appends if absent.
-// If the file has no YAML frontmatter, leaves it untouched.
+// File-system wrapper around the pure frontmatter renderer in
+// src/lib/frontmatter.ts. Reads target, applies the canonical render, writes
+// only when content actually changes (idempotent).
 export function renderSkillFrontmatter(skillMdPath: string, toolKey: ToolKey): void {
   if (!existsSync(skillMdPath)) return;
   const content = readFileSync(skillMdPath, 'utf8');
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n/);
-  if (!fmMatch) return;
-
-  const fmBody = fmMatch[1] ?? '';
-  const lines = fmBody.split('\n').filter((l) => !/^installed_for:\s/.test(l));
-  lines.push(`installed_for: ${toolKey}`);
-  const newFm = `---\n${lines.join('\n')}\n---\n`;
-  const newContent = newFm + content.slice(fmMatch[0].length);
+  const newContent = renderSkillFrontmatterContent(content, toolKey);
   if (newContent !== content) writeFileSync(skillMdPath, newContent);
 }
 

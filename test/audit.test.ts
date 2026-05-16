@@ -329,16 +329,55 @@ test('ban-list: detects @anthropic-ai/sdk import in synthetic file', () => {
   }
 });
 
-test('ban-list: respects <!-- roster-audit-ok --> opt-out marker', () => {
+test('ban-list: respects rule-id-scoped opt-out marker', () => {
   const root = mkdtempSync(join(tmpdir(), 'roster-ban-'));
   try {
     mkdirSync(join(root, 'skills', 'doc'), { recursive: true });
     writeFileSync(
       join(root, 'skills', 'doc', 'SKILL.md'),
-      '---\nname: doc\n---\n\n- `claude -p` <!-- roster-audit-ok: documentation -->\n',
+      '---\nname: doc\n---\n\n- `claude -p` <!-- roster-audit-ok: claude-p-flag -->\n',
     );
     const violations = scanForBannedPrimitives([join(root, 'skills')]);
-    assert.equal(violations.length, 0, 'opt-out line not reported');
+    assert.equal(violations.length, 0, 'rule-id-matched opt-out suppresses');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Codex 2nd-pass review #4: a per-line, all-rule opt-out can shadow an
+// executable banned literal that shares the line with a documentation comment.
+// Scope the marker to a single rule id so only that rule is silenced.
+
+test('ban-list: opt-out for one rule does NOT shadow other rule violations on the same line', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-ban-'));
+  try {
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(
+      join(root, 'src', 'mixed.ts'),
+      `import x from '@anthropic-ai/sdk'; // doc: claude -p reference <!-- roster-audit-ok: claude-p-flag -->\n`,
+    );
+    const violations = scanForBannedPrimitives([join(root, 'src')]);
+    assert.equal(violations.length, 1, 'sdk-import still flagged despite claude-p opt-out');
+    assert.equal(violations[0]!.ruleId, 'anthropic-sdk-import');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Codex 2nd-pass review #3: package subpath imports must also be banned, since
+// `import x from "@anthropic-ai/sdk/lib/x"` would otherwise slip past the rule.
+
+test('ban-list: detects @anthropic-ai/sdk subpath imports', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-ban-'));
+  try {
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(
+      join(root, 'src', 'subpath.ts'),
+      `import { Anthropic } from '@anthropic-ai/sdk/lib/internal';\n`,
+    );
+    const violations = scanForBannedPrimitives([join(root, 'src')]);
+    assert.equal(violations.length, 1, 'subpath import flagged');
+    assert.equal(violations[0]!.ruleId, 'anthropic-sdk-import');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -1,19 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Tool, ToolKey } from './tools.ts';
-
-// Mirror the installer's frontmatter injection so audit can compare apples-to-apples.
-// (install.ts owns the canonical implementation — kept here as a string transform
-// to avoid an import cycle.)
-function renderInstalledFor(content: string, toolKey: ToolKey): string {
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n/);
-  if (!fmMatch) return content;
-  const fmBody = fmMatch[1] ?? '';
-  const lines = fmBody.split('\n').filter((l) => !/^installed_for:\s/.test(l));
-  lines.push(`installed_for: ${toolKey}`);
-  const newFm = `---\n${lines.join('\n')}\n---\n`;
-  return newFm + content.slice(fmMatch[0].length);
-}
+import { renderSkillFrontmatterContent } from './frontmatter.ts';
 
 export type ItemStatus = 'ok' | 'missing' | 'stale';
 export type ItemKind = 'skill' | 'agent';
@@ -76,7 +64,7 @@ function auditSkillDir(name: string, srcDir: string, targetDir: string, toolKey:
       // the rendered source to the target so the installed_for injection is not
       // mistaken for drift.
       if (rel === 'SKILL.md') {
-        const expected = renderInstalledFor(readFileSync(join(srcDir, rel), 'utf8'), toolKey);
+        const expected = renderSkillFrontmatterContent(readFileSync(join(srcDir, rel), 'utf8'), toolKey);
         const actual = readFileSync(tgt, 'utf8');
         if (expected !== actual) {
           return { kind: 'skill', name, status: 'stale', targetPath: targetDir, reason: `bytes differ: ${rel}` };
@@ -101,7 +89,7 @@ function auditSkillFlatFile(name: string, srcSkillMd: string, targetFile: string
     return { kind: 'skill', name, status: 'missing', targetPath: targetFile };
   }
   try {
-    const expected = renderInstalledFor(readFileSync(srcSkillMd, 'utf8'), toolKey);
+    const expected = renderSkillFrontmatterContent(readFileSync(srcSkillMd, 'utf8'), toolKey);
     const actual = readFileSync(targetFile, 'utf8');
     if (expected !== actual) {
       return { kind: 'skill', name, status: 'stale', targetPath: targetFile, reason: 'bytes differ' };
@@ -142,11 +130,16 @@ const BAN_RULES: BanRule[] = [
   { id: 'claude-p-flag', regex: /(^|[^A-Za-z0-9_-])claude\s+-p(\s|$)/ },
   { id: 'claude-prompt-flag', regex: /(^|[^A-Za-z0-9_-])claude\s+--prompt(\s|$)/ },
   { id: 'claude-api-cmd', regex: /(^|[^A-Za-z0-9_-])claude\s+api(\s|$)/ },
-  { id: 'anthropic-sdk-import', regex: /['"`]@anthropic-ai\/sdk['"`]/ },
+  { id: 'anthropic-sdk-import', regex: /['"`]@anthropic-ai\/sdk(?:\/[^'"`]*)?['"`]/ },
   { id: 'python-anthropic-import', regex: /(^|[^A-Za-z0-9_-])from\s+anthropic(\s|$|\.)/ },
 ];
 
-const OPT_OUT_MARKER = /<!--\s*roster-audit-ok[\s\S]*?-->/;
+// Opt-out marker must NAME the rule it suppresses, e.g.
+//   <!-- roster-audit-ok: claude-p-flag -->
+// Per Codex review #4: an unscoped marker can hide unrelated banned literals
+// on the same line. Capture group 1 holds the rule id; only that rule is
+// skipped on the line.
+const OPT_OUT_MARKER = /<!--\s*roster-audit-ok:\s*([A-Za-z0-9_-]+)\s*-->/;
 
 export type BanlistViolation = {
   file: string;
@@ -190,8 +183,10 @@ export function scanForBannedPrimitives(roots: string[]): BanlistViolation[] {
       const lines = content.split('\n');
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i] ?? '';
-        if (OPT_OUT_MARKER.test(line)) continue;
+        const optOut = line.match(OPT_OUT_MARKER);
+        const suppressedRuleId = optOut ? optOut[1] : undefined;
         for (const rule of BAN_RULES) {
+          if (suppressedRuleId === rule.id) continue;
           if (rule.regex.test(line)) {
             violations.push({
               file,

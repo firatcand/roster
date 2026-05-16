@@ -47,16 +47,21 @@ No other side effects. Do not read item bodies. Do not modify any file.
 
 ## Mode 2 — Scheduled fire
 
-1. Parse the fire prompt for `<agent>`, `<plan>`, `<project>`. Refuse if any of those are missing.
-2. Load `roster/<function>/schedules.yaml`. The `<function>` is the directory the named agent lives in (`gtm/sdr` → function = `gtm`).
+1. Parse the fire prompt for `<agent>`, `<plan>`, `<project>`.
+   - Preferred shape: `<function>/<agent>` (e.g., `gtm/sdr`). Use this whenever the prompt provides it.
+   - Bare-agent shape (e.g., `sdr`): resolve by scanning `<function>/<agent>/` for exactly one matching directory. If zero or more than one match, abort with the parsed fields and the candidate functions.
+   - Refuse if `<agent>`, `<plan>`, or `<project>` is missing — list which one.
+2. Load `roster/<function>/schedules.yaml` using the resolved function from step 1.
 3. Verify an entry exists in `schedules.yaml` with matching `agent` + `plan` + `project`. If not, abort with:
-   > Schedule not registered: <agent>/<plan> for <project>. Use `roster schedule list` to see registered schedules.
+   > Schedule not registered: <function>/<agent>/<plan> for <project>. Use `roster schedule list` to see registered schedules.
 4. Dispatch the named agent via the host tool's subagent primitive (see "Subagent dispatch" below). Block until the subagent returns. The subagent runs in isolated context; nothing leaks back here.
-5. Append a single line to `roster/<function>/state.md`:
+5. Append a single line to `roster/<function>/state.md`. Exact format (one line, three fields, pipe-separated with surrounding single spaces):
    ```
-   <ISO-timestamp> | <agent>/<plan>/<project> | <status>
+   <utc-iso-8601> | <function>/<agent>/<plan>/<project> | <status>
    ```
-6. The subagent itself is responsible for the full run log at `<agent>/projects/<project>/log/runs/<ts>.md`. Do not write that file from here.
+   - `<utc-iso-8601>`: UTC, second precision, `Z` suffix. Example: `2026-05-16T14:09:00Z`.
+   - `<status>`: exactly one of `success` or `failed`. No other values.
+6. The subagent itself is responsible for the full run log at `<function>/<agent>/projects/<project>/log/runs/<ts>.md`. Do not write that file from here.
 7. Exit cleanly. Do not start a new turn.
 
 ## Subagent dispatch
@@ -89,12 +94,14 @@ Wait for the subagent to return its status, then proceed to the state.md write.
 
 This skill — and every subagent it dispatches — must run on the user's interactive Claude Pro/Max or ChatGPT Plus/Pro subscription. **Banned primitives** (any occurrence is a release blocker, enforced by `roster doctor` and CI audit):
 
-- `claude -p` <!-- roster-audit-ok: documentation -->
-- `claude --prompt` <!-- roster-audit-ok: documentation -->
-- `claude api` <!-- roster-audit-ok: documentation -->
-- `@anthropic-ai/sdk` <!-- roster-audit-ok: documentation -->
-- `from anthropic` <!-- roster-audit-ok: documentation -->
+- `claude -p` <!-- roster-audit-ok: claude-p-flag -->
+- `claude --prompt` <!-- roster-audit-ok: claude-prompt-flag -->
+- `claude api` <!-- roster-audit-ok: claude-api-cmd -->
+- `@anthropic-ai/sdk` <!-- roster-audit-ok: anthropic-sdk-import -->
+- `from anthropic` <!-- roster-audit-ok: python-anthropic-import -->
 - Any wrapper that re-routes calls through the Agent SDK billing pool
+
+**Scope of the guarantee.** The static audit blocks the above literals in roster's *shipped source* (skills/, src/) at build/install time. It is a source guard, not a runtime sandbox — nothing prevents a host LLM from inventing a banned invocation while following these instructions. Runtime compliance depends on the LLM honoring this section.
 
 If you encounter a workflow that seems to require one of the above, stop and surface it as a HITL item. Do not attempt to bypass.
 
