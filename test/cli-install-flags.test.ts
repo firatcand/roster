@@ -50,7 +50,7 @@ test('install --all installs to every detected tool', () => {
     });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.ok(existsSync(join(h.claude, 'skills')), 'claude skills dir written');
-    assert.ok(existsSync(join(h.codex, 'prompts')), 'codex prompts dir written');
+    assert.ok(existsSync(join(h.codex, 'skills')), 'codex skills dir written');
     assert.ok(existsSync(join(h.gemini, 'extensions')), 'gemini extensions dir written');
   } finally {
     h.cleanup();
@@ -67,7 +67,7 @@ test('install --tool claude writes only to Claude home', () => {
     });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.ok(existsSync(join(h.claude, 'skills')), 'claude written');
-    assert.ok(!existsSync(join(h.codex, 'prompts')), 'codex NOT written');
+    assert.ok(!existsSync(join(h.codex, 'skills')), 'codex NOT written');
     assert.ok(!existsSync(join(h.gemini, 'extensions')), 'gemini NOT written');
   } finally {
     h.cleanup();

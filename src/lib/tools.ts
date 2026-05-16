@@ -53,10 +53,10 @@ function defaultDefinitions(): ToolDefinition[] {
       key: 'codex',
       name: 'Codex CLI',
       configRoot: codex,
-      skillsTarget: join(codex, 'prompts'),
+      skillsTarget: join(codex, 'skills'),
       agentsTarget: join(codex, 'agents'),
-      skillsLayout: 'file',
-      skillsFileExt: '.md',
+      skillsLayout: 'dir',
+      skillsFileExt: null,
       installLink: 'https://github.com/openai/codex',
     },
     {

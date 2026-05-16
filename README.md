@@ -53,7 +53,7 @@ roster v0.1.0
 Multi-agent workspace scaffolder for Claude Code, Codex CLI, and Gemini.
 
 ✓ Claude Code — 3 skills → ~/.claude/skills, 7 agents → ~/.claude/agents
-✓ Codex CLI — 3 skills → ~/.codex/prompts, 7 agents → ~/.codex/agents
+✓ Codex CLI — 4 skills → ~/.codex/skills, 7 agents → ~/.codex/agents
 ✓ Gemini CLI — 3 skills → ~/.gemini/extensions, 7 agents → ~/.gemini/agents
 
 Next: roster init to scaffold a workspace.
@@ -77,7 +77,7 @@ Without `--all`, you'll get an interactive checkbox to pick which tools to recei
 | Tool | Status | Skills installed to | Agents installed to |
 |---|---|---|---|
 | Claude Code | Supported | `~/.claude/skills/<skill>/` (directory per skill) | `~/.claude/agents/<agent>.md` |
-| Codex CLI | Supported | `~/.codex/prompts/<skill>.md` (flat file per skill) | `~/.codex/agents/<agent>.md` |
+| Codex CLI | Supported | `~/.codex/skills/<skill>/` (directory per skill) | `~/.codex/agents/<agent>.md` |
 | Gemini CLI | Supported | `~/.gemini/extensions/<skill>/` (directory per skill) | `~/.gemini/agents/<agent>.md` |
 | Cursor | **Out of scope** — see [docs/roadmap.md](docs/roadmap.md) | — | — |
 
