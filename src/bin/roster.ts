@@ -7,8 +7,10 @@ import { allTools, detectTools, type Tool, type ToolKey } from '../lib/tools.ts'
 import { installToTool, type InstallResult } from '../lib/install.ts';
 import { parseInstallArgs } from '../lib/install-args.ts';
 import { parseDoctorArgs } from '../lib/doctor-args.ts';
+import { parseScheduleArgs } from '../lib/schedule-args.ts';
 import { executeInit } from '../commands/init.ts';
 import { executeDoctor } from '../commands/doctor.ts';
+import { executeScheduleValidate } from '../commands/schedule.ts';
 import {
   EXIT_OK,
   EXIT_ERROR,
@@ -23,8 +25,8 @@ import {
   userCancelledInstall,
 } from '../lib/errors.ts';
 
-type Subcommand = 'install' | 'init' | 'doctor';
-const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>(['install', 'init', 'doctor']);
+type Subcommand = 'install' | 'init' | 'doctor' | 'schedule';
+const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>(['install', 'init', 'doctor', 'schedule']);
 
 function tildify(path: string): string {
   const home = homedir();
@@ -46,6 +48,7 @@ function printHelp(version: string): void {
     `  roster install               ${chalk.dim('Copy skills + agents into detected AI tool config dirs')}`,
     `  roster init [name]           ${chalk.dim('Scaffold a multi-agent workspace in the current dir')}`,
     `  roster doctor                ${chalk.dim('Audit installed skills + agents per AI tool')}`,
+    `  roster schedule validate     ${chalk.dim('Validate roster/<function>/schedules.yaml files')}`,
     '',
     chalk.bold('Flags:'),
     `  -h, --help                   ${chalk.dim('Show this help')}`,
@@ -55,7 +58,8 @@ function printHelp(version: string): void {
     `  --all                        ${chalk.dim('Install to every detected tool (install)')}`,
     `  --tool <name>                ${chalk.dim('Install to a single tool: claude | codex | gemini')}`,
     `  --migrate                    ${chalk.dim('Upgrade pre-CONTEXT.md workspace, preserving CLAUDE.md content (init)')}`,
-    `  --json                       ${chalk.dim('Emit machine-readable JSON (doctor)')}`,
+    `  --json                       ${chalk.dim('Emit machine-readable JSON (doctor, schedule validate)')}`,
+    `  --cwd <dir>                  ${chalk.dim('Run schedule validate against a different cwd')}`,
     `  --debug                      ${chalk.dim('Print full stack trace on error (global)')}`,
     '',
     chalk.bold('Exit codes:'),
@@ -211,6 +215,32 @@ async function runInit(args: readonly string[]): Promise<number> {
   return EXIT_OK;
 }
 
+function runSchedule(args: readonly string[]): number {
+  const parsed = parseScheduleArgs(args);
+  if (parsed.kind === 'err') {
+    throw new RosterError({
+      header: `${chalk.red.bold('roster:')} ${parsed.message}`,
+      body: '',
+      remedy: `  Run ${chalk.bold('roster --help')} for usage.`,
+      exitCode: EXIT_ERROR,
+    });
+  }
+  if (parsed.subcommand === 'validate') {
+    return executeScheduleValidate({
+      cwd: parsed.cwd ?? process.cwd(),
+      json: parsed.json,
+      silent: parsed.silent,
+    });
+  }
+  // Unreachable while only `validate` is supported, but exhaustive guard.
+  throw new RosterError({
+    header: `${chalk.red.bold('roster:')} schedule subcommand not implemented`,
+    body: '',
+    remedy: `  Run ${chalk.bold('roster --help')} for usage.`,
+    exitCode: EXIT_ERROR,
+  });
+}
+
 function runDoctor(args: readonly string[]): number {
   const parsed = parseDoctorArgs(args);
   if (parsed.kind === 'err') {
@@ -259,6 +289,7 @@ async function main(): Promise<number> {
     if (first === 'install') return runInstall(rest);
     if (first === 'init') return await runInit(rest);
     if (first === 'doctor') return runDoctor(rest);
+    if (first === 'schedule') return runSchedule(rest);
   }
 
   throw unknownCommandError(first);

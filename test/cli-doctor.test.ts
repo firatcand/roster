@@ -198,3 +198,129 @@ test('--help mentions --json', () => {
   assert.equal(r.status, 0);
   assert.match(r.stdout, /--json/);
 });
+
+const validScheduleYaml = `version: 1
+schedules:
+  - name: cold-outreach-daily
+    agent: sdr
+    plan: cold-outreach
+    cron: "0 9 * * 1-5"
+    tool: codex
+    install_mode: via-cron
+`;
+
+const invalidScheduleYaml = `version: 1
+schedules:
+  - name: bad
+    agent: sdr
+    plan: cold-outreach
+    cron: "0 9 * * 8"
+    tool: gemini
+    install_mode: via-cron
+`;
+
+function writeSchedules(cwd: string, fn: string, content: string): void {
+  mkdirSync(join(cwd, 'roster', fn), { recursive: true });
+  writeFileSync(join(cwd, 'roster', fn, 'schedules.yaml'), content, 'utf8');
+}
+
+function runCliInCwd(args: readonly string[], env: Record<string, string>, cwd: string): Run {
+  const out = spawnSync(
+    process.execPath,
+    ['--experimental-strip-types', '--no-warnings', BIN, ...args],
+    {
+      encoding: 'utf8',
+      env: { ...process.env, ...env, FORCE_COLOR: '0', NO_COLOR: '1' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 10000,
+      cwd,
+    },
+  );
+  return { status: out.status ?? -1, stdout: out.stdout, stderr: out.stderr };
+}
+
+test('doctor with valid schedules.yaml exits 0 and shows Scheduling OK', () => {
+  const h = makeHomes(['claude']);
+  try {
+    const install = runCli(['install', '--all', '--silent'], envFor(h));
+    assert.equal(install.status, 0);
+
+    const ws = mkdtempSync(join(tmpdir(), 'roster-doctor-sched-ok-'));
+    try {
+      writeSchedules(ws, 'gtm', validScheduleYaml);
+      const doc = runCliInCwd(['doctor'], envFor(h), ws);
+      assert.equal(doc.status, 0, `stderr: ${doc.stderr}\nstdout: ${doc.stdout}`);
+      assert.match(doc.stdout, /Scheduling/);
+      assert.match(doc.stdout, /schedules\.yaml.*OK/);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('doctor with invalid schedules.yaml exits 1 and shows Scheduling FAIL', () => {
+  const h = makeHomes(['claude']);
+  try {
+    const install = runCli(['install', '--all', '--silent'], envFor(h));
+    assert.equal(install.status, 0);
+
+    const ws = mkdtempSync(join(tmpdir(), 'roster-doctor-sched-fail-'));
+    try {
+      writeSchedules(ws, 'gtm', invalidScheduleYaml);
+      const doc = runCliInCwd(['doctor'], envFor(h), ws);
+      assert.equal(doc.status, 1, `stdout: ${doc.stdout}`);
+      assert.match(doc.stdout, /Scheduling/);
+      assert.match(doc.stdout, /FAIL/);
+      assert.match(doc.stdout, /tool: must be one of/);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('doctor --json includes scheduling payload', () => {
+  const h = makeHomes(['claude']);
+  try {
+    const install = runCli(['install', '--all', '--silent'], envFor(h));
+    assert.equal(install.status, 0);
+
+    const ws = mkdtempSync(join(tmpdir(), 'roster-doctor-sched-json-'));
+    try {
+      writeSchedules(ws, 'gtm', validScheduleYaml);
+      const doc = runCliInCwd(['doctor', '--json'], envFor(h), ws);
+      assert.equal(doc.status, 0);
+      const payload = JSON.parse(doc.stdout) as { ok: boolean; scheduling?: { ok: boolean; files: unknown[] } };
+      assert.equal(payload.ok, true);
+      assert.ok(payload.scheduling);
+      assert.equal(payload.scheduling!.ok, true);
+      assert.equal(payload.scheduling!.files.length, 1);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('doctor with no schedules.yaml files: no Scheduling section, exit 0', () => {
+  const h = makeHomes(['claude']);
+  try {
+    const install = runCli(['install', '--all', '--silent'], envFor(h));
+    assert.equal(install.status, 0);
+
+    const ws = mkdtempSync(join(tmpdir(), 'roster-doctor-no-sched-'));
+    try {
+      const doc = runCliInCwd(['doctor'], envFor(h), ws);
+      assert.equal(doc.status, 0);
+      assert.doesNotMatch(doc.stdout, /Scheduling/);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  } finally {
+    h.cleanup();
+  }
+});
