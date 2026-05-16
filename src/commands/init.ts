@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -12,6 +13,7 @@ import { basename, join, relative } from 'node:path';
 import chalk from 'chalk';
 import { ROSTER_ROOT } from '../lib/paths.ts';
 import { missingScaffoldError } from '../lib/errors.ts';
+import { writeContextAndLinks } from '../lib/project-context.ts';
 
 export type ConfirmFn = (message: string) => Promise<boolean>;
 
@@ -25,9 +27,11 @@ export type InitOptions = {
   name?: string;
   silent?: boolean;
   force?: boolean;
+  migrate?: boolean;
   noGit?: boolean;
   confirm?: ConfirmFn;
   logger?: InitLogger;
+  platform?: string;
 };
 
 export type InitStatus = 'ok' | 'cancelled';
@@ -37,6 +41,10 @@ export type InitResult = {
   workspaceRoot: string;
   projectName: string;
   filesWritten: string[];
+  filesUpdated: string[];
+  filesSkipped: string[];
+  filesLinked: string[];
+  warnings: string[];
   gitInitialized: boolean;
 };
 
@@ -140,31 +148,27 @@ const consoleLogger: InitLogger = {
   warn: (m) => console.warn(m),
 };
 
-function writeClaudeMd(cwd: string, projectName: string): void {
-  const tpl = readTemplate('CLAUDE.project.template.md');
-  writeFileSync(join(cwd, 'CLAUDE.md'), substitute(tpl, { PROJECT_NAME: projectName }), 'utf8');
-}
-
 function ensureEnvExample(cwd: string): void {
   const target = join(cwd, '.env.example');
   if (existsSync(target)) return;
   writeFileSync(target, readTemplate('env.example'), 'utf8');
 }
 
-export function appendGitignoreBlock(cwd: string): void {
+export function appendGitignoreBlock(cwd: string): 'written' | 'skipped' {
   const path = join(cwd, '.gitignore');
   const block = readTemplate('gitignore-defaults.txt');
 
   if (!existsSync(path)) {
     writeFileSync(path, block, 'utf8');
-    return;
+    return 'written';
   }
 
   const current = readFileSync(path, 'utf8');
-  if (current.includes(GITIGNORE_MARKER_START)) return;
+  if (current.includes(GITIGNORE_MARKER_START)) return 'skipped';
 
   const sep = current.endsWith('\n') ? '\n' : '\n\n';
   writeFileSync(path, current + sep + block, 'utf8');
+  return 'written';
 }
 
 async function maybeGitInit(cwd: string, noGit: boolean, confirm: ConfirmFn): Promise<boolean> {
@@ -186,6 +190,7 @@ export async function executeInit(opts: InitOptions): Promise<InitResult> {
   const logger = opts.logger ?? consoleLogger;
   const silent = opts.silent ?? false;
   const force = opts.force ?? false;
+  const migrate = opts.migrate ?? false;
   const confirm = opts.confirm ?? defaultConfirm;
 
   const info = (msg: string): void => {
@@ -193,14 +198,44 @@ export async function executeInit(opts: InitOptions): Promise<InitResult> {
   };
 
   const forgeMarkers = detectForgeMarkers(opts.cwd);
+  const contextMdPath = join(opts.cwd, 'CONTEXT.md');
   const claudeMdPath = join(opts.cwd, 'CLAUDE.md');
+  const contextMdExists = existsSync(contextMdPath);
   const claudeMdExists = existsSync(claudeMdPath);
 
-  if (claudeMdExists && !force) {
+  const claudeMdIsSymlink = claudeMdExists
+    ? (() => { try { return lstatSync(claudeMdPath).isSymbolicLink(); } catch { return false; } })()
+    : false;
+
+  const isMigration = claudeMdExists && !contextMdExists && !claudeMdIsSymlink;
+
+  const cancelledResult: InitResult = {
+    status: 'cancelled',
+    workspaceRoot: opts.cwd,
+    projectName,
+    filesWritten: [],
+    filesUpdated: [],
+    filesSkipped: [],
+    filesLinked: [],
+    warnings: [],
+    gitInitialized: false,
+  };
+
+  if (isMigration && !force && !migrate) {
+    info(
+      `roster: detected a pre-CONTEXT.md workspace (CLAUDE.md is a regular file).\n` +
+        `  - Re-run with --migrate to upgrade and preserve your CLAUDE.md content.\n` +
+        `  - Re-run with --force to replace CLAUDE.md without preserving content.\n` +
+        `  - Or manually delete CLAUDE.md and re-run roster init.`,
+    );
+    return cancelledResult;
+  }
+
+  if (!isMigration && (contextMdExists || claudeMdExists) && !force) {
     const message =
       forgeMarkers.length > 0
-        ? `This looks like a forge-initialized project (found: ${forgeMarkers.join(', ')}). Running roster init will replace CLAUDE.md and add the agent-team scaffold. Continue?`
-        : `CLAUDE.md already exists in this directory. Overwrite?`;
+        ? `This looks like a forge-initialized project (found: ${forgeMarkers.join(', ')}). Running roster init will update CONTEXT.md and add the agent-team scaffold. Continue?`
+        : `CONTEXT.md or CLAUDE.md already exists in this directory. Overwrite?`;
 
     let ok: boolean;
     try {
@@ -209,15 +244,9 @@ export async function executeInit(opts: InitOptions): Promise<InitResult> {
       ok = false;
     }
     if (!ok) {
-      return {
-        status: 'cancelled',
-        workspaceRoot: opts.cwd,
-        projectName,
-        filesWritten: [],
-        gitInitialized: false,
-      };
+      return cancelledResult;
     }
-  } else if (forgeMarkers.length > 0 && !silent) {
+  } else if (forgeMarkers.length > 0 && !isMigration && !silent) {
     logger.warn(
       chalk.yellow(
         `Detected forge artifacts (${forgeMarkers.join(', ')}); roster scaffold will be added alongside.`,
@@ -226,6 +255,10 @@ export async function executeInit(opts: InitOptions): Promise<InitResult> {
   }
 
   const filesWritten: string[] = [];
+  const filesUpdated: string[] = [];
+  const filesSkipped: string[] = [];
+  const filesLinked: string[] = [];
+  const warnings: string[] = [];
 
   const scaffoldSrc = join(ROSTER_ROOT, 'templates', 'scaffold');
   if (!existsSync(scaffoldSrc)) {
@@ -234,27 +267,88 @@ export async function executeInit(opts: InitOptions): Promise<InitResult> {
   const scaffoldFiles = walkScaffold(scaffoldSrc, opts.cwd, { PROJECT_NAME: projectName });
   filesWritten.push(...scaffoldFiles);
 
-  writeClaudeMd(opts.cwd, projectName);
-  filesWritten.push('CLAUDE.md');
+  // For --migrate: inject existing CLAUDE.md content into user region before writing
+  if (isMigration && migrate) {
+    const existingClaudeMd = readFileSync(claudeMdPath, 'utf8');
+    const oldTemplateSrc = join(ROSTER_ROOT, 'templates', 'CLAUDE.project.template.md');
+    let oldTemplateRendered = '';
+    try {
+      oldTemplateRendered = substitute(readFileSync(oldTemplateSrc, 'utf8'), { PROJECT_NAME: projectName });
+    } catch {
+      // If old template is gone, treat all as user content
+    }
+
+    const userLines: string[] = [];
+    const existingLines = existingClaudeMd.split('\n');
+
+    if (!oldTemplateRendered || existingClaudeMd.trim() !== oldTemplateRendered.trim()) {
+      // Diff line by line: lines not in template are user content
+      const templateSet = new Set(oldTemplateRendered.split('\n').map((l) => l.trim()));
+      for (const line of existingLines) {
+        if (!templateSet.has(line.trim())) {
+          userLines.push(line);
+        }
+      }
+    }
+
+    if (userLines.length > 0) {
+      const fresh = readFileSync(join(ROSTER_ROOT, 'templates', 'CONTEXT.template.md'), 'utf8');
+      const rendered = substitute(fresh, { PROJECT_NAME: projectName });
+
+      const USER_START = `<!-- roster:user:start workspace -->`;
+      const USER_END = `<!-- roster:user:end workspace -->`;
+      const userPlaceholder = `## Workspace: ${projectName}\n\n[Replace this section with project-specific context: domain, goals, constraints.]`;
+      const userInjected = userLines.join('\n').trim();
+      const withUserContent = rendered.replace(
+        `${USER_START}\n${userPlaceholder}\n${USER_END}`,
+        `${USER_START}\n${userInjected}\n${USER_END}`,
+      );
+      writeFileSync(contextMdPath, withUserContent, 'utf8');
+    }
+
+    unlinkSync(claudeMdPath);
+    const agentsMdPath = join(opts.cwd, 'AGENTS.md');
+    if (existsSync(agentsMdPath) && !lstatSync(agentsMdPath).isSymbolicLink()) {
+      unlinkSync(agentsMdPath);
+    }
+  }
+
+  const writeResult = writeContextAndLinks(opts.cwd, projectName, {
+    force,
+    platform: opts.platform,
+  });
+  filesWritten.push(...writeResult.filesWritten);
+  filesUpdated.push(...writeResult.filesUpdated);
+  filesSkipped.push(...writeResult.filesSkipped);
+  filesLinked.push(...writeResult.filesLinked);
+  warnings.push(...writeResult.warnings);
 
   if (!existsSync(join(opts.cwd, '.env.example'))) {
     ensureEnvExample(opts.cwd);
     filesWritten.push('.env.example');
   }
 
-  appendGitignoreBlock(opts.cwd);
-  filesWritten.push('.gitignore');
+  const gitignoreResult = appendGitignoreBlock(opts.cwd);
+  if (gitignoreResult === 'written') {
+    filesWritten.push('.gitignore');
+  } else {
+    filesSkipped.push('.gitignore');
+  }
 
   const gitInitialized = await maybeGitInit(opts.cwd, opts.noGit ?? false, confirm);
+
+  const totalChanged = filesWritten.length + filesUpdated.length + filesLinked.length;
 
   if (!silent) {
     info('');
     info(`${chalk.green('✓')} Initialized ${chalk.bold(projectName)} in ${opts.cwd}`);
-    if (filesWritten.length > 8) {
-      info(chalk.dim(`Files: ${filesWritten.length} written`));
+    if (totalChanged > 8) {
+      info(chalk.dim(`Files: ${totalChanged} written/linked`));
     } else {
-      info(chalk.dim('Files: ') + filesWritten.join(', '));
+      const changed = [...filesWritten, ...filesUpdated, ...filesLinked];
+      info(chalk.dim('Files: ') + changed.join(', '));
     }
+    for (const w of warnings) info(chalk.yellow(w));
     if (gitInitialized) info(chalk.dim('Git: initialized .git/'));
     info('');
     info(
@@ -267,6 +361,10 @@ export async function executeInit(opts: InitOptions): Promise<InitResult> {
     workspaceRoot: opts.cwd,
     projectName,
     filesWritten,
+    filesUpdated,
+    filesSkipped,
+    filesLinked,
+    warnings,
     gitInitialized,
   };
 }
