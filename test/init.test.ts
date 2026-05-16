@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync, lstatSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync, lstatSync, readlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -41,7 +41,7 @@ test('substitute() replaces all {{KEY}} occurrences and leaves unknown tokens', 
   assert.equal(substitute('no tokens here', { X: '1' }), 'no tokens here');
 });
 
-test('roster init in an empty dir creates CLAUDE.md with project name substituted', async () => {
+test('roster init in an empty dir creates CONTEXT.md and symlinks CLAUDE.md + AGENTS.md (POSIX)', async () => {
   const { cwd, cleanup } = makeTmp();
   try {
     const { logger } = silentLogger();
@@ -52,14 +52,33 @@ test('roster init in an empty dir creates CLAUDE.md with project name substitute
       noGit: true,
       confirm: yes,
       logger,
+      platform: 'linux',
     });
 
     assert.equal(result.status, 'ok');
     assert.equal(result.projectName, 'acme-corp');
-    assert.ok(existsSync(join(cwd, 'CLAUDE.md')), 'CLAUDE.md exists');
+
+    // CONTEXT.md written as regular file
+    assert.ok(existsSync(join(cwd, 'CONTEXT.md')), 'CONTEXT.md exists');
+    assert.ok(result.filesWritten.includes('CONTEXT.md'), 'CONTEXT.md in filesWritten');
+
+    // CLAUDE.md and AGENTS.md are symlinks
+    assert.ok(lstatSync(join(cwd, 'CLAUDE.md')).isSymbolicLink(), 'CLAUDE.md is a symlink');
+    assert.ok(lstatSync(join(cwd, 'AGENTS.md')).isSymbolicLink(), 'AGENTS.md is a symlink');
+    assert.equal(readlinkSync(join(cwd, 'CLAUDE.md')), 'CONTEXT.md', 'CLAUDE.md → CONTEXT.md');
+    assert.equal(readlinkSync(join(cwd, 'AGENTS.md')), 'CONTEXT.md', 'AGENTS.md → CONTEXT.md');
+    assert.ok(result.filesLinked.includes('CLAUDE.md'), 'CLAUDE.md in filesLinked');
+    assert.ok(result.filesLinked.includes('AGENTS.md'), 'AGENTS.md in filesLinked');
+
+    // Content has project name substituted, no unresolved tokens
+    const contextMd = readFileSync(join(cwd, 'CONTEXT.md'), 'utf8');
+    assert.match(contextMd, /acme-corp/, 'project name substituted');
+    assert.ok(!contextMd.includes('{{PROJECT_NAME}}'), 'no unresolved tokens');
+
+    // CLAUDE.md readable through symlink with project name
     const claudeMd = readFileSync(join(cwd, 'CLAUDE.md'), 'utf8');
-    assert.match(claudeMd, /acme-corp/, 'project name substituted');
-    assert.ok(!claudeMd.includes('{{PROJECT_NAME}}'), 'no unresolved tokens');
+    assert.match(claudeMd, /acme-corp/, 'CLAUDE.md (via symlink) has project name');
+
     assert.ok(existsSync(join(cwd, '.env.example')), '.env.example exists');
     assert.ok(existsSync(join(cwd, '.gitignore')), '.gitignore exists');
     assert.ok(existsSync(join(cwd, 'projects', '_demo', 'README.md')), 'projects/_demo/README.md exists');
@@ -72,7 +91,7 @@ test('roster init produces the full scaffold tree (gtm, dreamer, chief-of-staff,
   const { cwd, cleanup } = makeTmp();
   try {
     const { logger } = silentLogger();
-    await executeInit({ cwd, name: 'acme', silent: true, noGit: true, confirm: yes, logger });
+    await executeInit({ cwd, name: 'acme', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
 
     const expected = [
       'conventions.md',
@@ -102,7 +121,7 @@ test('roster init re-run preserves user-edited scaffold files', async () => {
   const { cwd, cleanup } = makeTmp();
   try {
     const { logger } = silentLogger();
-    await executeInit({ cwd, name: 'acme', silent: true, noGit: true, confirm: yes, logger });
+    await executeInit({ cwd, name: 'acme', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
 
     const target = join(cwd, 'gtm', 'sdr', 'agent.md');
     const userContent = '# my custom agent contract\n';
@@ -116,6 +135,7 @@ test('roster init re-run preserves user-edited scaffold files', async () => {
       noGit: true,
       confirm: yes,
       logger,
+      platform: 'linux',
     });
 
     assert.equal(readFileSync(target, 'utf8'), userContent, 'user edit preserved');
@@ -181,10 +201,12 @@ test('detectForgeMarkers finds BRIEF.md, spec/PRD.md, and plans/phases.yaml', ()
   }
 });
 
-test('roster init in a forge dir prompts with forge-aware message and accepts overwrite', async () => {
+test('roster init in a forge dir with CONTEXT.md already present prompts with forge-aware message', async () => {
   const { cwd, cleanup } = makeTmp();
   try {
-    writeFileSync(join(cwd, 'CLAUDE.md'), '# pre-existing\n', 'utf8');
+    // Pre-write CONTEXT.md (simulating previous roster init) plus forge marker
+    writeFileSync(join(cwd, 'CONTEXT.md'), '# existing context\n', 'utf8');
+    symlinkSync('CONTEXT.md', join(cwd, 'CLAUDE.md'));
     writeFileSync(join(cwd, 'BRIEF.md'), '# forge brief\n', 'utf8');
 
     const seen: string[] = [];
@@ -201,14 +223,15 @@ test('roster init in a forge dir prompts with forge-aware message and accepts ov
       noGit: true,
       confirm: captureConfirm,
       logger,
+      platform: 'linux',
     });
 
     assert.equal(result.status, 'ok');
     assert.equal(seen.length, 1, 'confirm fired once');
     assert.match(seen[0]!, /forge/i, 'message mentions forge');
     assert.match(seen[0]!, /BRIEF\.md/, 'message lists the detected marker');
-    const claudeMd = readFileSync(join(cwd, 'CLAUDE.md'), 'utf8');
-    assert.match(claudeMd, /forge-proj/);
+    const contextMd = readFileSync(join(cwd, 'CONTEXT.md'), 'utf8');
+    assert.match(contextMd, /forge-proj/);
   } finally {
     cleanup();
   }
@@ -217,7 +240,9 @@ test('roster init in a forge dir prompts with forge-aware message and accepts ov
 test('roster init in a forge dir declines → cancelled, no scaffold written', async () => {
   const { cwd, cleanup } = makeTmp();
   try {
-    writeFileSync(join(cwd, 'CLAUDE.md'), '# pre-existing\n', 'utf8');
+    // Use a post-init workspace (CONTEXT.md + symlink) so forge prompt fires rather than migration guard
+    writeFileSync(join(cwd, 'CONTEXT.md'), '# existing context\n', 'utf8');
+    symlinkSync('CONTEXT.md', join(cwd, 'CLAUDE.md'));
     mkdirSync(join(cwd, 'plans'), { recursive: true });
     writeFileSync(join(cwd, 'plans', 'phases.yaml'), 'phases:\n', 'utf8');
 
@@ -229,13 +254,13 @@ test('roster init in a forge dir declines → cancelled, no scaffold written', a
       noGit: true,
       confirm: no,
       logger,
+      platform: 'linux',
     });
 
     assert.equal(result.status, 'cancelled');
     assert.deepEqual(result.filesWritten, []);
     assert.ok(!existsSync(join(cwd, 'projects')), 'projects/ not created');
     assert.ok(!existsSync(join(cwd, 'gtm')), 'gtm/ not created');
-    assert.equal(readFileSync(join(cwd, 'CLAUDE.md'), 'utf8'), '# pre-existing\n');
     // logs may include the 'Cancelled' info line — not asserted here
     void logs;
   } finally {
@@ -258,12 +283,13 @@ test('roster init with forge marker but no CLAUDE.md warns and proceeds', async 
       noGit: true,
       confirm: yes,
       logger,
+      platform: 'linux',
     });
 
     assert.equal(result.status, 'ok');
     assert.equal(warns.length, 1, 'one warn line');
     assert.match(warns[0]!, /forge/i);
-    assert.ok(existsSync(join(cwd, 'CLAUDE.md')), 'CLAUDE.md written');
+    assert.ok(existsSync(join(cwd, 'CLAUDE.md')), 'CLAUDE.md exists (symlink)');
     assert.ok(existsSync(join(cwd, 'gtm', 'sdr', 'agent.md')), 'scaffold written');
   } finally {
     cleanup();
@@ -285,6 +311,7 @@ test('roster init with forge marker but no CLAUDE.md AND --silent suppresses the
       noGit: true,
       confirm: yes,
       logger,
+      platform: 'linux',
     });
 
     assert.equal(result.status, 'ok');
@@ -363,7 +390,7 @@ test('roster init completes within the 3s budget on local filesystem', async () 
   try {
     const { logger } = silentLogger();
     const start = performance.now();
-    await executeInit({ cwd, name: 'perf', silent: true, noGit: true, confirm: yes, logger });
+    await executeInit({ cwd, name: 'perf', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
     const ms = performance.now() - start;
     assert.ok(ms < 3000, `init took ${ms.toFixed(0)}ms, expected <3000ms`);
   } finally {
@@ -371,7 +398,7 @@ test('roster init completes within the 3s budget on local filesystem', async () 
   }
 });
 
-test('roster init with existing CLAUDE.md prompts and declining exits cancelled, no files written', async () => {
+test('CLAUDE.md as regular file + no --force → cancelled with migration message', async () => {
   const { cwd, cleanup } = makeTmp();
   try {
     writeFileSync(join(cwd, 'CLAUDE.md'), '# pre-existing\n', 'utf8');
@@ -382,8 +409,9 @@ test('roster init with existing CLAUDE.md prompts and declining exits cancelled,
       name: 'foo',
       silent: true,
       noGit: true,
-      confirm: no, // decline overwrite
+      confirm: no,
       logger,
+      platform: 'linux',
     });
 
     assert.equal(result.status, 'cancelled');
@@ -391,6 +419,31 @@ test('roster init with existing CLAUDE.md prompts and declining exits cancelled,
     const claudeMd = readFileSync(join(cwd, 'CLAUDE.md'), 'utf8');
     assert.equal(claudeMd, '# pre-existing\n', 'CLAUDE.md unchanged');
     assert.ok(!existsSync(join(cwd, '.env.example')), '.env.example not written');
+    assert.ok(!existsSync(join(cwd, 'projects')), 'projects/ not created');
+    assert.ok(!existsSync(join(cwd, 'CONTEXT.md')), 'CONTEXT.md not created');
+  } finally {
+    cleanup();
+  }
+});
+
+test('CONTEXT.md exists + declining overwrite prompt → cancelled', async () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    writeFileSync(join(cwd, 'CONTEXT.md'), '# existing\n', 'utf8');
+    const { logger } = silentLogger();
+
+    const result = await executeInit({
+      cwd,
+      name: 'foo',
+      silent: true,
+      noGit: true,
+      confirm: no,
+      logger,
+      platform: 'linux',
+    });
+
+    assert.equal(result.status, 'cancelled');
+    assert.deepEqual(result.filesWritten, []);
     assert.ok(!existsSync(join(cwd, 'projects')), 'projects/ not created');
   } finally {
     cleanup();
@@ -417,12 +470,15 @@ test('--force skips the overwrite confirmation', async () => {
       noGit: true,
       confirm,
       logger,
+      platform: 'linux',
     });
 
     assert.equal(result.status, 'ok');
     assert.equal(prompted, false, 'no confirmation prompt when --force');
-    const claudeMd = readFileSync(join(cwd, 'CLAUDE.md'), 'utf8');
-    assert.match(claudeMd, /forced/);
+    // CLAUDE.md is now a symlink to CONTEXT.md
+    assert.ok(lstatSync(join(cwd, 'CLAUDE.md')).isSymbolicLink(), 'CLAUDE.md replaced with symlink');
+    const contextMd = readFileSync(join(cwd, 'CONTEXT.md'), 'utf8');
+    assert.match(contextMd, /forced/);
   } finally {
     cleanup();
   }
@@ -432,9 +488,9 @@ test('.gitignore has Roster defaults block appended exactly once on repeated run
   const { cwd, cleanup } = makeTmp();
   try {
     const { logger } = silentLogger();
-    await executeInit({ cwd, name: 'x', silent: true, noGit: true, confirm: yes, logger });
-    await executeInit({ cwd, name: 'x', silent: true, force: true, noGit: true, confirm: yes, logger });
-    await executeInit({ cwd, name: 'x', silent: true, force: true, noGit: true, confirm: yes, logger });
+    await executeInit({ cwd, name: 'x', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
+    await executeInit({ cwd, name: 'x', silent: true, force: true, noGit: true, confirm: yes, logger, platform: 'linux' });
+    await executeInit({ cwd, name: 'x', silent: true, force: true, noGit: true, confirm: yes, logger, platform: 'linux' });
 
     const gi = readFileSync(join(cwd, '.gitignore'), 'utf8');
     const occurrences = (gi.match(new RegExp(GITIGNORE_MARKER_START, 'g')) ?? []).length;
@@ -464,7 +520,7 @@ test('init creates .env.example with placeholder values only', async () => {
   const { cwd, cleanup } = makeTmp();
   try {
     const { logger } = silentLogger();
-    await executeInit({ cwd, name: 'x', silent: true, noGit: true, confirm: yes, logger });
+    await executeInit({ cwd, name: 'x', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
 
     const env = readFileSync(join(cwd, '.env.example'), 'utf8');
     // Every uncommented line ought to be empty; everything else starts with #.
@@ -489,6 +545,7 @@ test('init does not write .git/ when noGit is true', async () => {
       noGit: true,
       confirm: yes,
       logger,
+      platform: 'linux',
     });
     assert.equal(result.gitInitialized, false);
     assert.ok(!existsSync(join(cwd, '.git')), '.git/ not created');
@@ -504,10 +561,295 @@ test('init preserves existing .env.example (no overwrite)', async () => {
     writeFileSync(join(cwd, '.env.example'), customEnv, 'utf8');
 
     const { logger } = silentLogger();
-    await executeInit({ cwd, name: 'x', silent: true, noGit: true, confirm: yes, logger });
+    await executeInit({ cwd, name: 'x', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
 
     const after = readFileSync(join(cwd, '.env.example'), 'utf8');
     assert.equal(after, customEnv, '.env.example unchanged');
+  } finally {
+    cleanup();
+  }
+});
+
+test('win32 dual-write: three regular files with identical content', async () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    const { logger } = silentLogger();
+    const result = await executeInit({
+      cwd,
+      name: 'win-proj',
+      silent: true,
+      noGit: true,
+      confirm: yes,
+      logger,
+      platform: 'win32',
+    });
+
+    assert.equal(result.status, 'ok');
+    assert.ok(result.filesWritten.includes('CONTEXT.md'), 'CONTEXT.md written');
+    assert.ok(result.filesWritten.includes('CLAUDE.md'), 'CLAUDE.md written');
+    assert.ok(result.filesWritten.includes('AGENTS.md'), 'AGENTS.md written');
+    assert.deepEqual(result.filesLinked, [], 'no symlinks on win32');
+
+    // All three have identical content
+    const contextContent = readFileSync(join(cwd, 'CONTEXT.md'), 'utf8');
+    const claudeContent = readFileSync(join(cwd, 'CLAUDE.md'), 'utf8');
+    const agentsContent = readFileSync(join(cwd, 'AGENTS.md'), 'utf8');
+    assert.equal(claudeContent, contextContent, 'CLAUDE.md matches CONTEXT.md');
+    assert.equal(agentsContent, contextContent, 'AGENTS.md matches CONTEXT.md');
+
+    // They must be regular files, not symlinks
+    assert.equal(lstatSync(join(cwd, 'CLAUDE.md')).isSymbolicLink(), false, 'CLAUDE.md is not a symlink');
+    assert.equal(lstatSync(join(cwd, 'AGENTS.md')).isSymbolicLink(), false, 'AGENTS.md is not a symlink');
+  } finally {
+    cleanup();
+  }
+});
+
+test('re-run idempotency: correct symlinks skipped, CONTEXT.md unchanged → skipped', async () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    const { logger } = silentLogger();
+    await executeInit({ cwd, name: 'idem', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
+
+    const second = await executeInit({
+      cwd,
+      name: 'idem',
+      silent: true,
+      force: true,
+      noGit: true,
+      confirm: yes,
+      logger,
+      platform: 'linux',
+    });
+
+    assert.ok(second.filesSkipped.includes('CLAUDE.md'), 'CLAUDE.md symlink skipped on re-run');
+    assert.ok(second.filesSkipped.includes('AGENTS.md'), 'AGENTS.md symlink skipped on re-run');
+    // CONTEXT.md content is the same (no user edits) — skipped
+    assert.ok(
+      second.filesSkipped.includes('CONTEXT.md') || second.filesUpdated.includes('CONTEXT.md'),
+      'CONTEXT.md skipped or updated on re-run',
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('re-run: user region content preserved across managed-region refresh', async () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    const { logger } = silentLogger();
+    await executeInit({ cwd, name: 'user-preserve', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
+
+    // Edit the user region in CONTEXT.md
+    const contextPath = join(cwd, 'CONTEXT.md');
+    const content = readFileSync(contextPath, 'utf8');
+    const edited = content.replace(
+      '[Replace this section with project-specific context: domain, goals, constraints.]',
+      'This is my custom workspace description.',
+    );
+    writeFileSync(contextPath, edited, 'utf8');
+
+    await executeInit({
+      cwd,
+      name: 'user-preserve',
+      silent: true,
+      force: true,
+      noGit: true,
+      confirm: yes,
+      logger,
+      platform: 'linux',
+    });
+
+    const afterContent = readFileSync(contextPath, 'utf8');
+    assert.ok(afterContent.includes('This is my custom workspace description.'), 'user region preserved');
+    assert.ok(
+      afterContent.includes('> **You are operating inside a roster-managed workspace.**'),
+      'managed region refreshed',
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('CLAUDE.md as regular file + --migrate → symlink created, user content preserved', async () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    const userContent = '# My Custom Section\n\nImportant project details.';
+    const oldClaudeMd = `# old-proj — Agent-Team Workspace\n\n${userContent}\n`;
+    writeFileSync(join(cwd, 'CLAUDE.md'), oldClaudeMd, 'utf8');
+
+    const { logger } = silentLogger();
+    const result = await executeInit({
+      cwd,
+      name: 'old-proj',
+      silent: true,
+      noGit: true,
+      migrate: true,
+      confirm: yes,
+      logger,
+      platform: 'linux',
+    });
+
+    assert.equal(result.status, 'ok');
+    assert.ok(existsSync(join(cwd, 'CONTEXT.md')), 'CONTEXT.md created');
+    assert.ok(lstatSync(join(cwd, 'CLAUDE.md')).isSymbolicLink(), 'CLAUDE.md replaced with symlink');
+    const contextContent = readFileSync(join(cwd, 'CONTEXT.md'), 'utf8');
+    assert.ok(contextContent.includes('Important project details.'), 'user content preserved in CONTEXT.md');
+  } finally {
+    cleanup();
+  }
+});
+
+test('CLAUDE.md as regular file + --force → symlink created, no content preservation', async () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    writeFileSync(join(cwd, 'CLAUDE.md'), '# very important custom content\n', 'utf8');
+
+    const { logger } = silentLogger();
+    const result = await executeInit({
+      cwd,
+      name: 'force-proj',
+      silent: true,
+      noGit: true,
+      force: true,
+      confirm: yes,
+      logger,
+      platform: 'linux',
+    });
+
+    assert.equal(result.status, 'ok');
+    assert.ok(lstatSync(join(cwd, 'CLAUDE.md')).isSymbolicLink(), 'CLAUDE.md is a symlink');
+    const contextContent = readFileSync(join(cwd, 'CONTEXT.md'), 'utf8');
+    assert.ok(!contextContent.includes('very important custom content'), 'old content not preserved with --force');
+  } finally {
+    cleanup();
+  }
+});
+
+test('symlink at wrong target + --force → re-linked to CONTEXT.md', async () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    writeFileSync(join(cwd, 'CONTEXT.md'), '# ctx\n', 'utf8');
+    writeFileSync(join(cwd, 'old-context.md'), '# old\n', 'utf8');
+    symlinkSync('old-context.md', join(cwd, 'CLAUDE.md'));
+    symlinkSync('CONTEXT.md', join(cwd, 'AGENTS.md'));
+
+    const { logger } = silentLogger();
+    const result = await executeInit({
+      cwd,
+      name: 'x',
+      silent: true,
+      noGit: true,
+      force: true,
+      confirm: yes,
+      logger,
+      platform: 'linux',
+    });
+
+    assert.equal(result.status, 'ok');
+    assert.equal(readlinkSync(join(cwd, 'CLAUDE.md')), 'CONTEXT.md', 'CLAUDE.md re-linked');
+    assert.ok(result.filesLinked.includes('CLAUDE.md'), 'CLAUDE.md in filesLinked');
+  } finally {
+    cleanup();
+  }
+});
+
+test('symlink at wrong target + no --force → throws', async () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    writeFileSync(join(cwd, 'CONTEXT.md'), '# ctx\n', 'utf8');
+    writeFileSync(join(cwd, 'old-context.md'), '# old\n', 'utf8');
+    symlinkSync('old-context.md', join(cwd, 'CLAUDE.md'));
+    symlinkSync('CONTEXT.md', join(cwd, 'AGENTS.md'));
+
+    const { logger } = silentLogger();
+    await assert.rejects(
+      () => executeInit({
+        cwd,
+        name: 'x',
+        silent: true,
+        noGit: true,
+        force: false,
+        confirm: yes,
+        logger,
+        platform: 'linux',
+      }),
+      /wrong target|re-link|--force/i,
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('InitResult.filesWritten excludes skipped files', async () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    const { logger } = silentLogger();
+    const result = await executeInit({
+      cwd,
+      name: 'x',
+      silent: true,
+      noGit: true,
+      confirm: yes,
+      logger,
+      platform: 'linux',
+    });
+
+    assert.equal(result.status, 'ok');
+    // No file should appear in both filesWritten and filesSkipped
+    for (const f of result.filesSkipped) {
+      assert.ok(!result.filesWritten.includes(f), `${f} must not be in both filesWritten and filesSkipped`);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('InitResult.filesLinked populated on POSIX', async () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    const { logger } = silentLogger();
+    const result = await executeInit({
+      cwd,
+      name: 'x',
+      silent: true,
+      noGit: true,
+      confirm: yes,
+      logger,
+      platform: 'linux',
+    });
+
+    assert.equal(result.status, 'ok');
+    assert.ok(result.filesLinked.includes('CLAUDE.md'), 'CLAUDE.md in filesLinked');
+    assert.ok(result.filesLinked.includes('AGENTS.md'), 'AGENTS.md in filesLinked');
+    assert.ok(!result.filesWritten.includes('CLAUDE.md'), 'CLAUDE.md not in filesWritten');
+    assert.ok(!result.filesWritten.includes('AGENTS.md'), 'AGENTS.md not in filesWritten');
+  } finally {
+    cleanup();
+  }
+});
+
+test('contract: CLAUDE.md symlink target is the literal string "CONTEXT.md"', async () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    const { logger } = silentLogger();
+    await executeInit({ cwd, name: 'x', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
+    assert.equal(readlinkSync(join(cwd, 'CLAUDE.md')), 'CONTEXT.md');
+  } finally {
+    cleanup();
+  }
+});
+
+test('contract: CONTEXT.md contains roster:managed:start orchestrator blockquote', async () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    const { logger } = silentLogger();
+    await executeInit({ cwd, name: 'x', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
+    const content = readFileSync(join(cwd, 'CONTEXT.md'), 'utf8');
+    assert.ok(
+      content.includes('> **You are operating inside a roster-managed workspace.**'),
+      'orchestrator blockquote present',
+    );
   } finally {
     cleanup();
   }
