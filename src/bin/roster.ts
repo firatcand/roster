@@ -54,6 +54,7 @@ function printHelp(version: string): void {
     `  --verbose                    ${chalk.dim('Log each file path written (install)')}`,
     `  --all                        ${chalk.dim('Install to every detected tool (install)')}`,
     `  --tool <name>                ${chalk.dim('Install to a single tool: claude | codex | gemini')}`,
+    `  --migrate                    ${chalk.dim('Upgrade pre-CONTEXT.md workspace, preserving CLAUDE.md content (init)')}`,
     `  --json                       ${chalk.dim('Emit machine-readable JSON (doctor)')}`,
     `  --debug                      ${chalk.dim('Print full stack trace on error (global)')}`,
     '',
@@ -192,6 +193,7 @@ async function runInstall(args: readonly string[]): Promise<number> {
 async function runInit(args: readonly string[]): Promise<number> {
   const silent = args.includes('--silent');
   const force = args.includes('--force');
+  const migrate = args.includes('--migrate');
   const noGit = args.includes('--no-git') || args.includes('--skip-git');
   const name = args.find((a) => !a.startsWith('-'));
 
@@ -202,6 +204,7 @@ async function runInit(args: readonly string[]): Promise<number> {
     name,
     silent,
     force,
+    migrate,
     noGit,
   });
   if (result.status === 'cancelled') throw userCancelledInit();
@@ -218,7 +221,7 @@ function runDoctor(args: readonly string[]): number {
       exitCode: EXIT_ERROR,
     });
   }
-  const code = executeDoctor({ json: parsed.json, silent: parsed.silent });
+  const code = executeDoctor({ json: parsed.json, silent: parsed.silent, cwd: process.cwd() });
   if (code === EXIT_NO_TOOLS && !parsed.json) {
     throw noToolsError(toolHints(allTools()));
   }
