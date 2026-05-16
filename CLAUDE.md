@@ -34,7 +34,7 @@ pnpm build           # tsdown → bin/roster.js with shebang
 pnpm test            # node --test on test/**/*.test.ts
 pnpm smoke           # bash test/smoke.sh — pack, install, init end-to-end
 pnpm e2e             # bash test/e2e-sdr.sh — init + SDR-contract gate (pass --keep to preserve the workspace for the manual Claude Code gate)
-npm pack --dry-run   # confirm tarball stays clean (~13kB, 11 files)
+npm pack --dry-run   # confirm tarball stays clean (~64 kB, ~80 files at v0.1.0)
 ```
 
 The Phase gate command (run before opening a PR): `pnpm typecheck && pnpm build && pnpm test`.
