@@ -36,6 +36,7 @@ node_modules/
 
 # Local Claude Code permission overrides (root + any nested .claude/, e.g. .dogfood/.claude/)
 **/.claude/settings.local.json
+**/.claude/scheduled_tasks.lock
 
 # Dogfood runtime state — preserve directories with .gitkeep, ignore actual logs
 .dogfood/chief-of-staff/logs/2*/
