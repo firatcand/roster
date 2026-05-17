@@ -207,6 +207,7 @@ schedules:
     cron: "0 9 * * 1-5"
     tool: codex
     install_mode: via-cron
+    status: installed
 `;
 
 const invalidScheduleYaml = `version: 1
@@ -217,6 +218,7 @@ schedules:
     cron: "0 9 * * 8"
     tool: gemini
     install_mode: via-cron
+    status: installed
 `;
 
 function writeSchedules(cwd: string, fn: string, content: string): void {

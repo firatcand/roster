@@ -16,6 +16,7 @@ const minimalEntry = {
   cron: '0 9 * * 1-5',
   tool: 'codex',
   install_mode: 'via-cron',
+  status: 'installed',
 };
 
 const fullEntry = {
@@ -67,7 +68,7 @@ test('schedule schema — empty schedules array is OK', () => {
 });
 
 test('schedule schema — missing required field surfaces field-level error', () => {
-  for (const field of ['name', 'agent', 'plan', 'cron', 'tool', 'install_mode'] as const) {
+  for (const field of ['name', 'agent', 'plan', 'cron', 'tool', 'install_mode', 'status'] as const) {
     const { [field]: _, ...rest } = minimalEntry;
     const parsed = scheduleEntrySchema.safeParse(rest);
     assert.equal(parsed.success, false, `expected ${field} to be required`);
@@ -75,6 +76,30 @@ test('schedule schema — missing required field surfaces field-level error', ()
       const errs = flattenZodErrors(parsed.error);
       assert.ok(errs.some((e) => e.path === field), `expected error path '${field}' in ${JSON.stringify(errs)}`);
     }
+  }
+});
+
+test('schedule schema — status enum accepts pending-ui-install and installed', () => {
+  for (const status of ['pending-ui-install', 'installed'] as const) {
+    const parsed = scheduleEntrySchema.safeParse({ ...minimalEntry, status });
+    assert.equal(parsed.success, true, `expected status='${status}' to be accepted`);
+  }
+});
+
+test('schedule schema — cron leading/trailing whitespace is trimmed on parse', () => {
+  const parsed = scheduleEntrySchema.safeParse({ ...minimalEntry, cron: '  0 9 * * 1-5  ' });
+  assert.equal(parsed.success, true);
+  if (parsed.success) {
+    assert.equal(parsed.data.cron, '0 9 * * 1-5', 'cron should be trimmed in output');
+  }
+});
+
+test('schedule schema — status enum rejects invalid value', () => {
+  const parsed = scheduleEntrySchema.safeParse({ ...minimalEntry, status: 'bogus' });
+  assert.equal(parsed.success, false);
+  if (!parsed.success) {
+    const errs = flattenZodErrors(parsed.error);
+    assert.ok(errs.some((e) => e.message.includes("must be one of 'pending-ui-install' | 'installed'")));
   }
 });
 

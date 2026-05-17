@@ -29,6 +29,7 @@ schedules:
     cron: "0 9 * * 1-5"
     tool: codex
     install_mode: via-cron
+    status: installed
 `;
 
 const invalidEnumYaml = `version: 1
@@ -39,6 +40,7 @@ schedules:
     cron: "0 9 * * 1-5"
     tool: gemini
     install_mode: via-cron
+    status: installed
 `;
 
 const invalidCronYaml = `version: 1
@@ -49,6 +51,7 @@ schedules:
     cron: "0 9 * * 8"
     tool: codex
     install_mode: via-cron
+    status: installed
 `;
 
 const duplicateNameYaml = `version: 1
@@ -59,12 +62,14 @@ schedules:
     cron: "0 9 * * 1-5"
     tool: codex
     install_mode: via-cron
+    status: installed
   - name: alpha
     agent: sdr
     plan: cold-outreach
     cron: "0 9 * * 1-5"
     tool: codex
     install_mode: via-cron
+    status: installed
 `;
 
 test('findScheduleFiles: empty cwd → []', () => {
@@ -221,6 +226,7 @@ test('validate: missing version field → file-level fail', () => {
     cron: "0 9 * * 1-5"
     tool: codex
     install_mode: via-cron
+    status: installed
 `);
     const report = validateSchedulesInCwd(fix.root);
     assert.equal(report.ok, false);
@@ -275,6 +281,7 @@ schedules:
     cron: "0 9 * * 1-5"
     tool: codex
     install_mode: via-cron
+    status: installed
     timezone: "America/New_York"
     max_duration_minutes: 30
     hitl_routing: "roster/gtm/pending/"

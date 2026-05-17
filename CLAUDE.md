@@ -43,10 +43,13 @@ The Phase gate command (run before opening a PR): `pnpm typecheck && pnpm build 
 
 ## Where things live in the CLI
 
-- **Subcommand entry**: `src/bin/roster.ts` — hand-rolled argv parsing; subcommands `install`, `init`, `doctor`. `--help`, `--version`, exit codes (0/1/2/3).
+- **Subcommand entry**: `src/bin/roster.ts` — hand-rolled argv parsing; subcommands `install`, `init`, `doctor`, `schedule`. `--help`, `--version`, exit codes (0/1/2/3).
 - **Tool detection**: `src/lib/tools.ts` — `detectTools()` checks `~/.claude/`, `~/.codex/`, `~/.gemini/`. Each `Tool` has `key`, `name`, `skillsTarget`, `agentsTarget`. Override via `ROSTER_CLAUDE_HOME` etc. for tests.
 - **Install logic**: `installToTool()` in `src/lib/tools.ts` — copies `skills/*` and `agents/*.md` into the tool's config dir. Idempotent. Handles symlinks (prompts before clobber). Handles EACCES with a sudo hint.
 - **Scaffold logic**: `src/commands/init.ts` — copies `templates/scaffold/**` into CWD, substitutes `{{PROJECT_NAME}}` in `CLAUDE.project.template.md`, appends gitignore-defaults idempotently.
+- **Schedule schema**: `src/lib/schedule-schema.ts` — Zod-validated `scheduleEntrySchema` (name, agent, plan, cron, tool, install_mode, status). Required `status` enum is `pending-ui-install | installed`. `validateCronExpression()` for cron syntax.
+- **Schedule install**: `src/lib/schedule-install.ts` — `installClaudeSchedule()` renders `.roster/schedule-specs/<name>.claude.fields.md` (markdown, NOT JSON — Spike 2) and upserts `roster/<function>/schedules.yaml` atomically. YAML round-trip via `parseDocument` preserves user comments. UI hand-off only; tracked under [anthropics/claude-code#41364](https://github.com/anthropics/claude-code/issues/41364).
+- **Schedule commands**: `src/commands/schedule.ts` — `executeScheduleValidate()` and `executeScheduleInstall()`. The install command preflights `--cloud-routine` (not-yet-implemented), Linux + `--tool claude` (no Desktop Scheduled Tasks on Linux), and `--tool codex` (ships in ROS-35).
 
 ## Adding a new AI-tool target
 

@@ -10,7 +10,7 @@ import { parseDoctorArgs } from '../lib/doctor-args.ts';
 import { parseScheduleArgs } from '../lib/schedule-args.ts';
 import { executeInit } from '../commands/init.ts';
 import { executeDoctor } from '../commands/doctor.ts';
-import { executeScheduleValidate } from '../commands/schedule.ts';
+import { executeScheduleValidate, executeScheduleInstall } from '../commands/schedule.ts';
 import {
   EXIT_OK,
   EXIT_ERROR,
@@ -49,6 +49,7 @@ function printHelp(version: string): void {
     `  roster init [name]           ${chalk.dim('Scaffold a multi-agent workspace in the current dir')}`,
     `  roster doctor                ${chalk.dim('Audit installed skills + agents per AI tool')}`,
     `  roster schedule validate     ${chalk.dim('Validate roster/<function>/schedules.yaml files')}`,
+    `  roster schedule install      ${chalk.dim('Register a schedule (Claude: UI hand-off; Codex: ROS-35)')}`,
     '',
     chalk.bold('Flags:'),
     `  -h, --help                   ${chalk.dim('Show this help')}`,
@@ -232,7 +233,22 @@ function runSchedule(args: readonly string[]): number {
       silent: parsed.silent,
     });
   }
-  // Unreachable while only `validate` is supported, but exhaustive guard.
+  if (parsed.subcommand === 'install') {
+    return executeScheduleInstall({
+      cwd: parsed.cwd ?? process.cwd(),
+      functionName: parsed.functionName,
+      agent: parsed.agent,
+      plan: parsed.plan,
+      cron: parsed.cron,
+      tool: parsed.tool,
+      name: parsed.name,
+      dryRun: parsed.dryRun,
+      cloudRoutine: parsed.cloudRoutine,
+      json: parsed.json,
+      silent: parsed.silent,
+    });
+  }
+  // Exhaustive guard.
   throw new RosterError({
     header: `${chalk.red.bold('roster:')} schedule subcommand not implemented`,
     body: '',

@@ -102,6 +102,7 @@ const kebabString = (label: string) =>
 const cronString = z
   .string()
   .min(1, { message: 'cron: required' })
+  .transform((s) => s.trim())
   .superRefine((expr, ctx) => {
     const result = validateCronExpression(expr);
     if (!result.ok) {
@@ -134,6 +135,7 @@ const retryPolicySchema = z
 
 export const TOOL_VALUES = ['claude', 'codex'] as const;
 export const INSTALL_MODE_VALUES = ['ui-handoff', 'via-cron'] as const;
+export const INSTALL_STATUS_VALUES = ['pending-ui-install', 'installed'] as const;
 
 export const scheduleEntrySchema = z
   .object({
@@ -150,6 +152,12 @@ export const scheduleEntrySchema = z
     install_mode: z.enum(INSTALL_MODE_VALUES, {
       error: (issue) => {
         const base = `install_mode: must be one of ${INSTALL_MODE_VALUES.map((v) => `'${v}'`).join(' | ')}`;
+        return issue.code === 'invalid_value' ? `${base} (got '${String(issue.input)}')` : base;
+      },
+    }),
+    status: z.enum(INSTALL_STATUS_VALUES, {
+      error: (issue) => {
+        const base = `status: must be one of ${INSTALL_STATUS_VALUES.map((v) => `'${v}'`).join(' | ')}`;
         return issue.code === 'invalid_value' ? `${base} (got '${String(issue.input)}')` : base;
       },
     }),
@@ -174,6 +182,7 @@ export const scheduleEntrySchema = z
 export type ScheduleEntry = z.infer<typeof scheduleEntrySchema>;
 export type ToolValue = (typeof TOOL_VALUES)[number];
 export type InstallModeValue = (typeof INSTALL_MODE_VALUES)[number];
+export type InstallStatusValue = (typeof INSTALL_STATUS_VALUES)[number];
 
 export const scheduleFileSchema = z
   .object({
