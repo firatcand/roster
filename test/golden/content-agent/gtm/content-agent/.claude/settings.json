@@ -1,0 +1,3 @@
+{
+  "_comment": "Agent-scoped Claude Code settings for content-agent. Inherits universal settings from the workspace .claude/settings.json."
+}

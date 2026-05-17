@@ -90,10 +90,14 @@ export type GuidedPlan = z.infer<typeof PlanSchema>;
 export type GuidedStep = z.infer<typeof StepSchema>;
 
 export class FixtureValidationError extends Error {
-  constructor(public readonly path: string, public readonly issues: z.ZodIssue[]) {
+  readonly path: string;
+  readonly issues: z.ZodIssue[];
+  constructor(path: string, issues: z.ZodIssue[]) {
     const summary = issues.map((i) => `  ${i.path.join('.')}: ${i.message}`).join('\n');
     super(`Fixture at ${path} failed validation:\n${summary}`);
     this.name = 'FixtureValidationError';
+    this.path = path;
+    this.issues = issues;
   }
 }
 
