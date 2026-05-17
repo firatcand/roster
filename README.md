@@ -108,6 +108,8 @@ Detection is presence-only: roster considers a tool installed if its config root
 
 Every skill and agent ships with version `0.1.0` (frontmatter pin). `roster doctor` will surface drift between installed and shipped versions in v0.2.
 
+From **v0.4.0**, `/chief-of-staff create-agent <function> <agent>` runs an interactive five-phase dialogue by default in a TTY — it interviews you for the gaps a stub can't fill (subagents, tools, plan names, project-specific failure modes) and writes a fully populated `agent.md` instead of placeholders. CI / scripts / non-TTY contexts get the legacy stub mode automatically; force it explicitly with `AGENT_TEAM_NO_CONFIRM=1`. See [docs/HOWTO.md → Creating an agent](docs/HOWTO.md#creating-an-agent) for the worked example.
+
 ## What `init` scaffolds
 
 `roster init` is non-destructive — re-running merges new files in without overwriting your edits. The full scaffold:

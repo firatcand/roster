@@ -98,6 +98,120 @@ Claude Code will read `~/.claude/skills/chief-of-staff/SKILL.md` and list the pl
 
 ---
 
+## Creating an agent
+
+> Available from v0.4.0. Earlier versions ship the stub-only behavior described below; the guided dialogue is the v0.4.0 addition.
+
+`/chief-of-staff create-agent <function> <agent>` scaffolds a new role-based agent under one of your function dirs (`gtm/`, `product/`, `design/`, `ops/`, or anything you registered with `create-function`). It runs in one of two modes:
+
+| Mode | When it fires | What it produces |
+|---|---|---|
+| **stub** | non-TTY context, `AGENT_TEAM_NO_CONFIRM=1`, or `mode=stub` inline | `agent.md` with `<placeholder>` strings throughout; a TODO slash-command description; empty `plans/`. You fill it in by hand. |
+| **guided** | TTY context, no `AGENT_TEAM_NO_CONFIRM` env var | A short interview, then a fully populated `agent.md`, real subagent files, a starter plan if you named one, and a ≤ 80-char slash-command description. |
+
+Mode selection priority (first match wins): inline `mode=` argument → `AGENT_TEAM_NO_CONFIRM=1` env → TTY detection.
+
+The same slash command works identically across Claude Code, Codex CLI, and Gemini — the dialogue rendering may differ slightly (Claude Code shows it inline; Codex/Gemini show it in their respective chat surfaces) but the five-phase contract and the on-disk output are identical.
+
+### Stub mode (CI / headless / "I'll fill it in later")
+
+```bash
+AGENT_TEAM_NO_CONFIRM=1 /chief-of-staff create-agent gtm content-agent
+```
+
+The skill writes the canonical tree under `gtm/content-agent/` with placeholder strings, prints the list of paths created, and exits. No prompts. The output is byte-identical to invoking `bash scripts/new-agent.sh gtm content-agent` directly. Use this when you're scripting workspace setup or you already know what you want and just need the scaffold.
+
+If a non-interactive run partially fails (rare — usually a permission error on `.claude/commands/`), the agent tree is canonical but the slash command may not exist. Recover with:
+
+```bash
+bash scripts/new-agent.sh --slash-only gtm content-agent
+```
+
+`--slash-only` writes only `.claude/commands/<agent>.md`; it refuses to clobber an existing file (delete it first if you need to retry).
+
+### Guided mode — worked example
+
+Invoke without `AGENT_TEAM_NO_CONFIRM` in a real terminal:
+
+```bash
+/chief-of-staff create-agent gtm content-agent
+```
+
+**Phase 1 — Prose intake.** The skill opens with a single question:
+
+> Describe what this agent does in 1–3 sentences. What does one run produce, on what input, for whom?
+
+A realistic answer:
+
+> Drafts long-form Substack posts on B2B SaaS positioning. Reads our brand voice, recent posts, and a one-line topic brief. Outputs a draft post in markdown ready for human review through HITL. Runs weekly on Sundays.
+
+**Phase 2 — Classify.** The skill silently partitions every required `agent.md` field into boilerplate / grounded / uncertain. You don't see this step — it just shapes Phase 3.
+
+**Phase 3 — Targeted follow-ups.** One question per gap. Realistic sequence:
+
+> Q1: Your prose mentions HITL for the draft review. Does this agent have any subagents (e.g. a separate critic pass), or is the agent itself the only mover before HITL?
+>
+> *— Add a critic subagent that reviews tone and brand fit before HITL.*
+>
+> Q2: Which LLM should the writer use — Claude, GPT, something else? And does it need web search or any MCP?
+>
+> *— Claude Sonnet 4.6 for the writer, no web search needed. The critic runs on the same model.*
+>
+> Q3: You said "runs weekly." Should I create a starter plan file for that, and what should the plan be named?
+>
+> *— Yes, name it `weekly-draft`.*
+>
+> Q4: What should happen if the topic brief is empty or missing when the plan fires?
+>
+> *— Abort with a stderr message and skip the run; don't draft on nothing.*
+>
+> Q5: Outputs — single `.md` per run, or `.md` plus a metadata sidecar (frontmatter, run ID, topic)?
+>
+> *— Single `.md`. The HITL log already captures the metadata.*
+
+Five focused questions, one fact each — no bundling, no leading defaults. The skill never invents content; if something's missing, it asks.
+
+**Phase 4 — Consolidated preview.** You see every file path that will be written, the full `agent.md`, the slash-command description, the `subagents/critic.md` body, and the `plans/weekly-draft.yaml` skeleton:
+
+```
+Will write:
+  gtm/content-agent/agent.md                              (3.2 KB, populated)
+  gtm/content-agent/subagents/critic.md                   (1.1 KB, 6 sections filled)
+  gtm/content-agent/subagents/_template.md                (canonical)
+  gtm/content-agent/plans/weekly-draft.yaml               (4 steps, matches agent.md)
+  gtm/content-agent/plans/.gitkeep                        (canonical)
+  gtm/content-agent/README.md                             (canonical)
+  gtm/content-agent/.mcp.json                             (canonical)
+  gtm/content-agent/.claude/settings.json                 (canonical)
+  gtm/content-agent/projects/_template/**                 (canonical, 7 files)
+  .claude/commands/content-agent.md                       (slash command, 64 chars)
+
+Slash command description (≤ 80 chars):
+  "gtm content-agent — draft weekly Substack posts in our voice for HITL review"
+
+[y / revise <section> / cancel]
+```
+
+`revise plans` re-enters Phase 3 for just that section, then re-renders the full preview. Loop until you type `y` or `cancel`.
+
+**Phase 5 — Atomic write.** Final confirm (`Write this? (y/revise/cancel)`), then the skill creates directories parent-before-child, writes files in deterministic order with `agent.md` last (canonical-contract guarantee), and finally writes the slash command outside the rollback root. Post-write summary:
+
+```
+Wrote gtm/content-agent/ (15 files, 17 directories).
+Wrote .claude/commands/content-agent.md.
+Logged to chief-of-staff/logs/2026-05/operations-2026-05-17.md (outcome: success).
+```
+
+If anything fails between directory creation and the last byte of `agent.md`, the skill rolls back the entire agent tree in reverse order, leaves the workspace clean, and prints the residual paths (if any) for manual cleanup. The slash command write is treated separately — if it fails after the agent tree is canonical, you get a `--slash-only` retry message instead of a rollback.
+
+### When to pick which mode
+
+- **Use guided** the first time you create an agent of a given role. The follow-up questions catch gaps you wouldn't think to fill in a stub.
+- **Use stub** when you're cloning an existing agent's shape, scripting setup in CI, or you just want the directory tree to land so you can edit `agent.md` in your editor.
+- The two outputs are byte-identical for every file *except* `agent.md`, the slash command description, named subagent files, and starter plan files. Everything else (README, settings, MCP config, projects/_template) is canonical regardless of mode.
+
+---
+
 ## Doctor
 
 Coming in v0.2. Will audit installed skills and agents for drift and report missing or stale components. Source: `src/lib/tools.ts:86-88`.
