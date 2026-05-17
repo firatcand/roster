@@ -196,3 +196,272 @@ test('help text includes schedule validate', () => {
   assert.equal(r.status, 0);
   assert.match(r.stdout, /roster schedule validate/);
 });
+
+test('help text includes schedule install', () => {
+  const r = runCli(['--help']);
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /roster schedule install/);
+});
+
+test('schedule (no subcommand): error message lists install too', () => {
+  const r = runCli(['schedule']);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /install/);
+});
+
+// ---------------------------------------------------------------------------
+// schedule install (ROS-34) — full CLI integration coverage
+// ---------------------------------------------------------------------------
+
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import YAML from 'yaml';
+
+function listAllFiles(root: string): string[] {
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    if (!existsSync(dir)) return;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else out.push(full);
+    }
+  };
+  walk(root);
+  return out.sort();
+}
+
+test('schedule install: happy path → exit 0, files written, hand-off printed', () => {
+  const fix = makeCwd();
+  try {
+    const r = runCli([
+      'schedule', 'install',
+      'gtm/sdr', 'cold-outreach',
+      '--cron', '0 9 * * 1-5',
+      '--tool', 'claude',
+      '--cwd', fix.root,
+    ]);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.match(r.stdout, /Registered schedule sdr-cold-outreach/);
+    assert.match(r.stdout, /Next: paste into Claude Desktop/);
+    assert.match(r.stdout, /41364/);
+
+    const fieldsDocPath = join(fix.root, '.roster', 'schedule-specs', 'sdr-cold-outreach.claude.fields.md');
+    assert.ok(existsSync(fieldsDocPath), 'fields doc should exist');
+    const fieldsDoc = readFileSync(fieldsDocPath, 'utf8');
+    assert.match(fieldsDoc, /Task name.*sdr-cold-outreach/);
+    assert.match(fieldsDoc, /Workspace path.*roster-schedule-cli-/);
+
+    const yamlPath = join(fix.root, 'roster', 'gtm', 'schedules.yaml');
+    assert.ok(existsSync(yamlPath));
+    const doc = YAML.parse(readFileSync(yamlPath, 'utf8'));
+    assert.equal(doc.version, 1);
+    assert.equal(doc.schedules[0].status, 'pending-ui-install');
+    assert.equal(doc.schedules[0].tool, 'claude');
+    assert.equal(doc.schedules[0].install_mode, 'ui-handoff');
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test('schedule install --dry-run: writes nothing, prints fields doc', () => {
+  const fix = makeCwd();
+  try {
+    const before = listAllFiles(fix.root);
+    const r = runCli([
+      'schedule', 'install',
+      'gtm/sdr', 'cold-outreach',
+      '--cron', '0 9 * * 1-5',
+      '--tool', 'claude',
+      '--cwd', fix.root,
+      '--dry-run',
+    ]);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.match(r.stdout, /Would register/);
+    assert.match(r.stdout, /Fields document \(would be written\)/);
+
+    const after = listAllFiles(fix.root);
+    assert.deepEqual(after, before, 'dry-run must not write any files');
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test('schedule install: Linux + --tool claude → exit 1 with linux refusal', () => {
+  const fix = makeCwd();
+  try {
+    const out = spawnSync(
+      process.execPath,
+      ['--experimental-strip-types', '--no-warnings', BIN,
+       'schedule', 'install', 'gtm/sdr', 'cold-outreach',
+       '--cron', '0 9 * * 1-5', '--tool', 'claude', '--cwd', fix.root,
+      ],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1', ROSTER_PLATFORM: 'linux' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 10000,
+      },
+    );
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /not available on Linux/);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test('schedule install: --cloud-routine → exit 1 with not-yet-implemented', () => {
+  const fix = makeCwd();
+  try {
+    const r = runCli([
+      'schedule', 'install',
+      'gtm/sdr', 'cold-outreach',
+      '--cron', '0 9 * * 1-5',
+      '--tool', 'claude',
+      '--cwd', fix.root,
+      '--cloud-routine',
+    ]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /--cloud-routine is not yet implemented/);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test('schedule install: --tool codex → exit 1 with ROS-35 pointer', () => {
+  const fix = makeCwd();
+  try {
+    const r = runCli([
+      'schedule', 'install',
+      'gtm/sdr', 'cold-outreach',
+      '--cron', '0 9 * * 1-5',
+      '--tool', 'codex',
+      '--cwd', fix.root,
+    ]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /not implemented in this release/);
+    assert.match(r.stderr, /ROS-35/);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test('schedule install: missing --cron → exit 1', () => {
+  const fix = makeCwd();
+  try {
+    const r = runCli([
+      'schedule', 'install',
+      'gtm/sdr', 'cold-outreach',
+      '--tool', 'claude',
+      '--cwd', fix.root,
+    ]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /missing required flag --cron/);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test('schedule install: missing --tool → exit 1', () => {
+  const fix = makeCwd();
+  try {
+    const r = runCli([
+      'schedule', 'install',
+      'gtm/sdr', 'cold-outreach',
+      '--cron', '0 9 * * 1-5',
+      '--cwd', fix.root,
+    ]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /missing required flag --tool/);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test('schedule install: malformed positional (no slash) → exit 1', () => {
+  const fix = makeCwd();
+  try {
+    const r = runCli([
+      'schedule', 'install',
+      'gtm-sdr', 'cold-outreach',
+      '--cron', '0 9 * * 1-5', '--tool', 'claude',
+      '--cwd', fix.root,
+    ]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /<function>\/<agent>/);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test('schedule install: idempotent re-run → 1 entry, action=updated', () => {
+  const fix = makeCwd();
+  try {
+    const r1 = runCli([
+      'schedule', 'install', 'gtm/sdr', 'cold-outreach',
+      '--cron', '0 9 * * 1-5', '--tool', 'claude', '--cwd', fix.root,
+    ]);
+    assert.equal(r1.status, 0);
+
+    const r2 = runCli([
+      'schedule', 'install', 'gtm/sdr', 'cold-outreach',
+      '--cron', '30 14 * * 1-5', '--tool', 'claude', '--cwd', fix.root,
+    ]);
+    assert.equal(r2.status, 0);
+    assert.match(r2.stdout, /Updated schedule sdr-cold-outreach/);
+
+    const yamlPath = join(fix.root, 'roster', 'gtm', 'schedules.yaml');
+    const doc = YAML.parse(readFileSync(yamlPath, 'utf8'));
+    assert.equal(doc.schedules.length, 1);
+    assert.equal(doc.schedules[0].cron, '30 14 * * 1-5');
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test('schedule install: --name override creates a distinct entry', () => {
+  const fix = makeCwd();
+  try {
+    runCli(['schedule', 'install', 'gtm/sdr', 'cold-outreach',
+      '--cron', '0 9 * * 1-5', '--tool', 'claude', '--cwd', fix.root]);
+    const r = runCli(['schedule', 'install', 'gtm/sdr', 'cold-outreach',
+      '--cron', '0 17 * * 1-5', '--tool', 'claude',
+      '--name', 'sdr-cold-outreach-evening', '--cwd', fix.root]);
+    assert.equal(r.status, 0);
+
+    const yamlPath = join(fix.root, 'roster', 'gtm', 'schedules.yaml');
+    const doc = YAML.parse(readFileSync(yamlPath, 'utf8'));
+    assert.equal(doc.schedules.length, 2);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test('schedule install → schedule validate round-trip passes', () => {
+  const fix = makeCwd();
+  try {
+    const r1 = runCli(['schedule', 'install', 'gtm/sdr', 'cold-outreach',
+      '--cron', '0 9 * * 1-5', '--tool', 'claude', '--cwd', fix.root]);
+    assert.equal(r1.status, 0);
+
+    const r2 = runCli(['schedule', 'validate', '--cwd', fix.root]);
+    assert.equal(r2.status, 0, `validate stderr: ${r2.stderr}\nvalidate stdout: ${r2.stdout}`);
+    assert.match(r2.stdout, /PASS/);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test('schedule install --json: exit 0, parseable payload', () => {
+  const fix = makeCwd();
+  try {
+    const r = runCli(['schedule', 'install', 'gtm/sdr', 'cold-outreach',
+      '--cron', '0 9 * * 1-5', '--tool', 'claude', '--cwd', fix.root, '--json']);
+    assert.equal(r.status, 0);
+    const payload = JSON.parse(r.stdout) as { ok: boolean; name: string; action: string };
+    assert.equal(payload.ok, true);
+    assert.equal(payload.name, 'sdr-cold-outreach');
+    assert.equal(payload.action, 'created');
+  } finally {
+    fix.cleanup();
+  }
+});
