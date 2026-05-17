@@ -69,6 +69,8 @@ Without `--all`, you'll get an interactive checkbox to pick which tools to recei
 | `roster init [name]` | Scaffold the agent-team workspace into CWD. Substitutes `{{PROJECT_NAME}}`. |
 | `roster doctor` | Audit installed skills/agents per AI tool; exits non-zero on drift. Includes a Scheduling section that runs `schedule validate` against the current workspace. |
 | `roster schedule validate` | Validate every `roster/<function>/schedules.yaml` file in the workspace. `--json` / `--silent` / `--cwd <dir>`. Exits non-zero on schema or cron errors. |
+| `roster review [function]` | Walk `roster/<function>/pending/*.md` HITL items interactively. Approve/reject/defer each; approved items move to the `target_on_approve:` path in their front-matter. `--json` for non-interactive listing. |
+| `roster hooks install` | Install SessionStart banner hooks into `~/.claude/settings.json` and `~/.codex/hooks.json` so any chat session in a roster workspace shows pending-HITL counts on start. Idempotent. `--tool claude\|codex\|all`. |
 | `roster --help` / `--version` | Usage + version from `package.json`. |
 
 Scheduling primitives (Phase 2.5) — see [docs/SCHEDULING.md](docs/SCHEDULING.md) for the platform × tool matrix, UI hand-off flows for Claude Desktop and Codex Automations, `codex --via cron` install, the Linux Claude gap, the Codex Windows subagent workaround, and the subscription-billing rules (including why `claude -p` is banned).

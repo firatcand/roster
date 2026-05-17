@@ -135,6 +135,32 @@ measure "roster doctor" 1.0 \
   env HOME="$FAKE_HOME" ROSTER_CLAUDE_HOME="$CLAUDE_HOME" \
     "$ROSTER_BIN" doctor
 
+# 7. banner.sh — SessionStart hook latency. The hook fires on every CLI
+#    session start in a roster workspace, so it has the tightest budget
+#    of any roster surface: 200ms hard ceiling per ROS-37 acceptance.
+#    Measured across three pending-item counts (0/10/100) — the budget
+#    holds for all three.
+echo ""
+echo "===> 7. banner.sh SessionStart latency (≤ 0.2s, 3 scenarios)"
+BANNER_SH="$REPO_ROOT/templates/hooks/banner.sh"
+[ -x "$BANNER_SH" ] || { fail "banner.sh missing or not executable"; exit 1; }
+
+BANNER_WS="$PERF_DIR/banner-ws"
+mkdir -p "$BANNER_WS/roster/gtm/pending" "$BANNER_WS/roster/dreamer/pending"
+
+# Scenario A: 0 pending items
+measure "banner.sh (0 items)" 0.2 sh "$BANNER_SH" </dev/null
+
+# Scenario B: 10 pending items spread across two functions
+for i in $(seq 1 5); do echo "stub" > "$BANNER_WS/roster/gtm/pending/g$i.md"; done
+for i in $(seq 1 5); do echo "stub" > "$BANNER_WS/roster/dreamer/pending/d$i.md"; done
+(cd "$BANNER_WS" && measure "banner.sh (10 items)" 0.2 sh "$BANNER_SH" </dev/null)
+
+# Scenario C: 100 pending items
+for i in $(seq 6 50); do echo "stub" > "$BANNER_WS/roster/gtm/pending/g$i.md"; done
+for i in $(seq 6 50); do echo "stub" > "$BANNER_WS/roster/dreamer/pending/d$i.md"; done
+(cd "$BANNER_WS" && measure "banner.sh (100 items)" 0.2 sh "$BANNER_SH" </dev/null)
+
 # Summary
 echo ""
 echo "===> $PASS_COUNT passed, $FAIL_COUNT failed"

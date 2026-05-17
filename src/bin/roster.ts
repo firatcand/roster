@@ -8,9 +8,13 @@ import { installToTool, type InstallResult } from '../lib/install.ts';
 import { parseInstallArgs } from '../lib/install-args.ts';
 import { parseDoctorArgs } from '../lib/doctor-args.ts';
 import { parseScheduleArgs } from '../lib/schedule-args.ts';
+import { parseReviewArgs } from '../lib/review-args.ts';
+import { parseHooksArgs } from '../lib/hooks-args.ts';
 import { executeInit } from '../commands/init.ts';
 import { executeDoctor } from '../commands/doctor.ts';
 import { executeScheduleValidate, executeScheduleInstall } from '../commands/schedule.ts';
+import { executeReview } from '../commands/review.ts';
+import { executeHooksInstall } from '../commands/hooks.ts';
 import {
   EXIT_OK,
   EXIT_ERROR,
@@ -25,8 +29,15 @@ import {
   userCancelledInstall,
 } from '../lib/errors.ts';
 
-type Subcommand = 'install' | 'init' | 'doctor' | 'schedule';
-const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>(['install', 'init', 'doctor', 'schedule']);
+type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'hooks';
+const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
+  'install',
+  'init',
+  'doctor',
+  'schedule',
+  'review',
+  'hooks',
+]);
 
 function tildify(path: string): string {
   const home = homedir();
@@ -50,6 +61,8 @@ function printHelp(version: string): void {
     `  roster doctor                ${chalk.dim('Audit installed skills + agents per AI tool')}`,
     `  roster schedule validate     ${chalk.dim('Validate roster/<function>/schedules.yaml files')}`,
     `  roster schedule install      ${chalk.dim('Register a schedule (Claude: UI hand-off; Codex: ROS-35)')}`,
+    `  roster review [function]     ${chalk.dim('Walk roster/*/pending/ HITL items interactively')}`,
+    `  roster hooks install         ${chalk.dim('Install SessionStart banner hooks for Claude + Codex')}`,
     '',
     chalk.bold('Flags:'),
     `  -h, --help                   ${chalk.dim('Show this help')}`,
@@ -257,6 +270,48 @@ function runSchedule(args: readonly string[]): number {
   });
 }
 
+async function runReview(args: readonly string[]): Promise<number> {
+  const parsed = parseReviewArgs(args);
+  if (parsed.kind === 'err') {
+    throw new RosterError({
+      header: `${chalk.red.bold('roster:')} ${parsed.message}`,
+      body: '',
+      remedy: `  Run ${chalk.bold('roster --help')} for usage.`,
+      exitCode: EXIT_ERROR,
+    });
+  }
+  return await executeReview({
+    cwd: process.cwd(),
+    fn: parsed.fn,
+    json: parsed.json,
+    silent: parsed.silent,
+  });
+}
+
+async function runHooks(args: readonly string[]): Promise<number> {
+  const parsed = parseHooksArgs(args);
+  if (parsed.kind === 'err') {
+    throw new RosterError({
+      header: `${chalk.red.bold('roster:')} ${parsed.message}`,
+      body: '',
+      remedy: `  Run ${chalk.bold('roster --help')} for usage.`,
+      exitCode: EXIT_ERROR,
+    });
+  }
+  if (parsed.subcommand === 'install') {
+    return await executeHooksInstall({
+      target: parsed.target,
+      silent: parsed.silent,
+    });
+  }
+  throw new RosterError({
+    header: `${chalk.red.bold('roster:')} hooks subcommand not implemented`,
+    body: '',
+    remedy: `  Run ${chalk.bold('roster --help')} for usage.`,
+    exitCode: EXIT_ERROR,
+  });
+}
+
 function runDoctor(args: readonly string[]): number {
   const parsed = parseDoctorArgs(args);
   if (parsed.kind === 'err') {
@@ -306,6 +361,8 @@ async function main(): Promise<number> {
     if (first === 'init') return await runInit(rest);
     if (first === 'doctor') return runDoctor(rest);
     if (first === 'schedule') return runSchedule(rest);
+    if (first === 'review') return await runReview(rest);
+    if (first === 'hooks') return await runHooks(rest);
   }
 
   throw unknownCommandError(first);

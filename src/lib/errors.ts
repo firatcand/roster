@@ -54,6 +54,24 @@ export function noToolsError(tools: ReadonlyArray<ToolHint>): RosterError {
   });
 }
 
+export function invalidFunctionError(fn: string): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} unknown function ${chalk.yellow(`'${fn}'`)}`,
+    body: `  No roster/${fn}/ directory exists in this workspace.`,
+    remedy: `  Run ${chalk.bold('roster review')} with no argument to walk all functions.`,
+    exitCode: EXIT_ERROR,
+  });
+}
+
+export function notTtyForReviewError(): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} review requires an interactive terminal`,
+    body: '  Stdout is not a TTY (running under a pipe, CI, or non-interactive shell).',
+    remedy: `  Pass ${chalk.bold('--json')} to list pending items without prompting.`,
+    exitCode: EXIT_ERROR,
+  });
+}
+
 export function missingScaffoldError(scaffoldPath: string): RosterError {
   return new RosterError({
     header: `${chalk.red.bold('roster:')} scaffold templates missing`,
