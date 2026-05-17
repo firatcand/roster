@@ -227,6 +227,8 @@ PRs into `main` run [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — t
 - Require branches to be up-to-date before merging
 - (Optional) Require linear history
 
+All third-party actions in `ci.yml` and `publish.yml` are pinned to 40-character commit SHAs (with a trailing `# vX.Y.Z` comment) and auto-updated weekly via [Dependabot](.github/dependabot.yml).
+
 ### Publishing / Releases
 
 Releases are triggered by pushing a version tag:
