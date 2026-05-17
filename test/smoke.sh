@@ -92,7 +92,18 @@ for expected in \
   package/templates/scaffold/conventions.md \
   package/templates/scaffold/.config/functions.yaml \
   package/templates/scaffold/scripts/new-project.sh \
+  package/templates/scaffold/scripts/new-agent.sh \
+  package/templates/scaffold/scripts/new-agent-instance.sh \
+  package/templates/scaffold/scripts/create-function.sh \
+  package/templates/scaffold/scripts/archive-project.sh \
+  package/templates/scaffold/scripts/unarchive-project.sh \
+  package/templates/scaffold/scripts/remove-agent-from-project.sh \
+  package/templates/scaffold/scripts/rename-project.sh \
+  package/templates/scaffold/scripts/audit-agent.sh \
+  package/templates/scaffold/scripts/audit-project.sh \
+  package/templates/scaffold/scripts/audit-repo.sh \
   package/templates/scaffold/scripts/lib/functions.sh \
+  package/templates/scaffold/scripts/lib/bindings-prompt.sh \
   package/templates/scaffold/chief-of-staff/agent.md \
   package/templates/scaffold/dreamer/agent.md \
   package/templates/scaffold/gtm/sdr/agent.md \
@@ -158,6 +169,9 @@ assert "-f gtm/sdr/agent.md" "gtm/sdr/agent.md ported"
 assert "-f chief-of-staff/agent.md" "chief-of-staff/agent.md ported"
 assert "-f dreamer/agent.md" "dreamer/agent.md ported"
 assert "-x scripts/new-project.sh" "scripts/new-project.sh ported + executable"
+assert "-x scripts/new-agent.sh" "scripts/new-agent.sh ported + executable (ROS-58)"
+assert "-x scripts/new-agent-instance.sh" "scripts/new-agent-instance.sh ported + executable (ROS-58)"
+assert "-f scripts/lib/bindings-prompt.sh" "scripts/lib/bindings-prompt.sh ported (sourced by new-agent-instance)"
 assert "-f .config/functions.yaml" ".config/functions.yaml ported"
 assert "-d logs/cron" "logs/cron/ ported"
 
@@ -169,6 +183,22 @@ assert "-f projects/smoke-test-co/config/default.yaml" "new-project.sh creates c
 assert "-f .env.example" ".env.example exists"
 assert "-f .gitignore" ".gitignore exists"
 assert_contains .gitignore "# Roster defaults" ".gitignore has Roster defaults marker"
+
+# 5c. new-agent.sh + new-agent-instance.sh end-to-end against the fresh workspace.
+# Both scripts have interactive prompts (tool-bindings on new-agent.sh, project
+# instance prompts on new-agent-instance.sh) — </dev/null + AGENT_TEAM_NO_CONFIRM=1
+# is load-bearing per non-interactive-flags-need-tty-audits.md.
+AGENT_TEAM_NO_CONFIRM=1 bash scripts/new-agent.sh gtm test-agent </dev/null > /dev/null
+assert "-d gtm/test-agent" "new-agent.sh creates gtm/test-agent/ (ROS-58)"
+assert "-f gtm/test-agent/agent.md" "new-agent.sh creates agent.md (ROS-58)"
+assert "-f .claude/commands/test-agent.md" "new-agent.sh creates slash command (ROS-58)"
+assert "-d gtm/test-agent/projects/_template" "new-agent.sh creates instance template (ROS-58)"
+# --slash-only recovery flag (ROS-53) — exercised end-to-end against the shipped script
+rm .claude/commands/test-agent.md
+AGENT_TEAM_NO_CONFIRM=1 bash scripts/new-agent.sh --slash-only gtm test-agent </dev/null > /dev/null
+assert "-f .claude/commands/test-agent.md" "--slash-only recovery (ROS-53) works via shipped script (ROS-58)"
+AGENT_TEAM_NO_CONFIRM=1 bash scripts/new-agent-instance.sh smoke-test-co gtm test-agent </dev/null > /dev/null
+assert "-d gtm/test-agent/projects/smoke-test-co" "new-agent-instance.sh creates project instance (ROS-58)"
 
 # Idempotency: re-run init with --force, marker should still appear exactly once
 "$ROSTER_BIN" init my-test-workspace --silent --no-git --force

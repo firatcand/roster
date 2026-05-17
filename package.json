@@ -26,7 +26,7 @@
     "smoke": "bash test/smoke.sh",
     "e2e": "bash test/e2e-sdr.sh",
     "perf": "bash test/perf.sh",
-    "test:dogfood-scripts": "bash test/new-agent-slash-only.sh"
+    "test:dogfood-scripts": "bash test/new-agent-slash-only.sh && bash test/scripts-parity.sh"
   },
   "keywords": [
     "claude-code",
