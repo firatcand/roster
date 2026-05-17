@@ -53,6 +53,11 @@ node_modules/
 /spec/
 /plans/
 
+# Forge harness state — worktrees and per-worktree task binding markers
+# (created by skills/pickup-task). Anchored to repo root so a nested
+# `templates/scaffold/.forge/` (if ever shipped) is not ignored.
+/.forge/
+
 # Build artifacts — produced by tsdown; included in npm pack via files allowlist
 /bin/
 /dist/
