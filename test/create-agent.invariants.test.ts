@@ -60,6 +60,46 @@ test('Invariant 1: subagent declared in agent.md but file missing trips with "no
   );
 });
 
+test('Invariant 1: subagent file missing a required section trips with "missing required section"', () => {
+  const output = cloneOutput(happyPathOutput());
+  let path = '';
+  let content = '';
+  for (const [p, c] of output.files) {
+    if (p.endsWith('/subagents/critic.md')) {
+      path = p;
+      content = c;
+      break;
+    }
+  }
+  // Strip the ## Quality bar heading (and its body) — section disappears entirely.
+  const tampered = content.replace(/## Quality bar\n[\s\S]*$/, '');
+  output.files.set(path, tampered);
+  assert.throws(
+    () => validateSubagentManifest(output),
+    /Invariant 1 \(subagent manifest\): subagent "critic" missing required section "## Quality bar"/,
+  );
+});
+
+test('Invariant 1: subagent file with empty required section trips with "empty section"', () => {
+  const output = cloneOutput(happyPathOutput());
+  let path = '';
+  let content = '';
+  for (const [p, c] of output.files) {
+    if (p.endsWith('/subagents/critic.md')) {
+      path = p;
+      content = c;
+      break;
+    }
+  }
+  // Replace the Quality bar body with whitespace only — heading remains.
+  const tampered = content.replace(/(## Quality bar\n)[\s\S]*$/, '$1\n   \n');
+  output.files.set(path, tampered);
+  assert.throws(
+    () => validateSubagentManifest(output),
+    /Invariant 1 \(subagent manifest\): subagent "critic" has empty section "## Quality bar"/,
+  );
+});
+
 test('Invariant 1: orphan subagent file (not in agent.md) trips with "exists but"', () => {
   const output = cloneOutput(happyPathOutput());
   let prefix = '';
@@ -246,6 +286,36 @@ test('Invariant 5: bare "TODO:" without gap description trips with "bare \\"TODO
   assert.throws(
     () => validateNoPlaceholders(tampered),
     /Invariant 5 \(no placeholders\): bare "TODO:" in agent\.md without a gap description/,
+  );
+});
+
+test('Invariant 5: <placeholder> inside a ```yaml fenced block is ignored', () => {
+  // Per pr-toolkit review: I3 owns the bindings yaml block; I5 should not
+  // double-fire on tokens inside it. A future template adding `description:
+  // "Optional binding for <provider>"` inside the fence must not trip I5.
+  const md = '# Agent\n\n## Tools and bindings\n\n```yaml\nfoo:\n  description: "uses <provider> API"\n```\n';
+  assert.doesNotThrow(() => validateNoPlaceholders(md));
+});
+
+test('Invariant 5: Markdown autolink <https://...> is ignored', () => {
+  const md = '# Agent\n\n## Purpose\n\nSee <https://example.com/spec> for details.\n';
+  assert.doesNotThrow(() => validateNoPlaceholders(md));
+});
+
+test('Invariant 5: aggregate validateInvariants trips on a placeholder in slash command body', () => {
+  const output = cloneOutput(happyPathOutput());
+  // Inject a stub-style placeholder into the slash command body. The
+  // description line is left untouched so I4 still passes.
+  output.slashCommand = {
+    ...output.slashCommand,
+    content: output.slashCommand.content.replace(
+      /^## Usage$/m,
+      '## Usage\n\nSee <unfilled-token> for help.',
+    ),
+  };
+  assert.throws(
+    () => validateInvariants(output),
+    /Invariant 5 \(no placeholders\): slash command body contains 1 unfilled placeholder\(s\): <unfilled-token>/,
   );
 });
 

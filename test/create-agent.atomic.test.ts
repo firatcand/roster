@@ -33,7 +33,12 @@ interface FakeFs extends AtomicFs {
 
 // Builds an in-memory fs that records every operation. `throwOn` lets the
 // test inject a failure at a specific write target.
-function makeFakeFs(opts: { throwOnWrite?: (path: string) => Error | null } = {}): FakeFs {
+function makeFakeFs(
+  opts: {
+    throwOnWrite?: (path: string) => Error | null;
+    throwOnMkdir?: (path: string) => Error | null;
+  } = {},
+): FakeFs {
   const files = new Map<string, string>();
   const dirs = new Set<string>();
   const events: FakeFsEvent[] = [];
@@ -44,6 +49,11 @@ function makeFakeFs(opts: { throwOnWrite?: (path: string) => Error | null } = {}
     events,
 
     async mkdir(path) {
+      const err = opts.throwOnMkdir?.(path);
+      if (err) {
+        events.push({ op: 'mkdir', path, ok: false });
+        throw err;
+      }
       if (dirs.has(path)) {
         events.push({ op: 'mkdir', path, ok: true });
         return { created: false };
@@ -279,6 +289,34 @@ test('opts.skipSlashCommand: success without writing the slash file', async () =
   const result = await atomicWrite(output, fs, { skipSlashCommand: true });
   assert.equal(result.outcome, 'success');
   assert.equal(fs.files.has(output.slashCommand.path), false);
+});
+
+test('rollback: mkdir failure sets failureAt to the failing dir', async () => {
+  // pr-toolkit review (ROS-55): the mkdir failure path used to leave
+  // failureAt undefined, mirroring it to the file-write path.
+  const output = happyPathOutput();
+  // Fail on the 3rd dir (after agent root + subagents/ are created).
+  const targetDir = output.dirs[2];
+  const fs = makeFakeFs({
+    throwOnMkdir: (path) => {
+      if (path === targetDir) {
+        const err = new Error('EACCES') as Error & { code: string };
+        err.code = 'EACCES';
+        return err;
+      }
+      return null;
+    },
+  });
+  const result = await atomicWrite(output, fs);
+  assert.equal(result.outcome, 'rollback');
+  assert.equal(result.failureAt, targetDir, 'mkdir failure path must set failureAt');
+  // The two successfully-created ancestors are in the rollback list AND
+  // were cleaned up.
+  assert.ok(result.rollback.includes(output.dirs[0]));
+  assert.ok(result.rollback.includes(output.dirs[1]));
+  // The failed dir is NOT in the rollback list (mkdir reported failure,
+  // not success).
+  assert.ok(!result.rollback.includes(targetDir));
 });
 
 test('rollback: invariant failure (Step 1) aborts before any fs operation', async () => {

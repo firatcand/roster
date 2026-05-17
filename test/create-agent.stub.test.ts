@@ -108,6 +108,29 @@ function snapshotOutput(root: string): { paths: string[]; contents: Map<string, 
   return { paths, contents };
 }
 
+// Compare two snapshots. Throws on the first divergence. Used by both
+// the byte-identical test and the tamper guard — extracting the comparison
+// into a helper means the tamper test exercises the SAME comparison code
+// that protects against regressions. Per Codex review (ROS-55).
+function compareTreeToGolden(actual: ReturnType<typeof snapshotOutput>, golden: ReturnType<typeof snapshotOutput>): void {
+  if (
+    actual.paths.length !== golden.paths.length ||
+    actual.paths.some((p, i) => p !== golden.paths[i])
+  ) {
+    throw new Error(
+      'compareTreeToGolden: paths differ. ' +
+        `actual=${JSON.stringify(actual.paths)} golden=${JSON.stringify(golden.paths)}`,
+    );
+  }
+  for (const path of golden.paths) {
+    const a = actual.contents.get(path);
+    const g = golden.contents.get(path);
+    if (a !== g) {
+      throw new Error(`compareTreeToGolden: ${path} bytes differ from golden`);
+    }
+  }
+}
+
 test('stub-mode: tree matches golden exactly (paths)', () => {
   const workspace = makeWorkspace();
   try {
@@ -131,28 +154,22 @@ test('stub-mode: every file byte-identical to golden', () => {
     runStub(workspace);
     const actual = snapshotOutput(workspace.root);
     const golden = snapshotOutput(GOLDEN_ROOT);
-    for (const path of golden.paths) {
-      assert.equal(
-        actual.contents.get(path),
-        golden.contents.get(path),
-        `${path}: stub output bytes differ from golden. ` +
-          'Run `pnpm test:update-golden:stub` after intentional contract changes; otherwise the script regressed.',
-      );
-    }
+    compareTreeToGolden(actual, golden);
   } finally {
     workspace.cleanup();
   }
 });
 
 // Tamper guard — proves the assertion is doing work, not silently passing.
-// Per contract-tests-mirror-document-form.md (ROS-20): a green run alone
-// doesn't prove the regex matches anything; we must show it fails when the
-// source is deliberately broken.
-test('tamper: a modified script produces a tree that does NOT match golden', () => {
+// Per contract-tests-mirror-document-form.md (ROS-20) and Codex review
+// (ROS-55): the tamper test must exercise the SAME comparison code that
+// guards the main test, not a private `assert.notEqual` that could pass
+// while the byte-compare loop silently no-ops.
+test('tamper: a modified script makes compareTreeToGolden() throw', () => {
   const original = readFileSync(SOURCE_SCRIPT, 'utf8');
-  // Inject a literal extra line into agent.md's purpose section. The
-  // injection lands inside the heredoc that writes agent.md, so the
-  // generated agent.md will differ from the golden.
+  // Inject an extra line into agent.md's Purpose section. The injection
+  // lands inside the heredoc that writes agent.md, so the generated
+  // agent.md will differ from the golden.
   const tamperedScript = original.replace(
     /^## Purpose$/m,
     '## Purpose\n\nDRIFT-CANARY-LINE',
@@ -164,12 +181,12 @@ test('tamper: a modified script produces a tree that does NOT match golden', () 
     runStub(workspace);
     const actual = snapshotOutput(workspace.root);
     const golden = snapshotOutput(GOLDEN_ROOT);
-    // The agent.md file's content should differ.
-    const agentMdPath = `${STUB_FN}/${STUB_AGENT}/agent.md`;
-    assert.notEqual(
-      actual.contents.get(agentMdPath),
-      golden.contents.get(agentMdPath),
-      'tampered script must produce a different agent.md — if this matches, the regression test is a no-op',
+    // The byte-compare test uses compareTreeToGolden() — assert that the
+    // SAME function rejects the tampered output. If this passes, the
+    // byte-compare test is guaranteed to catch the same regression.
+    assert.throws(
+      () => compareTreeToGolden(actual, golden),
+      /compareTreeToGolden: .* bytes differ from golden/,
     );
   } finally {
     workspace.cleanup();

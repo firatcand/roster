@@ -33,6 +33,18 @@ const ALLOWED_PATH_TEMPLATES = new Set([
 // Invariant 1 — subagent files match agent.md ## Subagents
 // ─────────────────────────────────────────────────────────────────────────────
 
+// SKILL.md line 304: subagent files must have all six required sections
+// (Role, Inputs, Output, Tools, Boundaries, Quality bar) present and populated.
+// Order matches the renderSubagent() output in templates.ts.
+const SUBAGENT_REQUIRED_SECTIONS = [
+  'Role',
+  'Inputs',
+  'Output',
+  'Tools',
+  'Boundaries',
+  'Quality bar',
+] as const;
+
 export function validateSubagentManifest(output: RenderOutput): void {
   const agentMd = findAgentMd(output);
   const declared = parseSubagentsSection(agentMd.content);
@@ -55,6 +67,30 @@ export function validateSubagentManifest(output: RenderOutput): void {
         `Invariant 1 (subagent manifest): file ${agentMd.root}/subagents/${name}.md exists but ` +
           `"${name}" is not listed in agent.md ## Subagents`,
       );
+    }
+  }
+
+  // Per SKILL.md line 304: each populated subagent file must have all six
+  // required sections, each non-empty. Codex review (ROS-55) flagged this gap
+  // — the renderer always produces all six by construction, but the invariant
+  // is a defensive check meant to catch external mutations (hand-edits,
+  // malformed RenderOutput).
+  for (const name of filesPresent) {
+    const path = `${agentMd.root}/subagents/${name}.md`;
+    const content = output.files.get(path);
+    if (content === undefined) continue;
+    for (const section of SUBAGENT_REQUIRED_SECTIONS) {
+      const body = extractSection(content, section);
+      if (body === null) {
+        throw new Error(
+          `Invariant 1 (subagent manifest): subagent "${name}" missing required section "## ${section}"`,
+        );
+      }
+      if (body.trim() === '') {
+        throw new Error(
+          `Invariant 1 (subagent manifest): subagent "${name}" has empty section "## ${section}"`,
+        );
+      }
     }
   }
 }
@@ -144,19 +180,30 @@ export function validateSlashDescription(slashContent: string): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Invariant 5 — no unfilled placeholders in agent.md
+// Invariant 5 — no unfilled placeholders in agent.md (and slash body)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function validateNoPlaceholders(agentMdContent: string): void {
+// Code-fenced YAML / code blocks are governed by other invariants (e.g.,
+// invariant 3 owns the ```yaml bindings block). A bindings entry that
+// legitimately contains `<example>` inside the fence would otherwise trip
+// invariant 5. Strip fenced blocks before scanning. Per pr-toolkit review.
+function stripCodeFences(text: string): string {
+  return text.replace(/```[a-zA-Z0-9]*\n[\s\S]*?\n```/g, '');
+}
+
+export function validateNoPlaceholders(agentMdContent: string, label = 'agent.md'): void {
+  const scannable = stripCodeFences(agentMdContent);
   const offenders: string[] = [];
-  for (const match of agentMdContent.matchAll(/<([^>]+)>/g)) {
+  for (const match of scannable.matchAll(/<([^>]+)>/g)) {
     const inner = match[1];
     if (ALLOWED_PATH_TEMPLATES.has(inner)) continue;
+    // Allow Markdown autolinks (<https://...>, <mailto:...>). pr-toolkit review.
+    if (/^(?:https?:\/\/|mailto:)/.test(inner)) continue;
     offenders.push(match[0]);
   }
   if (offenders.length > 0) {
     throw new Error(
-      `Invariant 5 (no placeholders): agent.md contains ${offenders.length} unfilled placeholder(s): ` +
+      `Invariant 5 (no placeholders): ${label} contains ${offenders.length} unfilled placeholder(s): ` +
         offenders.slice(0, 3).join(', ') +
         (offenders.length > 3 ? `, ... (${offenders.length - 3} more)` : ''),
     );
@@ -164,12 +211,20 @@ export function validateNoPlaceholders(agentMdContent: string): void {
   // `[ \t]*` not `\s*` — `\s` would consume the newline and pull the next
   // line into the captured gap, so a bare `TODO:` followed by another line
   // would look like it has a description.
-  for (const m of agentMdContent.matchAll(/TODO:[ \t]*([^\n]*)/g)) {
+  for (const m of scannable.matchAll(/TODO:[ \t]*([^\n]*)/g)) {
     const gap = m[1].trim();
     if (gap.length === 0) {
-      throw new Error(`Invariant 5 (no placeholders): bare "TODO:" in agent.md without a gap description`);
+      throw new Error(`Invariant 5 (no placeholders): bare "TODO:" in ${label} without a gap description`);
     }
   }
+}
+
+// Scan the slash command body (excluding the `description:` frontmatter
+// line, which invariant 4 already owns). Per pr-toolkit review.
+function validateNoPlaceholdersSlash(slashContent: string): void {
+  // Strip frontmatter `description:` line — I4 governs that.
+  const body = slashContent.replace(/^description:.*$/m, '');
+  validateNoPlaceholders(body, 'slash command body');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -182,6 +237,7 @@ export function validateInvariants(output: RenderOutput): void {
   validateToolBindings(output);
   validateSlashDescription(output.slashCommand.content);
   validateNoPlaceholders(findAgentMd(output).content);
+  validateNoPlaceholdersSlash(output.slashCommand.content);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

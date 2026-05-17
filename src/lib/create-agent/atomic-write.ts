@@ -68,13 +68,16 @@ export async function atomicWrite(
   const knownDirs = new Set(output.dirs);
 
   // Step 4 — directories, parent-before-child.
+  let mkdirFailureAt: string | undefined;
   try {
     for (const dir of output.dirs) {
+      mkdirFailureAt = dir;
       const result = await fs.mkdir(dir);
       if (result.created) rollback.push(dir);
     }
+    mkdirFailureAt = undefined;
   } catch (err) {
-    return rollbackWalk(fs, rollback, knownDirs, err as Error, 'rollback');
+    return rollbackWalk(fs, rollback, knownDirs, err as Error, 'rollback', mkdirFailureAt);
   }
 
   // Step 5 — files in canonical write order (agent.md is last).
