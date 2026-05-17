@@ -324,3 +324,60 @@ test('doctor with no schedules.yaml files: no Scheduling section, exit 0', () =>
     h.cleanup();
   }
 });
+
+// ──────────────────────────────────────────────────────────────────────────────
+// ROS-33 — Codex Windows workaround surfaced under the Codex tool block.
+// Driven by ROSTER_PLATFORM=win32 so the test runs on any host.
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('doctor on win32: emits Codex workaround notice under the Codex tool block', () => {
+  const h = makeHomes(['claude', 'codex']);
+  try {
+    runCli(['install', '--all', '--silent'], envFor(h));
+
+    const env = { ...envFor(h), ROSTER_PLATFORM: 'win32' };
+    const doc = runCli(['doctor'], env);
+    assert.equal(doc.status, 0, `stderr: ${doc.stderr}\nstdout: ${doc.stdout}`);
+    assert.match(doc.stdout, /codex-windows-19399/);
+    assert.match(doc.stdout, /runtime injection ACTIVE/);
+    assert.match(doc.stdout, /github\.com\/openai\/codex\/issues\/19399/);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('doctor on win32 --json: workarounds array contains codex-windows-19399', () => {
+  const h = makeHomes(['claude', 'codex']);
+  try {
+    runCli(['install', '--all', '--silent'], envFor(h));
+
+    const env = { ...envFor(h), ROSTER_PLATFORM: 'win32' };
+    const doc = runCli(['doctor', '--json'], env);
+    assert.equal(doc.status, 0);
+    const payload = JSON.parse(doc.stdout) as {
+      workarounds?: Array<{ id: string; toolKey: string; status: string; reference: string }>;
+    };
+    assert.ok(Array.isArray(payload.workarounds), 'workarounds present in JSON');
+    const w = payload.workarounds!.find((x) => x.id === 'codex-windows-19399');
+    assert.ok(w, 'codex-windows-19399 workaround in payload');
+    assert.equal(w.toolKey, 'codex');
+    assert.equal(w.status, 'active');
+    assert.match(w.reference, /openai\/codex\/issues\/19399/);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('doctor on non-win32: emits no workaround notice', () => {
+  const h = makeHomes(['claude', 'codex']);
+  try {
+    runCli(['install', '--all', '--silent'], envFor(h));
+
+    const env = { ...envFor(h), ROSTER_PLATFORM: 'darwin' };
+    const doc = runCli(['doctor'], env);
+    assert.equal(doc.status, 0);
+    assert.doesNotMatch(doc.stdout, /codex-windows-19399/, 'no workaround on darwin');
+  } finally {
+    h.cleanup();
+  }
+});
