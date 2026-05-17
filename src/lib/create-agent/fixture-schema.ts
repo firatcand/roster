@@ -65,10 +65,26 @@ const GroundedSchema = z.object({
   outputs_description: NON_EMPTY,
 });
 
+function uniqueBy<T>(arr: T[], key: (item: T) => string): boolean {
+  const seen = new Set<string>();
+  for (const item of arr) {
+    const k = key(item);
+    if (seen.has(k)) return false;
+    seen.add(k);
+  }
+  return true;
+}
+
 const UncertainAnswersSchema = z.object({
-  subagents: z.array(SubagentSchema),
-  tools: z.array(ToolSchema),
-  plans: z.array(PlanSchema),
+  subagents: z
+    .array(SubagentSchema)
+    .refine((arr) => uniqueBy(arr, (s) => s.name), 'subagent names must be unique'),
+  tools: z
+    .array(ToolSchema)
+    .refine((arr) => uniqueBy(arr, (t) => t.name), 'tool names must be unique'),
+  plans: z
+    .array(PlanSchema)
+    .refine((arr) => uniqueBy(arr, (p) => p.name), 'plan names must be unique'),
   failure_modes: z.array(NON_EMPTY),
 });
 
@@ -76,7 +92,10 @@ export const GuidedAgentFixtureSchema = z.object({
   fn: SLUG,
   agent: SLUG,
   prose: NON_EMPTY,
-  grounded: GroundedSchema,
+  grounded: GroundedSchema.refine(
+    (g) => uniqueBy(g.steps, (s) => s.id),
+    'grounded.steps must have unique ids',
+  ),
   uncertain_answers: UncertainAnswersSchema,
   slash_command: SlashCommandSchema,
 });
@@ -99,16 +118,24 @@ export class FixtureValidationError extends Error {
   }
 }
 
-// Cross-fixture invariant: every plan step id must appear in grounded.steps.
-// Enforced here (not in zod) because zod cross-field refinements get awkward.
-// SKILL.md invariant 2: step ids match between agent.md and the starter plan.
+// SKILL.md invariant 2: step ids in agent.md ## Steps and the starter plan
+// match as SETS — neither side may carry an id absent from the other.
+// Enforced outside zod because the check is cross-field (grounded ⇄ plans).
 export function validateStepIdsMatch(fixture: GuidedAgentFixture): void {
-  const agentStepIds = new Set(fixture.grounded.steps.map((s) => s.id));
+  const groundedIds = new Set(fixture.grounded.steps.map((s) => s.id));
   for (const plan of fixture.uncertain_answers.plans) {
-    for (const step of plan.steps) {
-      if (!agentStepIds.has(step.id)) {
+    const planIds = new Set(plan.steps.map((s) => s.id));
+    for (const id of planIds) {
+      if (!groundedIds.has(id)) {
         throw new Error(
-          `Invariant 2 (step ids match): plan "${plan.name}" references step id "${step.id}" not in grounded.steps`,
+          `Invariant 2 (step ids match): plan "${plan.name}" references step id "${id}" not in grounded.steps`,
+        );
+      }
+    }
+    for (const id of groundedIds) {
+      if (!planIds.has(id)) {
+        throw new Error(
+          `Invariant 2 (step ids match): grounded.steps id "${id}" not in plan "${plan.name}"`,
         );
       }
     }

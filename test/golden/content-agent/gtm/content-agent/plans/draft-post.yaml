@@ -1,8 +1,7 @@
 plan: draft-post
 description: |
   Single-topic short-form draft cycle. Takes a topic brief, produces 2-3
-critiqued candidate posts ready for user review.
-
+  critiqued candidate posts ready for user review.
 
 # Inputs schema — fill in per-invocation arguments here.
 inputs: {}

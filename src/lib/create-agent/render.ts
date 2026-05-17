@@ -73,21 +73,11 @@ function renderFileAtPath(path: string, fixture: GuidedAgentFixture): string {
   const { fn, agent } = fixture;
   const root = `${fn}/${agent}`;
 
-  // README.md
   if (path === `${root}/README.md`) return renderReadme(fn, agent);
-
-  // .mcp.json
-  if (path === `${root}/.mcp.json`) {
-    return renderMcpJson(fn, agent, fixture.uncertain_answers.tools);
-  }
-
-  // .claude/settings.json
-  if (path === `${root}/.claude/settings.json`) return renderClaudeSettings(fn, agent);
-
-  // subagents/_template.md
+  if (path === `${root}/.mcp.json`) return renderMcpJson(agent, fixture.uncertain_answers.tools);
+  if (path === `${root}/.claude/settings.json`) return renderClaudeSettings(agent);
   if (path === `${root}/subagents/_template.md`) return renderSubagentTemplate();
 
-  // subagents/<name>.md
   if (path.startsWith(`${root}/subagents/`) && path.endsWith('.md')) {
     const name = path.slice(`${root}/subagents/`.length, -3);
     const subagent = fixture.uncertain_answers.subagents.find((s) => s.name === name);
@@ -97,29 +87,21 @@ function renderFileAtPath(path: string, fixture: GuidedAgentFixture): string {
     return renderSubagent(subagent);
   }
 
-  // plans/.gitkeep
   if (path === `${root}/plans/.gitkeep`) return '';
 
-  // plans/<plan>.yaml
   if (path.startsWith(`${root}/plans/`) && path.endsWith('.yaml')) {
     const name = path.slice(`${root}/plans/`.length, -5);
     const plan = fixture.uncertain_answers.plans.find((p) => p.name === name);
     if (!plan) {
       throw new Error(`render: plan file ${path} requested but no plan named "${name}" in fixture`);
     }
-    return renderPlanYaml(plan, agent);
+    return renderPlanYaml(plan);
   }
 
-  // projects/_template/config/default.yaml
   if (path === `${root}/projects/_template/config/default.yaml`) return renderProjectConfig(agent);
-
-  // projects/_template/asset-references.md
   if (path === `${root}/projects/_template/asset-references.md`) return renderAssetReferences();
-
-  // .gitkeep files (everywhere else)
   if (path.endsWith('/.gitkeep')) return '';
-
-  // agent.md (LAST per SKILL.md Step 5)
+  // agent.md is written LAST per SKILL.md Step 5 — canonical contract.
   if (path === `${root}/agent.md`) return renderAgentMd(fixture);
 
   throw new Error(`render: no template for path ${path}`);

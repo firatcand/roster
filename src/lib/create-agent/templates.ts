@@ -5,11 +5,42 @@
 // Single source of truth: when scripts/new-agent.sh ships (ROS-58), its
 // stub-mode output for these files must equal what this module produces.
 // A drift detector test there will enforce that contract.
+//
+// Multi-line interpolation rule: any fixture value that arrived from a YAML
+// `|` block scalar may carry embedded newlines. Inline interpolation
+// (`${value}` inside a template literal) only prefixes the FIRST line with
+// surrounding whitespace; continuation lines land at column 0 — breaking
+// both YAML block-scalar nesting and Markdown bullet continuation. Use
+// indentBlockScalar / indentBulletContinuation for any field that may be
+// multi-line.
 
 import type { GuidedAgentFixture, GuidedSubagent, GuidedTool, GuidedPlan, GuidedStep } from './fixture-schema.ts';
 
+// Stub date used in any boilerplate that needs a created/last_modified field.
+// Hardcoded for host-independence — the harness asserts render() output is
+// byte-identical across runs, so Date.now() at render time would flake CI.
+const STUB_DATE = '2026-01-01';
+
+// Indent every line of a multi-line value so it sits cleanly inside a YAML
+// block-scalar (`description: |`) or any other context that needs a stable
+// leading-whitespace prefix. Trailing whitespace is trimmed.
+function indentBlockScalar(text: string, indent: string): string {
+  return text
+    .trimEnd()
+    .split('\n')
+    .map((line) => indent + line)
+    .join('\n');
+}
+
+// Indent continuation lines of a multi-line value so they sit under a
+// Markdown bullet (`- ${first}\n  ${rest}`). Without this, Markdown treats
+// the continuation as a sibling paragraph and breaks bullet grouping.
+function indentBulletContinuation(text: string): string {
+  return text.trimEnd().split('\n').join('\n  ');
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// File-level boilerplate (byte-identical regardless of mode)
+// File-level boilerplate
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function renderReadme(fn: string, agent: string): string {
@@ -38,7 +69,7 @@ Per run: \`projects/<project>/log/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md\`.
 `;
 }
 
-export function renderMcpJson(fn: string, agent: string, tools: GuidedTool[]): string {
+export function renderMcpJson(agent: string, tools: GuidedTool[]): string {
   const mcpTools = tools.filter((t) => t.mcp_url);
   if (mcpTools.length === 0) {
     return `{
@@ -47,7 +78,6 @@ export function renderMcpJson(fn: string, agent: string, tools: GuidedTool[]): s
 }
 `;
   }
-  // Stable order: by tool name ascending (already by fixture order, but sort for safety).
   const sorted = [...mcpTools].sort((a, b) => a.name.localeCompare(b.name));
   const entries = sorted.map(
     (t) => `    "${t.name}": {
@@ -64,7 +94,7 @@ ${entries.join(',\n')}
 `;
 }
 
-export function renderClaudeSettings(fn: string, agent: string): string {
+export function renderClaudeSettings(agent: string): string {
   return `{
   "_comment": "Agent-scoped Claude Code settings for ${agent}. Inherits universal settings from the workspace .claude/settings.json."
 }
@@ -101,22 +131,20 @@ export function renderSubagentTemplate(): string {
 }
 
 export function renderSubagent(s: GuidedSubagent): string {
-  const toolsBlock = s.tools.length === 0
-    ? 'None.'
-    : s.tools.map((t) => `- ${t}`).join('\n');
+  const toolsBlock = s.tools.length === 0 ? 'None.' : s.tools.map((t) => `- ${t}`).join('\n');
   return `# ${titleCase(s.name)} Subagent
 
 ## Role
 
-${s.role}
+${s.role.trimEnd()}
 
 ## Inputs
 
-${s.inputs}
+${s.inputs.trimEnd()}
 
 ## Output
 
-${s.output}
+${s.output.trimEnd()}
 
 ## Tools
 
@@ -124,21 +152,20 @@ ${toolsBlock}
 
 ## Boundaries
 
-${s.boundaries}
+${s.boundaries.trimEnd()}
 
 ## Quality bar
 
-${s.quality_bar}
+${s.quality_bar.trimEnd()}
 `;
 }
 
 export function renderProjectConfig(agent: string): string {
-  const today = '2026-01-01';
   return `---
 agent: ${agent}
 project: <project-slug>
-created: ${today}
-last_modified: ${today}
+created: ${STUB_DATE}
+last_modified: ${STUB_DATE}
 ---
 
 # ${agent} config — <project-name>
@@ -160,11 +187,11 @@ Use relative paths from the project root (e.g., \`guidelines/voice.md\`).
 `;
 }
 
-export function renderPlanYaml(plan: GuidedPlan, agent: string): string {
+export function renderPlanYaml(plan: GuidedPlan): string {
   const stepLines = plan.steps.map((s) => `  - id: ${s.id}\n    title: ${s.title}`).join('\n');
   return `plan: ${plan.name}
 description: |
-  ${plan.description}
+${indentBlockScalar(plan.description, '  ')}
 
 # Inputs schema — fill in per-invocation arguments here.
 inputs: {}
@@ -213,7 +240,7 @@ See \`${fn}/${agent}/agent.md\` for the full orchestrator contract.
 
 export function renderAgentMd(fixture: GuidedAgentFixture): string {
   const { fn, agent, grounded, uncertain_answers } = fixture;
-  const sections: string[] = [
+  return [
     `# ${titleCase(agent)} Agent\n`,
     sectionPurpose(grounded.purpose),
     sectionInputs(fn, agent, grounded.orchestrator_inputs),
@@ -225,19 +252,18 @@ export function renderAgentMd(fixture: GuidedAgentFixture): string {
     sectionApproval(),
     sectionLessonsProtocol(),
     sectionFailureModes(uncertain_answers.failure_modes),
-  ];
-  return sections.join('\n');
+  ].join('\n');
 }
 
 function sectionPurpose(purpose: string): string {
   return `## Purpose
 
-${purpose}
+${purpose.trimEnd()}
 `;
 }
 
 function sectionInputs(fn: string, agent: string, orchestratorInputs: string[]): string {
-  const orchestratorLines = orchestratorInputs.map((line) => `- ${line}`).join('\n');
+  const orchestratorLines = orchestratorInputs.map((line) => `- ${indentBulletContinuation(line)}`).join('\n');
   return `## Inputs
 
 The orchestrator (slash command or natural-language invocation) expects:
@@ -260,7 +286,7 @@ Read at runtime:
 
 function sectionSteps(steps: GuidedStep[]): string {
   const stepLines = steps
-    .map((s) => `- \`${s.id}\` — **${s.title}.** ${s.description}`)
+    .map((s) => `- \`${s.id}\` — **${s.title}.** ${indentBulletContinuation(s.description)}`)
     .join('\n');
   return `## Steps
 
@@ -275,9 +301,7 @@ function sectionSubagents(subagents: GuidedSubagent[]): string {
 None. This agent runs all logic inline without delegating to subagents.
 `;
   }
-  const lines = subagents
-    .map((s) => `- \`${s.name}.md\` — ${s.role}`)
-    .join('\n');
+  const lines = subagents.map((s) => `- \`${s.name}.md\` — ${indentBulletContinuation(s.role)}`).join('\n');
   return `## Subagents
 
 ${lines}
@@ -292,7 +316,7 @@ None. This agent operates without external tool bindings.
 `;
   }
   const lines = tools
-    .map((t) => `- \`${t.name}\` — ${t.description}${t.required ? ' (required)' : ' (optional)'}`)
+    .map((t) => `- \`${t.name}\` — ${indentBulletContinuation(t.description)}${t.required ? ' (required)' : ' (optional)'}`)
     .join('\n');
   return `## Tools
 
@@ -309,9 +333,11 @@ No external tools required. This section is intentionally empty.
   }
   // Invariant 3: every tool listed in ## Tools has a corresponding entry here
   // with a non-TODO required flag and a non-empty description.
-  const blocks = tools.map((t) => `${t.name}:
+  const blocks = tools.map(
+    (t) => `${t.name}:
   required: ${t.required}
-  description: "${t.description.replace(/"/g, '\\"')}"`);
+  description: "${t.description.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`,
+  );
   return `## Tools and bindings
 
 Per-project tool bindings expected by this agent. Values land in \`projects/<project>/config/default.yaml\` under a \`tools:\` key.
@@ -329,7 +355,7 @@ function sectionOutputs(fn: string, agent: string, outputsDescription: string): 
 
 Run file at \`${fn}/${agent}/projects/<project>/log/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md\`. Per-plan output schemas are declared in each plan's \`outputs:\` block.
 
-${outputsDescription}
+${outputsDescription.trimEnd()}
 `;
 }
 
@@ -359,16 +385,12 @@ function sectionFailureModes(projectSpecific: string[]): string {
     '**Tool unavailable**: abort, surface which tool and that it should be in this agent\'s `.mcp.json`',
     '**HITL TTL expired with pending items**: log expired, do not action, surface in next session',
   ];
-  const specific = projectSpecific.map((line) => `- ${line}`);
+  const specific = projectSpecific.map((line) => `- ${indentBulletContinuation(line)}`);
   return `## Failure modes
 
 ${standard.map((line) => `- ${line}`).join('\n')}
 ${specific.length > 0 ? '\nProject-specific:\n\n' + specific.join('\n') + '\n' : ''}`;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
 
 function titleCase(slug: string): string {
   return slug

@@ -6,7 +6,6 @@ Creates short-form GTM content drafts in a project's voice. One run takes
 a topic brief plus the project's ICPs and produces 2-3 candidate posts
 that have been critiqued for voice fit, brand safety, and ICP relevance.
 
-
 ## Inputs
 
 The orchestrator (slash command or natural-language invocation) expects:
@@ -30,20 +29,16 @@ Read at runtime:
 ## Steps
 
 - `parse-brief` — **Parse topic brief.** Extract subject, target ICP, tone, and call-to-action from the user-supplied
-topic brief. Surface any gaps before proceeding to drafting.
-
+  topic brief. Surface any gaps before proceeding to drafting.
 - `draft-candidates` — **Draft 2-3 candidates.** Generate variant drafts in the project's voice using brand-book.md and
-voice.md as substrate. Each candidate differs in opening hook or angle.
-
+  voice.md as substrate. Each candidate differs in opening hook or angle.
 - `critique-and-revise` — **Critique and revise.** Send drafts to the critic subagent. Apply revision suggestions; emit only
-candidates that pass the critic's quality bar.
-
+  candidates that pass the critic's quality bar.
 
 ## Subagents
 
 - `critic.md` — Reviews each candidate draft for voice fit, ICP relevance, brand safety,
-and do-and-don't compliance. Returns pass/fail with specific feedback.
-
+  and do-and-don't compliance. Returns pass/fail with specific feedback.
 
 ## Tools
 
@@ -72,7 +67,6 @@ Run file at `gtm/content-agent/projects/<project>/log/runs/<YYYY-MM>/<YYYY-MM-DD
 Approved post drafts written to the run log, one entry per candidate with
 its critic score and any revision history. Drafts not surfaced to external
 systems by this agent — copy/posting is a separate user action.
-
 
 ## Approval
 
