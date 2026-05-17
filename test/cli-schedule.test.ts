@@ -42,6 +42,7 @@ schedules:
     cron: "0 9 * * 1-5"
     tool: codex
     install_mode: via-cron
+    status: installed
 `;
 
 const invalidYaml = `version: 1
@@ -52,6 +53,7 @@ schedules:
     cron: "0 9 * * 8"
     tool: gemini
     install_mode: via-cron
+    status: installed
 `;
 
 test('schedule validate: empty cwd → exit 0, "no files" message', () => {
