@@ -85,7 +85,6 @@ jobs:
           fi
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
-      - run: pnpm test
       - name: Assert tag matches package.json version
         run: |
           PKG_VERSION="v$(node -p "require('./package.json').version")"
@@ -94,6 +93,7 @@ jobs:
             exit 1
           fi
       - run: pnpm build
+      - run: pnpm test
       - run: npm pack --dry-run
       - name: Publish to npm
         env:
