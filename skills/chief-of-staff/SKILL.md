@@ -139,7 +139,52 @@ Loop on `revise` until the user types `y` or `cancel`. There is no implicit "loo
 
 ### Phase 5 — Atomic write
 
-See P4-T04 for the per-file content contracts and the atomic-write transaction. Summary: stage all files in a temp tree, validate the tree against `conventions.md`, then move into place in a single transaction. On any validation failure, the temp tree is discarded and no partial state is written to the workspace.
+See P4-T04 for the atomic-write transaction (stage → invariant check → preview → write → rollback list). The pre-write check enforces the contracts and invariants defined in the next section. Summary: stage all files in a temp tree, validate against `conventions.md` plus the cross-file invariants below, then move into place in a single transaction. On any validation failure, the temp tree is discarded and no partial state is written to the workspace.
+
+## Generated file contracts
+
+Every file the guided plan writes has a per-file content contract. Stub mode produces a strict subset (placeholders only); guided mode must populate everything in the "guided" column or the write aborts.
+
+| File | Guided-mode contract | Stub-mode contract |
+| --- | --- | --- |
+| `agent.md` | See per-section disposition below. Populated and grounded fields filled from prose + Phase 3 answers; boilerplate fields filled from `_template/` and `conventions.md`. Zero literal `<placeholder>` strings remain (explicit `TODO: <gap>` markers allowed only where the user deferred during Phase 3). | Identical to `bash scripts/new-agent.sh` output: every grounded/uncertain field carries its `<placeholder>` text verbatim. |
+| `plans/<plan>.yaml` | Created only if the user named at least one plan during Phase 3. Step `id:` fields 1:1 with `agent.md ## Steps` — they cannot drift. Inputs / outputs schemas come from the user's plan description. | `plans/.gitkeep` only. No starter plan file. |
+| `subagents/<name>.md` | One file per name listed in `agent.md ## Subagents`. All **six** required sections present and populated: `Role`, `Inputs`, `Output`, `Tools`, `Boundaries`, `Quality bar`. **Never half-populate a subagent.** If a section cannot be populated from prose / follow-ups, either remove the subagent from `agent.md ## Subagents` entirely or Phase 3 re-asks. | `subagents/_template.md` only. No per-name files. |
+| `.claude/commands/<agent>.md` | `description:` field is a real sentence: ≤ 80 chars, contains no `<` character, and contains no literal `TODO:` substring. The body matches the canonical routing-logic template from `_template/` with `<agent>` and `<function>` substituted. | `description: <function> agent — TODO: fill in description`. Canonical body otherwise unchanged. |
+| `README.md`, `.mcp.json`, `.claude/settings.json`, `projects/_template/**`, every `.gitkeep` | Identical to stub mode — byte-for-byte. These files do not vary by mode. | (canonical) |
+
+### `agent.md` per-section disposition
+
+For each section of the agent.md template (the structure emitted by `scripts/new-agent.sh`):
+
+| Section | Disposition |
+| --- | --- |
+| `## Purpose` | **grounded** — drafted from the Phase 1 prose. |
+| `## Inputs` — orchestrator-expected list | **grounded** — drafted from prose + Phase 3 answers about what triggers a run. |
+| `## Inputs` — "Read at runtime" list | **boilerplate** — canonical paths from `conventions.md` (agent.md, instance config, project CLAUDE.md, project guidelines, playbooks, recent runs). |
+| `## Steps` | **grounded** — every step comes from prose / Phase 3. Must have matching ids in `plans/<plan>.yaml`. |
+| `## Subagents` | **uncertain → guided** — Phase 3 collects the subagent list (or empty). Each named subagent gets a fully populated `subagents/<name>.md`. |
+| `## Tools` | **uncertain → guided** — Phase 3 collects tool / MCP names. Each tool listed gets a bindings block (invariant 3). |
+| `## Outputs` | **boilerplate + grounded** — canonical run-file path is boilerplate; the artifact description is grounded from prose. |
+| `## Approval` | **boilerplate** — `approval_channel: auto` line with the standard Slack / HITL routing paragraph. |
+| `## Lessons protocol` | **boilerplate** — canonical paragraph, identical in every agent. |
+| `## Failure modes` | **boilerplate + uncertain** — standard failures (cwd wrong, slug invalid, script fails) are boilerplate; project-specific failures come from Phase 3. |
+
+### Cross-file invariants
+
+Five invariants MUST pass during the pre-write check (Phase 5). Any failure aborts the write — no partial state is committed to the workspace — and the user is shown which invariant tripped and offered the chance to revise the relevant section.
+
+1. **Subagent files match the declared list.** Every subagent named in `agent.md ## Subagents` has a populated file at `subagents/<name>.md` with all six required sections. Conversely, every file under `subagents/` other than `_template.md` is named in `agent.md ## Subagents`. Neither side may carry an orphan.
+2. **Step ids match between agent.md and the starter plan.** Every step in `agent.md ## Steps` appears in the starter `plans/<plan>.yaml` with a matching `id:` field. Order may differ; presence and ids may not.
+3. **Every named tool has a bindings block.** Every tool listed in `agent.md ## Tools` has a corresponding entry in the `## Tools and bindings` block of `agent.md` with a non-`TODO` `required` flag and a non-empty `description`.
+4. **Slash-command description is real.** The `description:` field in `.claude/commands/<agent>.md` is ≤ 80 characters, contains no `<` character, and contains no literal `TODO:` substring.
+5. **No unfilled placeholders in agent.md.** `agent.md` contains zero literal `<placeholder>` strings (i.e., no `<...>` patterns from the stub template). Explicit `TODO: <gap>` comments are allowed only where the user deferred during Phase 3; they must include a specific gap description, not a bare `TODO:`.
+
+On invariant failure, the skill prints:
+
+> Invariant N failed: <specific failure>. Revise the affected section, or `cancel` to abort without writing.
+
+Then re-enters Phase 3 for the section that owns the tripped invariant. The atomic-write transaction never proceeds with a tripped invariant.
 
 ## Outputs
 
