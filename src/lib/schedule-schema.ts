@@ -102,6 +102,7 @@ const kebabString = (label: string) =>
 const cronString = z
   .string()
   .min(1, { message: 'cron: required' })
+  .transform((s) => s.trim())
   .superRefine((expr, ctx) => {
     const result = validateCronExpression(expr);
     if (!result.ok) {

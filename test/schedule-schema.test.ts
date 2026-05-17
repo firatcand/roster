@@ -86,6 +86,14 @@ test('schedule schema — status enum accepts pending-ui-install and installed',
   }
 });
 
+test('schedule schema — cron leading/trailing whitespace is trimmed on parse', () => {
+  const parsed = scheduleEntrySchema.safeParse({ ...minimalEntry, cron: '  0 9 * * 1-5  ' });
+  assert.equal(parsed.success, true);
+  if (parsed.success) {
+    assert.equal(parsed.data.cron, '0 9 * * 1-5', 'cron should be trimmed in output');
+  }
+});
+
 test('schedule schema — status enum rejects invalid value', () => {
   const parsed = scheduleEntrySchema.safeParse({ ...minimalEntry, status: 'bogus' });
   assert.equal(parsed.success, false);

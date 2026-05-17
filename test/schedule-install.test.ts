@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import YAML from 'yaml';
@@ -252,6 +252,30 @@ test('install: preserves a user comment in existing schedules.yaml on re-run', (
     fix.cleanup();
   }
 });
+
+if (process.platform !== 'win32' && process.getuid && process.getuid() !== 0) {
+  test('install: EACCES on directory create surfaces as permissionError (not unexpectedError)', () => {
+    const fix = makeFixture();
+    try {
+      // Lock the root so mkdir fails on .roster/ creation.
+      chmodSync(fix.root, 0o500);
+      try {
+        installClaudeSchedule(baseOpts(fix.root));
+        assert.fail('expected RosterError from permissionError');
+      } catch (err) {
+        assert.ok(err instanceof RosterError, `expected RosterError, got ${err}`);
+        assert.ok(
+          (err as RosterError).header.includes('permission denied'),
+          `expected 'permission denied' header, got: ${(err as RosterError).header}`,
+        );
+      }
+    } finally {
+      // Restore so cleanup can run.
+      try { chmodSync(fix.root, 0o755); } catch { /* best-effort */ }
+      fix.cleanup();
+    }
+  });
+}
 
 test('install: file paths are anchored under cwd, not process.cwd()', () => {
   const fix = makeFixture();

@@ -8,7 +8,7 @@ import {
   SCHEDULES_YAML_VERSION,
   type ScheduleEntry,
 } from './schedule-schema.ts';
-import { RosterError, EXIT_ERROR } from './errors.ts';
+import { RosterError, EXIT_ERROR, permissionError } from './errors.ts';
 import chalk from 'chalk';
 
 // Tracking issue for replacing UI hand-off with programmatic install:
@@ -134,7 +134,13 @@ export function renderHandoffMessage(args: {
 
 function atomicWriteFile(absPath: string, content: string): void {
   const dir = absPath.slice(0, absPath.lastIndexOf(sep));
-  mkdirSync(dir, { recursive: true });
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === 'EACCES' || e.code === 'EPERM') throw permissionError(dir, e);
+    throw err;
+  }
   const tmp = `${absPath}.tmp-${randomBytes(6).toString('hex')}`;
   try {
     writeFileSync(tmp, content, { encoding: 'utf8', mode: 0o644 });
@@ -145,6 +151,8 @@ function atomicWriteFile(absPath: string, content: string): void {
     } catch {
       // best-effort cleanup
     }
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === 'EACCES' || e.code === 'EPERM') throw permissionError(absPath, e);
     throw err;
   }
 }
