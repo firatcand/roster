@@ -139,7 +139,159 @@ Loop on `revise` until the user types `y` or `cancel`. There is no implicit "loo
 
 ### Phase 5 — Atomic write
 
-See P4-T04 for the atomic-write transaction (stage → invariant check → preview → write → rollback list). The pre-write check enforces the contracts and invariants defined in the next section. Summary: stage all files in a temp tree, validate against `conventions.md` plus the cross-file invariants below, then move into place in a single transaction. On any validation failure, the temp tree is discarded and no partial state is written to the workspace.
+Transitions from accepted Phase 4 preview (`y`) to files-on-disk. The **agent tree** at `<fn>/<agent>/` (Steps 4–5) is written as a single transaction — either every staged file in the tree lands, or nothing does. The **slash command** at `<repo-root>/.claude/commands/<agent>.md` (Step 6) is a separate post-tree write: it can fail or be interrupted independently and is recovered via `--slash-only` retry rather than rollback.
+
+#### Transaction state
+
+- `draft: Map<absolute_path, string>` — in-memory file map (every path the write will create, with final content). Built incrementally during Phase 2/3 as fields are populated.
+- `dirs: List<absolute_path>` — directories to create, enumerated explicitly (no implicit ancestors). Listed parent-before-child so the corresponding `rmdir` walk in Step 7 can go deepest-first.
+- `rollback: List<absolute_path>` — every newly-created path (file or directory), appended in creation order. Includes every directory in `dirs`, every file from `draft` once its write is attempted, and nothing else. Drives reverse-order cleanup on failure.
+
+#### Step 1 — Pre-write invariant check
+
+Run all five invariants from § "Cross-file invariants" against `draft`. On any failure:
+
+> Invariant N failed: <specific failure>. Revise the affected section, or `cancel` to abort without writing.
+
+Re-enter Phase 3 for the offending section. The atomic-write transaction NEVER proceeds with a tripped invariant — no partial state can leak onto disk.
+
+Invariant 2 (step ids match `plans/<plan>.yaml`) is vacuously satisfied when no starter plan was named during Phase 3 — per the Generated file contracts table, `plans/<plan>.yaml` is optional. The check applies only when at least one plan file is staged in `draft`.
+
+#### Step 2 — Final user preview
+
+Confirm once more: `Write this? (y/revise/cancel)`. Re-render the full Phase 4 preview only if the user typed `revise` since the last render. On `cancel` print `Cancelled. No files written.` and exit. On `y` proceed to Step 3.
+
+#### Step 3 — Install SIGINT trap
+
+Install a signal handler covering **Steps 4–5 only** (the agent-tree transaction). On Ctrl+C: run the rollback sequence (Step 7) best-effort, then append a Step 8 log entry with `outcome: interrupted` (best-effort — log failure is non-fatal), then exit non-zero. After cleanup, print either:
+
+> Interrupted. Rolled back N files. Workspace is clean.
+
+or, if cleanup itself partially fails:
+
+> Interrupted. Cleanup incomplete — these paths remain on disk:
+>   `<path>`
+>   `<path>`
+> Remove manually before retrying.
+
+Uninstall the trap **before** entering Step 6. Once the agent tree is canonical (i.e., `agent.md` has landed), a SIGINT during Step 6 is treated as a slash-command failure, not as cause for rollback — the agent tree is preserved and the user can recover with `--slash-only` (Step 6 retry guidance).
+
+#### Step 4 — Create directory tree
+
+Enumerate every directory the transaction creates **explicitly** (no `mkdir -p` shortcut that hides intermediate ancestors from the cleanup walker — Step 7 needs to remove them). Create them one at a time, parent-before-child, appending each to `rollback`:
+
+- `<fn>/<agent>/`
+- `<fn>/<agent>/subagents/`
+- `<fn>/<agent>/playbook/`
+- `<fn>/<agent>/logs/`
+- `<fn>/<agent>/.claude/`
+- `<fn>/<agent>/.claude/skills/`
+- `<fn>/<agent>/.claude/plugins/`
+- `<fn>/<agent>/plans/`
+- `<fn>/<agent>/projects/`
+- `<fn>/<agent>/projects/_template/`
+- `<fn>/<agent>/projects/_template/config/`
+- `<fn>/<agent>/projects/_template/playbook/`
+- `<fn>/<agent>/projects/_template/log/`
+- `<fn>/<agent>/projects/_template/log/runs/`
+- `<fn>/<agent>/projects/_template/log/feedback/`
+
+If a directory already exists at the moment we try to create it (e.g., racing process, or `<fn>/` exists from a prior function), do NOT append it to `rollback` — pre-existing paths are not ours to delete. Skip and continue. The parent `<fn>/` itself is never in `rollback` for the same reason (it predates this transaction or was created as `<fn>/<agent>/`'s implicit parent — see invariant: if `<fn>/` does not exist, abort the whole transaction before Step 4 and ask the user to register the function via `create-function` first).
+
+If a directory creation fails for any other reason (permissions, ENOSPC), skip to Step 7 with `rollback` populated up to the failure point.
+
+#### Step 5 — Write files in deterministic order
+
+Write each file from `draft`. Append every written path to `rollback` **before** the write begins, so a write-failure mid-byte still leaves the partial file in the cleanup set.
+
+Order:
+
+1.  `<fn>/<agent>/README.md`
+2.  `<fn>/<agent>/.mcp.json`
+3.  `<fn>/<agent>/.claude/settings.json`
+4.  `<fn>/<agent>/subagents/_template.md`
+5.  `<fn>/<agent>/subagents/<name>.md` (one per `agent.md ## Subagents` entry; zero files if none named)
+6.  `<fn>/<agent>/plans/.gitkeep`
+7.  `<fn>/<agent>/plans/<plan>.yaml` (one per plan named in Phase 3; absent in stub mode and when no plan named)
+8.  `<fn>/<agent>/projects/_template/config/default.yaml`
+9.  `<fn>/<agent>/projects/_template/asset-references.md`
+10. `<fn>/<agent>/playbook/.gitkeep`
+11. `<fn>/<agent>/logs/.gitkeep`
+12. `<fn>/<agent>/.claude/skills/.gitkeep`
+13. `<fn>/<agent>/.claude/plugins/.gitkeep`
+14. `<fn>/<agent>/projects/_template/playbook/.gitkeep`
+15. `<fn>/<agent>/projects/_template/log/runs/.gitkeep`
+16. `<fn>/<agent>/projects/_template/log/feedback/.gitkeep`
+17. `<fn>/<agent>/agent.md`  ← **LAST. Canonical contract.**
+
+**Why `agent.md` last:** It is the canonical orchestrator contract — the file roster's commands grep for to detect an agent's existence. Writing it last guarantees that any process **keyed off the existence of `agent.md`** observes either no agent or a complete one. A mid-Step-5 crash leaves either no `agent.md` at all, or — after Step 7 rollback — an empty `<fn>/<agent>/` parent that no contract-aware reader will treat as a valid agent.
+
+This is a **path-level / discovery-keyed** guarantee, not a process-isolation guarantee. A third party that opens a path mid-write retains an open file descriptor through rollback, and a directory listing of `<fn>/<agent>/` mid-Step-4/5 can show a partial tree (this is why discovery should always key off `agent.md`, never directory enumeration).
+
+On any write failure mid-Step-5, skip to Step 7. `rollback` already contains every path attempted, including the partially-written file at the failure point.
+
+**Note — divergence from stub mode:** `scripts/new-agent.sh` (stub mode) writes `agent.md` first as a single shell-script side effect; the script is not transactional. Guided mode adopts the safer LAST-ordering to make the canonical-contract invariant hold. The two paths are intentionally different — do not "fix" one to match the other.
+
+#### Step 6 — Write slash command (outside rollback root)
+
+The SIGINT trap from Step 3 is uninstalled before this step begins. Write `<repo-root>/.claude/commands/<agent>.md`. This path is **outside** `<fn>/<agent>/`, so it is **not** in the `rollback` list — neither a write failure nor a Ctrl+C during Step 6 triggers a rollback of the agent tree.
+
+On failure (or SIGINT during Step 6 leaves a partial file), print:
+
+> Agent tree at `<fn>/<agent>/` written successfully, but slash command `.claude/commands/<agent>.md` failed: `<error>`. Retry with:
+>   `bash scripts/new-agent.sh --slash-only <fn> <agent>`
+
+The `--slash-only` flag (added in P4-T05) accepts the same two positional args and writes ONLY the slash command — no other side effects, no prompts. Required because the agent tree is already canonical at this point; re-running the full plan would refuse on the existing directory. Caveats for retry:
+
+- If the slash command file already exists at retry time (e.g., partial write from Step 6 failure or SIGINT), `--slash-only` refuses to clobber per P4-T05 acceptance — remove the existing file first, then retry.
+- `--slash-only` does NOT verify that `<fn>/<agent>/agent.md` exists. If the agent tree was rolled back before retry, the slash command will be a dangling pointer. Re-run the full `create-agent` plan instead in that case.
+
+#### Step 7 — Rollback (failure path)
+
+Triggered by any error in Steps 4–5, or by SIGINT during Steps 4–5 (Step 3 trap). Step 6 failures and Step-6 SIGINT are **not** rollback triggers — they are surfaced for `--slash-only` retry instead.
+
+Sequence:
+
+1. Walk `rollback` in reverse order (newest first). For each path:
+   - If it is a file (or partially-written file), `unlink` it.
+   - If it is a directory, `rmdir` it (no `-r`). It will succeed because all of its children were created later than it and have already been removed by this walk. If `rmdir` fails because something unexpected exists (race, manual write), record the path as residual and continue.
+2. After the walk, `<fn>/<agent>/` itself is either gone (if `rollback` included it and the walk reached it) or remains with residual content. Do NOT attempt a recursive delete — if anything remains, it is either pre-existing (not ours) or unexpected (worth surfacing).
+3. Print:
+   > Write failed at `<path>`: `<error>`. Rolled back N paths (M files, K directories).
+
+   If `<fn>/<agent>/` was removed:
+   > Workspace is clean.
+
+   Else:
+   > Workspace still contains `<fn>/<agent>/` with N residual paths:
+   >   `<path>`
+   >   `<path>`
+   > Remove manually before retrying.
+4. Append a Step 8 log entry with `outcome: rollback` and the residual-paths list, then exit non-zero.
+
+#### Step 8 — Operation log
+
+Always append exactly one log entry per `create-agent` invocation to `chief-of-staff/logs/<YYYY-MM>/operations-<YYYY-MM-DD>.md`. Trigger points:
+
+| Operation outcome | When Step 8 fires | `outcome` value |
+| --- | --- | --- |
+| Steps 4–6 all succeed | end of Step 6 | `success` |
+| Step 5/4 write failure | end of Step 7 rollback walk | `rollback` |
+| Step 6 write failure (agent tree canonical, slash failed) | after the user-facing retry message in Step 6 | `partial-slash-failure` |
+| SIGINT during Steps 4–5 | inside the trap, after the Step 7 rollback walk | `interrupted` |
+| SIGINT during Step 6 (agent tree canonical, slash partial) | after Step 6 retry message | `partial-slash-failure` (with a note that the slash file may be partial) |
+
+Schema:
+
+- `timestamp` (UTC ISO-8601)
+- `plan: create-agent`
+- `mode: guided | stub`
+- `inputs: <fn>, <agent>`
+- `outcome: success | rollback | partial-slash-failure | interrupted`
+- `residual_paths:` (only present when outcome is `rollback` or `interrupted`; empty list if cleanup was complete)
+- `candidate_lessons:` (optional, per § "Lessons protocol")
+
+The log file is append-only. If `chief-of-staff/logs/<YYYY-MM>/` doesn't exist, create it during Step 8. This write is **outside** the transaction — a log-write failure does NOT trigger rollback of a successful agent creation; surface a stderr warning instead.
 
 ## Generated file contracts
 
@@ -149,7 +301,7 @@ Every file the guided plan writes has a per-file content contract. Stub mode pro
 | --- | --- | --- |
 | `agent.md` | See per-section disposition below. Populated and grounded fields filled from prose + Phase 3 answers; boilerplate fields filled from `_template/` and `conventions.md`. Zero literal `<placeholder>` strings remain (explicit `TODO: <gap>` markers allowed only where the user deferred during Phase 3). | Identical to `bash scripts/new-agent.sh` output: every grounded/uncertain field carries its `<placeholder>` text verbatim. |
 | `plans/<plan>.yaml` | Created only if the user named at least one plan during Phase 3. Step `id:` fields 1:1 with `agent.md ## Steps` — they cannot drift. Inputs / outputs schemas come from the user's plan description. | `plans/.gitkeep` only. No starter plan file. |
-| `subagents/<name>.md` | One file per name listed in `agent.md ## Subagents`. All **six** required sections present and populated: `Role`, `Inputs`, `Output`, `Tools`, `Boundaries`, `Quality bar`. **Never half-populate a subagent.** If a section cannot be populated from prose / follow-ups, either remove the subagent from `agent.md ## Subagents` entirely or Phase 3 re-asks. | `subagents/_template.md` only. No per-name files. |
+| `subagents/<name>.md` | One file per name listed in `agent.md ## Subagents`. All **six** required sections present and populated: `Role`, `Inputs`, `Output`, `Tools`, `Boundaries`, `Quality bar`. **Never half-populate a subagent.** If a section cannot be populated from prose / follow-ups, either remove the subagent from `agent.md ## Subagents` entirely or Phase 3 re-asks. `subagents/_template.md` is also written byte-for-byte from `_template/` (same as stub mode). | `subagents/_template.md` only. No per-name files. |
 | `.claude/commands/<agent>.md` | `description:` field is a real sentence: ≤ 80 chars, contains no `<` character, and contains no literal `TODO:` substring. The body matches the canonical routing-logic template from `_template/` with `<agent>` and `<function>` substituted. | `description: <function> agent — TODO: fill in description`. Canonical body otherwise unchanged. |
 | `README.md`, `.mcp.json`, `.claude/settings.json`, `projects/_template/**`, every `.gitkeep` | Identical to stub mode — byte-for-byte. These files do not vary by mode. | (canonical) |
 
@@ -209,6 +361,10 @@ Never write directly to `chief-of-staff/playbook/` during operations. The user m
 - **YAML/JSON parse error in audit** → report as failure with the line number from the audit script
 - **Confirmation gate denied** → abort cleanly, no changes
 - **Partial failure mid-operation** → scripts handle their own rollback. If a script reports partial state, surface exactly what state the repo is in and what to do next.
+- **Atomic write rollback ran** (guided mode, Steps 4–5 failure) → all `rollback` paths deleted, parent `<fn>/<agent>/` removed if empty. Surface residual paths if any deletion failed; exit non-zero.
+- **SIGINT during atomic write** → trap runs Step 7 best-effort; partial cleanup state disclosed. User must remove residual paths before retrying.
+- **Slash command failed after agent tree success** (Step 6) → agent tree is canonical and kept. Surface the failure with the `--slash-only <fn> <agent>` retry command. Not a rollback trigger.
+- **Operation log write failed after successful agent creation** (Step 8) → log a warning to stderr; do NOT roll back the agent. Logs are best-effort and outside the transaction.
 
 ## What this skill does NOT do
 
