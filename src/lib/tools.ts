@@ -10,11 +10,6 @@ export type Tool = {
   configRoot: string;
   skillsTarget: string;
   agentsTarget: string | null;
-  // "dir": each skill is a directory copied wholesale (Claude, Gemini)
-  // "file": each skill is a single flat file under skillsTarget (Codex)
-  skillsLayout: 'dir' | 'file';
-  // File extension when skillsLayout === 'file' (e.g., ".md", ".mdc"). null for dir layout.
-  skillsFileExt: string | null;
   // "md-copy": copy source agents/<name>.md verbatim to agentsTarget (Claude, Gemini).
   // "codex-toml": render source to <name>.toml + <name>.persona.md per ROS-33 / ADR-0001.
   agentsLayout: 'md-copy' | 'codex-toml';
@@ -48,8 +43,6 @@ function defaultDefinitions(): ToolDefinition[] {
       configRoot: claude,
       skillsTarget: join(claude, 'skills'),
       agentsTarget: join(claude, 'agents'),
-      skillsLayout: 'dir',
-      skillsFileExt: null,
       agentsLayout: 'md-copy',
       installLink: 'https://claude.ai/code',
     },
@@ -59,8 +52,6 @@ function defaultDefinitions(): ToolDefinition[] {
       configRoot: codex,
       skillsTarget: join(codex, 'skills'),
       agentsTarget: join(codex, 'agents'),
-      skillsLayout: 'dir',
-      skillsFileExt: null,
       agentsLayout: 'codex-toml',
       installLink: 'https://github.com/openai/codex',
     },
@@ -70,8 +61,6 @@ function defaultDefinitions(): ToolDefinition[] {
       configRoot: gemini,
       skillsTarget: join(gemini, 'extensions'),
       agentsTarget: join(gemini, 'agents'),
-      skillsLayout: 'dir',
-      skillsFileExt: null,
       agentsLayout: 'md-copy',
       installLink: 'https://github.com/google-gemini/gemini-cli',
     },

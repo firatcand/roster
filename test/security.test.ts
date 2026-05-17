@@ -122,8 +122,6 @@ function makeEscapedTool(configRoot: string, escapedSkills: string, escapedAgent
     configRoot,
     skillsTarget: escapedSkills,
     agentsTarget: escapedAgents,
-    skillsLayout: 'dir',
-    skillsFileExt: null,
     agentsLayout: 'md-copy',
     installLink: 'https://example.test/claude',
   };
@@ -259,8 +257,6 @@ test('legitimate ..foo name is not rejected — separator-aware check', async ()
       configRoot,
       skillsTarget: join(configRoot, 'skills'),
       agentsTarget: join(configRoot, 'agents'),
-      skillsLayout: 'dir',
-      skillsFileExt: null,
       agentsLayout: 'md-copy',
       installLink: 'https://example.test/claude',
     };
