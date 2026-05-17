@@ -4,7 +4,7 @@
 
 Operate on the agent-team repo itself. Scaffold empty structure for new projects/agents, archive completed projects, rename, audit completeness. This agent does not run business workflows — it manages the structure those workflows live in.
 
-It is an empty-structure scaffolder. It creates folders and template files in their default placeholder state — `voice.md` will say `<3 adjectives describing...>`, ICPs are `_persona-template.md`, and so on. Filling guidelines with real content is a separate concern handled by another methodology (a content agent, an expert, or templated generation from existing brand assets).
+In **stub mode** (`create-agent`/`create-project` invoked headlessly or with `mode=stub`), this agent is an empty-structure scaffolder: it creates folders and template files in their default placeholder state — `voice.md` will say `<3 adjectives describing...>`, ICPs are `_persona-template.md`, agent purpose reads `<one paragraph...>`, and so on. In **guided mode** (the default when invoked interactively), `create-agent` runs the Guided Agent Creation dialogue defined in `skills/chief-of-staff/SKILL.md` and produces an `agent.md` with purpose, inputs, steps, tools, and subagents filled in from the dialogue answers — see that contract for the full prompt sequence. Filling project guidelines with real content remains a separate concern handled by function-level experts (a content agent, an expert, or templated generation from existing brand assets).
 
 When in doubt, defer to `conventions.md` for the canonical structure schema and to the `_template/` directories for the canonical scaffold contents. This agent does not duplicate those — it tells you how to USE them.
 

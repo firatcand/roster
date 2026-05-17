@@ -1,15 +1,31 @@
 plan: create-agent
 description: |
-  Create a new global agent under a registered function. Optionally instance
-  it into a list of existing projects (or prompt for which projects).
+  Create a new global agent under a registered function. Runs in one of two
+  modes:
+
+  - **stub** — byte-identical to `bash scripts/new-agent.sh`. Drops empty
+    placeholder files (purpose `<one paragraph...>`, plan stubs, etc.) and
+    exits. Headless / CI / legacy escape hatch.
+  - **guided** — runs the Guided Agent Creation dialogue defined in
+    `skills/chief-of-staff/SKILL.md` § "Guided Agent Creation" (see P4-T02).
+    Produces the same on-disk layout as stub mode, but with agent.md
+    sections filled in from the dialogue answers.
+
+  Either mode optionally instances the resulting agent into existing
+  projects (or prompts the caller to pick).
 
 inputs:
   function:
     required: true
-    description: Function slug (must be registered in .config/functions.yaml).
+    description: Function slug (must be registered in `.config/functions.yaml`).
   agent:
     required: true
     description: Agent slug (lowercase, kebab-case, starts with letter).
+  mode:
+    required: false
+    description: |
+      Explicit branch override: `stub` or `guided`. If omitted, `resolve_mode`
+      picks based on env + TTY (see that step).
   add-to-projects:
     required: false
     description: List of project slugs to instance into. If omitted, the cross-link prompt runs.
@@ -17,34 +33,64 @@ inputs:
 outputs:
   agent_path: string
   instance_paths: list
+  mode_used: string         # "stub" or "guided" — which branch executed.
+  files_written: list       # absolute paths of every file the plan created or modified.
 
 steps:
   - id: validate
     description: |
-      Confirm ${inputs.function} is registered. Validate ${inputs.agent} slug.
-      Confirm ${inputs.function}/${inputs.agent}/ does not exist.
-      If ${inputs.add-to-projects} provided, validate each project exists at
-      projects/<slug>/. If any are missing, abort.
+      Confirm ${inputs.function} is registered. Validate ${inputs.agent} slug
+      against `^[a-z][a-z0-9-]*$`. Confirm `${inputs.function}/${inputs.agent}/`
+      does not already exist. If ${inputs.mode} is provided, validate it is
+      one of {stub, guided}. If ${inputs.add-to-projects} provided, validate
+      each project exists at `projects/<slug>/`. If any are missing, abort.
 
-  - id: scaffold_agent
+  - id: resolve_mode
+    description: |
+      Pick the scaffold branch by priority — first match wins:
+        1. `${inputs.mode}` (if non-empty).
+        2. `AGENT_TEAM_NO_CONFIRM=1` in env → `stub`. (Headless / CI signal.)
+        3. TTY detection: stdin is a TTY → `guided`; otherwise → `stub`.
+
+      Store the result in `${resolved_mode}` and surface it later as
+      `${outputs.mode_used}`. Print the resolved mode + the rule that won
+      (e.g., `mode=guided (TTY detected)`) so the caller can see why.
+
+  - id: scaffold_stub
+    when: ${resolved_mode} == "stub"
     tool: bash
     args:
       command: bash scripts/new-agent.sh ${inputs.function} ${inputs.agent}
     description: |
-      Create the global agent. The script also runs an interactive
-      tool-definition prompt (skipped under AGENT_TEAM_NO_CONFIRM=1 or
-      non-interactive stdin) and scaffolds plans/ + .claude/commands/<agent>.md.
+      Delegate to `scripts/new-agent.sh` unchanged. Output must remain
+      byte-identical to invoking the script directly — this is the legacy /
+      headless escape hatch and any drift breaks reproducibility for
+      callers that already script against the stub layout. Append every
+      path the script reports as "Created:" to `${files_written}`.
+
+  - id: guided_dialogue
+    when: ${resolved_mode} == "guided"
+    description: |
+      Run the Guided Agent Creation dialogue defined in
+      `skills/chief-of-staff/SKILL.md` § "Guided Agent Creation" (P4-T02).
+      That contract owns the prompt sequence, the structured-output schema,
+      validation rules, and the on-disk write list. It produces the same
+      directory layout as `scaffold_stub` (same paths, same `.gitkeep`s),
+      but with `agent.md` sections filled in from the dialogue answers and
+      a real description in `.claude/commands/<agent>.md` instead of the
+      `TODO: fill in description` placeholder. Append every file touched
+      to `${files_written}`.
 
   - id: resolve_projects
     description: |
       Branch on whether ${inputs.add-to-projects} was provided.
       - If provided: use the list directly.
-      - If omitted: discover all live projects (every dir under projects/ that
-        is not _template and does not start with _). If empty, skip instancing
-        and report "no live projects yet."
+      - If omitted: discover all live projects (every dir under `projects/`
+        that is not `_template` and does not start with `_`). If empty,
+        skip instancing and report "no live projects yet."
         Otherwise present a multi-select via AskUserQuestion with options
         [All projects, ...each project, None — agent stays global-only]
-        and multiSelect: true.
+        and `multiSelect: true`.
 
   - id: instance_into_projects
     tool: bash
@@ -54,14 +100,24 @@ steps:
           bash scripts/new-agent-instance.sh "$proj" ${inputs.function} ${inputs.agent}
         done
     description: |
-      For each resolved project, run new-agent-instance.sh and append the
-      instance line to projects/<project>/CLAUDE.md under
-      ## Active agent instances.
+      For each resolved project, run `new-agent-instance.sh` and append the
+      instance line to `projects/<project>/CLAUDE.md` under
+      `## Active agent instances`. Append every created instance path to
+      `${files_written}`.
 
   - id: report
     description: |
-      Print global agent path + every instance path. Surface the script's
-      "next steps" output (fill agent.md, add subagents, configure MCPs,
-      add at least one plan, edit slash command description).
+      Print `${outputs.mode_used}`, the global agent path, every instance
+      path, and the full `${files_written}` list.
+
+      In **stub** mode, surface the script's "Next steps" output verbatim
+      (fill `agent.md`, add subagents, configure MCPs, add at least one
+      plan, edit the slash command description) — the placeholders are
+      still empty and the caller has to finish them.
+
+      In **guided** mode, those next steps are mostly already done. Print
+      only the residual ones: wire MCPs in `.mcp.json`, write the first
+      plan in `plans/`, and review the generated `agent.md` for any
+      dialogue answers that should be refined.
 
 approval_channel: session
