@@ -85,23 +85,6 @@ function auditSkillDir(name: string, srcDir: string, targetDir: string, toolKey:
   }
 }
 
-function auditSkillFlatFile(name: string, srcSkillMd: string, targetFile: string, toolKey: ToolKey): ItemAudit {
-  if (!existsSync(targetFile)) {
-    return { kind: 'skill', name, status: 'missing', targetPath: targetFile };
-  }
-  try {
-    const expected = renderSkillFrontmatterContent(readFileSync(srcSkillMd, 'utf8'), toolKey);
-    const actual = readFileSync(targetFile, 'utf8');
-    if (expected !== actual) {
-      return { kind: 'skill', name, status: 'stale', targetPath: targetFile, reason: 'bytes differ' };
-    }
-    return { kind: 'skill', name, status: 'ok', targetPath: targetFile };
-  } catch (err: unknown) {
-    const code = (err as NodeJS.ErrnoException).code ?? 'EUNKNOWN';
-    return { kind: 'skill', name, status: 'stale', targetPath: targetFile, reason: code };
-  }
-}
-
 function auditAgentMdCopy(name: string, srcFile: string, targetFile: string): ItemAudit {
   if (!existsSync(targetFile)) {
     return { kind: 'agent', name, status: 'missing', targetPath: targetFile };
@@ -245,20 +228,12 @@ export function auditTool(tool: Tool, sources: AuditSources): ToolAuditResult {
 
   for (const skillName of listDirNames(sources.skills, 'dir')) {
     const srcDir = join(sources.skills, skillName);
-    if (tool.skillsLayout === 'file') {
-      const srcSkillMd = join(srcDir, 'SKILL.md');
-      if (!existsSync(srcSkillMd)) continue;
-      const ext = tool.skillsFileExt ?? '.md';
-      const targetFile = join(tool.skillsTarget, `${skillName}${ext}`);
-      items.push(auditSkillFlatFile(skillName, srcSkillMd, targetFile, tool.key));
-    } else {
-      // Skip source dirs without SKILL.md — mirrors installToTool's behaviour;
-      // such dirs are not real skills and would never reach the target.
-      const srcSkillMd = join(srcDir, 'SKILL.md');
-      if (!existsSync(srcSkillMd)) continue;
-      const targetDir = join(tool.skillsTarget, skillName);
-      items.push(auditSkillDir(skillName, srcDir, targetDir, tool.key));
-    }
+    // Skip source dirs without SKILL.md — mirrors installToTool's behaviour;
+    // such dirs are not real skills and would never reach the target.
+    const srcSkillMd = join(srcDir, 'SKILL.md');
+    if (!existsSync(srcSkillMd)) continue;
+    const targetDir = join(tool.skillsTarget, skillName);
+    items.push(auditSkillDir(skillName, srcDir, targetDir, tool.key));
   }
 
   if (tool.agentsTarget) {

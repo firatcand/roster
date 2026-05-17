@@ -187,22 +187,9 @@ export async function installToTool(tool: Tool, opts: InstallOptions): Promise<I
         continue;
       }
 
-      let srcPath: string;
-      let targetPath: string;
-      let renderedSkillMd: string;
-      if (tool.skillsLayout === 'file') {
-        // Flat-file layout: write SKILL.md body as a single <name><ext> file.
-        // No current tool uses this; retained for future single-file targets.
-        const ext = tool.skillsFileExt ?? '.md';
-        srcPath = srcSkillMd;
-        targetPath = join(tool.skillsTarget, `${dirent.name}${ext}`);
-        renderedSkillMd = targetPath;
-      } else {
-        // Directory layout (Claude, Codex, Gemini): copy the whole skill dir.
-        srcPath = srcDir;
-        targetPath = join(tool.skillsTarget, dirent.name);
-        renderedSkillMd = join(targetPath, 'SKILL.md');
-      }
+      const srcPath = srcDir;
+      const targetPath = join(tool.skillsTarget, dirent.name);
+      const renderedSkillMd = join(targetPath, 'SKILL.md');
 
       assertWithinRoot(targetPath, tool.configRoot, 'skill targetPath');
       info(chalk.dim(`  + skill ${dirent.name} -> ${targetPath}`));
