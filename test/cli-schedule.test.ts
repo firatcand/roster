@@ -15,7 +15,11 @@ function runCli(args: readonly string[]): Run {
     ['--experimental-strip-types', '--no-warnings', BIN, ...args],
     {
       encoding: 'utf8',
-      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
+      // Pin ROSTER_PLATFORM=darwin so install-path tests don't trip the
+      // Linux + --tool claude refusal on Ubuntu CI runners. Tests that
+      // explicitly need a different platform spawn the child directly
+      // (see the 'Linux + --tool claude' refusal test below).
+      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1', ROSTER_PLATFORM: 'darwin' },
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 10000,
     },
