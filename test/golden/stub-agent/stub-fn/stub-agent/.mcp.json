@@ -1,0 +1,4 @@
+{
+  "_comment": "Agent-scoped MCPs for stub-agent. Available when working in this agent's tree (including project instances). Add MCPs this agent specifically needs. Universal MCPs (Slack, Google Drive) are inherited from agent-team/.mcp.json.",
+  "mcpServers": {}
+}
