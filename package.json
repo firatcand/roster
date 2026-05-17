@@ -25,7 +25,8 @@
     "test": "node --test --experimental-strip-types 'test/**/*.test.ts'",
     "smoke": "bash test/smoke.sh",
     "e2e": "bash test/e2e-sdr.sh",
-    "perf": "bash test/perf.sh"
+    "perf": "bash test/perf.sh",
+    "test:dogfood-scripts": "bash test/new-agent-slash-only.sh"
   },
   "keywords": [
     "claude-code",

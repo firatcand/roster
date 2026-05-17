@@ -1,13 +1,41 @@
 #!/usr/bin/env bash
 # new-agent.sh — scaffolds a new global agent under a function category
-# Usage: bash scripts/new-agent.sh <function> <agent-name>
+#
+# Usage:
+#   bash scripts/new-agent.sh <function> <agent-name>
+#   bash scripts/new-agent.sh --slash-only <function> <agent-name>
+#
+# --slash-only is the recovery flag invoked by chief-of-staff's guided-mode
+# atomic-write transaction when the slash command file fails to land after
+# the agent tree has already been written (see ROS-52). It writes only
+# .claude/commands/<agent>.md, with strict no-clobber, and requires the
+# agent tree to exist.
 
 set -euo pipefail
 
+print_usage() {
+  cat >&2 <<EOF
+Usage:
+  $0 <function> <agent-name>
+  $0 --slash-only <function> <agent-name>
+
+Function: any slug registered in .config/functions.yaml
+Example:  $0 gtm content-agent
+
+--slash-only: recovery flag. Writes only .claude/commands/<agent-name>.md.
+  Requires the agent tree at <function>/<agent-name>/ to already exist.
+  Exits non-zero (no clobber) if the slash command file already exists.
+EOF
+}
+
+SLASH_ONLY=0
+if [ "${1:-}" = "--slash-only" ]; then
+  SLASH_ONLY=1
+  shift
+fi
+
 if [ $# -ne 2 ]; then
-  echo "Usage: $0 <function> <agent-name>"
-  echo "Function: any slug registered in .config/functions.yaml"
-  echo "Example: $0 gtm content-agent"
+  print_usage
   exit 1
 fi
 
@@ -17,6 +45,53 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="$ROOT/$FN/$NAME"
 
 source "$ROOT/scripts/lib/functions.sh"
+
+# write_slash_command <abs-file-path> <function> <agent-name>
+# Canonical writer for .claude/commands/<agent>.md. Both the full-install
+# path and --slash-only call this so the two paths cannot drift over time
+# (see docs/learnings/2026-Q2/installer-mutations-need-drift-detector-mirror.md).
+write_slash_command() {
+  local file="$1" fn="$2" name="$3"
+  cat > "$file" <<EOF
+---
+name: $name
+description: $fn agent — TODO: fill in description
+---
+
+# /$name
+
+You are operating the \`$fn/$name\` agent. Load \`$fn/$name/agent.md\` and the project's relevant context.
+
+The user request is: \$ARGUMENTS
+
+## Routing logic
+
+Parse the user request:
+
+1. **If it matches \`run <plan-name> for <project>\` or \`run <plan-name> on <project>\`**:
+   - Load \`$fn/$name/plans/<plan-name>.yaml\`. If it doesn't exist, list available plans and ask user to pick.
+   - Load \`projects/<project>/CLAUDE.md\` and relevant guidelines.
+   - Load \`$fn/$name/projects/<project>/config/default.yaml\`.
+   - Validate that all required tool bindings are non-TODO. Abort if not.
+   - Execute the plan steps. Substitute \`\${tools.X.Y}\`, \`\${inputs.X}\`, \`\${config.X}\`.
+   - Log to \`$fn/$name/projects/<project>/log/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md\`.
+   - Surface HITL approvals per the plan's approval_channel.
+
+2. **If only a project is named (no plan)**:
+   - List available plans from \`$fn/$name/plans/\` with descriptions. Ask user to pick.
+
+3. **If neither plan nor project is named**:
+   - List available projects and plans. Ask user to specify both.
+
+4. **For ad-hoc strategic work**: suggest invoking \`$fn/EXPERT.md\` instead.
+
+## Constraints
+
+- Only run plans that exist as files in \`$fn/$name/plans/\`.
+- Don't bypass approval gates.
+- File writes go to the instance's \`log/runs/\` unless the plan explicitly writes elsewhere.
+EOF
+}
 
 if ! is_valid_function "$FN"; then
   echo "ERROR: '$FN' is not a registered function." >&2
@@ -28,12 +103,33 @@ if ! is_valid_function "$FN"; then
 fi
 
 if ! [[ "$NAME" =~ ^[a-z][a-z0-9-]*$ ]]; then
-  echo "ERROR: Agent name must be lowercase, alphanumeric + hyphens."
+  echo "ERROR: Agent name must be lowercase, alphanumeric + hyphens." >&2
   exit 1
 fi
 
+# --slash-only branch: write only the slash command file and exit.
+# Requires agent tree to exist; refuses to clobber an existing slash command.
+if [ "$SLASH_ONLY" = "1" ]; then
+  if [ ! -d "$TARGET" ]; then
+    echo "ERROR: agent tree '$FN/$NAME' does not exist at $TARGET." >&2
+    echo "  --slash-only is a recovery flag — create the agent tree first with:" >&2
+    echo "    bash scripts/new-agent.sh $FN $NAME" >&2
+    exit 1
+  fi
+  COMMANDS_DIR="$ROOT/.claude/commands"
+  SLASH_CMD_FILE="$COMMANDS_DIR/$NAME.md"
+  if [ -f "$SLASH_CMD_FILE" ]; then
+    echo "ERROR: slash command already exists at .claude/commands/$NAME.md. Refusing to clobber." >&2
+    exit 1
+  fi
+  mkdir -p "$COMMANDS_DIR"
+  write_slash_command "$SLASH_CMD_FILE" "$FN" "$NAME"
+  echo "Created: .claude/commands/$NAME.md"
+  exit 0
+fi
+
 if [ -d "$TARGET" ]; then
-  echo "ERROR: Agent '$FN/$NAME' already exists at $TARGET"
+  echo "ERROR: Agent '$FN/$NAME' already exists at $TARGET" >&2
   exit 1
 fi
 
@@ -298,45 +394,7 @@ mkdir -p "$COMMANDS_DIR"
 SLASH_CMD_FILE="$COMMANDS_DIR/$NAME.md"
 
 if [ ! -f "$SLASH_CMD_FILE" ]; then
-  cat > "$SLASH_CMD_FILE" <<EOF
----
-name: $NAME
-description: $FN agent — TODO: fill in description
----
-
-# /$NAME
-
-You are operating the \`$FN/$NAME\` agent. Load \`$FN/$NAME/agent.md\` and the project's relevant context.
-
-The user request is: \$ARGUMENTS
-
-## Routing logic
-
-Parse the user request:
-
-1. **If it matches \`run <plan-name> for <project>\` or \`run <plan-name> on <project>\`**:
-   - Load \`$FN/$NAME/plans/<plan-name>.yaml\`. If it doesn't exist, list available plans and ask user to pick.
-   - Load \`projects/<project>/CLAUDE.md\` and relevant guidelines.
-   - Load \`$FN/$NAME/projects/<project>/config/default.yaml\`.
-   - Validate that all required tool bindings are non-TODO. Abort if not.
-   - Execute the plan steps. Substitute \`\${tools.X.Y}\`, \`\${inputs.X}\`, \`\${config.X}\`.
-   - Log to \`$FN/$NAME/projects/<project>/log/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md\`.
-   - Surface HITL approvals per the plan's approval_channel.
-
-2. **If only a project is named (no plan)**:
-   - List available plans from \`$FN/$NAME/plans/\` with descriptions. Ask user to pick.
-
-3. **If neither plan nor project is named**:
-   - List available projects and plans. Ask user to specify both.
-
-4. **For ad-hoc strategic work**: suggest invoking \`$FN/EXPERT.md\` instead.
-
-## Constraints
-
-- Only run plans that exist as files in \`$FN/$NAME/plans/\`.
-- Don't bypass approval gates.
-- File writes go to the instance's \`log/runs/\` unless the plan explicitly writes elsewhere.
-EOF
+  write_slash_command "$SLASH_CMD_FILE" "$FN" "$NAME"
   echo "Created: .claude/commands/$NAME.md"
 fi
 
