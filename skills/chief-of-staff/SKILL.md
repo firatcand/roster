@@ -37,7 +37,7 @@ When invoked without a plan, list the available plans and ask which to run.
 | Plan | Description | Destructive? |
 |---|---|---|
 | `create-project` | Create a new project, optionally with agent instances | no |
-| `create-agent` | Create a new global agent under a function | no |
+| `create-agent` | Create a new global agent under a function (interactive dialogue by default — see § "Guided agent creation"; `mode=stub` for headless) | no |
 | `create-function` | Add a new function category to the registry | no |
 | `add-agent-to-project` | Add an agent instance to an existing project | no |
 | `remove-agent-from-project` | Archive an agent instance (preserved in `_archive`) | yes |
@@ -64,6 +64,82 @@ Each plan lives in `chief-of-staff/plans/<plan>.yaml` in the workspace, backed b
 Destructive plans (`archive-project`, `unarchive-project`, `rename-project`, `remove-agent-from-project`) MUST display the planned changes and ask `proceed?` before executing.
 
 Cross-link prompts during `create-project` (which agents to instance) and `create-agent` (which projects to instance into) are also session-only — they cannot be answered headlessly. Power users skip the prompt by passing `agents=` or `add-to-projects=` inline.
+
+## Guided agent creation
+
+The `create-agent` plan runs in one of two modes (see `chief-of-staff/plans/create-agent.yaml`):
+
+- **stub** — byte-identical to `bash scripts/new-agent.sh`. Drops placeholder files (`<one paragraph...>`, plan stubs, empty `## Tools and bindings`, etc.) and exits. Used in CI, headless contexts, and as the legacy escape hatch.
+- **guided** — runs the 5-phase dialogue defined below to produce a filled-in `agent.md` from prose intake plus targeted follow-ups. Same on-disk layout as stub mode, but with real content instead of placeholders.
+
+Mode selection priority (first match wins): `${inputs.mode}` → `AGENT_TEAM_NO_CONFIRM=1` (→ `stub`) → TTY detection (TTY → `guided`, no TTY → `stub`).
+
+### Anti-fabrication invariant
+
+> The skill MUST NOT write a Step, Subagent, Tool, Plan body, or Failure mode unless that content was supplied by the user (in prose or follow-up) or comes from documented convention. If the skill catches itself about to invent content, it stops and asks instead.
+
+This invariant is load-bearing. Guided mode is **not a content generator** — it is a structured interviewer that organizes what the user said into the canonical `agent.md` shape. Every non-boilerplate line in the generated agent.md must be traceable to either (a) the prose intake, (b) a follow-up answer, or (c) a documented convention in `conventions.md` / `_template/`. Never fill in plausible-looking defaults to make the output feel complete — gaps stay gaps, surfaced explicitly as follow-up questions.
+
+### EXPERT.md auto-load
+
+At the start of the dialogue, the skill checks `<function>/EXPERT.md` for the function the agent is being created under.
+
+- **Present:** read it for shape reference. Use it to seed function-typical suggestions in Phase 2 (e.g., a `gtm/` agent typically reads `messaging.md` and ICPs; a `design/` agent typically reads `brand-book.md`). These suggestions are still subject to the anti-fabrication invariant — they become Phase 3 questions, not silent fills.
+- **Missing:** the dialogue proceeds without function-shaped suggestions. The skill discloses the gap **once** at the start of Phase 3:
+
+  > No `<function>/EXPERT.md` found — proceeding without function-level shape suggestions. You may still register an expert later via `chief-of-staff create-function`.
+
+### Phase 1 — Prose intake
+
+Open with a single open-ended prompt:
+
+> Describe what this agent does in 1–3 sentences. What does one run produce, on what input, for whom?
+
+Accept the answer as-is — no structure required. Capture it verbatim; it seeds the Phase 2 classification.
+
+### Phase 2 — Classify fields as boilerplate / grounded / uncertain
+
+Partition every required `agent.md` field into one of three buckets:
+
+- **boilerplate** — filled silently from `conventions.md` / `_template/`. Examples: standard "Read at runtime" file paths, the lessons-protocol paragraph, the `approval_channel: auto` default, the canonical "Confirmation gate denied" failure mode wording.
+- **grounded** — drafted directly from the prose intake. Examples: the `Purpose` paragraph, the `Outputs` description, the agent's headline role.
+- **uncertain** — content the prose did not specify and convention cannot fill. Examples: which subagents exist, which tools/MCPs are needed, project-specific failure modes, plan names.
+
+Boilerplate is written without asking. Grounded is drafted but explicitly flagged in the Phase 4 preview ("drafted from your prose — review before accepting"). Uncertain becomes the queue for Phase 3.
+
+### Phase 3 — Targeted follow-up Q&A
+
+For each item in the uncertain queue, ask one question. Constraints:
+
+- **One fact per question.** Don't bundle ("what subagents does this need, and what tools, and what's its failure mode?").
+- **Surface the gap explicitly.** Tell the user *why* you're asking. Example: "Your prose mentioned reviewing CVs but didn't name a model. Which LLM — Claude, GPT, something else?"
+- **Batch by topic when natural.** Subagent-related questions can come in a short cluster; don't context-switch every turn.
+- **Track answered facts.** Never re-ask something the user already said in prose or a previous follow-up. If the user contradicts a prior answer, ask which to keep.
+- **Push back on scope creep.** If the user starts describing a second agent's responsibilities mid-dialogue, redirect: "That sounds like a separate agent. Want to finish this one first and create that one after?"
+- **No invention shortcuts.** When tempted to skip a follow-up by guessing a sensible default, stop and ask instead (anti-fabrication invariant).
+
+Continue until the uncertain bucket is empty.
+
+### Phase 4 — Consolidated preview
+
+Render the full draft tree to the user. Show:
+
+- Every file path that will be written, with a one-line description.
+- The full `agent.md` content (purpose, inputs, steps, subagents, tools, outputs, approval, lessons, failure modes).
+- The slash-command description that will land in `.claude/commands/<agent>.md` (replacing the stub's `TODO: fill in description` placeholder).
+- The `plans/` directory (empty `.gitkeep` + a stub for the first plan if one was named during Phase 3).
+
+Offer three controls:
+
+- **`y`** → proceed to Phase 5 (atomic write).
+- **`revise <section>`** → re-enter Phase 3 for that section only, then re-render the preview. Valid sections: `purpose`, `inputs`, `steps`, `subagents`, `tools`, `outputs`, `approval`, `failure-modes`, `plans`, `slash-command`. After collecting the revised answers, the skill re-renders the **full** preview (not just the changed section) so the user sees the final state in one place.
+- **`cancel`** → abort with no writes. Print: `Cancelled. No files written.`
+
+Loop on `revise` until the user types `y` or `cancel`. There is no implicit "looks good enough" — explicit acceptance is required.
+
+### Phase 5 — Atomic write
+
+See P4-T04 for the per-file content contracts and the atomic-write transaction. Summary: stage all files in a temp tree, validate the tree against `conventions.md`, then move into place in a single transaction. On any validation failure, the temp tree is discarded and no partial state is written to the workspace.
 
 ## Outputs
 
