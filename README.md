@@ -40,8 +40,6 @@ claude
 #    in dreamer/pending/ on the next nightly reinforcement pass.
 ```
 
-> Until v0.1 is published to npm, install locally with `npm pack && npm install -g firatcand-roster-*.tgz` from a clone. See [docs/roadmap.md](docs/roadmap.md) for publish status.
-
 [docs/HOWTO.md](docs/HOWTO.md) has the long-form step-by-step.
 
 ### What `roster install` looks like

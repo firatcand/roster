@@ -7,8 +7,14 @@
 #   short-circuits, `npm publish` errors on duplicate version (expected).
 #
 # Required repo secret: NPM_TOKEN
-#   npmjs.com -> Access Tokens -> Granular, scoped to @firatcand/roster
-#   (Read & write), 30-day expiry. Rotate before each release window.
+#   npmjs.com -> Access Tokens -> "Classic Token" -> Automation type.
+#   30-day expiry. Rotate before each release window.
+#   Why Classic Automation, not Granular: Granular tokens honor the
+#   account's 2FA mode. With "Authorization and writes" mode (npm's
+#   default), publish fails with `EOTP` even though the token has
+#   write scope. Classic Automation tokens bypass 2FA unconditionally
+#   -- that's their purpose. If you prefer Granular (per-package
+#   scope), flip account 2FA mode to "Authorization only" first.
 #   Set:    gh secret set NPM_TOKEN --repo firatcand/roster
 #   Verify: gh api repos/firatcand/roster/actions/secrets | jq .total_count
 #
@@ -22,9 +28,13 @@
 #   git push origin v<X>.<Y>.<Z>
 #   gh run watch --repo firatcand/roster
 #
-# Post-publish verification (acceptance gate):
+# Post-publish verification (acceptance gate -- run from /tmp, NOT
+# from the package source; npx short-circuits to local resolution
+# when cwd matches the package name and fails silently with
+# "sh: <bin>: command not found"):
+#   cd "$(mktemp -d)" && rm -rf ~/.npm/_npx
 #   npm view @firatcand/roster version | dist.integrity | dist.unpackedSize
-#   rm -rf ~/.npm/_npx && npx --yes @firatcand/roster --version
+#   npx --yes @firatcand/roster --version
 #   gh release view v<X>.<Y>.<Z> --repo firatcand/roster
 #   Confirm Provenance badge at npmjs.com/package/@firatcand/roster
 #
