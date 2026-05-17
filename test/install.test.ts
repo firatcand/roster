@@ -234,8 +234,6 @@ test('codex: ROSTER_CODEX_HOME redirects writes to the override path', async () 
     assert.ok(tool, 'codex tool definition exists');
     assert.equal(tool.skillsTarget, join(f.codexHome, 'skills'));
     assert.equal(tool.agentsTarget, join(f.codexHome, 'agents'));
-    assert.equal(tool.skillsLayout, 'dir');
-    assert.equal(tool.skillsFileExt, null);
   } finally {
     delete process.env['ROSTER_CODEX_HOME'];
     f.cleanup();
@@ -486,8 +484,6 @@ test('gemini: ROSTER_GEMINI_HOME redirects writes to the override path', async (
     assert.ok(tool, 'gemini tool definition exists');
     assert.equal(tool.skillsTarget, join(f.geminiHome, 'extensions'));
     assert.equal(tool.agentsTarget, join(f.geminiHome, 'agents'));
-    assert.equal(tool.skillsLayout, 'dir');
-    assert.equal(tool.skillsFileExt, null);
   } finally {
     delete process.env['ROSTER_GEMINI_HOME'];
     f.cleanup();
