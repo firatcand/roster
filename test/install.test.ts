@@ -31,7 +31,20 @@ function makeFixture(): Fixture {
   writeFileSync(join(source, 'skills', 'other-skill', 'SKILL.md'), '# other\n');
 
   mkdirSync(join(source, 'agents'), { recursive: true });
-  writeFileSync(join(source, 'agents', 'lesson-drafter.md'), '# lesson-drafter\n');
+  writeFileSync(
+    join(source, 'agents', 'lesson-drafter.md'),
+    [
+      '---',
+      'name: lesson-drafter',
+      'description: "Drafts a lesson candidate from observed outcomes."',
+      '---',
+      '',
+      '# lesson-drafter',
+      '',
+      'Body content for the lesson-drafter agent.',
+      '',
+    ].join('\n'),
+  );
   writeFileSync(join(source, 'agents', 'ignored.txt'), 'should not copy\n');
 
   return {
@@ -261,7 +274,7 @@ test('codex: skills written as directories under ~/.codex/skills/<name>/', async
   }
 });
 
-test('codex: agents copied as .md into agentsTarget; non-.md ignored', async () => {
+test('codex: agents rendered as <name>.toml + <name>.persona.md sidecar; non-.md ignored (ROS-33)', async () => {
   const f = makeFixture();
   try {
     process.env['ROSTER_CODEX_HOME'] = f.codexHome;
@@ -277,8 +290,68 @@ test('codex: agents copied as .md into agentsTarget; non-.md ignored', async () 
 
     assert.equal(result.agentsCount, 1);
     assert.equal(result.agentsTarget, join(f.codexHome, 'agents'));
-    assert.ok(existsSync(join(f.codexHome, 'agents', 'lesson-drafter.md')));
+    const tomlPath = join(f.codexHome, 'agents', 'lesson-drafter.toml');
+    const personaPath = join(f.codexHome, 'agents', 'lesson-drafter.persona.md');
+    assert.ok(existsSync(tomlPath), '.toml file emitted');
+    assert.ok(existsSync(personaPath), '.persona.md sidecar emitted');
+    assert.ok(!existsSync(join(f.codexHome, 'agents', 'lesson-drafter.md')), 'no .md copy under codex agents');
     assert.ok(!existsSync(join(f.codexHome, 'agents', 'ignored.txt')));
+
+    const toml = readFileSync(tomlPath, 'utf8');
+    assert.match(toml, /^name = "lesson-drafter"$/m);
+    assert.match(toml, /^developer_instructions = """$/m);
+    assert.doesNotMatch(toml, /^instructions\s*=/m, 'no legacy instructions key');
+    assert.doesNotMatch(toml, /^reasoning_effort\s*=/m, 'no legacy reasoning_effort key');
+    assert.match(toml, /openai\/codex#19399/, 'header cites upstream issue');
+
+    const persona = readFileSync(personaPath, 'utf8');
+    assert.ok(persona.startsWith('# lesson-drafter'), 'persona body starts with markdown heading from source');
+    assert.ok(!persona.startsWith('---'), 'persona body excludes frontmatter');
+  } finally {
+    delete process.env['ROSTER_CODEX_HOME'];
+    f.cleanup();
+  }
+});
+
+test('codex: malformed agent (no frontmatter) is skipped + warns — install continues', async () => {
+  const f = makeFixture();
+  try {
+    process.env['ROSTER_CODEX_HOME'] = f.codexHome;
+    writeFileSync(join(f.source, 'agents', 'broken.md'), '# missing frontmatter\n');
+
+    const tool = getToolByKey('codex')!;
+    const { logger, warns } = silentLogger();
+
+    const result = await installToTool(tool, {
+      skills: skillsSrc(f),
+      agents: agentsSrc(f),
+      silent: true,
+      logger,
+    });
+
+    assert.equal(result.agentsCount, 1, 'only the well-formed agent counted');
+    assert.ok(!existsSync(join(f.codexHome, 'agents', 'broken.toml')), 'broken agent emitted no toml');
+    assert.ok(warns.some((w) => w.includes('broken.md') && w.includes('skipped')), 'warned about skip');
+  } finally {
+    delete process.env['ROSTER_CODEX_HOME'];
+    f.cleanup();
+  }
+});
+
+test('codex: agent install is idempotent — re-running produces byte-identical .toml + .persona.md', async () => {
+  const f = makeFixture();
+  try {
+    process.env['ROSTER_CODEX_HOME'] = f.codexHome;
+    const tool = getToolByKey('codex')!;
+    const { logger } = silentLogger();
+
+    await installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger });
+    const tomlSnap = readFileSync(join(f.codexHome, 'agents', 'lesson-drafter.toml'), 'utf8');
+    const personaSnap = readFileSync(join(f.codexHome, 'agents', 'lesson-drafter.persona.md'), 'utf8');
+
+    await installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger });
+    assert.equal(readFileSync(join(f.codexHome, 'agents', 'lesson-drafter.toml'), 'utf8'), tomlSnap);
+    assert.equal(readFileSync(join(f.codexHome, 'agents', 'lesson-drafter.persona.md'), 'utf8'), personaSnap);
   } finally {
     delete process.env['ROSTER_CODEX_HOME'];
     f.cleanup();

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { auditTool, scanForBannedPrimitives } from '../src/lib/audit.ts';
@@ -33,7 +33,20 @@ function makeFixture(): Fixture {
   writeFileSync(join(source, 'skills', 'other-skill', 'SKILL.md'), '# other\n');
 
   mkdirSync(join(source, 'agents'), { recursive: true });
-  writeFileSync(join(source, 'agents', 'lesson-drafter.md'), '# lesson-drafter\n');
+  writeFileSync(
+    join(source, 'agents', 'lesson-drafter.md'),
+    [
+      '---',
+      'name: lesson-drafter',
+      'description: "Drafts a lesson candidate from observed outcomes."',
+      '---',
+      '',
+      '# lesson-drafter',
+      '',
+      'Body content for the lesson-drafter agent.',
+      '',
+    ].join('\n'),
+  );
 
   return {
     root,
@@ -380,5 +393,86 @@ test('ban-list: detects @anthropic-ai/sdk subpath imports', () => {
     assert.equal(violations[0]!.ruleId, 'anthropic-sdk-import');
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Codex agent TOML render symmetry (ROS-33). Audit must reproduce the render
+// in-memory and compare to disk so installToTool output never reads as drift.
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('audit (codex agent): fresh install of codex-toml agent reports ok', async () => {
+  const f = makeFixture();
+  try {
+    process.env['ROSTER_CODEX_HOME'] = f.codexHome;
+    const tool = getToolByKey('codex')!;
+    await installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger: silentLogger });
+
+    const result = auditTool(tool, sources(f));
+    const agent = result.items.find((i) => i.kind === 'agent' && i.name === 'lesson-drafter.md')!;
+    assert.ok(agent, 'agent item present in audit result');
+    assert.equal(agent.status, 'ok', 'rendered TOML + persona match source-after-render');
+  } finally {
+    delete process.env['ROSTER_CODEX_HOME'];
+    f.cleanup();
+  }
+});
+
+test('audit (codex agent): mutating the .toml target reports STALE', async () => {
+  const f = makeFixture();
+  try {
+    process.env['ROSTER_CODEX_HOME'] = f.codexHome;
+    const tool = getToolByKey('codex')!;
+    await installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger: silentLogger });
+
+    const tomlPath = join(f.codexHome, 'agents', 'lesson-drafter.toml');
+    writeFileSync(tomlPath, readFileSync(tomlPath, 'utf8') + '\n# user tampered\n');
+
+    const result = auditTool(tool, sources(f));
+    const agent = result.items.find((i) => i.name === 'lesson-drafter.md')!;
+    assert.equal(agent.status, 'stale');
+    assert.match(agent.reason ?? '', /toml bytes differ/);
+  } finally {
+    delete process.env['ROSTER_CODEX_HOME'];
+    f.cleanup();
+  }
+});
+
+test('audit (codex agent): deleting the .persona.md sidecar reports MISSING', async () => {
+  const f = makeFixture();
+  try {
+    process.env['ROSTER_CODEX_HOME'] = f.codexHome;
+    const tool = getToolByKey('codex')!;
+    await installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger: silentLogger });
+
+    rmSync(join(f.codexHome, 'agents', 'lesson-drafter.persona.md'));
+
+    const result = auditTool(tool, sources(f));
+    const agent = result.items.find((i) => i.name === 'lesson-drafter.md')!;
+    assert.equal(agent.status, 'missing');
+    assert.match(agent.reason ?? '', /persona/);
+  } finally {
+    delete process.env['ROSTER_CODEX_HOME'];
+    f.cleanup();
+  }
+});
+
+test('audit (codex agent): mutating only the persona body reports STALE', async () => {
+  const f = makeFixture();
+  try {
+    process.env['ROSTER_CODEX_HOME'] = f.codexHome;
+    const tool = getToolByKey('codex')!;
+    await installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger: silentLogger });
+
+    const personaPath = join(f.codexHome, 'agents', 'lesson-drafter.persona.md');
+    writeFileSync(personaPath, '# tampered\n');
+
+    const result = auditTool(tool, sources(f));
+    const agent = result.items.find((i) => i.name === 'lesson-drafter.md')!;
+    assert.equal(agent.status, 'stale');
+    assert.match(agent.reason ?? '', /persona bytes differ/);
+  } finally {
+    delete process.env['ROSTER_CODEX_HOME'];
+    f.cleanup();
   }
 });
