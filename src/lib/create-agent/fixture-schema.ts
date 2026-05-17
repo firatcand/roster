@@ -6,11 +6,9 @@
 // an LLM. Phase 2 classification itself is LLM-driven and out of scope for
 // deterministic testing.
 //
-// Schema is the contract between fixture authors and render(). Any change to
-// agent.md / subagent / plan / mcp shape goes through this file first.
+// Schema-only — no fs, no yaml parsing. The loader lives in fixture-loader.ts
+// so this file remains pure (importable by render.ts without dragging in I/O).
 
-import { readFileSync } from 'node:fs';
-import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 
 const SLUG = z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'must be lowercase-kebab-case');
@@ -99,16 +97,6 @@ export class FixtureValidationError extends Error {
     this.path = path;
     this.issues = issues;
   }
-}
-
-export function loadFixture(path: string): GuidedAgentFixture {
-  const raw = readFileSync(path, 'utf8');
-  const parsed: unknown = parseYaml(raw);
-  const result = GuidedAgentFixtureSchema.safeParse(parsed);
-  if (!result.success) {
-    throw new FixtureValidationError(path, result.error.issues);
-  }
-  return result.data;
 }
 
 // Cross-fixture invariant: every plan step id must appear in grounded.steps.

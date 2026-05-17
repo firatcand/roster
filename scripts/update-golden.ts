@@ -10,7 +10,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { loadFixture } from '../src/lib/create-agent/fixture-schema.ts';
+import { loadFixture } from '../src/lib/create-agent/fixture-loader.ts';
 import { render } from '../src/lib/create-agent/render.ts';
 
 const __filename = fileURLToPath(import.meta.url);
