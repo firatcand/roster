@@ -53,7 +53,7 @@
     "url": "https://github.com/firatcand/roster/issues"
   },
   "dependencies": {
-    "@inquirer/prompts": "^7.0.0",
+    "@inquirer/prompts": "^8.4.3",
     "chalk": "^5.3.0",
     "fs-extra": "^11.2.0",
     "yaml": "^2.9.0",
