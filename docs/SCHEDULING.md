@@ -16,6 +16,8 @@ Six cells, one row per supported tool. Cell content = the supported install path
 | **Codex CLI** | Codex app Automations (UI hand-off) **or** `roster schedule install --tool codex --via cron` for programmatic install. Codex `auth_mode=chatgpt` bills against ChatGPT subscription. | Codex app Automations (UI hand-off). `--via cron` works under Task Scheduler with the `env -i` wrapper. **Subagent TOML bug applies — see [Windows caveat](#codex-windows-toml-subagent-workaround).** | `roster schedule install --tool codex --via cron`. UI Automations require the Codex desktop app — use cron on headless Linux. |
 
 > Reading the matrix: pick your row first (which CLI you're using for this agent), then your column (which OS the Mac mini / workstation is on). The cell tells you the install path Roster supports today.
+>
+> **Note on app restarts.** Whether a tool's desktop app re-queues missed fires after a restart or update is undocumented by both vendors and **not relied on by Roster** ([ADR-0001 § Codex review findings](adr/0001-scheduling-architecture.md#codex-review-findings-2026-05-15)). Missed fires surface as gaps in `roster schedule status` and `roster doctor`; see [Doctor checks](#doctor-checks-for-scheduling) and the [Disruption checks](#disruption-checks-optional-but-recommended) section below.
 
 ---
 
@@ -116,9 +118,8 @@ roster schedule install gtm/sdr cold-outreach \
 #   .roster/schedule-specs/sdr-cold-outreach.codex.fields.md
 #   roster/gtm/schedules.yaml                  (status=pending-ui-install)
 # Roster prints:
-#   "Open the Codex app → start a new thread → paste the prompt below and add:
-#    'Schedule this for <cron expression> in workspace <path>.'
-#    Codex will create the Automation."
+#   "Open the Codex app → start a new thread → paste the entire message
+#    from the fields document above. Codex will create the Automation."
 ```
 
 The generated `.fields.md` is shorter than the Claude variant — three blocks (prompt, cron, workspace path) joined into a single paste-ready message.
