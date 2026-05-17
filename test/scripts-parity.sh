@@ -11,6 +11,11 @@
 #
 # Files in only one tree are FINE — this checks the intersection only.
 # Run via `pnpm test:dogfood-scripts`.
+#
+# NOTE: `.dogfood/scripts/` is git-tracked (not gitignored), so CI checkouts
+# DO include it and this test DOES run in CI. The skip below only fires for
+# unusual checkouts that have one tree but not the other — e.g. someone who
+# manually rm -rf'd .dogfood/.
 
 set -uo pipefail
 
@@ -20,7 +25,7 @@ SCAFFOLD="$REPO_ROOT/templates/scaffold/scripts"
 DOGFOOD="$REPO_ROOT/.dogfood/scripts"
 
 if [ ! -d "$SCAFFOLD" ] || [ ! -d "$DOGFOOD" ]; then
-  echo "scripts-parity: one of the trees is missing — skipping (this is fine for fresh checkouts)"
+  echo "scripts-parity: one of the trees is missing — skipping (unusual checkout state)"
   exit 0
 fi
 
@@ -32,12 +37,19 @@ check_pair() {
   local rel="${scaffold_file#$SCAFFOLD/}"
   local dogfood_file="$DOGFOOD/$rel"
   [ -f "$dogfood_file" ] || return 0  # scaffold-only file: fine
-  if cmp -s "$scaffold_file" "$dogfood_file"; then
+  cmp -s "$scaffold_file" "$dogfood_file"
+  local rc=$?
+  if [ "$rc" -eq 0 ]; then
     printf "  \033[32m✓\033[0m %s\n" "$rel"
     PASS=$((PASS + 1))
-  else
+  elif [ "$rc" -eq 1 ]; then
     printf "  \033[31m✗\033[0m DRIFT: %s\n" "$rel"
     diff "$scaffold_file" "$dogfood_file" | head -10
+    FAIL=$((FAIL + 1))
+  else
+    # cmp exits 2 on I/O error (e.g. unreadable file) — surface it loudly
+    # rather than silently treating it as a pass.
+    printf "  \033[31m✗\033[0m cmp ERROR (rc=%d) on %s\n" "$rc" "$rel" >&2
     FAIL=$((FAIL + 1))
   fi
 }

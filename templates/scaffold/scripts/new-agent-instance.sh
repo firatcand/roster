@@ -109,5 +109,7 @@ echo "  cd $INSTANCE_DIR/"
 echo "  claude"
 echo "  \"Run $AGENT — dry run, just show me the plan\""
 echo ""
-echo "Optionally schedule via cron:"
-echo "  bash scripts/new-cron.sh $PROJECT-$AGENT-<frequency>"
+# Scheduling primitives ship in Phase 2.5 (see ROS-39). Until then,
+# `bash scripts/new-cron.sh` is not available — print a pointer instead
+# of a command that would fail with "No such file or directory".
+echo "Optionally schedule via cron: see ROS-39 (Phase 2.5 scheduling primitives)."

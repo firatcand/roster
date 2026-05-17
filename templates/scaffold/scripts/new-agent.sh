@@ -222,12 +222,7 @@ claude
 "Run $NAME on <inputs>"
 \`\`\`
 
-From cron:
-
-\`\`\`bash
-cd /path/to/agent-team
-claude -p "\$(cat scripts/cron/wrappers/$NAME-prompt.txt)"
-\`\`\`
+From cron: see ROS-39 (Phase 2.5 scheduling primitives — wrapper layout + install script land then).
 
 ## Configuration
 

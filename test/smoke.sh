@@ -171,7 +171,7 @@ assert "-f dreamer/agent.md" "dreamer/agent.md ported"
 assert "-x scripts/new-project.sh" "scripts/new-project.sh ported + executable"
 assert "-x scripts/new-agent.sh" "scripts/new-agent.sh ported + executable (ROS-58)"
 assert "-x scripts/new-agent-instance.sh" "scripts/new-agent-instance.sh ported + executable (ROS-58)"
-assert "-f scripts/lib/bindings-prompt.sh" "scripts/lib/bindings-prompt.sh ported (sourced by new-agent-instance)"
+assert "-x scripts/lib/bindings-prompt.sh" "scripts/lib/bindings-prompt.sh ported + executable (sourced by new-agent-instance)"
 assert "-f .config/functions.yaml" ".config/functions.yaml ported"
 assert "-d logs/cron" "logs/cron/ ported"
 
@@ -199,6 +199,29 @@ AGENT_TEAM_NO_CONFIRM=1 bash scripts/new-agent.sh --slash-only gtm test-agent </
 assert "-f .claude/commands/test-agent.md" "--slash-only recovery (ROS-53) works via shipped script (ROS-58)"
 AGENT_TEAM_NO_CONFIRM=1 bash scripts/new-agent-instance.sh smoke-test-co gtm test-agent </dev/null > /dev/null
 assert "-d gtm/test-agent/projects/smoke-test-co" "new-agent-instance.sh creates project instance (ROS-58)"
+
+# 5d. Exercise the lib/bindings-prompt.sh path. Inject a "## Tools and
+# bindings" section into the agent.md, create a SECOND project, and a
+# SECOND instance — new-agent-instance.sh:83 will detect the section
+# and invoke bindings-prompt.sh. In non-TTY mode (</dev/null), bindings-
+# prompt falls back to TODO placeholders per its own docstring; this
+# verifies the script ships, is executable, and runs to completion.
+cat >> gtm/test-agent/agent.md <<'AGENT_TOOLS_EOF'
+
+## Tools and bindings
+
+```yaml
+gmail:
+  account:
+    required: true
+    description: "Email address to send from"
+```
+AGENT_TOOLS_EOF
+bash scripts/new-project.sh "Bindings Test Co" > /dev/null
+AGENT_TEAM_NO_CONFIRM=1 bash scripts/new-agent-instance.sh bindings-test-co gtm test-agent </dev/null > /dev/null 2>&1
+assert "-f gtm/test-agent/projects/bindings-test-co/config/default.yaml" "bindings-prompt: instance config exists"
+assert_contains gtm/test-agent/projects/bindings-test-co/config/default.yaml "tools:" "bindings-prompt appended tools: block (ROS-58)"
+assert_contains gtm/test-agent/projects/bindings-test-co/config/default.yaml "TODO" "bindings-prompt fell back to TODO placeholders in non-TTY mode"
 
 # Idempotency: re-run init with --force, marker should still appear exactly once
 "$ROSTER_BIN" init my-test-workspace --silent --no-git --force
