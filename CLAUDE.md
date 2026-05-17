@@ -60,9 +60,9 @@ The Phase gate command (run before opening a PR): `pnpm typecheck && pnpm build 
 
 Phase 1 — Foundations: **complete** (closed 2026-05-12; retro at `docs/retros/phase-1.md`).
 Phase 2 — Core Features: **complete** (closed 2026-05-14; retro at `docs/retros/phase-2.md`).
+Phase 3 — Polish and Launch: **complete** (`ROS-27` v0.1.0 published 2026-05-17). v0.1.0 ships install/init/doctor only; scheduling lands in v0.2.5+.
+Phase 4 — Guided Agent Authoring: **complete** (closed 2026-05-17 with PR #75 / `ROS-55`). Delivered: mode-branched `create-agent.yaml` (`ROS-49`), guided-dialogue contract in `skills/chief-of-staff/SKILL.md` (`ROS-50`), per-file content contracts + cross-file invariants (`ROS-51`), atomic-write spec (`ROS-52`), `--slash-only` recovery flag (`ROS-53`), fixture-driven golden-snapshot harness (`ROS-54`), invariants + atomic-write modules + stub regression tests (`ROS-55`), dialogue-mode docs (`ROS-56`), scaffold scripts (`ROS-58`). Targeted for v0.4.0 release.
 Phase 2.5 — Scheduling primitives: **active**. Goals: subscription-safe scheduling for Claude Code + Codex CLI via native local schedulers, `CONTEXT.md` symlink architecture, `roster-orchestrator` skill, `roster schedule install/validate`, HITL queue. See `docs/adr/0001-scheduling-architecture.md` and `docs/roadmap.md`.
-Phase 3 — Polish and Launch: **75% (in flight)**. Publish v0.1.0 to npm (`ROS-27`, Urgent) is decoupled from 2.5 — v0.1.0 ships install/init/doctor only; scheduling lands in v0.2.5+.
-Phase 4 — Guided Agent Authoring: **in flight**. ROS-49 (mode-branched `create-agent.yaml`) and ROS-50 (guided-dialogue contract in `skills/chief-of-staff/SKILL.md`) landed 2026-05-17; ROS-51 next. Still gated on Phase 3 publish (`ROS-27`) for v0.4.0 release.
 
 Local planning (PRD/SPEC/phases.yaml) lives in `spec/` and `plans/` and is gitignored — public roadmap in `docs/roadmap.md`, work items tracked in Linear (ROS-*).
 
