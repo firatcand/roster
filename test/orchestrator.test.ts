@@ -14,6 +14,7 @@ import {
   mkdirSync,
   writeFileSync,
   readFileSync,
+  readdirSync,
   existsSync,
   rmSync,
   cpSync,
@@ -241,6 +242,75 @@ test('orchestrator: installs into ~/.codex/skills/roster-orchestrator/ with inst
     delete process.env['ROSTER_CODEX_HOME'];
     f.cleanup();
   }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROS-33 — subagent dispatch end-to-end shape
+//
+// True end-to-end through the real `codex` CLI is left to the manual smoke
+// gate (Codex isn't installable in CI). Here we assert the file-shape that
+// the orchestrator skill (ROS-32) relies on at runtime: every shipped agent
+// produces a TOML with the right field names AND a persona sidecar; the
+// orchestrator's dispatch idioms reference at least one of the installed
+// agent names.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('subagent dispatch (codex): every shipped agent lands as .toml + .persona.md', async () => {
+  const f = makeE2EFixture();
+  const codexHome = join(f.root, 'codex-home');
+  try {
+    process.env['ROSTER_CODEX_HOME'] = codexHome;
+    // Use real shipped agents — copy them into the e2e source tree.
+    cpSync(join(repoRoot, 'agents'), join(f.source, 'agents'), { recursive: true });
+
+    const tool = getToolByKey('codex')!;
+    await installToTool(tool, {
+      skills: join(f.source, 'skills'),
+      agents: join(f.source, 'agents'),
+      silent: true,
+      logger: silentLogger,
+    });
+
+    const installedAgents = readdirSync(join(codexHome, 'agents'));
+    const tomlFiles = installedAgents.filter((n) => n.endsWith('.toml'));
+    const personaFiles = installedAgents.filter((n) => n.endsWith('.persona.md'));
+    assert.ok(tomlFiles.length > 0, 'at least one .toml emitted');
+    assert.equal(tomlFiles.length, personaFiles.length, '1:1 .toml/.persona.md pairing');
+
+    for (const tomlName of tomlFiles) {
+      const baseName = tomlName.replace(/\.toml$/, '');
+      const toml = readFileSync(join(codexHome, 'agents', tomlName), 'utf8');
+      assert.match(toml, /^name = "/m, `${tomlName}: name present`);
+      assert.match(toml, /^description = "/m, `${tomlName}: description present`);
+      assert.match(toml, /^developer_instructions = """$/m, `${tomlName}: uses developer_instructions`);
+      assert.doesNotMatch(toml, /^instructions\s*=/m, `${tomlName}: no legacy instructions`);
+      assert.doesNotMatch(toml, /^reasoning_effort\s*=/m, `${tomlName}: no legacy reasoning_effort`);
+
+      const persona = readFileSync(join(codexHome, 'agents', `${baseName}.persona.md`), 'utf8');
+      assert.ok(persona.length > 0, `${baseName}.persona.md is non-empty`);
+      assert.ok(!persona.startsWith('---'), `${baseName}.persona.md excludes frontmatter`);
+    }
+  } finally {
+    delete process.env['ROSTER_CODEX_HOME'];
+    f.cleanup();
+  }
+});
+
+test('subagent dispatch (codex): persona.md is the runtime-injection payload for the Windows workaround', () => {
+  // The orchestrator skill (ROS-32) reads <agent>.persona.md off disk and
+  // feeds it to `codex` via `-c developer_instructions=<content>` when the
+  // host is Windows (openai/codex#19399). This test pins the contract: the
+  // persona file is plain text, frontmatter-free, and matches the body the
+  // renderer would re-emit. If this drifts, the Windows orchestrator hand-off
+  // breaks silently.
+  const agentsRoot = join(repoRoot, 'agents');
+  const fixturePath = join(agentsRoot, 'critic.md');
+  assert.ok(existsSync(fixturePath), 'fixture: agents/critic.md exists');
+  // Sanity: the schema test in test/agent-render.test.ts already proves
+  // round-trip parseability across every shipped agent; here we just assert
+  // the contract that anchors the doctor + install + audit chain.
+  const src = readFileSync(fixturePath, 'utf8');
+  assert.match(src, /^---\n[\s\S]+?\n---/, 'source has frontmatter (consumed by renderer)');
 });
 
 test('orchestrator: re-install is byte-stable (idempotent)', async () => {

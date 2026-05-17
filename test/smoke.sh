@@ -23,9 +23,10 @@ cd "$REPO_ROOT"
 SMOKE_DIR="$(mktemp -d -t roster-smoke-XXXXXXXX)"
 NPM_PREFIX="$SMOKE_DIR/npm-prefix"
 CLAUDE_HOME="$SMOKE_DIR/claude"
+CODEX_HOME="$SMOKE_DIR/codex"
 WORKSPACE="$SMOKE_DIR/workspace"
 FAKE_HOME="$SMOKE_DIR/fake-home"
-mkdir -p "$NPM_PREFIX" "$CLAUDE_HOME" "$WORKSPACE" "$FAKE_HOME"
+mkdir -p "$NPM_PREFIX" "$CLAUDE_HOME" "$CODEX_HOME" "$WORKSPACE" "$FAKE_HOME"
 
 cleanup() {
   local rc=$?
@@ -113,11 +114,25 @@ echo ""
 echo "===> 4. roster install"
 HOME="$FAKE_HOME" ROSTER_CLAUDE_HOME="$CLAUDE_HOME" "$ROSTER_BIN" install --silent
 assert "-f \"$CLAUDE_HOME/skills/chief-of-staff/SKILL.md\"" "chief-of-staff SKILL.md installed"
-assert "-f \"$CLAUDE_HOME/agents/lesson-drafter.md\"" "lesson-drafter.md installed"
+assert "-f \"$CLAUDE_HOME/agents/lesson-drafter.md\"" "lesson-drafter.md installed (claude md-copy)"
 
 # Idempotency: re-running install should not throw
 HOME="$FAKE_HOME" ROSTER_CLAUDE_HOME="$CLAUDE_HOME" "$ROSTER_BIN" install --silent
 assert "$? -eq 0" "roster install is idempotent"
+
+# 4b. Codex install — agents rendered as <name>.toml + <name>.persona.md (ROS-33)
+HOME="$FAKE_HOME" ROSTER_CODEX_HOME="$CODEX_HOME" "$ROSTER_BIN" install --tool codex --silent
+assert "-f \"$CODEX_HOME/agents/lesson-drafter.toml\"" "codex emits lesson-drafter.toml"
+assert "-f \"$CODEX_HOME/agents/lesson-drafter.persona.md\"" "codex emits lesson-drafter.persona.md sidecar"
+assert "! -f \"$CODEX_HOME/agents/lesson-drafter.md\"" "codex does NOT copy raw .md into agents/"
+assert_contains "$CODEX_HOME/agents/lesson-drafter.toml" "^developer_instructions = \"\"\"$" "toml uses developer_instructions key"
+assert_contains "$CODEX_HOME/agents/lesson-drafter.toml" "openai/codex#19399" "toml header references upstream issue"
+# Schema contract: legacy field names must NOT appear at the start of any line.
+if grep -E '^(instructions|reasoning_effort)\s*=' "$CODEX_HOME/agents/lesson-drafter.toml" > /dev/null 2>&1; then
+  fail "toml emits legacy keys (instructions/reasoning_effort)"
+else
+  pass "toml has no legacy instructions/reasoning_effort keys"
+fi
 
 # 5. roster init
 echo ""
