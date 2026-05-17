@@ -35,10 +35,11 @@ pnpm test            # node --test on test/**/*.test.ts
 pnpm smoke           # bash test/smoke.sh — pack, install, init end-to-end
 pnpm e2e             # bash test/e2e-sdr.sh — init + SDR-contract gate (pass --keep to preserve the workspace for the manual Claude Code gate)
 pnpm perf            # bash test/perf.sh — measure install/init/doctor + tarball against SPEC budgets (dev-machine only)
+pnpm test:dogfood-scripts  # bash test/new-agent-slash-only.sh — covers .dogfood/scripts/ (unshipped)
 npm pack --dry-run   # confirm tarball stays clean (~64 kB, ~80 files at v0.1.0)
 ```
 
-The Phase gate command (run before opening a PR): `pnpm typecheck && pnpm build && pnpm test`.
+The Phase gate command (run before opening a PR): `pnpm typecheck && pnpm build && pnpm test`. When the diff touches `.dogfood/scripts/`, also run `pnpm test:dogfood-scripts`.
 
 ## Where things live in the CLI
 

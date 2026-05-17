@@ -20,6 +20,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Note: this script tests SHIPPED behavior (npm pack + install + roster init).
+# Tests for unshipped artifacts under .dogfood/ live in separate scripts and
+# are invoked via `pnpm test:dogfood-scripts` (e.g. test/new-agent-slash-only.sh).
+# Keep this gate focused on what end users actually receive.
+
 SMOKE_DIR="$(mktemp -d -t roster-smoke-XXXXXXXX)"
 NPM_PREFIX="$SMOKE_DIR/npm-prefix"
 CLAUDE_HOME="$SMOKE_DIR/claude"
