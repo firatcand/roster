@@ -6,6 +6,7 @@ import chalk from 'chalk';
 import type { Tool, ToolKey } from './tools.ts';
 import { permissionError } from './errors.ts';
 import { renderSkillFrontmatterContent } from './frontmatter.ts';
+import { renderCodexAgentToml, RosterAgentRenderError } from './agent-render.ts';
 
 const { copy, ensureDir } = fsExtra;
 
@@ -91,6 +92,25 @@ export function renderSkillFrontmatter(skillMdPath: string, toolKey: ToolKey): v
   if (newContent !== content) writeFileSync(skillMdPath, newContent);
 }
 
+async function prepareTargetForWrite(
+  targetPath: string,
+  kind: 'skill' | 'agent' | 'agent persona',
+  logger: InstallLogger,
+  confirm: ConfirmFn,
+): Promise<boolean> {
+  if (existsSync(targetPath) && lstatSync(targetPath).isSymbolicLink()) {
+    const accepted = await confirm(
+      `${targetPath} is a symbolic link. Replace it with the bundled ${kind}?`,
+    );
+    if (!accepted) {
+      logger.warn(chalk.dim(`  ~ preserved symlink: ${targetPath}`));
+      return false;
+    }
+    await rm(targetPath, { force: true });
+  }
+  return true;
+}
+
 async function copyOne(
   srcPath: string,
   targetPath: string,
@@ -99,17 +119,29 @@ async function copyOne(
   confirm: ConfirmFn,
 ): Promise<boolean> {
   try {
-    if (existsSync(targetPath) && lstatSync(targetPath).isSymbolicLink()) {
-      const accepted = await confirm(
-        `${targetPath} is a symbolic link. Replace it with the bundled ${kind}?`,
-      );
-      if (!accepted) {
-        logger.warn(chalk.dim(`  ~ preserved symlink: ${targetPath}`));
-        return false;
-      }
-      await rm(targetPath, { force: true });
-    }
+    const ok = await prepareTargetForWrite(targetPath, kind, logger, confirm);
+    if (!ok) return false;
     await copy(srcPath, targetPath, { overwrite: true, errorOnExist: false });
+    return true;
+  } catch (err: unknown) {
+    if (isEacces(err)) {
+      throw permissionError(targetPath, err);
+    }
+    throw err;
+  }
+}
+
+async function writeRenderedOne(
+  targetPath: string,
+  contents: string,
+  kind: 'agent' | 'agent persona',
+  logger: InstallLogger,
+  confirm: ConfirmFn,
+): Promise<boolean> {
+  try {
+    const ok = await prepareTargetForWrite(targetPath, kind, logger, confirm);
+    if (!ok) return false;
+    writeFileSync(targetPath, contents);
     return true;
   } catch (err: unknown) {
     if (isEacces(err)) {
@@ -182,12 +214,55 @@ export async function installToTool(tool: Tool, opts: InstallOptions): Promise<I
     }
   }
 
+  // Per-tool agent install branch (ROS-33).
+  //
+  // - md-copy   (Claude, Gemini): copy source agents/<name>.md verbatim.
+  // - codex-toml (Codex):         render to <name>.toml + <name>.persona.md.
+  //
+  // The .persona.md sidecar is emitted on every host so the roster-orchestrator
+  // skill (ROS-32) has a uniform source-of-truth for runtime persona injection
+  // via `-c developer_instructions=…` on Codex Windows, where the .toml is
+  // silently ignored (openai/codex#19399).
+  //
+  // Remove the persona sidecar branch when openai/codex#19399 closes.
   let agentsCount = 0;
   if (tool.agentsTarget && existsSync(opts.agents)) {
     const entries = readdirSync(opts.agents, { withFileTypes: true });
     for (const dirent of entries) {
       if (!dirent.isFile() || !dirent.name.endsWith('.md')) continue;
       const srcPath = join(opts.agents, dirent.name);
+
+      if (tool.agentsLayout === 'codex-toml') {
+        const baseName = dirent.name.replace(/\.md$/, '');
+        const tomlTarget = join(tool.agentsTarget, `${baseName}.toml`);
+        const personaTarget = join(tool.agentsTarget, `${baseName}.persona.md`);
+        assertWithinRoot(tomlTarget, tool.configRoot, 'agent targetPath');
+        assertWithinRoot(personaTarget, tool.configRoot, 'agent persona targetPath');
+
+        let rendered;
+        try {
+          rendered = renderCodexAgentToml(readFileSync(srcPath, 'utf8'));
+        } catch (err: unknown) {
+          if (err instanceof RosterAgentRenderError) {
+            logger.warn(chalk.yellow(`  ! agent ${dirent.name}: ${err.message} — skipped`));
+            continue;
+          }
+          throw err;
+        }
+
+        info(chalk.dim(`  + agent ${dirent.name} -> ${tomlTarget}`));
+        const wroteToml = await writeRenderedOne(tomlTarget, rendered.toml, 'agent', logger, confirm);
+        const wrotePersona = await writeRenderedOne(
+          personaTarget,
+          rendered.personaBody,
+          'agent persona',
+          logger,
+          confirm,
+        );
+        if (wroteToml && wrotePersona) agentsCount++;
+        continue;
+      }
+
       const targetPath = join(tool.agentsTarget, dirent.name);
       assertWithinRoot(targetPath, tool.configRoot, 'agent targetPath');
       info(chalk.dim(`  + agent ${dirent.name} -> ${targetPath}`));

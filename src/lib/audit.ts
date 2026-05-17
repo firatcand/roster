@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Tool, ToolKey } from './tools.ts';
 import { renderSkillFrontmatterContent } from './frontmatter.ts';
+import { renderCodexAgentToml, RosterAgentRenderError } from './agent-render.ts';
 
 export type ItemStatus = 'ok' | 'missing' | 'stale';
 export type ItemKind = 'skill' | 'agent';
@@ -101,7 +102,7 @@ function auditSkillFlatFile(name: string, srcSkillMd: string, targetFile: string
   }
 }
 
-function auditAgentFile(name: string, srcFile: string, targetFile: string): ItemAudit {
+function auditAgentMdCopy(name: string, srcFile: string, targetFile: string): ItemAudit {
   if (!existsSync(targetFile)) {
     return { kind: 'agent', name, status: 'missing', targetPath: targetFile };
   }
@@ -115,6 +116,43 @@ function auditAgentFile(name: string, srcFile: string, targetFile: string): Item
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException).code ?? 'EUNKNOWN';
     return { kind: 'agent', name, status: 'stale', targetPath: targetFile, reason: code };
+  }
+}
+
+// Codex agent audit: source is `<name>.md`, but on disk we have `<name>.toml`
+// and `<name>.persona.md`. Render the source through the same pure function
+// used by installToTool and byte-compare both targets — mutation symmetry
+// (docs/learnings/2026-Q2/installer-mutations-need-drift-detector-mirror.md).
+function auditAgentCodexToml(
+  name: string,
+  srcFile: string,
+  tomlTarget: string,
+  personaTarget: string,
+): ItemAudit {
+  if (!existsSync(tomlTarget)) {
+    return { kind: 'agent', name, status: 'missing', targetPath: tomlTarget };
+  }
+  if (!existsSync(personaTarget)) {
+    return { kind: 'agent', name, status: 'missing', targetPath: personaTarget, reason: 'persona sidecar missing' };
+  }
+  try {
+    const source = readFileSync(srcFile, 'utf8');
+    const rendered = renderCodexAgentToml(source);
+    const actualToml = readFileSync(tomlTarget, 'utf8');
+    if (actualToml !== rendered.toml) {
+      return { kind: 'agent', name, status: 'stale', targetPath: tomlTarget, reason: 'toml bytes differ' };
+    }
+    const actualPersona = readFileSync(personaTarget, 'utf8');
+    if (actualPersona !== rendered.personaBody) {
+      return { kind: 'agent', name, status: 'stale', targetPath: personaTarget, reason: 'persona bytes differ' };
+    }
+    return { kind: 'agent', name, status: 'ok', targetPath: tomlTarget };
+  } catch (err: unknown) {
+    if (err instanceof RosterAgentRenderError) {
+      return { kind: 'agent', name, status: 'stale', targetPath: tomlTarget, reason: `render: ${err.field}` };
+    }
+    const code = (err as NodeJS.ErrnoException).code ?? 'EUNKNOWN';
+    return { kind: 'agent', name, status: 'stale', targetPath: tomlTarget, reason: code };
   }
 }
 
@@ -227,8 +265,15 @@ export function auditTool(tool: Tool, sources: AuditSources): ToolAuditResult {
     for (const agentName of listDirNames(sources.agents, 'file')) {
       if (!agentName.endsWith('.md')) continue;
       const srcFile = join(sources.agents, agentName);
-      const targetFile = join(tool.agentsTarget, agentName);
-      items.push(auditAgentFile(agentName, srcFile, targetFile));
+      if (tool.agentsLayout === 'codex-toml') {
+        const baseName = agentName.replace(/\.md$/, '');
+        const tomlTarget = join(tool.agentsTarget, `${baseName}.toml`);
+        const personaTarget = join(tool.agentsTarget, `${baseName}.persona.md`);
+        items.push(auditAgentCodexToml(agentName, srcFile, tomlTarget, personaTarget));
+      } else {
+        const targetFile = join(tool.agentsTarget, agentName);
+        items.push(auditAgentMdCopy(agentName, srcFile, targetFile));
+      }
     }
   }
 
