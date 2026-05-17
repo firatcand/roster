@@ -71,6 +71,8 @@ Without `--all`, you'll get an interactive checkbox to pick which tools to recei
 | `roster schedule validate` | Validate every `roster/<function>/schedules.yaml` file in the workspace. `--json` / `--silent` / `--cwd <dir>`. Exits non-zero on schema or cron errors. |
 | `roster --help` / `--version` | Usage + version from `package.json`. |
 
+Scheduling primitives (Phase 2.5) — see [docs/SCHEDULING.md](docs/SCHEDULING.md) for the platform × tool matrix, UI hand-off flows for Claude Desktop and Codex Automations, `codex --via cron` install, the Linux Claude gap, the Codex Windows subagent workaround, and the subscription-billing rules (including why `claude -p` is banned).
+
 ## Tool support
 
 | Tool | Status | Skills installed to | Agents installed to |

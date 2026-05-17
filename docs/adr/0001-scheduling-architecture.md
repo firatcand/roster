@@ -241,15 +241,17 @@ The benefits of delegation are large and durable:
 ```bash
 # Claude side (today: UI hand-off)
 roster schedule install gtm/sdr cold-outreach --cron "0 9 * * MON-FRI" --tool claude
-  → writes spec to .roster/schedule-specs/sdr-cold-outreach.claude.json
-  → adds entry to roster/gtm/schedules.yaml
-  → prints: "Open Claude Desktop → Schedule sidebar → New local task → paste spec"
+  → writes paste-ready fields document to .roster/schedule-specs/sdr-cold-outreach.claude.fields.md
+    (markdown, not JSON — Claude Desktop has no JSON-import API; see Spike 2)
+  → adds entry to roster/gtm/schedules.yaml (status=pending-ui-install)
+  → prints: "Open Claude Desktop → Schedule sidebar → New local task → fill in fields from the document above"
 
 # Codex side (default: UI hand-off via app Automations)
 roster schedule install gtm/sdr cold-outreach --cron "0 9 * * MON-FRI" --tool codex
-  → writes spec to .roster/schedule-specs/sdr-cold-outreach.codex.toml
-  → adds entry to roster/gtm/schedules.yaml
-  → prints: "Open Codex app → Automations → New → paste spec"
+  → writes paste-ready fields document to .roster/schedule-specs/sdr-cold-outreach.codex.fields.md
+    (markdown — Codex Automations are created from a Codex thread in natural language, not by TOML import)
+  → adds entry to roster/gtm/schedules.yaml (status=pending-ui-install)
+  → prints: "Open Codex app → start a new thread → paste the message from the fields document above"
 
 # Codex side (power-user: programmatic via codex exec cron)
 roster schedule install gtm/sdr cold-outreach --cron "0 9 * * MON-FRI" --tool codex --via cron
