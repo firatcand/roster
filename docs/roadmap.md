@@ -38,12 +38,34 @@ Architecture decision: [ADR-0001 Scheduling architecture](adr/0001-scheduling-ar
 - HITL queue + SessionStart banner surface.
 - `roster doctor` extended to detect symlink, crontab, and `.env` drift; static audit that no installed skill imports the Anthropic SDK or invokes `claude -p`.
 
-## v0.3.0+ — Phase 3: Polish and Launch (blocked on 2.5)
+## v0.3.0 — Phase 3: Polish and Launch (blocked on 2.5)
 
 - Published to npm under `@firatcand/roster`.
 - Migration docs for users coming from the original `~/repos/agent-team` layout.
 - Optional: a `roster update` command that re-installs skills from latest package without re-running interactive prompts.
 - Versioned skills with frontmatter `version` field; `doctor` reports stale by version instead of byte comparison.
+
+## v0.4.0 — Phase 4: Guided Agent Authoring (planning, blocked on 3)
+
+Goal: replace today's stub-only `/chief-of-staff create-agent` flow with a dialogue-first plan. Interactive sessions get a short interview that populates `agent.md`, an initial plan YAML, every named subagent file, and the slash-command description — instead of the placeholder strings the user has to fill in by hand today. Non-interactive sessions (CI, piped stdin, `AGENT_TEAM_NO_CONFIRM=1`) keep today's stub behavior byte-for-byte so e2e tests and power-user scripts don't break.
+
+The skill is **correctness over completeness**: it loads `<function>/EXPERT.md` as shape reference, drafts only what it can ground in the user's prose or follow-up Q&A, and refuses to fabricate steps/subagents/tools. Write is atomic with rollback on failure.
+
+### In scope (highlights)
+
+- Rewritten `chief-of-staff/plans/create-agent.yaml` with TTY-aware mode branch (stub vs guided).
+- Five-phase dialogue contract documented in `chief-of-staff/SKILL.md`: prose intake → classify (boilerplate / grounded / uncertain) → targeted follow-up Q&A until uncertain bucket empty → consolidated preview with `y/revise/cancel` → atomic write.
+- Anti-fabrication invariant stated verbatim in the skill body.
+- Cross-file invariants enforced before write: every subagent has a file, every step appears in the starter plan, every tool has a bindings block, no `<placeholder>` strings, slash description ≤80 chars.
+- `scripts/new-agent.sh --slash-only` recovery path for the rare case where the agent tree writes succeed but the slash command write fails.
+- Fixture-driven golden-snapshot test harness so the dialogue mode is regression-testable without invoking an LLM in CI.
+
+### Out of scope (deferred to v0.5+)
+
+- Refining an existing agent via dialogue (`refine-agent` plan).
+- Project-instance content generation — per-project config stays manual.
+- Multi-agent batch creation. One agent per invocation.
+- Automated `.mcp.json` population.
 
 ## Out of scope
 
