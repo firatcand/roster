@@ -1,3 +1,37 @@
+# ============================================================
+# Roster publish runbook (ROS-27 onward)
+#
+# Trigger: `git push origin v<X>.<Y>.<Z>` runs end-to-end with no env gate.
+#   workflow_dispatch is recovery-only, gated by `production` env's
+#   required-reviewer rule. Re-runs are idempotent: `gh release view`
+#   short-circuits, `npm publish` errors on duplicate version (expected).
+#
+# Required repo secret: NPM_TOKEN
+#   npmjs.com -> Access Tokens -> Granular, scoped to @firatcand/roster
+#   (Read & write), 30-day expiry. Rotate before each release window.
+#   Set:    gh secret set NPM_TOKEN --repo firatcand/roster
+#   Verify: gh api repos/firatcand/roster/actions/secrets | jq .total_count
+#
+# Pre-tag (local in worktree):
+#   pnpm typecheck && pnpm test && pnpm build && pnpm smoke && pnpm perf
+#   npm pack --dry-run    # tarball <= 1 MB, files match `files` allowlist
+#   git fetch origin main && git log HEAD..origin/main    # empty
+#
+# Tag + push:
+#   git tag v<X>.<Y>.<Z> origin/main -m "v<X>.<Y>.<Z>"
+#   git push origin v<X>.<Y>.<Z>
+#   gh run watch --repo firatcand/roster
+#
+# Post-publish verification (acceptance gate):
+#   npm view @firatcand/roster version | dist.integrity | dist.unpackedSize
+#   rm -rf ~/.npm/_npx && npx --yes @firatcand/roster --version
+#   gh release view v<X>.<Y>.<Z> --repo firatcand/roster
+#   Confirm Provenance badge at npmjs.com/package/@firatcand/roster
+#
+# Prereleases (vX.Y.Z-PRERELEASE): published to `--tag next`, marked
+# `--prerelease` on GH. `npm install` still resolves to `latest`.
+# ============================================================
+
 name: Publish
 on:
   push:
