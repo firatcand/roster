@@ -1,0 +1,11 @@
+---
+agent: stub-agent
+project: <project-slug>
+created: <YYYY-MM-DD>
+last_modified: <YYYY-MM-DD>
+---
+
+# stub-agent Config — <Project>
+
+# See stub-fn/stub-agent/agent.md § "Inputs" for required fields.
+# Use prose comments to explain "why" alongside "what".
