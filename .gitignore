@@ -58,6 +58,10 @@ node_modules/
 # `templates/scaffold/.forge/` (if ever shipped) is not ignored.
 /.forge/
 
+# Claude Code native worktrees (created by EnterWorktree). Anchored so a
+# nested `templates/scaffold/.claude/worktrees/` would not be ignored.
+/.claude/worktrees/
+
 # Build artifacts — produced by tsdown; included in npm pack via files allowlist
 /bin/
 /dist/
