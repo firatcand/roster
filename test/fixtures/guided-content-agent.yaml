@@ -1,0 +1,102 @@
+# Canonical fixture for the ROS-54 guided agent creation harness.
+#
+# Represents the POST-DIALOGUE RESOLVED STATE for a GTM content-agent:
+# Phase 1 prose plus Phase 2 grounded fields plus Phase 3 Q&A answers,
+# ready for the render() function to compose into the on-disk file tree.
+#
+# Exercises: ≥1 subagent, ≥1 tool with mcp_url, ≥1 tool without mcp_url,
+# ≥1 plan, ≥1 project-specific failure mode — every code path in render().
+
+fn: gtm
+agent: content-agent
+
+prose: |
+  Creates short-form GTM content drafts from a topic brief. Given a project's
+  ICPs and recent posts, drafts 2-3 candidate posts in the project's voice,
+  routes them to a critic subagent for voice/brand checks, and outputs approved
+  drafts to the run log for the user to copy into their CMS or social tool.
+
+grounded:
+  purpose: |
+    Creates short-form GTM content drafts in a project's voice. One run takes
+    a topic brief plus the project's ICPs and produces 2-3 candidate posts
+    that have been critiqued for voice fit, brand safety, and ICP relevance.
+
+  orchestrator_inputs:
+    - "plan: name of a plan in plans/ (e.g., draft-post)"
+    - "project: project slug (must match a folder in projects/)"
+    - "topic: short brief of what to write about (1-2 sentences)"
+
+  steps:
+    - id: parse-brief
+      title: Parse topic brief
+      description: |
+        Extract subject, target ICP, tone, and call-to-action from the user-supplied
+        topic brief. Surface any gaps before proceeding to drafting.
+
+    - id: draft-candidates
+      title: Draft 2-3 candidates
+      description: |
+        Generate variant drafts in the project's voice using brand-book.md and
+        voice.md as substrate. Each candidate differs in opening hook or angle.
+
+    - id: critique-and-revise
+      title: Critique and revise
+      description: |
+        Send drafts to the critic subagent. Apply revision suggestions; emit only
+        candidates that pass the critic's quality bar.
+
+  outputs_description: |
+    Approved post drafts written to the run log, one entry per candidate with
+    its critic score and any revision history. Drafts not surfaced to external
+    systems by this agent — copy/posting is a separate user action.
+
+uncertain_answers:
+  subagents:
+    - name: critic
+      role: |
+        Reviews each candidate draft for voice fit, ICP relevance, brand safety,
+        and do-and-don't compliance. Returns pass/fail with specific feedback.
+      inputs: |
+        - draft (object): candidate from the writer step
+        - voice (markdown): project voice.md
+        - icps (markdown): all matched ICP personas
+        - brand_book (markdown): project brand-book.md
+        - do_and_dont (markdown, optional)
+      output: |
+        verdict: pass | fail with per-category scores (voice_match, icp_match,
+        brand_safety) and specific revision suggestions.
+      tools: []
+      boundaries: |
+        Does not rewrite. Lists issues; the next iteration in the parent plan
+        re-runs draft-candidates with the suggestions applied.
+      quality_bar: |
+        A pass means the draft is publishable without further editing.
+        Any voice-match or brand-safety issue is a blocker.
+
+  tools:
+    - name: drive
+      required: true
+      description: Read project voice.md and brand-book.md from Google Drive
+      mcp_url: https://drive.googleapis.com/mcp/v1
+
+    - name: linear
+      required: false
+      description: Optionally link drafts to a Linear ticket for tracking
+
+  plans:
+    - name: draft-post
+      description: |
+        Single-topic short-form draft cycle. Takes a topic brief, produces 2-3
+        critiqued candidate posts ready for user review.
+      steps:
+        - { id: parse-brief, title: Parse topic brief }
+        - { id: draft-candidates, title: "Draft 2-3 candidates" }
+        - { id: critique-and-revise, title: Critique and revise }
+
+  failure_modes:
+    - "No matching ICP found in project guidelines — abort with a list of available ICPs"
+    - "Voice file missing or empty — abort with link to onboarding guide"
+
+slash_command:
+  description: GTM content agent — drafts short-form posts in project voice

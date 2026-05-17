@@ -1,0 +1,9 @@
+{
+  "_comment": "Agent-scoped MCPs for content-agent. Universal MCPs are inherited from the workspace .mcp.json.",
+  "mcpServers": {
+    "drive": {
+      "type": "http",
+      "url": "https://drive.googleapis.com/mcp/v1"
+    }
+  }
+}

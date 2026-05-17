@@ -1,0 +1,18 @@
+plan: draft-post
+description: |
+  Single-topic short-form draft cycle. Takes a topic brief, produces 2-3
+  critiqued candidate posts ready for user review.
+
+# Inputs schema — fill in per-invocation arguments here.
+inputs: {}
+
+# Outputs schema — what this plan returns to the caller.
+outputs: {}
+
+steps:
+  - id: parse-brief
+    title: Parse topic brief
+  - id: draft-candidates
+    title: Draft 2-3 candidates
+  - id: critique-and-revise
+    title: Critique and revise
