@@ -81,6 +81,34 @@ export function userCancelledInstall(): RosterError {
   });
 }
 
+export function linuxClaudeUnsupportedError(): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} Claude Desktop scheduling is not available on Linux`,
+    body: [
+      '  ADR-0001: Linux Claude has no Desktop Scheduled Tasks surface',
+      '  (the Schedule sidebar is macOS/Windows-only).',
+    ].join('\n'),
+    remedy: [
+      `  Either:`,
+      `    - Use ${chalk.bold('--tool codex')} (Codex supports Linux via codex exec cron), or`,
+      `    - Pass ${chalk.bold('--cloud-routine')} to use Anthropic Cloud Routines (requires GitHub-connected workspace).`,
+    ].join('\n'),
+    exitCode: EXIT_ERROR,
+  });
+}
+
+export function cloudRoutineNotImplementedError(): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} --cloud-routine is not yet implemented`,
+    body: [
+      '  The Cloud Routine install path (Anthropic-hosted, GitHub-connected) is',
+      '  reserved for a follow-up ADR. ROS-34 ships local Desktop hand-off only.',
+    ].join('\n'),
+    remedy: `  Use ${chalk.bold('--tool codex')} on Linux, or run roster on macOS/Windows.`,
+    exitCode: EXIT_ERROR,
+  });
+}
+
 export function unexpectedError(err: unknown): RosterError {
   const message = err instanceof Error ? err.message : String(err);
   const wrapped = new RosterError({
