@@ -573,7 +573,7 @@ Cron jobs:
 4. stdout/stderr → `logs/cron/<job>-<YYYY-MM-DD>.log`
 5. Run output → the agent's instance `log/runs/` as normal
 
-Install: `bash scripts/cron/install.sh`. Add a job: `bash scripts/new-cron.sh <job-name>`.
+*(Cron primitives — `scripts/cron/install.sh`, `scripts/new-cron.sh`, and the wrapper layout — ship in Phase 2.5; see [ROS-39](https://linear.app/firatdogan/issue/ROS-39) for the canonical reference once available.)*
 
 ## External-action gates
 
