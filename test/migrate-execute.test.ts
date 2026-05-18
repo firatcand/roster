@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, statSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { scanSourceWorkspace } from '../src/lib/migrate/scan.ts';
-import { planMigration } from '../src/lib/migrate/plan.ts';
+import { planMigration, type MigrationPlan } from '../src/lib/migrate/plan.ts';
 import { executeMigration, renderInstallScript } from '../src/lib/migrate/execute.ts';
 import { readManifest } from '../src/lib/migrate/manifest.ts';
 import { buildAgentTeamMini } from './fixtures/agent-team-mini/_setup.ts';
@@ -178,4 +178,60 @@ test('renderInstallScript: emits Claude + Codex sections (both ready-to-run post
     fix.cleanup();
     dst.cleanup();
   }
+});
+
+// ROS-68 — defense-in-depth: rendered install script must not have any
+// `rm -rf /` (or similar attacker-controlled suffix) escape from a `#`
+// comment, even if a malicious or malformed UnmappedWrapper / sourceDir /
+// destWorkspace carries embedded \n / \r. The crontab parser already
+// rejects newlines in wrapper fields, but the renderer must not rely on
+// a parser invariant for safety, and sourceDir/destWorkspace come from CLI.
+test('renderInstallScript: every `rm -rf /` substring stays inside a `#` comment under newline-bearing inputs (ROS-68)', () => {
+  const plan: MigrationPlan = {
+    sourceDir: '/src\nrm -rf /',
+    destWorkspace: '/dst\nrm -rf /',
+    scheduleInstalls: [],
+    unmappedWrappers: [
+      {
+        basename: 'evil\nrm -rf /',
+        cron: '0 9 * * *\nrm -rf /',
+        wrapperPath: '/safe.sh\nrm -rf /',
+      },
+    ],
+    pendingMoves: [],
+    logCopies: [],
+    envCopy: null,
+    agentMdNotes: [],
+    subscriptionWarnings: [],
+    manualSteps: [],
+    blockers: [],
+    trackedFiles: [],
+  };
+  const script = renderInstallScript(plan, '2026-05-18T00:00:00Z');
+  const lines = script.split('\n');
+
+  // Strongest invariant: any line containing the attacker payload MUST start
+  // with `#`. If any line carries the payload outside a comment, the
+  // generated script would execute it.
+  for (const l of lines) {
+    if (l.includes('rm -rf /')) {
+      assert.ok(l.startsWith('#'), `payload escaped a comment: ${JSON.stringify(l)}`);
+    }
+  }
+
+  // Header comment lines must be single-line.
+  const sourceLine = lines.find((l) => l.startsWith('# Source:'));
+  const destLine = lines.find((l) => l.startsWith('# Destination:'));
+  assert.notEqual(sourceLine, undefined, 'header `# Source:` line should appear');
+  assert.notEqual(destLine, undefined, 'header `# Destination:` line should appear');
+  assert.doesNotMatch(sourceLine!, /[\r\n]/, '# Source line must not contain CR/LF');
+  assert.doesNotMatch(destLine!, /[\r\n]/, '# Destination line must not contain CR/LF');
+
+  // TODO line: exactly one, single-line, with all three sanitized values.
+  const todoLines = lines.filter((l) => l.startsWith('# TODO'));
+  assert.equal(todoLines.length, 1, 'exactly one TODO line should appear');
+  assert.doesNotMatch(todoLines[0]!, /[\r\n]/, 'TODO line must not contain CR/LF');
+  assert.match(todoLines[0]!, /evil rm -rf \//);
+  assert.match(todoLines[0]!, /0 9 \* \* \* rm -rf \//);
+  assert.match(todoLines[0]!, /\/safe\.sh rm -rf \//);
 });
