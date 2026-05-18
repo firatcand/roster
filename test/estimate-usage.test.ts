@@ -9,6 +9,7 @@ import {
   makeFiresPerWeekFn,
   type EstimateReport,
 } from '../src/lib/estimate-usage.ts';
+import { buildListReport, renderListJson } from '../src/lib/schedule-list.ts';
 import type { PlanCeilings } from '../src/lib/plan-ceilings.ts';
 import { parseScheduleArgs } from '../src/lib/schedule-args.ts';
 
@@ -326,6 +327,96 @@ test('renderEstimateJson: envelope shape includes cwd, schedules, ceilings, warn
     assert.ok(Array.isArray(json.ceilings));
     assert.ok(Array.isArray(json.warnings));
     assert.equal(json.warn_threshold, 0.70);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('renderEstimateJson: per-row keys are a strict superset of renderListJson row keys', () => {
+  const dir = tmp();
+  try {
+    writeSchedules(
+      dir,
+      'ops',
+      `version: 1
+schedules:
+  - name: heartbeat
+    agent: noop
+    plan: noop
+    project: _demo
+    cron: "*/5 * * * *"
+    tool: codex
+    install_mode: via-cron
+    status: installed
+    subscription_attestation:
+      auth_mode: chatgpt
+      env_policy: cleared
+      codex_home: /Users/test/.codex
+`,
+    );
+    write(dir, 'ops/noop/agent.md', '# noop\n');
+    write(dir, 'roster/ops/state.md', '2026-05-18T10:30:00Z | ops/noop/noop/_demo | success\n');
+    const now = new Date('2026-05-18T10:31:00Z');
+    const list = JSON.parse(renderListJson(buildListReport(dir, now))) as {
+      schedules: Array<Record<string, unknown>>;
+    };
+    const est = JSON.parse(
+      renderEstimateJson(estimateUsage({ cwd: dir, now, ceilings: SMALL_CEILINGS })),
+    ) as { schedules: Array<Record<string, unknown>> };
+
+    assert.equal(list.schedules.length, 1);
+    assert.equal(est.schedules.length, 1);
+
+    const listKeys = Object.keys(list.schedules[0]!);
+    const estKeys = new Set(Object.keys(est.schedules[0]!));
+    for (const k of listKeys) {
+      assert.ok(estKeys.has(k), `estimate row missing key '${k}' present in list row`);
+    }
+
+    // Values for the shared keys must match between the two envelopes.
+    const e = est.schedules[0]!;
+    const l = list.schedules[0]!;
+    assert.equal(e.install_mode, l.install_mode);
+    assert.equal(e.status, l.status);
+    assert.equal(e.last_run, l.last_run);
+    assert.equal(e.last_status, l.last_status);
+    assert.equal(e.next_due_at, l.next_due_at);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('renderEstimateJson: nullable fields render as null (not omitted) with no run history', () => {
+  const dir = tmp();
+  try {
+    writeSchedules(
+      dir,
+      'gtm',
+      `version: 1
+schedules:
+  - name: never-fired
+    agent: sdr
+    plan: cold-outreach
+    project: _demo
+    cron: '@daily'
+    tool: claude
+    install_mode: ui-handoff
+    status: pending-ui-install
+`,
+    );
+    write(dir, 'gtm/sdr/agent.md', '# SDR\n');
+    const report = estimateUsage({ cwd: dir, now: T0, ceilings: SMALL_CEILINGS });
+    const json = JSON.parse(renderEstimateJson(report)) as {
+      schedules: Array<Record<string, unknown>>;
+    };
+    const row = json.schedules[0]!;
+    assert.ok('last_run' in row, 'last_run key must be present');
+    assert.ok('last_status' in row, 'last_status key must be present');
+    assert.equal(row.last_run, null);
+    assert.equal(row.last_status, null);
+    assert.equal(row.install_mode, 'ui-handoff');
+    assert.equal(row.status, 'pending-ui-install');
+    assert.equal(typeof row.next_due_at, 'string'); // @daily always has a next fire
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

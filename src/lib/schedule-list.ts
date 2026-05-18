@@ -127,7 +127,7 @@ function tildify(path: string): string {
   return path;
 }
 
-function fmtTs(d: Date): string {
+export function fmtTs(d: Date): string {
   return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
