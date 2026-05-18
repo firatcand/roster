@@ -11,7 +11,20 @@ import {
   type CodexInstallOpts,
   type CodexInstallResult,
 } from '../lib/codex-install.ts';
+import { buildListReport, renderListText, renderListJson, type ListReport } from '../lib/schedule-list.ts';
+import {
+  executeRemove,
+  renderRemovePreview,
+  renderRemoveSuccess,
+  type ScheduleRemoveResult,
+  type ScheduleRemoveOpts,
+} from '../lib/schedule-remove.ts';
+import { executeRun, type ScheduleRunOpts, type ScheduleRunResult } from '../lib/schedule-run.ts';
+import { resolveScheduleByName } from '../lib/schedule-resolve.ts';
+import { readStateMd, findRecentRuns } from '../lib/schedule-state.ts';
+import { nextFireTime } from '../lib/cron-next.ts';
 import { getPlatform } from '../lib/platform.ts';
+import { join } from 'node:path';
 import {
   EXIT_OK,
   EXIT_ERROR,
@@ -240,4 +253,250 @@ export function executeScheduleInstall(opts: ScheduleInstallOptions): number {
     for (const line of renderCodexInstallText(result, opts.dryRun)) console.log(line);
   }
   return EXIT_OK;
+}
+
+// ── list ─────────────────────────────────────────────────────────────────
+
+export type ScheduleListOptions = {
+  cwd: string;
+  json: boolean;
+  silent: boolean;
+};
+
+export function executeScheduleList(opts: ScheduleListOptions): number {
+  const report: ListReport = buildListReport(opts.cwd);
+  if (opts.json) {
+    console.log(renderListJson(report));
+  } else if (!opts.silent) {
+    for (const line of renderListText(report)) console.log(line);
+  }
+  // Warnings emitted to stderr so JSON consumers can still pipe stdout cleanly.
+  for (const w of report.warnings) {
+    if (!opts.silent) process.stderr.write(`${chalk.yellow('!')} ${w}\n`);
+  }
+  return EXIT_OK;
+}
+
+// ── status ────────────────────────────────────────────────────────────────
+
+export type ScheduleStatusOptions = {
+  cwd: string;
+  name: string;
+  functionName: string | undefined;
+  json: boolean;
+  silent: boolean;
+};
+
+const HISTORY_LIMIT = 5;
+
+function fmtTs(d: Date): string {
+  return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+function relativeAgo(now: Date, then: Date): string {
+  const ms = now.getTime() - then.getTime();
+  if (ms < 0) {
+    const abs = -ms;
+    const min = Math.round(abs / 60000);
+    if (min < 1) return 'in <1 min';
+    if (min < 60) return `in ${min} min`;
+    const hr = Math.round(min / 60);
+    if (hr < 24) return `in ${hr} hr`;
+    return `in ${Math.round(hr / 24)} d`;
+  }
+  const min = Math.round(ms / 60000);
+  if (min < 1) return '<1 min ago';
+  if (min < 60) return `${min} min ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr} hr ago`;
+  return `${Math.round(hr / 24)} d ago`;
+}
+
+export function executeScheduleStatus(opts: ScheduleStatusOptions): number {
+  const resolved = resolveScheduleByName({
+    cwd: opts.cwd,
+    name: opts.name,
+    functionName: opts.functionName,
+  });
+
+  const stateMdPath = join(resolved.workspacePath, 'roster', resolved.functionName, 'state.md');
+  const state = readStateMd(stateMdPath);
+  const history = findRecentRuns(state.lines, resolved.functionName, resolved.entry.agent, resolved.entry.plan, HISTORY_LIMIT);
+  const lastRun = history[0];
+  const now = new Date();
+  const next = nextFireTime(resolved.entry.cron, now);
+  const nextDueAt = next.ok ? next.next : undefined;
+
+  if (opts.json) {
+    console.log(
+      JSON.stringify(
+        {
+          functionName: resolved.functionName,
+          name: resolved.entry.name,
+          agent: resolved.entry.agent,
+          plan: resolved.entry.plan,
+          tool: resolved.entry.tool,
+          install_mode: resolved.entry.install_mode,
+          cron: resolved.entry.cron,
+          status: resolved.entry.status,
+          last_run: lastRun?.timestamp ?? null,
+          last_status: lastRun?.status ?? null,
+          next_due_at: nextDueAt ? fmtTs(nextDueAt) : null,
+          history: history.map((h) => ({
+            ts: h.timestamp,
+            scope: h.scope,
+            status: h.status,
+          })),
+          malformed_state_lines: state.malformedCount,
+        },
+        null,
+        2,
+      ),
+    );
+    return EXIT_OK;
+  }
+
+  if (opts.silent) return EXIT_OK;
+
+  const lines: string[] = [''];
+  lines.push(chalk.bold(`roster schedule status ${resolved.entry.name}`));
+  lines.push('');
+  lines.push(`${chalk.bold('Schedule:')}     ${resolved.entry.name}`);
+  lines.push(`${chalk.bold('Function:')}     ${resolved.functionName}`);
+  lines.push(`${chalk.bold('Agent/plan:')}   ${resolved.entry.agent}/${resolved.entry.plan}`);
+  lines.push(`${chalk.bold('Tool:')}         ${resolved.entry.tool} (${resolved.entry.install_mode})`);
+  lines.push(`${chalk.bold('Cron:')}         ${resolved.entry.cron}`);
+  if (lastRun) {
+    const t = new Date(lastRun.timestamp);
+    lines.push(`${chalk.bold('Last run:')}    ${lastRun.timestamp} ${chalk.dim(`(${relativeAgo(now, t)})`)}`);
+    const statusColor = lastRun.status === 'success' ? chalk.green : lastRun.status === 'failed' ? chalk.red : chalk.yellow;
+    lines.push(`${chalk.bold('Last status:')} ${statusColor(lastRun.status)}`);
+  } else {
+    lines.push(`${chalk.bold('Last run:')}    ${chalk.dim('(never fired)')}`);
+    lines.push(`${chalk.bold('Last status:')} ${chalk.dim('-')}`);
+  }
+  if (nextDueAt) {
+    lines.push(`${chalk.bold('Next due:')}    ${fmtTs(nextDueAt)} ${chalk.dim(`(${relativeAgo(now, nextDueAt)})`)}`);
+  } else {
+    lines.push(`${chalk.bold('Next due:')}    ${chalk.dim(`(cannot compute: ${next.ok ? '' : next.reason})`)}`);
+  }
+
+  if (history.length > 1) {
+    lines.push('');
+    lines.push(chalk.bold(`History (last ${history.length}):`));
+    for (const h of history) {
+      const scopeProject = h.scope.split('/').slice(3).join('/');
+      lines.push(`  ${h.timestamp}  ${h.status.padEnd(8)}  ${chalk.dim(scopeProject)}`);
+    }
+  }
+  if (state.malformedCount > 0) {
+    lines.push('');
+    lines.push(chalk.yellow(`! ${state.malformedCount} malformed line${state.malformedCount === 1 ? '' : 's'} in state.md (skipped)`));
+  }
+  lines.push('');
+
+  for (const line of lines) console.log(line);
+  return EXIT_OK;
+}
+
+// ── remove ────────────────────────────────────────────────────────────────
+
+export type ScheduleRemoveOptions = {
+  cwd: string;
+  name: string;
+  functionName: string | undefined;
+  dryRun: boolean;
+  yes: boolean;
+  json: boolean;
+  silent: boolean;
+  // Test seam: bypasses prompt + CrontabIO. Plumbed through to executeRemove.
+  remove?: (opts: ScheduleRemoveOpts) => Promise<ScheduleRemoveResult>;
+};
+
+export async function executeScheduleRemove(opts: ScheduleRemoveOptions): Promise<number> {
+  const runner = opts.remove ?? executeRemove;
+
+  if (opts.dryRun) {
+    const result = await runner({
+      cwd: opts.cwd,
+      name: opts.name,
+      functionName: opts.functionName,
+      dryRun: true,
+      yes: true,
+    });
+    if (opts.json) {
+      console.log(
+        JSON.stringify({ ok: true, dryRun: true, ...resultToJson(result) }, null, 2),
+      );
+    } else if (!opts.silent) {
+      for (const line of renderRemovePreview(result)) console.log(line);
+      console.log(chalk.dim('--dry-run: nothing removed.'));
+      console.log('');
+    }
+    return EXIT_OK;
+  }
+
+  // When NOT --yes and NOT --silent, show the preview banner first so the
+  // confirm prompt has context. The runner's default confirm fires next.
+  if (!opts.yes && !opts.silent) {
+    const preview = await runner({
+      cwd: opts.cwd,
+      name: opts.name,
+      functionName: opts.functionName,
+      dryRun: true,
+      yes: true,
+    });
+    for (const line of renderRemovePreview(preview)) console.log(line);
+  }
+
+  const result = await runner({
+    cwd: opts.cwd,
+    name: opts.name,
+    functionName: opts.functionName,
+    dryRun: false,
+    yes: opts.yes,
+  });
+
+  if (opts.json) {
+    console.log(JSON.stringify({ ok: true, dryRun: false, ...resultToJson(result) }, null, 2));
+  } else if (!opts.silent) {
+    for (const line of renderRemoveSuccess(result)) console.log(line);
+  }
+  return EXIT_OK;
+}
+
+function resultToJson(r: ScheduleRemoveResult): Record<string, unknown> {
+  return {
+    functionName: r.functionName,
+    name: r.name,
+    tool: r.tool,
+    installMode: r.installMode,
+    cronStripped: r.cronStripped,
+    cronMarkerMissing: r.cronMarkerMissing,
+    schedulesYamlPath: r.schedulesYamlPath,
+    fieldsDocPathHint: r.fieldsDocPathHint,
+    logPathHint: r.logPathHint,
+  };
+}
+
+// ── run ───────────────────────────────────────────────────────────────────
+
+export type ScheduleRunOptions = {
+  cwd: string;
+  name: string;
+  functionName: string | undefined;
+  silent: boolean;
+  // Test seam: same factory used by executeRun.
+  run?: (opts: ScheduleRunOpts) => Promise<ScheduleRunResult>;
+};
+
+export async function executeScheduleRun(opts: ScheduleRunOptions): Promise<number> {
+  const runner = opts.run ?? executeRun;
+  const result = await runner({
+    cwd: opts.cwd,
+    name: opts.name,
+    functionName: opts.functionName,
+    silent: opts.silent,
+  });
+  return result.exitCode;
 }

@@ -6,6 +6,7 @@ import {
   upsertCronEntry,
   findMarkerBlocks,
   getMarkerStrings,
+  removeCronEntry,
   type CrontabIO,
 } from '../src/lib/codex-cron.ts';
 import { RosterError } from '../src/lib/errors.ts';
@@ -288,4 +289,91 @@ test('getMarkerStrings: begin/end are stable', () => {
   const { begin, end } = getMarkerStrings('foo');
   assert.ok(begin.startsWith('# roster:schedule:foo:begin'));
   assert.equal(end, '# roster:schedule:foo:end');
+});
+
+// ── removeCronEntry ───────────────────────────────────────────────────────
+
+test('removeCronEntry: no crontab at all → returns removed=false', () => {
+  const io = noCrontabIO();
+  const r = removeCronEntry(io, 'heartbeat');
+  assert.equal(r.removed, false);
+  assert.equal(io.written.length, 0);
+});
+
+test('removeCronEntry: marker block absent → returns removed=false without writing', () => {
+  const io = fakeIO('# user comment\n0 9 * * * /bin/true\n');
+  const r = removeCronEntry(io, 'heartbeat');
+  assert.equal(r.removed, false);
+  assert.equal(io.written.length, 0);
+});
+
+test('removeCronEntry: lone managed block → leaves empty crontab', () => {
+  const initial =
+    '# roster:schedule:heartbeat:begin (do not edit; managed by `roster schedule install`)\n' +
+    '* * * * * /bin/echo hi\n' +
+    '# roster:schedule:heartbeat:end\n';
+  const io = fakeIO(initial);
+  const r = removeCronEntry(io, 'heartbeat');
+  assert.equal(r.removed, true);
+  assert.equal(io.written.length, 1);
+  assert.equal(io.current, '');
+});
+
+test('removeCronEntry: managed block among other user lines → preserves user lines', () => {
+  const initial =
+    '# user comment\n' +
+    '0 9 * * * /bin/true\n' +
+    '\n' +
+    '# roster:schedule:heartbeat:begin (do not edit; managed by `roster schedule install`)\n' +
+    '* * * * * /bin/echo hi\n' +
+    '# roster:schedule:heartbeat:end\n' +
+    '\n' +
+    '# another user line\n' +
+    '0 10 * * * /bin/false\n';
+  const io = fakeIO(initial);
+  removeCronEntry(io, 'heartbeat');
+  const after = io.current;
+  assert.ok(after.includes('# user comment'));
+  assert.ok(after.includes('# another user line'));
+  assert.ok(after.includes('0 9 * * * /bin/true'));
+  assert.ok(after.includes('0 10 * * * /bin/false'));
+  assert.ok(!after.includes('roster:schedule:heartbeat'));
+});
+
+test('removeCronEntry: duplicate marker blocks → throws RosterError', () => {
+  const initial =
+    '# roster:schedule:heartbeat:begin (do not edit; managed by `roster schedule install`)\n' +
+    '* * * * * /bin/echo first\n' +
+    '# roster:schedule:heartbeat:end\n' +
+    '# roster:schedule:heartbeat:begin (do not edit; managed by `roster schedule install`)\n' +
+    '* * * * * /bin/echo second\n' +
+    '# roster:schedule:heartbeat:end\n';
+  const io = fakeIO(initial);
+  assert.throws(() => removeCronEntry(io, 'heartbeat'), RosterError);
+  assert.equal(io.written.length, 0);
+});
+
+test('removeCronEntry: missing :end marker → throws RosterError (refuse to guess)', () => {
+  const initial =
+    '# roster:schedule:heartbeat:begin (do not edit; managed by `roster schedule install`)\n' +
+    '* * * * * /bin/echo hi\n';
+  const io = fakeIO(initial);
+  assert.throws(() => removeCronEntry(io, 'heartbeat'), RosterError);
+  assert.equal(io.written.length, 0);
+});
+
+test('removeCronEntry: only removes the requested schedule, not other managed blocks', () => {
+  const initial =
+    '# roster:schedule:heartbeat:begin (do not edit; managed by `roster schedule install`)\n' +
+    '* * * * * /bin/echo hi\n' +
+    '# roster:schedule:heartbeat:end\n' +
+    '\n' +
+    '# roster:schedule:other:begin (do not edit; managed by `roster schedule install`)\n' +
+    '0 9 * * * /bin/echo other\n' +
+    '# roster:schedule:other:end\n';
+  const io = fakeIO(initial);
+  removeCronEntry(io, 'heartbeat');
+  assert.ok(!io.current.includes('roster:schedule:heartbeat'));
+  assert.ok(io.current.includes('roster:schedule:other:begin'));
+  assert.ok(io.current.includes('/bin/echo other'));
 });

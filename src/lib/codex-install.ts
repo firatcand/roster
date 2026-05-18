@@ -1,5 +1,4 @@
 import { mkdirSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import chalk from 'chalk';
@@ -26,6 +25,7 @@ import {
   upsertCronEntry,
   defaultCrontabIO,
   getMarkerStrings,
+  resolveCodexBinaryPath,
   type CrontabIO,
 } from './codex-cron.ts';
 
@@ -61,24 +61,6 @@ export type CodexInstallResult = {
 };
 
 const KEBAB_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-
-function resolveCodexBinaryPath(env: NodeJS.ProcessEnv, override: string | undefined): string {
-  if (override !== undefined && override !== '') return override;
-  const fromEnv = env['ROSTER_CODEX_PATH'];
-  if (fromEnv !== undefined && fromEnv !== '') return fromEnv;
-  // Resolve via `command -v` (POSIX) so we get the binary the user's $PATH would pick.
-  const r = spawnSync('/bin/sh', ['-c', 'command -v codex'], { encoding: 'utf8', env });
-  if (r.status === 0) {
-    const out = (r.stdout ?? '').trim();
-    if (out.length > 0) return out;
-  }
-  throw new RosterError({
-    header: `${chalk.red.bold('roster:')} codex binary not found on PATH`,
-    body: '  Install codex CLI (https://developers.openai.com/codex) and ensure it is on your PATH.',
-    remedy: '  Or pass ROSTER_CODEX_PATH=/abs/path/to/codex when invoking roster.',
-    exitCode: EXIT_ERROR,
-  });
-}
 
 export function renderCodexHandoffDoc(args: {
   name: string;

@@ -227,6 +227,46 @@ assert_contains gtm/test-agent/projects/bindings-test-co/config/default.yaml "TO
 "$ROSTER_BIN" init my-test-workspace --silent --no-git --force
 assert_count .gitignore "# Roster defaults" 1 "Roster defaults block appended exactly once"
 
+# 6. Schedule list/status/remove smoke (ROS-36). Uses Claude UI-handoff path
+#    only — codex install requires preflight (env-cleared, ~/.codex present)
+#    which the smoke sandbox doesn't provide; codex paths are covered by unit
+#    tests with mocked spawn + crontabIO.
+echo ""
+echo "===> 6. Schedule list/status/remove (ROS-36)"
+
+# list on a fresh workspace → no schedules registered
+LIST_OUT=$("$ROSTER_BIN" schedule list 2>&1)
+echo "$LIST_OUT" | grep -q "no schedules registered" && pass "list (empty): prints no-schedules message" || fail "list (empty)"
+
+# Install a claude schedule, then exercise list/status/remove against it.
+"$ROSTER_BIN" schedule install ops/heartbeat noop --cron '*/5 * * * *' --tool claude --silent
+assert "-f roster/ops/schedules.yaml" "schedule install: schedules.yaml written"
+
+LIST_OUT=$("$ROSTER_BIN" schedule list 2>&1)
+echo "$LIST_OUT" | grep -q "heartbeat-noop" && pass "list: shows installed schedule" || fail "list: missing schedule name"
+echo "$LIST_OUT" | grep -q "claude" && pass "list: shows tool=claude" || fail "list: missing tool column"
+
+# status on never-fired schedule
+STATUS_OUT=$("$ROSTER_BIN" schedule status heartbeat-noop 2>&1)
+echo "$STATUS_OUT" | grep -q "Schedule:" && pass "status: prints schedule metadata" || fail "status: missing metadata"
+echo "$STATUS_OUT" | grep -q "never fired" && pass "status (never fired): graceful default" || fail "status: never-fired path"
+
+# remove --dry-run leaves YAML intact
+"$ROSTER_BIN" schedule remove heartbeat-noop --dry-run --silent
+assert_contains roster/ops/schedules.yaml "heartbeat-noop" "remove --dry-run: YAML untouched"
+
+# remove --yes strips the entry
+"$ROSTER_BIN" schedule remove heartbeat-noop --yes --silent
+if grep -q "heartbeat-noop" roster/ops/schedules.yaml 2>/dev/null; then
+  fail "remove --yes: YAML still contains entry"
+else
+  pass "remove --yes: YAML entry stripped"
+fi
+
+# list after remove → empty again
+LIST_OUT=$("$ROSTER_BIN" schedule list 2>&1)
+echo "$LIST_OUT" | grep -q "heartbeat-noop" && fail "list (after remove): still shows entry" || pass "list (after remove): empty"
+
 # Summary
 echo ""
 echo "===> $PASS_COUNT passed, $FAIL_COUNT failed"

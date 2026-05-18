@@ -1,10 +1,14 @@
 import { TOOL_VALUES, type ToolValue } from './schedule-schema.ts';
 
-export type ScheduleSubcommand = 'validate' | 'install';
+export type ScheduleSubcommand = 'validate' | 'install' | 'list' | 'remove' | 'status' | 'run';
 
 export const SCHEDULE_SUBCOMMANDS: ReadonlySet<ScheduleSubcommand> = new Set<ScheduleSubcommand>([
   'validate',
   'install',
+  'list',
+  'remove',
+  'status',
+  'run',
 ]);
 
 const SUBCOMMAND_LIST = Array.from(SCHEDULE_SUBCOMMANDS).join(' | ');
@@ -38,6 +42,41 @@ export type ParsedScheduleArgs =
       silent: boolean;
       cwd: string | undefined;
     }
+  | {
+      kind: 'ok';
+      subcommand: 'list';
+      json: boolean;
+      silent: boolean;
+      cwd: string | undefined;
+    }
+  | {
+      kind: 'ok';
+      subcommand: 'remove';
+      name: string;
+      functionName: string | undefined;
+      dryRun: boolean;
+      yes: boolean;
+      json: boolean;
+      silent: boolean;
+      cwd: string | undefined;
+    }
+  | {
+      kind: 'ok';
+      subcommand: 'status';
+      name: string;
+      functionName: string | undefined;
+      json: boolean;
+      silent: boolean;
+      cwd: string | undefined;
+    }
+  | {
+      kind: 'ok';
+      subcommand: 'run';
+      name: string;
+      functionName: string | undefined;
+      silent: boolean;
+      cwd: string | undefined;
+    }
   | { kind: 'err'; message: string };
 
 function isScheduleSubcommand(value: string): value is ScheduleSubcommand {
@@ -65,7 +104,11 @@ export function parseScheduleArgs(args: readonly string[]): ParsedScheduleArgs {
   }
 
   if (first === 'validate') return parseValidate(rest);
-  return parseInstall(rest);
+  if (first === 'install') return parseInstall(rest);
+  if (first === 'list') return parseList(rest);
+  if (first === 'remove') return parseNamed(rest, 'remove');
+  if (first === 'status') return parseNamed(rest, 'status');
+  return parseNamed(rest, 'run');
 }
 
 function parseValidate(rest: readonly string[]): ParsedScheduleArgs {
@@ -227,6 +270,126 @@ function parseInstall(rest: readonly string[]): ParsedScheduleArgs {
     dryRun,
     cloudRoutine,
     json,
+    silent,
+    cwd,
+  };
+}
+
+function parseList(rest: readonly string[]): ParsedScheduleArgs {
+  let json = false;
+  let silent = false;
+  let cwd: string | undefined;
+
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i]!;
+    if (arg === '--json') json = true;
+    else if (arg === '--silent') silent = true;
+    else if (arg === '--cwd') {
+      const next = rest[i + 1];
+      if (next === undefined) return { kind: 'err', message: '--cwd requires a path argument' };
+      cwd = next;
+      i++;
+    } else if (arg.startsWith('--cwd=')) {
+      cwd = arg.slice('--cwd='.length);
+    } else if (arg.startsWith('-')) {
+      return { kind: 'err', message: `unknown flag for 'schedule list': ${arg}` };
+    } else {
+      return { kind: 'err', message: `unexpected positional argument for 'schedule list': ${arg}` };
+    }
+  }
+  return { kind: 'ok', subcommand: 'list', json, silent, cwd };
+}
+
+// Shared parser for remove/status/run — each takes a single positional <name>
+// plus optional --function / --json / --silent / --cwd / (remove-only:
+// --dry-run / --yes).
+function parseNamed(rest: readonly string[], subcommand: 'remove' | 'status' | 'run'): ParsedScheduleArgs {
+  const positionals: string[] = [];
+  let functionName: string | undefined;
+  let json = false;
+  let silent = false;
+  let cwd: string | undefined;
+  let dryRun = false;
+  let yes = false;
+
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i]!;
+    if (arg === '--function') {
+      const next = rest[i + 1];
+      if (next === undefined || next.startsWith('-')) {
+        return { kind: 'err', message: '--function requires a value' };
+      }
+      if (functionName !== undefined) return { kind: 'err', message: 'flag --function specified more than once' };
+      functionName = next;
+      i++;
+    } else if (arg.startsWith('--function=')) {
+      if (functionName !== undefined) return { kind: 'err', message: 'flag --function specified more than once' };
+      functionName = arg.slice('--function='.length);
+    } else if (arg === '--cwd') {
+      const next = rest[i + 1];
+      if (next === undefined) return { kind: 'err', message: '--cwd requires a path argument' };
+      cwd = next;
+      i++;
+    } else if (arg.startsWith('--cwd=')) {
+      cwd = arg.slice('--cwd='.length);
+    } else if (arg === '--json') {
+      if (subcommand === 'run') return { kind: 'err', message: "--json is not supported for 'schedule run' (streams child stdout)" };
+      json = true;
+    } else if (arg === '--silent') {
+      silent = true;
+    } else if (arg === '--dry-run') {
+      if (subcommand !== 'remove') return { kind: 'err', message: `--dry-run is only supported for 'schedule remove'` };
+      dryRun = true;
+    } else if (arg === '--yes' || arg === '-y') {
+      if (subcommand !== 'remove') return { kind: 'err', message: `--yes is only supported for 'schedule remove'` };
+      yes = true;
+    } else if (arg.startsWith('-')) {
+      return { kind: 'err', message: `unknown flag for 'schedule ${subcommand}': ${arg}` };
+    } else {
+      positionals.push(arg);
+    }
+  }
+
+  if (positionals.length !== 1) {
+    return {
+      kind: 'err',
+      message:
+        positionals.length === 0
+          ? `missing positional <name> for 'schedule ${subcommand}'`
+          : `'schedule ${subcommand}' expected 1 positional argument <name>, got ${positionals.length}`,
+    };
+  }
+
+  const name = positionals[0]!;
+  if (subcommand === 'remove') {
+    return {
+      kind: 'ok',
+      subcommand: 'remove',
+      name,
+      functionName,
+      dryRun,
+      yes,
+      json,
+      silent,
+      cwd,
+    };
+  }
+  if (subcommand === 'status') {
+    return {
+      kind: 'ok',
+      subcommand: 'status',
+      name,
+      functionName,
+      json,
+      silent,
+      cwd,
+    };
+  }
+  return {
+    kind: 'ok',
+    subcommand: 'run',
+    name,
+    functionName,
     silent,
     cwd,
   };
