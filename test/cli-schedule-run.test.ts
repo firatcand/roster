@@ -147,7 +147,7 @@ test('executeRun (codex): spawns codex exec with workspace + prompt, uses NON-sc
       name: 'heartbeat',
       functionName: undefined,
       silent: true,
-        dryRun: false,
+      dryRun: false,
       spawn: fakeSpawn,
       env: interactiveEnv,
       homeDir: home,
@@ -189,7 +189,7 @@ test('executeRun (codex): child non-zero exit propagates to result.exitCode', as
       name: 'heartbeat',
       functionName: undefined,
       silent: true,
-        dryRun: false,
+      dryRun: false,
       spawn: fakeSpawn,
       env: { HOME: home, ROSTER_CODEX_PATH: '/opt/test/codex' },
       homeDir: home,
@@ -217,7 +217,7 @@ test('executeRun (codex): refuses when OPENAI_API_KEY in env (codex finding #4)'
         name: 'heartbeat',
         functionName: undefined,
         silent: true,
-        dryRun: false,
+      dryRun: false,
         spawn: fakeSpawn,
         env: {
           HOME: home,
@@ -250,7 +250,7 @@ test('executeRun (codex): refuses when CODEX_API_KEY in env', async () => {
         name: 'heartbeat',
         functionName: undefined,
         silent: true,
-        dryRun: false,
+      dryRun: false,
         spawn: (() => new EventEmitter() as never) as never,
         env: { HOME: home, CODEX_API_KEY: 'leaked', ROSTER_CODEX_PATH: '/opt/test/codex' },
         homeDir: home,
@@ -274,7 +274,7 @@ test('executeRun (codex): refuses when CODEX_HOME points elsewhere', async () =>
         name: 'heartbeat',
         functionName: undefined,
         silent: true,
-        dryRun: false,
+      dryRun: false,
         spawn: (() => new EventEmitter() as never) as never,
         env: {
           HOME: home,
@@ -327,22 +327,60 @@ test('executeRun (codex) --dry-run: prints would-be command, spawn NOT called, r
   try {
     writeSchedules(root, 'ops', yamlCodex);
     let spawnCalls = 0;
-    const result = await executeRun({
-      cwd: root,
-      name: 'heartbeat',
-      functionName: undefined,
-      silent: false,
-      dryRun: true,
-      spawn: (() => {
-        spawnCalls++;
-        throw new Error('spawn must not be called under --dry-run');
-      }) as never,
-      env: { HOME: home, ROSTER_CODEX_PATH: '/opt/test/codex' },
-      homeDir: home,
-    });
+    const { out, result } = await captureStdout(() =>
+      executeRun({
+        cwd: root,
+        name: 'heartbeat',
+        functionName: undefined,
+        silent: false,
+        dryRun: true,
+        spawn: (() => {
+          spawnCalls++;
+          throw new Error('spawn must not be called under --dry-run');
+        }) as never,
+        env: { HOME: home, ROSTER_CODEX_PATH: '/opt/test/codex' },
+        homeDir: home,
+      }),
+    );
     assert.equal(spawnCalls, 0);
-    assert.equal(result.tool, 'codex');
-    assert.equal(result.exitCode, 0);
+    const r = result as { tool: string; exitCode: number };
+    assert.equal(r.tool, 'codex');
+    assert.equal(r.exitCode, 0);
+    assert.match(out, /--dry-run: spawn skipped\. Would run: \/opt\/test\/codex exec -C/);
+  } finally {
+    cleanup();
+    cleanupHome();
+  }
+});
+
+test('executeRun (codex) --dry-run: codex binary missing → uses placeholder, no command -v fork', async () => {
+  const { root, cleanup } = makeWorkspace();
+  const { home, cleanup: cleanupHome } = makePreflightHome();
+  try {
+    writeSchedules(root, 'ops', yamlCodex);
+    let spawnCalls = 0;
+    // No ROSTER_CODEX_PATH, no override — under non-dry-run this would throw
+    // because resolveCodexBinaryPath forks `command -v codex`. Under dry-run
+    // we expect a clean exit with the `<codex on PATH>` placeholder.
+    const { out, result } = await captureStdout(() =>
+      executeRun({
+        cwd: root,
+        name: 'heartbeat',
+        functionName: undefined,
+        silent: false,
+        dryRun: true,
+        spawn: (() => {
+          spawnCalls++;
+          throw new Error('spawn must not be called under --dry-run');
+        }) as never,
+        env: { HOME: home, PATH: '/nowhere' },
+        homeDir: home,
+      }),
+    );
+    assert.equal(spawnCalls, 0);
+    const r = result as { tool: string; exitCode: number };
+    assert.equal(r.exitCode, 0);
+    assert.match(out, /Would run: <codex on PATH> exec -C/);
   } finally {
     cleanup();
     cleanupHome();

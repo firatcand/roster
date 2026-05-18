@@ -122,7 +122,15 @@ export async function executeRun(opts: ScheduleRunOpts): Promise<ScheduleRunResu
     throw codexPreflightError(preflight.failures);
   }
 
-  const codexPath = resolveCodexBinaryPath(env, opts.codexBinaryPathOverride);
+  // Under --dry-run, avoid the `command -v codex` fork in resolveCodexBinaryPath
+  // (codex round-2 review). Use only the override + ROSTER_CODEX_PATH; fall back
+  // to a placeholder so dry-run previews succeed even when codex isn't installed.
+  let codexPath: string;
+  if (opts.dryRun) {
+    codexPath = opts.codexBinaryPathOverride ?? env['ROSTER_CODEX_PATH'] ?? '<codex on PATH>';
+  } else {
+    codexPath = resolveCodexBinaryPath(env, opts.codexBinaryPathOverride);
+  }
   for (const line of renderCodexBanner(resolved.workspacePath, prompt, resolved.entry.name, resolved.entry.install_mode, opts.silent)) {
     console.log(line);
   }
