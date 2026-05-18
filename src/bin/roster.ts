@@ -88,6 +88,7 @@ function printHelp(version: string): void {
     `  --tool <name>                ${chalk.dim('Install to a single tool: claude | codex | gemini')}`,
     `  --migrate                    ${chalk.dim('Upgrade pre-CONTEXT.md workspace, preserving CLAUDE.md content (init)')}`,
     `  --json                       ${chalk.dim('Emit machine-readable JSON (doctor, schedule validate)')}`,
+    `  --fix                        ${chalk.dim('Auto-fix broken symlinks + .env permissions (doctor)')}`,
     `  --cwd <dir>                  ${chalk.dim('Run schedule validate against a different cwd')}`,
     `  --dest <dir>                 ${chalk.dim('Destination workspace for migrate (default: cwd)')}`,
     `  --project <name>             ${chalk.dim('Project slug for schedule install (default: _demo)')}`,
@@ -399,7 +400,7 @@ function runDoctor(args: readonly string[]): number {
       exitCode: EXIT_ERROR,
     });
   }
-  const code = executeDoctor({ json: parsed.json, silent: parsed.silent, cwd: process.cwd() });
+  const code = executeDoctor({ json: parsed.json, silent: parsed.silent, fix: parsed.fix, cwd: process.cwd() });
   if (code === EXIT_NO_TOOLS && !parsed.json) {
     throw noToolsError(toolHints(allTools()));
   }

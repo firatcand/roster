@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, cpSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, statSync, symlinkSync, cpSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -16,6 +16,17 @@ function makeHomes(present: ReadonlyArray<'claude' | 'codex' | 'gemini'>): Homes
   const codex = join(root, 'codex');
   const gemini = join(root, 'gemini');
   for (const key of present) mkdirSync(join(root, key), { recursive: true });
+  // Seed a valid chatgpt-subscription auth.json for the codex preflight
+  // (wired into doctor as part of ROS-38). Without this, doctor's safety
+  // audit reports a billing-safety failure for every test that includes
+  // 'codex' in `present`, masking the actual assertion under test.
+  if (present.includes('codex')) {
+    writeFileSync(
+      join(codex, 'auth.json'),
+      JSON.stringify({ auth_mode: 'chatgpt', OPENAI_API_KEY: null }),
+      'utf8',
+    );
+  }
   return { root, claude, codex, gemini, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
@@ -199,6 +210,10 @@ test('--help mentions --json', () => {
   assert.match(r.stdout, /--json/);
 });
 
+// ui-handoff install_mode keeps the cron-drift audit silent (only --via-cron
+// codex entries are auditable against crontab). The pre-ROS-38 test fixture
+// used via-cron and relied on no drift check; the new doctor flags drift when
+// a registered via-cron entry has no matching crontab marker.
 const validScheduleYaml = `version: 1
 schedules:
   - name: cold-outreach-daily
@@ -207,8 +222,8 @@ schedules:
     project: _demo
     cron: "0 9 * * 1-5"
     tool: codex
-    install_mode: via-cron
-    status: installed
+    install_mode: ui-handoff
+    status: pending-ui-install
     subscription_attestation:
       auth_mode: chatgpt
       env_policy: cleared
@@ -388,4 +403,119 @@ test('doctor on non-win32: emits no workaround notice', () => {
   } finally {
     h.cleanup();
   }
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// ROS-38 — --fix tests
+// ──────────────────────────────────────────────────────────────────────
+
+test('doctor with .env mode 0644 → exit 1; doctor --fix → exit 0 + mode flips to 0600', () => {
+  if (process.platform === 'win32') return;
+  const h = makeHomes(['claude']);
+  try {
+    runCli(['install', '--all', '--silent'], envFor(h));
+    const ws = mkdtempSync(join(tmpdir(), 'roster-doctor-fix-env-'));
+    try {
+      const envPath = join(ws, '.env');
+      writeFileSync(envPath, 'API_KEY=secret\n');
+      chmodSync(envPath, 0o644);
+
+      const before = runCliInCwd(['doctor'], envFor(h), ws);
+      assert.equal(before.status, 1, `expected fail before fix: ${before.stdout}`);
+      assert.match(before.stdout, /\.env permissions/);
+
+      const fix = runCliInCwd(['doctor', '--fix'], envFor(h), ws);
+      assert.equal(fix.status, 0, `expected ok after fix: ${fix.stdout}`);
+      const finalMode = statSync(envPath).mode & 0o777;
+      assert.equal(finalMode.toString(8), '600', `.env should be 0600, got 0${finalMode.toString(8)}`);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('doctor --fix NEVER unsets exported ANTHROPIC_API_KEY (billing-safety contract)', () => {
+  const h = makeHomes(['claude', 'codex']);
+  try {
+    runCli(['install', '--all', '--silent'], envFor(h));
+    const env = { ...envFor(h), ANTHROPIC_API_KEY: 'sk-ant-test-leaked-key-xxx' };
+    const doc = runCli(['doctor', '--fix', '--json'], env);
+    // Status MUST stay non-zero — the env var is a billing-safety leak.
+    // If --fix ever silently unsets it (a future "helpful" extension), this
+    // assertion fails loudly.
+    assert.equal(doc.status, 1, 'doctor must keep exit=1 on billing-safety leak even with --fix');
+    const payload = JSON.parse(doc.stdout) as {
+      ok: boolean;
+      safety: { codexPreflight: { status: string; failures?: Array<{ check: string }> } };
+    };
+    assert.equal(payload.ok, false);
+    assert.equal(payload.safety.codexPreflight.status, 'fail');
+    const failures = payload.safety.codexPreflight.failures ?? [];
+    assert.ok(failures.some((f) => f.check === 'env_anthropic_api_key'), 'preflight still reports the leak');
+    // Cross-verify: the env var is still set on this process (we didn't accidentally clear it).
+    // (Doctor runs in a child process, so the parent env is untouched regardless;
+    // this test pins the assertion to the child-process safety contract.)
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('doctor --json payload includes safety, secrets, scheduling_drift sections', () => {
+  const h = makeHomes(['claude']);
+  try {
+    runCli(['install', '--all', '--silent'], envFor(h));
+    const ws = mkdtempSync(join(tmpdir(), 'roster-doctor-json-payload-'));
+    try {
+      const doc = runCliInCwd(['doctor', '--json'], envFor(h), ws);
+      const payload = JSON.parse(doc.stdout) as {
+        safety?: { bannedPatterns: { status: string } };
+        secrets?: { envPermissions: { status: string } };
+        scheduling_drift?: { cronDrift: { status: string } };
+      };
+      assert.ok(payload.safety, 'safety section present');
+      assert.ok(payload.secrets, 'secrets section present');
+      assert.ok(payload.scheduling_drift, 'scheduling_drift section present');
+      assert.ok(typeof payload.safety!.bannedPatterns.status === 'string');
+      assert.ok(typeof payload.secrets!.envPermissions.status === 'string');
+      assert.ok(typeof payload.scheduling_drift!.cronDrift.status === 'string');
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('doctor --json: payload.fix has stable shape (applied:false when --fix not used)', () => {
+  const h = makeHomes(['claude']);
+  try {
+    runCli(['install', '--all', '--silent'], envFor(h));
+    const ws = mkdtempSync(join(tmpdir(), 'roster-doctor-fix-shape-'));
+    try {
+      const noFix = runCliInCwd(['doctor', '--json'], envFor(h), ws);
+      const a = JSON.parse(noFix.stdout) as { fix: { applied: boolean; fixed: string[]; failed: unknown[] } };
+      // Codex 2nd-pass [MINOR/9]: fix MUST be an object, never null — otherwise
+      // `.fix.fixed[]` jq-style scripts break across runs.
+      assert.equal(a.fix.applied, false);
+      assert.ok(Array.isArray(a.fix.fixed));
+      assert.equal(a.fix.fixed.length, 0);
+      assert.ok(Array.isArray(a.fix.failed));
+
+      const withFix = runCliInCwd(['doctor', '--fix', '--json'], envFor(h), ws);
+      const b = JSON.parse(withFix.stdout) as { fix: { applied: boolean } };
+      assert.equal(b.fix.applied, true);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('doctor --help mentions --fix', () => {
+  const r = runCli(['--help'], {});
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /--fix/);
 });

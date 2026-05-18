@@ -24,12 +24,7 @@ claude
 
 Claude reads agent.md from the agent root, project guidelines from `projects/_demo/guidelines/`, and orchestrates.
 
-From cron, headlessly:
-
-```bash
-cd /path/to/agent-team
-claude -p "$(cat scripts/cron/wrappers/_demo-outreach-daily-prompt.txt)"
-```
+For scheduled runs, register the schedule with the native desktop scheduler via `roster schedule install` — see the Phase 2.5 scheduling guide. The subscription-only ban on `claude -p` and the Anthropic Agent SDK is enforced by `roster doctor`.
 
 ## Configuration
 
