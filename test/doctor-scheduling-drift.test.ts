@@ -350,3 +350,147 @@ test('runSchedulingDriftAudit: alt-skill warn does NOT flip ok', () => {
     cleanup();
   }
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// auditStaleFires (ROS-42)
+// ──────────────────────────────────────────────────────────────────────
+
+import { auditStaleFires } from '../src/lib/doctor-scheduling-drift.ts';
+import { exitPathFor } from '../src/lib/cron-exit-log.ts';
+import { utimesSync } from 'node:fs';
+
+function writeExit(cwd: string, name: string, code: string, mtimeUtc?: Date): void {
+  mkdirSync(join(cwd, 'logs', 'cron'), { recursive: true });
+  const p = exitPathFor(cwd, name);
+  writeFileSync(p, code, 'utf8');
+  if (mtimeUtc !== undefined) {
+    const sec = mtimeUtc.getTime() / 1000;
+    utimesSync(p, sec, sec);
+  }
+}
+
+function writeStateMd(cwd: string, fnName: string, lines: string[]): void {
+  const fnDir = join(cwd, 'roster', fnName);
+  mkdirSync(fnDir, { recursive: true });
+  writeFileSync(join(fnDir, 'state.md'), lines.join('\n') + '\n', 'utf8');
+}
+
+test('auditStaleFires: no schedules → ok empty', () => {
+  const { dir, cleanup } = mkTmp('stale-empty-');
+  try {
+    const r = auditStaleFires({ cwd: dir });
+    assert.equal(r.status, 'ok');
+    assert.equal(r.items.length, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test('auditStaleFires: failed last fire → status=fail, item.status=fail', () => {
+  const { dir, cleanup } = mkTmp('stale-failed-');
+  try {
+    writeSchedulesYaml(dir, 'gtm', [{
+      name: 'sdr', agent: 'sdr', plan: 'cold', project: '_demo',
+      cron: '0 9 * * 1-5', install_mode: 'via-cron',
+    }]);
+    writeExit(dir, 'sdr', '137');
+    const r = auditStaleFires({ cwd: dir });
+    assert.equal(r.status, 'fail');
+    assert.equal(r.items.length, 1);
+    if (r.items[0]!.status === 'fail') {
+      assert.equal(r.items[0]!.exitCode, 137);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('auditStaleFires: stale last_run → status=warn, item missed-window', () => {
+  const { dir, cleanup } = mkTmp('stale-warn-');
+  try {
+    writeSchedulesYaml(dir, 'gtm', [{
+      name: 'sdr', agent: 'sdr', plan: 'cold', project: '_demo',
+      cron: '0 9 * * 1-5', install_mode: 'via-cron',
+    }]);
+    writeStateMd(dir, 'gtm', ['2026-05-15T09:05:00Z | gtm/sdr/cold/_demo | success']);
+    const r = auditStaleFires({
+      cwd: dir,
+      now: new Date('2026-05-18T12:00:00Z'),
+    });
+    assert.equal(r.status, 'warn');
+    assert.equal(r.items.length, 1);
+    if (r.items[0]!.status === 'warn') {
+      assert.equal(r.items[0]!.reason, 'missed-window');
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('auditStaleFires: zero exit + recent state.md → ok recent-run', () => {
+  const { dir, cleanup } = mkTmp('stale-ok-');
+  try {
+    writeSchedulesYaml(dir, 'gtm', [{
+      name: 'sdr', agent: 'sdr', plan: 'cold', project: '_demo',
+      cron: '0 9 * * 1-5', install_mode: 'via-cron',
+    }]);
+    writeStateMd(dir, 'gtm', ['2026-05-18T09:05:00Z | gtm/sdr/cold/_demo | success']);
+    writeExit(dir, 'sdr', '0', new Date('2026-05-18T09:00:00Z'));
+    const r = auditStaleFires({
+      cwd: dir,
+      now: new Date('2026-05-18T10:00:00Z'),
+    });
+    assert.equal(r.status, 'ok');
+    if (r.items[0]!.status === 'ok') {
+      assert.equal(r.items[0]!.reason, 'recent-run');
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('runSchedulingDriftAudit: stale fires WARN does not flip ok; FAIL does', () => {
+  const { dir, cleanup } = mkTmp('aggregate-stale-');
+  try {
+    writeSchedulesYaml(dir, 'gtm', [{
+      name: 'sdr', agent: 'sdr', plan: 'cold', project: '_demo',
+      cron: '0 9 * * 1-5', install_mode: 'via-cron',
+    }]);
+    writeStateMd(dir, 'gtm', ['2026-05-15T09:05:00Z | gtm/sdr/cold/_demo | success']);
+    // Crontab matches what install would render — drift=ok. Stale warns.
+    const expected = renderCronLine({
+      cron: '0 9 * * 1-5',
+      workspacePath: dir,
+      codexBinaryPath: FAKE_CODEX_BINARY,
+      prompt: buildOrchestratorPrompt('sdr', 'cold', '_demo'),
+      logPath: join(dir, 'logs', 'cron', 'sdr.log'),
+      exitPath: join(dir, 'logs', 'cron', 'sdr.exit'),
+    });
+    const crontab = buildMarkerBlock('sdr', expected);
+    const warnRun = runSchedulingDriftAudit({
+      cwd: dir,
+      homeDir: dir,
+      crontabIO: fakeCrontab(crontab),
+      env: { PATH: FAKE_CODEX_BINARY },
+      codexBinaryPathOverride: FAKE_CODEX_BINARY,
+      now: new Date('2026-05-18T12:00:00Z'),
+    });
+    assert.equal(warnRun.staleFires.status, 'warn');
+    assert.equal(warnRun.ok, true, 'WARN must not flip ok');
+
+    // Now add a failed exit → status flips to fail and ok flips to false.
+    writeExit(dir, 'sdr', '137');
+    const failRun = runSchedulingDriftAudit({
+      cwd: dir,
+      homeDir: dir,
+      crontabIO: fakeCrontab(crontab),
+      env: { PATH: FAKE_CODEX_BINARY },
+      codexBinaryPathOverride: FAKE_CODEX_BINARY,
+      now: new Date('2026-05-18T12:00:00Z'),
+    });
+    assert.equal(failRun.staleFires.status, 'fail');
+    assert.equal(failRun.ok, false, 'FAIL must flip ok');
+  } finally {
+    cleanup();
+  }
+});

@@ -19,6 +19,7 @@ import { runSafetyAudit, type SafetyAuditResult } from '../lib/doctor-safety-aud
 import {
   runSchedulingDriftAudit,
   type SchedulingDriftAuditResult,
+  type StaleFireAudit,
 } from '../lib/doctor-scheduling-drift.ts';
 import { scheduleFileSchema } from '../lib/schedule-schema.ts';
 import { isWindows } from '../lib/platform.ts';
@@ -364,6 +365,29 @@ function renderSecretsSection(audit: SecretsAuditResult): string[] {
   return lines;
 }
 
+function renderStaleFiresSection(stale: StaleFireAudit): string[] {
+  if (stale.items.length === 0) return [];
+  // Only render if at least one item is non-ok — for an all-OK workspace,
+  // a "Scheduling fires: OK" block is just noise (the rest of doctor is
+  // already success-by-absence in design).
+  const anyInteresting = stale.items.some((i) => i.status !== 'ok');
+  if (!anyInteresting) return [];
+
+  const lines: string[] = [''];
+  lines.push(chalk.bold('Scheduling fires') + chalk.dim(`  (grace: ${stale.graceMinutes}m)`));
+  for (const item of stale.items) {
+    if (item.status === 'ok') continue;
+    if (item.status === 'fail') {
+      const exitWord = item.exitCode === null ? '?' : String(item.exitCode);
+      lines.push(`  ${chalk.red('✗')} ${item.name.padEnd(20)} ${chalk.red('FAILED')} ${chalk.dim(`(exit ${exitWord} at ${item.firedAtUtc})`)}`);
+      lines.push(`      ${chalk.dim('→ Run ')}${chalk.bold('roster pending sync')}${chalk.dim(' to surface a HITL item.')}`);
+    } else if (item.status === 'warn') {
+      lines.push(`  ${chalk.yellow('!')} ${item.name.padEnd(20)} ${chalk.yellow('STALE')} ${chalk.dim(`(expected fresh run before ${item.expectedBeforeUtc})`)}`);
+    }
+  }
+  return lines;
+}
+
 function renderSchedulingDriftSection(audit: SchedulingDriftAuditResult): string[] {
   const drift = audit.cronDrift;
   const alt = audit.altSkillPath;
@@ -535,6 +559,7 @@ export function executeDoctor(opts: DoctorOptions): number {
     for (const line of renderWorkspaceSection(workspaceFinal)) console.log(line);
     for (const line of renderSchedulingSection(scheduling)) console.log(line);
     for (const line of renderSchedulingDriftSection(schedulingDrift)) console.log(line);
+    for (const line of renderStaleFiresSection(schedulingDrift.staleFires)) console.log(line);
     for (const line of renderSafetySection(safety)) console.log(line);
     for (const line of renderSecretsSection(secrets)) console.log(line);
     for (const line of renderFixSection(fixOutcome)) console.log(line);
