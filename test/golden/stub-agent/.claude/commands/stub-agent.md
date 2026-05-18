@@ -1,6 +1,6 @@
 ---
 name: stub-agent
-description: stub-fn agent — TODO: fill in description
+description: "stub-fn agent — TODO: fill in description"
 ---
 
 # /stub-agent

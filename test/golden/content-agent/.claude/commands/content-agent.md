@@ -1,6 +1,6 @@
 ---
 name: content-agent
-description: GTM content agent — drafts short-form posts in project voice
+description: "GTM content agent — drafts short-form posts in project voice"
 ---
 
 # /content-agent

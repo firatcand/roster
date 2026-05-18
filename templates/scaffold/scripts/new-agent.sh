@@ -52,10 +52,12 @@ source "$ROOT/scripts/lib/functions.sh"
 # (see docs/learnings/2026-Q2/installer-mutations-need-drift-detector-mirror.md).
 write_slash_command() {
   local file="$1" fn="$2" name="$3"
+  # ROS-62: quote the description so YAML-special characters in $fn or the
+  # placeholder body don't trip the I4 YAML parser when invariants run.
   cat > "$file" <<EOF
 ---
 name: $name
-description: $fn agent — TODO: fill in description
+description: "$fn agent — TODO: fill in description"
 ---
 
 # /$name

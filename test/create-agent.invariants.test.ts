@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 import { loadFixture } from '../src/lib/create-agent/fixture-loader.ts';
 import { render, type RenderOutput } from '../src/lib/create-agent/render.ts';
+import { renderSlashCommand } from '../src/lib/create-agent/templates.ts';
 import {
   validateInvariants,
   validateSubagentManifest,
@@ -409,12 +410,43 @@ test('Invariant 4: non-string description scalar (number) trips "plain-string"',
 
 test('Invariant 4: unquoted colon in description trips with yaml parse error (Codex ROS-59 #6)', () => {
   // YAML parses `description: Fix: improve thing` as a nested compact mapping
-  // {Fix: "improve thing"} and emits a parse error. Surfaces the renderer
-  // laxity at templates.ts (description emitted unquoted). Follow-up ticket
-  // will tighten the renderer/schema.
+  // {Fix: "improve thing"} and emits a parse error. The renderer now quotes
+  // via JSON.stringify (ROS-62), so this trip is only reachable when a slash
+  // file is hand-edited or written outside renderSlashCommand.
   const slash = '---\nname: x\ndescription: Fix: improve thing\n---\n# /x\n';
   assert.throws(
     () => validateSlashDescription(slash),
     /Invariant 4 \(slash description\): frontmatter yaml did not parse/,
   );
+});
+
+// ROS-62 — renderer-side quoting defends against YAML-special characters in
+// descriptions. Each input string here would trip I4 under the pre-ROS-62
+// unquoted emission (yaml parse error, silent comment-truncation, or
+// non-string scalar). renderSlashCommand now wraps the value via
+// JSON.stringify, producing a valid YAML double-quoted scalar.
+
+test('ROS-62: description with YAML-special chars round-trips through render → invariants', () => {
+  const cases = [
+    'Fix: improve thing',          // colon — nested-mapping parse error pre-fix
+    'feature # comment-like',      // hash — silent comment truncation pre-fix
+    'use {curly} braces here',     // flow mapping marker
+    'arr-like [a,b,c] thing',      // flow sequence marker
+    'has "quotes" and \\ backslash', // escape-sensitive characters
+    'anchor &ref and *alias',      // anchor / alias markers
+    'two\nline desc',              // Codex 2nd-pass: embedded newline — exercises
+                                   // JSON \n escape + parseSlashFrontmatter fence
+                                   // scan (must not split on the escaped newline).
+  ];
+  for (const desc of cases) {
+    const slash = renderSlashCommand('gtm', 'content-agent', desc);
+    assert.doesNotThrow(
+      () => validateSlashDescription(slash),
+      `description ${JSON.stringify(desc)} tripped I4 after render`,
+    );
+    assert.doesNotThrow(
+      () => validateNoPlaceholdersSlash(slash),
+      `description ${JSON.stringify(desc)} tripped I5 after render`,
+    );
+  }
 });
