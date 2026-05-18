@@ -494,3 +494,107 @@ test('runSchedulingDriftAudit: stale fires WARN does not flip ok; FAIL does', ()
     cleanup();
   }
 });
+
+// ── auditCronDrift: capture_events=true re-renders the events form ──────
+
+test('auditCronDrift: capture_events=true entry → events form matches installed line', () => {
+  const { dir, cleanup } = mkTmp('drift-capture-events-');
+  try {
+    // Write schedules.yaml inline so we can include capture_events: true.
+    const fnDir = join(dir, 'roster', 'gtm');
+    mkdirSync(fnDir, { recursive: true });
+    writeFileSync(join(fnDir, 'schedules.yaml'), [
+      'version: 1',
+      'schedules:',
+      '  - name: sdr-events',
+      '    agent: sdr',
+      '    plan: cold',
+      '    project: _demo',
+      '    cron: "0 9 * * 1-5"',
+      '    tool: codex',
+      '    install_mode: via-cron',
+      '    status: installed',
+      '    capture_events: true',
+      '    subscription_attestation:',
+      '      auth_mode: chatgpt',
+      '      env_policy: cleared',
+      '      codex_home: /tmp/.codex',
+      '',
+    ].join('\n'), 'utf8');
+
+    const expected = renderCronLine({
+      cron: '0 9 * * 1-5',
+      workspacePath: dir,
+      codexBinaryPath: FAKE_CODEX_BINARY,
+      prompt: buildOrchestratorPrompt('sdr', 'cold', '_demo'),
+      logPath: join(dir, 'logs', 'cron', 'sdr-events.log'),
+      exitPath: join(dir, 'logs', 'cron', 'sdr-events.exit'),
+      eventsPath: join(dir, 'logs', 'cron', 'sdr-events.events.jsonl'),
+    });
+    // Sanity: the rendered line includes --json (events form signature).
+    assert.ok(expected.includes(' exec --json '), 'expected --json in rendered line');
+
+    const crontab = buildMarkerBlock('sdr-events', expected);
+    const r = auditCronDrift({
+      cwd: dir,
+      crontabIO: fakeCrontab(crontab),
+      env: { PATH: FAKE_CODEX_BINARY },
+      codexBinaryPathOverride: FAKE_CODEX_BINARY,
+    });
+    assert.equal(r.status, 'ok');
+    assert.equal(r.items[0]!.status, 'ok');
+  } finally {
+    cleanup();
+  }
+});
+
+test('auditCronDrift: capture_events=true entry vs non-events crontab line → cron-line-mismatch', () => {
+  // If a user manually installed without capture_events but the schedules.yaml
+  // says capture_events: true, the byte-exact re-render diverges → drift.
+  const { dir, cleanup } = mkTmp('drift-capture-events-mismatch-');
+  try {
+    const fnDir = join(dir, 'roster', 'gtm');
+    mkdirSync(fnDir, { recursive: true });
+    writeFileSync(join(fnDir, 'schedules.yaml'), [
+      'version: 1',
+      'schedules:',
+      '  - name: sdr-events',
+      '    agent: sdr',
+      '    plan: cold',
+      '    project: _demo',
+      '    cron: "0 9 * * 1-5"',
+      '    tool: codex',
+      '    install_mode: via-cron',
+      '    status: installed',
+      '    capture_events: true',
+      '    subscription_attestation:',
+      '      auth_mode: chatgpt',
+      '      env_policy: cleared',
+      '      codex_home: /tmp/.codex',
+      '',
+    ].join('\n'), 'utf8');
+
+    // Crontab has the non-events form (older install before capture_events flip).
+    const nonEvents = renderCronLine({
+      cron: '0 9 * * 1-5',
+      workspacePath: dir,
+      codexBinaryPath: FAKE_CODEX_BINARY,
+      prompt: buildOrchestratorPrompt('sdr', 'cold', '_demo'),
+      logPath: join(dir, 'logs', 'cron', 'sdr-events.log'),
+      exitPath: join(dir, 'logs', 'cron', 'sdr-events.exit'),
+    });
+    const crontab = buildMarkerBlock('sdr-events', nonEvents);
+    const r = auditCronDrift({
+      cwd: dir,
+      crontabIO: fakeCrontab(crontab),
+      env: { PATH: FAKE_CODEX_BINARY },
+      codexBinaryPathOverride: FAKE_CODEX_BINARY,
+    });
+    assert.equal(r.status, 'fail');
+    if (r.items[0]!.status === 'fail') {
+      assert.equal(r.items[0]!.reason, 'cron-line-mismatch');
+    }
+  } finally {
+    cleanup();
+  }
+});

@@ -22,17 +22,17 @@ set -u
 [ -d "$PWD/roster" ] || exit 0
 
 # Step 1: failed-fire synthesis (best-effort).
-# Run only if `roster` resolves AND a `timeout` binary is available. macOS
-# ships `gtimeout` via coreutils; Linux ships `timeout`. Fall back to no
-# wrapper if neither is present — the sync is bounded by its own logic and
-# typically <100ms on a small workspace.
+# Requires both `roster` on PATH AND a `timeout` binary. Skip silently
+# otherwise — better to miss a sync than to block SessionStart on a slow
+# workspace (codex review impl-pass: an unbounded fallback ran `roster
+# pending sync` with no time cap; if disk was slow the user's first Claude
+# Code message could be delayed seconds). Doctor remains the deterministic
+# way to surface failed fires for users without a timeout binary.
 if command -v roster >/dev/null 2>&1; then
   if command -v timeout >/dev/null 2>&1; then
     timeout 5 roster pending sync --silent --cwd "$PWD" >/dev/null 2>&1 || true
   elif command -v gtimeout >/dev/null 2>&1; then
     gtimeout 5 roster pending sync --silent --cwd "$PWD" >/dev/null 2>&1 || true
-  else
-    roster pending sync --silent --cwd "$PWD" >/dev/null 2>&1 || true
   fi
 fi
 

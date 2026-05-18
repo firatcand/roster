@@ -153,8 +153,11 @@ test('renderCronLine: exitPath set → wraps in /bin/sh -c, captures $?', () => 
   assert.match(line, /^0 9 \* \* 1-5 \/usr\/bin\/env -i HOME="\$HOME" /);
   // /bin/sh -c wraps the inner command
   assert.match(line, / \/bin\/sh -c '/);
-  // inner: codex exec + redirect + rc capture + exit
-  assert.match(line, /printf %s "\$rc"/);
+  // inner: codex exec + redirect + rc capture + exit. The `%` in printf gets
+  // escaped to `\%` by escapeCronPercent so cron doesn't treat it as the
+  // stdin sentinel — cron strips the backslash before /bin/sh sees it, so
+  // the actual shell still sees `printf %s`.
+  assert.match(line, /printf \\%s "\$rc"/);
   assert.match(line, /exit "\$rc"/);
   // exit path is embedded
   assert.ok(line.includes("'/Users/firat/my-roster/logs/cron/sdr.exit'"));
@@ -528,4 +531,39 @@ test('removeCronEntry: ambiguity at trailing-block — biases toward byte-exact 
   const io = fakeIO(initial);
   removeCronEntry(io, 'foo');
   assert.equal(io.current, '# user 1\n\n# user 2');
+});
+
+// ── renderCronLine: % escape for crontab (ROS-42 codex review) ────────────
+
+test('renderCronLine: literal % in workspace path is escaped as \\% (vixie cron sends % to stdin)', () => {
+  const line = renderCronLine({
+    cron: '0 9 * * *',
+    workspacePath: '/tmp/firat%test',
+    codexBinaryPath: '/opt/homebrew/bin/codex',
+    prompt: 'Hello',
+    logPath: '/tmp/log.txt',
+  });
+  // The % byte must NOT appear unescaped anywhere in the rendered line.
+  // Every literal % must be preceded by a backslash.
+  const matches = [...line.matchAll(/(?<!\\)%/g)];
+  assert.equal(matches.length, 0, `unescaped % at index ${matches[0]?.index}: ${line}`);
+  // And the path must round-trip back to the original (escape is reversible).
+  assert.ok(line.includes('/tmp/firat\\%test'));
+});
+
+test('renderCronLine: % in prompt is escaped (wrapped form)', () => {
+  const line = renderCronLine({
+    cron: '0 9 * * *',
+    workspacePath: '/w',
+    codexBinaryPath: '/opt/homebrew/bin/codex',
+    prompt: 'Use 100% effort',
+    logPath: '/w/log',
+    exitPath: '/w/exit',
+  });
+  const matches = [...line.matchAll(/(?<!\\)%/g)];
+  assert.equal(matches.length, 0, `unescaped % at index ${matches[0]?.index}`);
+  // printf %s should also be escaped now (becomes printf \%s) — that's fine
+  // because the cron daemon strips the backslash before /bin/sh sees it,
+  // and `printf \%s "$rc"` is identical to `printf %s "$rc"` at the shell.
+  assert.ok(line.includes('printf \\%s "$rc"'));
 });

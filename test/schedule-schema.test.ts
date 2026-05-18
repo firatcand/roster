@@ -245,3 +245,57 @@ test('findDuplicateNames — empty/unique inputs return []', () => {
   assert.equal(findDuplicateNames([]).length, 0);
   assert.equal(findDuplicateNames([{ name: 'a' }, { name: 'b' }]).length, 0);
 });
+
+// ── ROS-42: capture_events validity rules ─────────────────────────────────
+
+test('schedule schema — capture_events optional, codex + via-cron + true validates', () => {
+  const parsed = scheduleEntrySchema.safeParse({ ...minimalEntry, capture_events: true });
+  assert.equal(parsed.success, true);
+});
+
+test('schedule schema — capture_events: false is allowed for any tool/mode combo', () => {
+  const codexUiHandoff = scheduleEntrySchema.safeParse({
+    ...minimalEntry,
+    install_mode: 'ui-handoff',
+    status: 'pending-ui-install',
+    capture_events: false,
+  });
+  assert.equal(codexUiHandoff.success, true);
+});
+
+test('schedule schema — capture_events: true rejected when tool=claude', () => {
+  const claudeEntry = {
+    name: 'cold-outreach-daily',
+    agent: 'sdr',
+    plan: 'cold-outreach',
+    project: '_demo',
+    cron: '0 9 * * 1-5',
+    tool: 'claude',
+    install_mode: 'ui-handoff',
+    status: 'pending-ui-install',
+    capture_events: true,
+  };
+  const parsed = scheduleEntrySchema.safeParse(claudeEntry);
+  assert.equal(parsed.success, false);
+  if (!parsed.success) {
+    const msg = flattenZodErrors(parsed.error).find((e) => e.path === 'capture_events');
+    assert.ok(msg, 'expected capture_events error');
+    assert.match(msg!.message, /forbidden when tool=claude/);
+  }
+});
+
+test('schedule schema — capture_events: true rejected when codex + ui-handoff (no wrapper to redirect)', () => {
+  const entry = {
+    ...minimalEntry,
+    install_mode: 'ui-handoff',
+    status: 'pending-ui-install',
+    capture_events: true,
+  };
+  const parsed = scheduleEntrySchema.safeParse(entry);
+  assert.equal(parsed.success, false);
+  if (!parsed.success) {
+    const msg = flattenZodErrors(parsed.error).find((e) => e.path === 'capture_events');
+    assert.ok(msg, 'expected capture_events error');
+    assert.match(msg!.message, /requires install_mode=via-cron/);
+  }
+});

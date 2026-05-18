@@ -136,7 +136,8 @@ test('codex install (via-cron): writes schedules.yaml + invokes crontab IO + cre
     // single quotes are escaped via the '\'' dance.
     assert.match(io.current, / \/bin\/sh -c '/);
     assert.match(io.current, /codex'\\''/);
-    assert.match(io.current, /printf %s "\$rc" > /);
+    // % is escaped as \% for crontab safety (codex review impl-pass).
+    assert.match(io.current, /printf \\%s "\$rc" > /);
     assert.match(io.current, /\.exit'\\''/);
 
     const yaml = YAML.parse(readFileSync(result.schedulesYamlPath, 'utf8'));

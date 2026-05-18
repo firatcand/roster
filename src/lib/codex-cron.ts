@@ -78,6 +78,16 @@ export type CronLineOpts = {
   eventsPath?: string;
 };
 
+// Vixie cron treats unescaped `%` in the command portion as a newline (and
+// sends everything after the first `%` to stdin), regardless of shell
+// quoting. Escape every literal `%` in the rendered line with `\%`. The
+// schedule expression doesn't contain `%` (validateCronExpression would
+// reject it), so a global replace is safe across the joined string.
+// See `man 5 crontab`. Caught by codex review impl-pass for ROS-42.
+function escapeCronPercent(line: string): string {
+  return line.replace(/%/g, '\\%');
+}
+
 export function renderCronLine(opts: CronLineOpts): string {
   const codexDir = dirname(opts.codexBinaryPath);
   const pathValue = `${codexDir}:/usr/bin:/bin`;
@@ -107,7 +117,7 @@ export function renderCronLine(opts: CronLineOpts): string {
       shellQuote(opts.logPath),
       '2>&1',
     ];
-    return parts.join(' ');
+    return escapeCronPercent(parts.join(' '));
   }
 
   // Wrapped form with exit-code capture. The inner script runs the codex
@@ -144,7 +154,7 @@ export function renderCronLine(opts: CronLineOpts): string {
   ].join(' ');
 
   const parts = [...envPrefix, '/bin/sh', '-c', shellQuote(inner)];
-  return parts.join(' ');
+  return escapeCronPercent(parts.join(' '));
 }
 
 function markerBegin(name: string): string {
