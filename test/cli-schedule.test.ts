@@ -508,7 +508,9 @@ function makeFakeHome(): { home: string; codex: string; cleanup: () => void } {
 
 function runCliCodex(args: readonly string[], homeDir: string, platform: 'darwin' | 'linux' | 'win32' = 'darwin'): Run {
   // Strip API-key env vars so preflight passes deterministically. HOME override
-  // makes the CLI's homedir() resolve to our fake codex root.
+  // makes the CLI's homedir() resolve to our fake codex root. ROSTER_CODEX_PATH
+  // pin is required so via-cron tests don't depend on `codex` being installed
+  // on the CI runner (Ubuntu has no codex binary on PATH).
   const baseEnv = { ...process.env };
   delete baseEnv['CODEX_API_KEY'];
   delete baseEnv['OPENAI_API_KEY'];
@@ -520,6 +522,7 @@ function runCliCodex(args: readonly string[], homeDir: string, platform: 'darwin
     FORCE_COLOR: '0',
     NO_COLOR: '1',
     ROSTER_PLATFORM: platform,
+    ROSTER_CODEX_PATH: '/opt/homebrew/bin/codex',
   };
   const out = spawnSync(
     process.execPath,
