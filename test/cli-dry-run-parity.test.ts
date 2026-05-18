@@ -81,7 +81,7 @@ test('executeDoctor --json: --dry-run output byte-identical to non-dry-run', () 
   // (deterministic since both invocations see the same env).
   const { root, cleanup } = makeWorkspace();
   try {
-    const opts = { cwd: root, json: true, silent: false } as const;
+    const opts = { cwd: root, json: true, silent: false, fix: false } as const;
     const baseline = captureStdout(() => executeDoctor({ ...opts, dryRun: false }));
     const dryRun = captureStdout(() => executeDoctor({ ...opts, dryRun: true }));
     assert.equal(dryRun, baseline);

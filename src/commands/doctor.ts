@@ -533,6 +533,7 @@ export function executeDoctor(opts: DoctorOptions): number {
   } else if (!opts.silent) {
     for (const line of renderText(results, summary, workarounds)) console.log(line);
     for (const line of renderWorkspaceSection(workspaceFinal)) console.log(line);
+    for (const line of renderSchedulingSection(scheduling)) console.log(line);
     for (const line of renderSchedulingDriftSection(schedulingDrift)) console.log(line);
     for (const line of renderSafetySection(safety)) console.log(line);
     for (const line of renderSecretsSection(secrets)) console.log(line);
