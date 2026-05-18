@@ -65,6 +65,16 @@ function atomicWriteFile(absPath: string, content: string, mode = 0o644): void {
   }
 }
 
+/**
+ * Strip CR/LF from values destined for single-line `#` comments in the
+ * generated install script. The crontab parser at `crontab.ts` already
+ * rejects newlines in these fields, but the renderer must not rely on a
+ * parser invariant for safety (defense-in-depth — ROS-68, follow-up to ROS-64).
+ */
+function sanitizeForComment(value: string): string {
+  return value.replace(/[\r\n]+/g, ' ');
+}
+
 function resolveCollidedDest(destPath: string): string {
   if (!existsSync(destPath)) return destPath;
   const ext = destPath.includes('.') ? destPath.slice(destPath.lastIndexOf('.')) : '';
@@ -108,7 +118,9 @@ export function renderInstallScript(plan: MigrationPlan, generatedAtUtc: string)
   if (plan.unmappedWrappers.length > 0) {
     lines.push('# Unmapped wrappers — could not determine function/agent/plan');
     for (const u of plan.unmappedWrappers) {
-      lines.push(`# TODO  ${u.basename}  (cron: ${u.cron}, source: ${u.wrapperPath})`);
+      lines.push(
+        `# TODO  ${sanitizeForComment(u.basename)}  (cron: ${sanitizeForComment(u.cron)}, source: ${sanitizeForComment(u.wrapperPath)})`,
+      );
     }
     lines.push('');
   }

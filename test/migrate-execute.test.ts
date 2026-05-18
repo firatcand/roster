@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, statSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { scanSourceWorkspace } from '../src/lib/migrate/scan.ts';
-import { planMigration } from '../src/lib/migrate/plan.ts';
+import { planMigration, type MigrationPlan } from '../src/lib/migrate/plan.ts';
 import { executeMigration, renderInstallScript } from '../src/lib/migrate/execute.ts';
 import { readManifest } from '../src/lib/migrate/manifest.ts';
 import { buildAgentTeamMini } from './fixtures/agent-team-mini/_setup.ts';
@@ -178,4 +178,52 @@ test('renderInstallScript: emits Claude + Codex sections (both ready-to-run post
     fix.cleanup();
     dst.cleanup();
   }
+});
+
+// ROS-68 — defense-in-depth: TODO comment for an unmapped wrapper must stay
+// on a single line even if a malicious or malformed UnmappedWrapper carries
+// embedded \n / \r. The crontab parser already rejects newlines in these
+// fields, but the renderer must not rely on a parser invariant for safety.
+test('renderInstallScript: TODO comment line stays single-line even with newline-bearing UnmappedWrapper (ROS-68)', () => {
+  const plan: MigrationPlan = {
+    sourceDir: '/src',
+    destWorkspace: '/dst',
+    scheduleInstalls: [],
+    unmappedWrappers: [
+      {
+        basename: 'evil\nrm -rf /',
+        cron: '0 9 * * *\nrm -rf /',
+        wrapperPath: '/safe.sh\nrm -rf /',
+      },
+    ],
+    pendingMoves: [],
+    logCopies: [],
+    envCopy: null,
+    agentMdNotes: [],
+    subscriptionWarnings: [],
+    manualSteps: [],
+    blockers: [],
+    trackedFiles: [],
+  };
+  const script = renderInstallScript(plan, '2026-05-18T00:00:00Z');
+
+  // Find the TODO line and confirm it is exactly one line (no orphan content
+  // floats below an unclosed comment).
+  const lines = script.split('\n');
+  const todoLines = lines.filter((l) => l.startsWith('# TODO'));
+  assert.equal(todoLines.length, 1, 'exactly one TODO line should appear');
+  assert.doesNotMatch(todoLines[0]!, /[\r\n]/, 'TODO line must not contain CR/LF');
+
+  // Critical: no line in the rendered script should consist of `rm -rf /`
+  // (or any other unwrapped suffix from the malicious payload).
+  for (const l of lines) {
+    assert.notEqual(l.trim(), 'rm -rf /', `orphan line not allowed: ${JSON.stringify(l)}`);
+    assert.notEqual(l.trim(), 'rm -rf /)', `orphan line not allowed: ${JSON.stringify(l)}`);
+  }
+
+  // All three sanitized values should still be present in the single TODO line
+  // (with newlines collapsed to spaces).
+  assert.match(todoLines[0]!, /evil rm -rf \//);
+  assert.match(todoLines[0]!, /0 9 \* \* \* rm -rf \//);
+  assert.match(todoLines[0]!, /\/safe\.sh rm -rf \//);
 });
