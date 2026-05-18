@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync, lstatSync } from 'node:fs';
-import { basename, join, relative } from 'node:path';
+import { basename, join, relative, resolve, sep } from 'node:path';
 import { parseCrontab, type CrontabLine } from './crontab.ts';
 import { parseWrapperFile, type ParsedWrapper, type KnownAgentPath } from './wrapper.ts';
 
@@ -275,8 +275,15 @@ function collectCronEntries(sourceDir: string, warnings: ScanWarning[]): CronWra
 function resolveWrapperPath(line: CrontabLine, sourceDir: string): string | null {
   if (line.wrapperPath === null) return null;
   if (line.wrapperPath.startsWith('/')) {
-    // Absolute path. If it points inside sourceDir, keep it; otherwise translate via basename.
-    if (line.wrapperPath.startsWith(sourceDir)) return line.wrapperPath;
+    // Absolute path. Resolve and require sep-anchored containment so `/source/../outside.sh`
+    // (which naively startsWith /source) cannot escape sourceDir. On miss, translate via
+    // basename — preserves existing UX for crontabs that reference wrappers by absolute
+    // path from a previous host.
+    const resolvedSrc = resolve(sourceDir);
+    const resolved = resolve(line.wrapperPath);
+    if (resolved === resolvedSrc || resolved.startsWith(resolvedSrc + sep)) {
+      return resolved;
+    }
     const base = basename(line.wrapperPath);
     return join(sourceDir, 'scripts', 'cron', 'wrappers', base);
   }

@@ -1,6 +1,7 @@
 import { basename, join, relative } from 'node:path';
 import type { SourceModel, CronWrapperPair, ScanWarning } from './scan.ts';
 import { mapWrapperToAgentPlan } from './wrapper.ts';
+import { shellEscape } from '../shell-escape.ts';
 
 export type ScheduleInstallCmd = {
   function: string;
@@ -92,8 +93,21 @@ function renderScheduleInstallCmd(args: {
   tool: 'claude' | 'codex';
   destWorkspace: string;
 }): string {
-  // Quote cron to survive shell expansion of stars; --cwd points at the destination workspace.
-  return `roster schedule install ${args.function}/${args.agent} ${args.plan} --cron "${args.cron}" --tool ${args.tool} --cwd "${args.destWorkspace}"`;
+  // shellEscape every dynamic token. `tool` is a typed union literal so it stays bare.
+  // The `/` between function and agent is the install-positional convention; both halves
+  // are independently quoted so a `'` cannot bleed across.
+  const fnAgent = `${shellEscape(args.function)}/${shellEscape(args.agent)}`;
+  return [
+    'roster schedule install',
+    fnAgent,
+    shellEscape(args.plan),
+    '--cron',
+    shellEscape(args.cron),
+    '--tool',
+    args.tool,
+    '--cwd',
+    shellEscape(args.destWorkspace),
+  ].join(' ');
 }
 
 function planScheduleFor(pair: CronWrapperPair, model: SourceModel, destWorkspace: string): ScheduleInstallCmd | UnmappedWrapper {

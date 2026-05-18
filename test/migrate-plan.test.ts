@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { scanSourceWorkspace } from '../src/lib/migrate/scan.ts';
 import { planMigration } from '../src/lib/migrate/plan.ts';
 import { buildAgentTeamMini } from './fixtures/agent-team-mini/_setup.ts';
@@ -156,6 +157,62 @@ test('planMigration: trackedFiles is sorted by source path', () => {
     const plan = planMigration(model, { destWorkspace: dst.dest, destIsInitialized: true });
     const sorted = [...plan.trackedFiles].sort((a, b) => a.src.localeCompare(b.src));
     assert.deepEqual(plan.trackedFiles, sorted);
+  } finally {
+    fix.cleanup();
+    dst.cleanup();
+  }
+});
+
+test('planMigration: rendered schedule install command uses POSIX single-quote escaping (ROS-64)', () => {
+  const fix = buildAgentTeamMini();
+  const dst = makeDest();
+  try {
+    const model = scanSourceWorkspace({ sourceDir: fix.root });
+    const plan = planMigration(model, { destWorkspace: dst.dest, destIsInitialized: true });
+    const dreamer = plan.scheduleInstalls.find((s) => s.wrapperBasename === 'dreamer-nightly')!;
+
+    // Cron expression is single-quoted (not double-quoted).
+    assert.match(dreamer.rendered, /--cron '0 3 \* \* \*'/);
+    // --cwd value is single-quoted.
+    assert.match(dreamer.rendered, /--cwd '[^']+'/);
+    // No raw double-quote sequences anywhere in the rendered command.
+    assert.equal(dreamer.rendered.includes('"'), false);
+  } finally {
+    fix.cleanup();
+    dst.cleanup();
+  }
+});
+
+test('planMigration: rendered command round-trips through bash argv parsing (ROS-64)', () => {
+  // Lock in shell-safety: the rendered command, when interpreted by bash, must
+  // tokenize into the exact argv vector we expect. Any quoting bug would
+  // mis-split the cron expression (which contains spaces) or splice the dest
+  // path with a flag.
+  const fix = buildAgentTeamMini();
+  const dst = makeDest();
+  try {
+    const model = scanSourceWorkspace({ sourceDir: fix.root });
+    const plan = planMigration(model, { destWorkspace: dst.dest, destIsInitialized: true });
+    const dreamer = plan.scheduleInstalls.find((s) => s.wrapperBasename === 'dreamer-nightly')!;
+
+    // Use bash to parse the rendered string into argv, then print each on its own line.
+    const script = `set -- ${dreamer.rendered}; printf '%s\\n' "$@"`;
+    const out = execFileSync('bash', ['-c', script], { encoding: 'utf8' });
+    const argv = out.split('\n').slice(0, -1); // trailing empty from final \n
+
+    assert.deepEqual(argv, [
+      'roster',
+      'schedule',
+      'install',
+      'dreamer/dreamer',
+      'nightly',
+      '--cron',
+      '0 3 * * *',          // single token, NOT three
+      '--tool',
+      'claude',
+      '--cwd',
+      dst.dest,
+    ]);
   } finally {
     fix.cleanup();
     dst.cleanup();

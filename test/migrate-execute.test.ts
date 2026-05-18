@@ -69,8 +69,8 @@ test('executeMigration: live run copies pending + logs + .env, writes manifest',
     assert.notEqual(exec.installScriptPath, null);
     assert.ok(existsSync(exec.installScriptPath!));
     const script = readFileSync(exec.installScriptPath!, 'utf8');
-    assert.match(script, /roster schedule install dreamer\/dreamer nightly/);
-    assert.match(script, /roster schedule install gtm\/sdr daily-outreach .* --tool codex/);
+    assert.match(script, /roster schedule install 'dreamer'\/'dreamer' 'nightly'/);
+    assert.match(script, /roster schedule install 'gtm'\/'sdr' 'daily-outreach' .* --tool codex/);
 
     // Manifest
     assert.notEqual(exec.manifestPath, null);
@@ -170,9 +170,9 @@ test('renderInstallScript: emits Claude + Codex sections (both ready-to-run post
     const script = renderInstallScript(plan, '2026-05-18T00:00:00Z');
     assert.match(script, /^#!\/usr\/bin\/env bash/);
     assert.match(script, /# Claude schedules/);
-    assert.match(script, /roster schedule install dreamer\/dreamer nightly/);
+    assert.match(script, /roster schedule install 'dreamer'\/'dreamer' 'nightly'/);
     assert.match(script, /# Codex schedules/);
-    assert.match(script, /roster schedule install gtm\/sdr daily-outreach .* --tool codex/);
+    assert.match(script, /roster schedule install 'gtm'\/'sdr' 'daily-outreach' .* --tool codex/);
     assert.match(script, /--via cron/);
   } finally {
     fix.cleanup();

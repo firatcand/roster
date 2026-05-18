@@ -4,7 +4,7 @@ import { parseCrontab } from '../src/lib/migrate/crontab.ts';
 import { mapWrapperToAgentPlan, parseWrapperFile } from '../src/lib/migrate/wrapper.ts';
 import { scanSourceWorkspace, isLikelyRosterWorkspace } from '../src/lib/migrate/scan.ts';
 import { buildAgentTeamMini } from './fixtures/agent-team-mini/_setup.ts';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -180,6 +180,46 @@ test('scanSourceWorkspace: knownAgentPaths is set up for longest-prefix wrapper 
     assert.deepEqual(keys, ['chief-of-staff', 'dreamer', 'gtm.sdr']);
   } finally {
     fix.cleanup();
+  }
+});
+
+test('scanSourceWorkspace: rejects crontab wrapper paths that escape sourceDir via .. (ROS-64)', () => {
+  // Build a minimal source tree with a crontab entry whose absolute wrapper
+  // path resolves OUTSIDE sourceDir via `..`. The pre-ROS-64 implementation
+  // would naively accept it (startsWith match) and try to read the escape
+  // path; the hardened implementation must fall back to basename translation.
+  const src = mkdtempSync(join(tmpdir(), 'roster-traversal-src-'));
+  const outside = mkdtempSync(join(tmpdir(), 'roster-traversal-outside-'));
+  try {
+    // Write an "outside" wrapper that should NEVER be read by the scanner.
+    const outsideWrapper = join(outside, 'evil-wrapper.sh');
+    writeFileSync(outsideWrapper, '#!/usr/bin/env bash\nclaude -p "PWNED"\n', 'utf8');
+
+    // Build the traversal path: ${src}/scripts/cron/../../../<outside-basename>/evil-wrapper.sh
+    // — startsWith(src) is TRUE (it begins with src), but path.resolve reveals
+    // the resolved target lives outside src.
+    mkdirSync(join(src, 'scripts', 'cron'), { recursive: true });
+    const outsideRelFromSrc = join('scripts', 'cron', '..', '..', '..', join(outside, 'evil-wrapper.sh').slice(1));
+    const traversalPath = join(src, outsideRelFromSrc);
+    writeFileSync(
+      join(src, 'scripts', 'cron', 'crontab'),
+      `0 3 * * * ${traversalPath}\n`,
+      'utf8',
+    );
+
+    const model = scanSourceWorkspace({ sourceDir: src });
+
+    // No wrapper was successfully resolved → cronEntries empty, scanner emitted a wrapper-not-found warning.
+    assert.equal(model.cronEntries.length, 0, 'must not follow .. escape path');
+    const notFound = model.warnings.filter((w) => w.kind === 'wrapper-not-found');
+    assert.equal(notFound.length, 1);
+
+    // Sanity: the outside wrapper still exists and was NOT read — proves we
+    // didn't silently swallow a successful escape.
+    assert.equal(existsSync(outsideWrapper), true);
+  } finally {
+    rmSync(src, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
   }
 });
 
