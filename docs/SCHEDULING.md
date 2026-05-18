@@ -99,7 +99,33 @@ Claude Desktop stores scheduled tasks in `~/Library/Application Support/Claude/L
 
 When Anthropic ships [#41364](https://github.com/anthropics/claude-code/issues/41364), the install becomes one command: `roster schedule install --tool claude` will register the task programmatically without a UI step. The same `schedules.yaml` mirror entry will be reused. Tracked in [ADR-0002 (future)](adr/0001-scheduling-architecture.md#what-well-need-to-revisit) for the migration plan.
 
-> Periodic re-check: each Claude Desktop release, Roster re-probes the `claude://` URL scheme route table. If a `claude://schedule/...` route appears, we promote it from "future investigation" to a first-class install path (lighter than UI hand-off, faster than waiting on #41364). Tracked in [ROS-57](https://linear.app/firatdogan/issue/ROS-57).
+### Re-check protocol for `claude://` URL scheme
+
+Spike β (2026-05-15) confirmed `claude://` today routes only `cowork/shared-artifact` — no schedule-creation deep-link. If Anthropic adds `claude://schedule/...` (or `claude://routine/...`, `claude://task/...`), Roster should promote it from "future investigation" to a first-class install path: lighter than UI hand-off, faster than waiting on [#41364](https://github.com/anthropics/claude-code/issues/41364).
+
+**Probe script:** `scripts/probe-claude-url-scheme.sh` (macOS-only; not shipped in the npm tarball — maintainer tool).
+
+**Cadence:** **first Monday of each month**, plus opportunistically any time Claude Desktop ships an update. The monthly anchor ensures the probe runs even if no one notices a release; the opportunistic trigger means we don't sit on a freshly-shipped route for up to 30 days.
+
+**How to run:**
+
+```bash
+pnpm probe:claude-url
+# or directly:
+bash scripts/probe-claude-url-scheme.sh
+```
+
+The script performs three checks (Info.plist `CFBundleURLSchemes`, asar grep for `claude://[a-zA-Z0-9_/.-]+` literals, behaviour probes via `open -g`), prints a paste-ready Markdown report to stdout, and writes a dated artifact under `docs/probes/claude-url-scheme/<YYYY-MM-DD>.md`. Exit codes: `0` no new routes, `1` new route detected (the script prints a loud banner — see below), `2` environment problem.
+
+**When the script exits 1** (`NEW ROUTE DETECTED`):
+
+1. File a follow-up Linear ticket under Phase 2.5 to promote the route to a first-class install path in `roster schedule install --tool claude`.
+2. Link the follow-up from [ROS-57](https://linear.app/firatdogan/issue/ROS-57) and update [ADR-0001 Action Item #11](adr/0001-scheduling-architecture.md#action-items).
+3. Close ROS-57 referencing the follow-up.
+
+**When the script exits 0**: paste the Markdown report into the latest comment on [ROS-57](https://linear.app/firatdogan/issue/ROS-57) with `Next probe due: <first Mon of next month>`. ROS-57 stays open — it *is* the recurring tracker.
+
+Probe history lives in [`docs/probes/claude-url-scheme/`](probes/claude-url-scheme/).
 
 ---
 
