@@ -360,11 +360,23 @@ fi
 
 # -----------------------------------------------------------------------------
 # Test 11: malformed registry slug — defense-in-depth (ROS-69).
-# A hand-edited .config/functions.yaml may register a slug containing YAML
-# hazards (quote, backslash, space, uppercase) that bypass the regex
-# enforcement in create-function.sh. read_functions must reject such
-# entries at READ time so any consumer (write_slash_command etc.) gets a
-# guaranteed-shape value. Test the three classes the regex must reject.
+# A hand-edited .config/functions.yaml may register a slug that bypasses
+# the regex enforcement in create-function.sh. read_functions must reject
+# such entries at READ time so any consumer (write_slash_command etc.)
+# gets a guaranteed-shape value. Test four representative classes that
+# parse cleanly as YAML scalars but fail the slug regex
+# `^[a-z][a-z0-9-]*$`:
+#   - uppercase letter
+#   - underscore (non-kebab separator)
+#   - leading dot (path-traversal footgun, see ROS-62 fix history)
+#   - embedded double-quote (the YAML hazard that motivated ROS-69; would
+#     break out of the double-quoted scalar in write_slash_command)
+#
+# Only ONE of the two runtime paths in read_functions runs per invocation
+# (the Python-yaml path if `python3 + pyyaml` is installed, else the
+# grep/awk fallback). Both implementations use the same regex literal, so
+# rejection behavior is identical; CI exercises whichever path the runner
+# has. Tests for the explicit fallback path are out of scope here.
 # -----------------------------------------------------------------------------
 echo ""
 echo "===> Test 11: malformed registry slug rejection (ROS-69)"
@@ -403,9 +415,7 @@ YAML
   fi
 }
 
-# YAML scalars that parse cleanly under yaml.safe_load but fail the slug
-# regex (covers the Python path) AND that the grep/sed fallback would
-# extract verbatim (covers the bash fallback).
-run_malformed_case "uppercase"   "BadSlug"
-run_malformed_case "underscore"  "bad_slug"
-run_malformed_case "leading-dot" ".badslug"
+run_malformed_case "uppercase"     "BadSlug"
+run_malformed_case "underscore"    "bad_slug"
+run_malformed_case "leading-dot"   ".badslug"
+run_malformed_case "embedded-quote" 'bad"quote'
