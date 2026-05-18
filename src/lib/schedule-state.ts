@@ -1,4 +1,5 @@
 import { readFileSync, existsSync } from 'node:fs';
+import { nextFireTime } from './cron-next.ts';
 
 // Contract: skills/roster-orchestrator/SKILL.md:58-64. The orchestrator skill
 // appends one line per fire to roster/<function>/state.md in this exact shape:
@@ -105,4 +106,77 @@ export function findMostRecentRun(
 ): StateLine | undefined {
   const matches = findRecentRuns(lines, functionName, agent, plan, 1);
   return matches[0];
+}
+
+// ── ROS-42: stale-fire detection ─────────────────────────────────────────
+
+export type StaleDetectInput = {
+  cronExpr: string;
+  // Most recent line for this schedule from state.md. `undefined` when the
+  // agent has never reported a run.
+  lastRun: StateLine | undefined;
+  // Last fire's process-level mtime, when available. Used as a fallback signal:
+  // if `.exit` is recent (within grace), the cron daemon DID fire — but the
+  // agent never wrote state.md. That's a "ran-but-silent" failure, not STALE.
+  lastFireMtimeMs: number | undefined;
+  now: Date;
+  graceMinutes: number;
+};
+
+export type StaleDetectResult =
+  | { stale: false; reason?: 'recent-run' | 'recent-fire' | 'never-fired-yet' }
+  | { stale: true; reason: 'no-recent-run' | 'missed-window'; expectedBeforeUtc: string };
+
+// Reports STALE when the most recent agent self-report is older than the
+// cron's expected next-fire + grace. Cases:
+//
+//   - lastRun present + (lastRun + cron-next + grace) > now → not stale
+//     (the agent reported within the most recent expected window)
+//   - lastRun present + cutoff passed + .exit recent (≥ expected fire) → not
+//     stale, reason=recent-fire (wrapper ran; agent silent → failure path
+//     surfaces it via pending-sync, not STALE)
+//   - lastRun present + cutoff passed + no recent .exit → STALE missed-window
+//   - lastRun absent + .exit recent → not stale, reason=recent-fire
+//   - lastRun absent + .exit absent → not stale, reason=never-fired-yet
+//     (cannot distinguish "freshly installed" from "broken since forever"
+//     without an install-time anchor; caller decides via schedules.yaml mtime
+//     in a separate doctor check if it cares)
+//
+// ROS-42 acceptance #2: "STALE if last_run is older than expected_next_fire
+// + 2h" — implemented for the `lastRun present` branch above.
+export function detectStale(input: StaleDetectInput): StaleDetectResult {
+  const { cronExpr, lastRun, lastFireMtimeMs, now, graceMinutes } = input;
+
+  if (lastRun === undefined) {
+    if (lastFireMtimeMs !== undefined) return { stale: false, reason: 'recent-fire' };
+    return { stale: false, reason: 'never-fired-yet' };
+  }
+
+  const lastRunDate = new Date(lastRun.timestamp);
+  const expectedNext = nextFireTime(cronExpr, lastRunDate);
+  if (!expectedNext.ok) {
+    // Cron parser rejected the expression — the doctor's schema-validation
+    // section surfaces the real problem. Stay quiet here.
+    return { stale: false, reason: 'recent-run' };
+  }
+
+  const cutoffMs = expectedNext.next.getTime() + graceMinutes * 60_000;
+
+  // Within the grace window for the most recent expected fire.
+  if (now.getTime() < cutoffMs) {
+    return { stale: false, reason: 'recent-run' };
+  }
+
+  // Grace window has closed without a fresh state.md line. Two sub-cases:
+  //   (a) wrapper recorded a fire at-or-after the expected fire time — process
+  //       ran but agent stayed silent. Not STALE; failure-detection surfaces.
+  if (lastFireMtimeMs !== undefined && lastFireMtimeMs >= expectedNext.next.getTime()) {
+    return { stale: false, reason: 'recent-fire' };
+  }
+  //   (b) no signal at all → STALE missed-window.
+  return {
+    stale: true,
+    reason: 'missed-window',
+    expectedBeforeUtc: new Date(cutoffMs).toISOString(),
+  };
 }
