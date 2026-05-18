@@ -180,14 +180,16 @@ test('renderInstallScript: emits Claude + Codex sections (both ready-to-run post
   }
 });
 
-// ROS-68 — defense-in-depth: TODO comment for an unmapped wrapper must stay
-// on a single line even if a malicious or malformed UnmappedWrapper carries
-// embedded \n / \r. The crontab parser already rejects newlines in these
-// fields, but the renderer must not rely on a parser invariant for safety.
-test('renderInstallScript: TODO comment line stays single-line even with newline-bearing UnmappedWrapper (ROS-68)', () => {
+// ROS-68 — defense-in-depth: rendered install script must not have any
+// `rm -rf /` (or similar attacker-controlled suffix) escape from a `#`
+// comment, even if a malicious or malformed UnmappedWrapper / sourceDir /
+// destWorkspace carries embedded \n / \r. The crontab parser already
+// rejects newlines in wrapper fields, but the renderer must not rely on
+// a parser invariant for safety, and sourceDir/destWorkspace come from CLI.
+test('renderInstallScript: every `rm -rf /` substring stays inside a `#` comment under newline-bearing inputs (ROS-68)', () => {
   const plan: MigrationPlan = {
-    sourceDir: '/src',
-    destWorkspace: '/dst',
+    sourceDir: '/src\nrm -rf /',
+    destWorkspace: '/dst\nrm -rf /',
     scheduleInstalls: [],
     unmappedWrappers: [
       {
@@ -206,23 +208,29 @@ test('renderInstallScript: TODO comment line stays single-line even with newline
     trackedFiles: [],
   };
   const script = renderInstallScript(plan, '2026-05-18T00:00:00Z');
-
-  // Find the TODO line and confirm it is exactly one line (no orphan content
-  // floats below an unclosed comment).
   const lines = script.split('\n');
+
+  // Strongest invariant: any line containing the attacker payload MUST start
+  // with `#`. If any line carries the payload outside a comment, the
+  // generated script would execute it.
+  for (const l of lines) {
+    if (l.includes('rm -rf /')) {
+      assert.ok(l.startsWith('#'), `payload escaped a comment: ${JSON.stringify(l)}`);
+    }
+  }
+
+  // Header comment lines must be single-line.
+  const sourceLine = lines.find((l) => l.startsWith('# Source:'));
+  const destLine = lines.find((l) => l.startsWith('# Destination:'));
+  assert.notEqual(sourceLine, undefined, 'header `# Source:` line should appear');
+  assert.notEqual(destLine, undefined, 'header `# Destination:` line should appear');
+  assert.doesNotMatch(sourceLine!, /[\r\n]/, '# Source line must not contain CR/LF');
+  assert.doesNotMatch(destLine!, /[\r\n]/, '# Destination line must not contain CR/LF');
+
+  // TODO line: exactly one, single-line, with all three sanitized values.
   const todoLines = lines.filter((l) => l.startsWith('# TODO'));
   assert.equal(todoLines.length, 1, 'exactly one TODO line should appear');
   assert.doesNotMatch(todoLines[0]!, /[\r\n]/, 'TODO line must not contain CR/LF');
-
-  // Critical: no line in the rendered script should consist of `rm -rf /`
-  // (or any other unwrapped suffix from the malicious payload).
-  for (const l of lines) {
-    assert.notEqual(l.trim(), 'rm -rf /', `orphan line not allowed: ${JSON.stringify(l)}`);
-    assert.notEqual(l.trim(), 'rm -rf /)', `orphan line not allowed: ${JSON.stringify(l)}`);
-  }
-
-  // All three sanitized values should still be present in the single TODO line
-  // (with newlines collapsed to spaces).
   assert.match(todoLines[0]!, /evil rm -rf \//);
   assert.match(todoLines[0]!, /0 9 \* \* \* rm -rf \//);
   assert.match(todoLines[0]!, /\/safe\.sh rm -rf \//);
