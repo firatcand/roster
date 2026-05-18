@@ -86,16 +86,15 @@ test('walkFanout: nested tree → recurses and reports depth', () => {
   }
 });
 
-test('walkFanout: cyclic graph → cycle detected, count truncated', () => {
+test('walkFanout: cyclic graph → cycle detected at back-edge, all preceding edges counted', () => {
   const dir = tmp();
   try {
     write(dir, 'agent.md', '# Root\n\n## Subagents\n\n- `a.md` — first\n');
-    // a references b, b references a → cycle through root chain
     write(dir, 'a.md', '# A\n\n## Subagents\n\n- `b.md` — back-edge attempt\n');
     write(dir, 'b.md', '# B\n\n## Subagents\n\n- `a.md` — cycle\n');
     const r = walkFanout(join(dir, 'agent.md'));
-    // root + a + b visited once = fanoutCount of 2 (visited.size - 1 = 3 - 1)
-    assert.equal(r.fanoutCount, 2);
+    // 3 edges traversed before the cycle short-circuits: root→a, a→b, b→a.
+    assert.equal(r.fanoutCount, 3);
     assert.ok(r.warnings.some((w) => /cycle detected/.test(w)), `expected cycle warning, got: ${r.warnings.join(' | ')}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -107,10 +106,30 @@ test('walkFanout: subagent file missing → counted but not recursed, with warni
   try {
     write(dir, 'agent.md', '# Root\n\n## Subagents\n\n- `ghost.md` — never created\n');
     const r = walkFanout(join(dir, 'agent.md'));
-    // ghost.md isn't visited (doesn't exist), so visited.size stays at 1 (root).
-    assert.equal(r.fanoutCount, 0);
+    // Edge from root→ghost is counted even though ghost.md doesn't exist on disk.
+    assert.equal(r.fanoutCount, 1);
     assert.equal(r.depth, 1);
     assert.ok(r.warnings.some((w) => /'ghost\.md' not found/.test(w)));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('walkFanout: diamond graph → shared subagent counted once per invocation, no cycle warning', () => {
+  const dir = tmp();
+  try {
+    write(dir, 'agent.md', '# Root\n\n## Subagents\n\n- `a.md`\n- `b.md`\n');
+    write(dir, 'a.md', '# A\n\n## Subagents\n\n- `critic.md`\n');
+    write(dir, 'b.md', '# B\n\n## Subagents\n\n- `critic.md`\n');
+    write(dir, 'critic.md', '# C\n');
+    const r = walkFanout(join(dir, 'agent.md'));
+    // 4 edges: root→a, root→b, a→critic, b→critic.
+    assert.equal(r.fanoutCount, 4);
+    assert.equal(
+      r.warnings.filter((w) => /cycle detected/.test(w)).length,
+      0,
+      `diamond should NOT trigger cycle warning, got: ${r.warnings.join(' | ')}`,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

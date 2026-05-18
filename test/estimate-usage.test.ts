@@ -229,7 +229,7 @@ schedules:
   }
 });
 
-test('estimateUsage: planFilter restricts comparison to one plan', () => {
+test('estimateUsage: planFilter narrows row planLoads AND report ceilings', () => {
   const dir = tmp();
   try {
     writeSchedules(
@@ -256,6 +256,10 @@ schedules:
     });
     assert.equal(report.rows[0]!.planLoads.length, 1);
     assert.equal(report.rows[0]!.planLoads[0]!.planId, 'claude-pro');
+    // Report-level ceilings array also narrowed so text + JSON renderers stay
+    // consistent with the row planLoads.
+    assert.equal(report.ceilings.length, 1);
+    assert.equal(report.ceilings[0]!.id, 'claude-pro');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

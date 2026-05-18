@@ -106,7 +106,6 @@ function computeRow(
   now: Date,
   depthCap: number,
   warnThreshold: number,
-  planFilter: string | undefined,
 ): EstimateRow {
   const warnings: string[] = [];
   const agentMd = resolveAgentMdPath(workspacePath, functionName, entry.agent);
@@ -132,7 +131,6 @@ function computeRow(
 
   const planLoads = ceilings
     .filter((c) => c.tool === entry.tool)
-    .filter((c) => (planFilter === undefined ? true : c.id === planFilter))
     .map((c) => {
       const fraction = msgsPerWeek / c.msgs_per_week;
       return {
@@ -168,17 +166,24 @@ export function estimateUsage(opts: EstimateOptions): EstimateReport {
   const now = opts.now ?? new Date();
   const warnThreshold = opts.warnThreshold ?? DEFAULT_WARN_THRESHOLD;
   const depthCap = opts.depthCap ?? DEFAULT_DEPTH_CAP;
-  const ceilings = opts.ceilings ?? loadPlanCeilings();
+  const allCeilings = opts.ceilings ?? loadPlanCeilings();
   const listReport = opts.listReport ?? buildListReport(opts.cwd, now);
 
   if (opts.planFilter !== undefined) {
-    const match = ceilings.find((c) => c.id === opts.planFilter);
+    const match = allCeilings.find((c) => c.id === opts.planFilter);
     if (!match) {
       throw new Error(
-        `--plan '${opts.planFilter}' not found in plan-ceilings.yaml (available: ${ceilings.map((c) => c.id).join(', ')})`,
+        `--plan '${opts.planFilter}' not found in plan-ceilings.yaml (available: ${allCeilings.map((c) => c.id).join(', ')})`,
       );
     }
   }
+
+  // When --plan is set, narrow EVERY downstream consumer (per-row planLoads,
+  // text table columns, JSON ceilings array) to the requested plan only.
+  const ceilings =
+    opts.planFilter === undefined
+      ? allCeilings
+      : allCeilings.filter((c) => c.id === opts.planFilter);
 
   const firesPerWeekFn = makeFiresPerWeekFn();
   const rows: EstimateRow[] = [];
@@ -193,7 +198,6 @@ export function estimateUsage(opts: EstimateOptions): EstimateReport {
         now,
         depthCap,
         warnThreshold,
-        opts.planFilter,
       ),
     );
   }
