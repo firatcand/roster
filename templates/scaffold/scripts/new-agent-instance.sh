@@ -109,7 +109,6 @@ echo "  cd $INSTANCE_DIR/"
 echo "  claude"
 echo "  \"Run $AGENT — dry run, just show me the plan\""
 echo ""
-# Scheduling primitives ship in Phase 2.5 (see ROS-39). Until then,
-# `bash scripts/new-cron.sh` is not available — print a pointer instead
-# of a command that would fail with "No such file or directory".
-echo "Optionally schedule via cron: see ROS-39 (Phase 2.5 scheduling primitives)."
+# Scheduling: register with the native desktop scheduler via `roster schedule install`.
+# See docs/SCHEDULING.md and docs/adr/0001-scheduling-architecture.md for the model.
+echo "Optionally schedule this agent: roster schedule install $FN/$AGENT <plan> --cron \"<expr>\" --tool claude|codex"
