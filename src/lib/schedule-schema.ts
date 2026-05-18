@@ -137,6 +137,16 @@ export const TOOL_VALUES = ['claude', 'codex'] as const;
 export const INSTALL_MODE_VALUES = ['ui-handoff', 'via-cron'] as const;
 export const INSTALL_STATUS_VALUES = ['pending-ui-install', 'installed'] as const;
 
+const subscriptionAttestationSchema = z
+  .object({
+    auth_mode: z.literal('chatgpt'),
+    env_policy: z.literal('cleared'),
+    codex_home: z.string().min(1, { message: 'subscription_attestation.codex_home: required' }),
+  })
+  .strict();
+
+export type SubscriptionAttestation = z.infer<typeof subscriptionAttestationSchema>;
+
 export const scheduleEntrySchema = z
   .object({
     name: kebabString('name'),
@@ -161,6 +171,7 @@ export const scheduleEntrySchema = z
         return issue.code === 'invalid_value' ? `${base} (got '${String(issue.input)}')` : base;
       },
     }),
+    subscription_attestation: subscriptionAttestationSchema.optional(),
     timezone: timezoneString.optional(),
     max_duration_minutes: z
       .number()
@@ -177,7 +188,26 @@ export const scheduleEntrySchema = z
       .optional(),
     retry_policy: retryPolicySchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((entry, ctx) => {
+    // ROS-35 codex review: attestation required when tool=codex, forbidden when tool=claude.
+    // Optional-everywhere left a hole where a codex entry without attestation would
+    // validate clean.
+    if (entry.tool === 'codex' && entry.subscription_attestation === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['subscription_attestation'],
+        message: 'subscription_attestation: required when tool=codex',
+      });
+    }
+    if (entry.tool === 'claude' && entry.subscription_attestation !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['subscription_attestation'],
+        message: 'subscription_attestation: forbidden when tool=claude (codex-only field)',
+      });
+    }
+  });
 
 export type ScheduleEntry = z.infer<typeof scheduleEntrySchema>;
 export type ToolValue = (typeof TOOL_VALUES)[number];

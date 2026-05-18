@@ -10,6 +10,10 @@ export const SCHEDULE_SUBCOMMANDS: ReadonlySet<ScheduleSubcommand> = new Set<Sch
 const SUBCOMMAND_LIST = Array.from(SCHEDULE_SUBCOMMANDS).join(' | ');
 const TOOL_LIST = TOOL_VALUES.join(' | ');
 
+export type ViaMode = 'cron';
+export const VIA_VALUES = ['cron'] as const;
+const VIA_LIST = VIA_VALUES.join(' | ');
+
 export type ParsedScheduleArgs =
   | {
       kind: 'ok';
@@ -26,6 +30,7 @@ export type ParsedScheduleArgs =
       plan: string;
       cron: string;
       tool: ToolValue;
+      via: ViaMode | undefined;
       name: string | undefined;
       dryRun: boolean;
       cloudRoutine: boolean;
@@ -41,6 +46,10 @@ function isScheduleSubcommand(value: string): value is ScheduleSubcommand {
 
 function isToolValue(value: string): value is ToolValue {
   return (TOOL_VALUES as readonly string[]).includes(value);
+}
+
+function isViaMode(value: string): value is ViaMode {
+  return (VIA_VALUES as readonly string[]).includes(value);
 }
 
 export function parseScheduleArgs(args: readonly string[]): ParsedScheduleArgs {
@@ -89,6 +98,7 @@ function parseInstall(rest: readonly string[]): ParsedScheduleArgs {
   const positionals: string[] = [];
   let cron: string | undefined;
   let toolRaw: string | undefined;
+  let viaRaw: string | undefined;
   let name: string | undefined;
   let dryRun = false;
   let cloudRoutine = false;
@@ -124,6 +134,14 @@ function parseInstall(rest: readonly string[]): ParsedScheduleArgs {
     } else if (arg.startsWith('--tool=')) {
       if (toolRaw !== undefined) return { kind: 'err', message: 'flag --tool specified more than once' };
       toolRaw = arg.slice('--tool='.length);
+    } else if (arg === '--via') {
+      const r = consumeValue('--via', viaRaw, rest[i + 1]);
+      if (!r.ok) return { kind: 'err', message: r.message };
+      viaRaw = r.value;
+      i++;
+    } else if (arg.startsWith('--via=')) {
+      if (viaRaw !== undefined) return { kind: 'err', message: 'flag --via specified more than once' };
+      viaRaw = arg.slice('--via='.length);
     } else if (arg === '--name') {
       const r = consumeValue('--name', name, rest[i + 1]);
       if (!r.ok) return { kind: 'err', message: r.message };
@@ -188,6 +206,14 @@ function parseInstall(rest: readonly string[]): ParsedScheduleArgs {
     return { kind: 'err', message: `unknown tool '${toolRaw}' for --tool (expected: ${TOOL_LIST})` };
   }
 
+  let via: ViaMode | undefined;
+  if (viaRaw !== undefined) {
+    if (!isViaMode(viaRaw)) {
+      return { kind: 'err', message: `unknown --via mode '${viaRaw}' (expected: ${VIA_LIST})` };
+    }
+    via = viaRaw;
+  }
+
   return {
     kind: 'ok',
     subcommand: 'install',
@@ -196,6 +222,7 @@ function parseInstall(rest: readonly string[]): ParsedScheduleArgs {
     plan,
     cron,
     tool: toolRaw,
+    via,
     name,
     dryRun,
     cloudRoutine,

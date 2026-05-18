@@ -47,6 +47,10 @@ schedules:
     tool: codex
     install_mode: via-cron
     status: installed
+    subscription_attestation:
+      auth_mode: chatgpt
+      env_policy: cleared
+      codex_home: /Users/test/.codex
 `;
 
 const invalidYaml = `version: 1
@@ -331,7 +335,25 @@ test('schedule install: --cloud-routine → exit 1 with not-yet-implemented', ()
   }
 });
 
-test('schedule install: --tool codex → exit 1 with ROS-35 pointer', () => {
+test('schedule install: --via cron with --tool claude → exit 1 with unsupported error', () => {
+  const fix = makeCwd();
+  try {
+    const r = runCli([
+      'schedule', 'install',
+      'gtm/sdr', 'cold-outreach',
+      '--cron', '0 9 * * 1-5',
+      '--tool', 'claude',
+      '--via', 'cron',
+      '--cwd', fix.root,
+    ]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /--via cron is not supported with --tool claude/);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test('schedule install: --via foo (unknown mode) → exit 1', () => {
   const fix = makeCwd();
   try {
     const r = runCli([
@@ -339,11 +361,11 @@ test('schedule install: --tool codex → exit 1 with ROS-35 pointer', () => {
       'gtm/sdr', 'cold-outreach',
       '--cron', '0 9 * * 1-5',
       '--tool', 'codex',
+      '--via', 'foo',
       '--cwd', fix.root,
     ]);
     assert.equal(r.status, 1);
-    assert.match(r.stderr, /not implemented in this release/);
-    assert.match(r.stderr, /ROS-35/);
+    assert.match(r.stderr, /unknown --via mode/);
   } finally {
     fix.cleanup();
   }
@@ -469,3 +491,217 @@ test('schedule install --json: exit 0, parseable payload', () => {
     fix.cleanup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// schedule install (ROS-35) — Codex paths
+// ---------------------------------------------------------------------------
+
+import { homedir } from 'node:os';
+
+function makeFakeHome(): { home: string; codex: string; cleanup: () => void } {
+  const home = mkdtempSync(join(tmpdir(), 'roster-codex-home-'));
+  const codex = join(home, '.codex');
+  mkdirSync(codex, { recursive: true });
+  writeFileSync(join(codex, 'auth.json'), JSON.stringify({ auth_mode: 'chatgpt', OPENAI_API_KEY: null }), 'utf8');
+  return { home, codex, cleanup: () => rmSync(home, { recursive: true, force: true }) };
+}
+
+function runCliCodex(args: readonly string[], homeDir: string, platform: 'darwin' | 'linux' | 'win32' = 'darwin'): Run {
+  // Strip API-key env vars so preflight passes deterministically. HOME override
+  // makes the CLI's homedir() resolve to our fake codex root. ROSTER_CODEX_PATH
+  // pin is required so via-cron tests don't depend on `codex` being installed
+  // on the CI runner (Ubuntu has no codex binary on PATH).
+  const baseEnv = { ...process.env };
+  delete baseEnv['CODEX_API_KEY'];
+  delete baseEnv['OPENAI_API_KEY'];
+  delete baseEnv['ANTHROPIC_API_KEY'];
+  delete baseEnv['CODEX_HOME'];
+  const env: NodeJS.ProcessEnv = {
+    ...baseEnv,
+    HOME: homeDir,
+    FORCE_COLOR: '0',
+    NO_COLOR: '1',
+    ROSTER_PLATFORM: platform,
+    ROSTER_CODEX_PATH: '/opt/homebrew/bin/codex',
+  };
+  const out = spawnSync(
+    process.execPath,
+    ['--experimental-strip-types', '--no-warnings', BIN, ...args],
+    { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000 },
+  );
+  return { status: out.status ?? -1, stdout: out.stdout, stderr: out.stderr };
+}
+
+test('schedule install --tool codex (hand-off): exit 0, fields doc written, hand-off printed', () => {
+  const fix = makeCwd();
+  const fh = makeFakeHome();
+  try {
+    const r = runCliCodex([
+      'schedule', 'install',
+      'gtm/sdr', 'cold-outreach',
+      '--cron', '0 9 * * 1-5',
+      '--tool', 'codex',
+      '--cwd', fix.root,
+    ], fh.home);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}\nstdout: ${r.stdout}`);
+    assert.match(r.stdout, /Registered codex schedule sdr-cold-outreach/);
+    assert.match(r.stdout, /paste into the Codex app/);
+
+    const fieldsDocPath = join(fix.root, '.roster', 'schedule-specs', 'sdr-cold-outreach.codex.fields.md');
+    assert.ok(existsSync(fieldsDocPath));
+
+    const yamlPath = join(fix.root, 'roster', 'gtm', 'schedules.yaml');
+    const doc = YAML.parse(readFileSync(yamlPath, 'utf8'));
+    assert.equal(doc.schedules[0].tool, 'codex');
+    assert.equal(doc.schedules[0].install_mode, 'ui-handoff');
+    assert.equal(doc.schedules[0].status, 'pending-ui-install');
+    assert.equal(doc.schedules[0].subscription_attestation.auth_mode, 'chatgpt');
+  } finally {
+    fix.cleanup();
+    fh.cleanup();
+  }
+});
+
+test('schedule install --tool codex (hand-off) --dry-run: exit 0, no writes', () => {
+  const fix = makeCwd();
+  const fh = makeFakeHome();
+  try {
+    const before = listAllFiles(fix.root);
+    const r = runCliCodex([
+      'schedule', 'install',
+      'gtm/sdr', 'cold-outreach',
+      '--cron', '0 9 * * 1-5',
+      '--tool', 'codex',
+      '--cwd', fix.root,
+      '--dry-run',
+    ], fh.home);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.match(r.stdout, /Would register/);
+    const after = listAllFiles(fix.root);
+    assert.deepEqual(after, before);
+  } finally {
+    fix.cleanup();
+    fh.cleanup();
+  }
+});
+
+test('schedule install --tool codex --via cron --dry-run: exit 0, cron line printed, no crontab call, no logs dir', () => {
+  const fix = makeCwd();
+  const fh = makeFakeHome();
+  try {
+    const r = runCliCodex([
+      'schedule', 'install',
+      'gtm/sdr', 'cold-outreach',
+      '--cron', '0 9 * * 1-5',
+      '--tool', 'codex',
+      '--via', 'cron',
+      '--cwd', fix.root,
+      '--dry-run',
+    ], fh.home);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.match(r.stdout, /Would register/);
+    assert.match(r.stdout, /Crontab line \(would be installed\)/);
+    assert.ok(!existsSync(join(fix.root, 'logs', 'cron')));
+  } finally {
+    fix.cleanup();
+    fh.cleanup();
+  }
+});
+
+test('schedule install --tool codex: preflight fails when API key in shell → exit 1, lists failures', () => {
+  const fix = makeCwd();
+  const fh = makeFakeHome();
+  try {
+    const baseEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: fh.home,
+      FORCE_COLOR: '0',
+      NO_COLOR: '1',
+      ROSTER_PLATFORM: 'darwin',
+      OPENAI_API_KEY: 'sk-leak',
+    };
+    const out = spawnSync(
+      process.execPath,
+      ['--experimental-strip-types', '--no-warnings', BIN,
+        'schedule', 'install', 'gtm/sdr', 'cold-outreach',
+        '--cron', '0 9 * * 1-5', '--tool', 'codex', '--cwd', fix.root,
+      ],
+      { encoding: 'utf8', env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000 },
+    );
+    assert.equal(out.status, 1);
+    assert.match(out.stderr, /preflight failed/);
+    assert.match(out.stderr, /env_openai_api_key/);
+  } finally {
+    fix.cleanup();
+    fh.cleanup();
+  }
+});
+
+test('schedule install --tool codex on Linux without --via cron → exit 1 (Codex desktop not on Linux)', () => {
+  const fix = makeCwd();
+  const fh = makeFakeHome();
+  try {
+    const r = runCliCodex([
+      'schedule', 'install',
+      'gtm/sdr', 'cold-outreach',
+      '--cron', '0 9 * * 1-5',
+      '--tool', 'codex',
+      '--cwd', fix.root,
+    ], fh.home, 'linux');
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /Codex desktop app is not available on Linux/);
+  } finally {
+    fix.cleanup();
+    fh.cleanup();
+  }
+});
+
+test('schedule install --tool codex --via cron on Windows → exit 1', () => {
+  const fix = makeCwd();
+  const fh = makeFakeHome();
+  try {
+    const r = runCliCodex([
+      'schedule', 'install',
+      'gtm/sdr', 'cold-outreach',
+      '--cron', '0 9 * * 1-5',
+      '--tool', 'codex',
+      '--via', 'cron',
+      '--cwd', fix.root,
+    ], fh.home, 'win32');
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /--via cron is not supported on Windows/);
+  } finally {
+    fix.cleanup();
+    fh.cleanup();
+  }
+});
+
+test('schedule install --tool codex --json: exit 0, parseable payload includes attestation', () => {
+  const fix = makeCwd();
+  const fh = makeFakeHome();
+  try {
+    const r = runCliCodex([
+      'schedule', 'install', 'gtm/sdr', 'cold-outreach',
+      '--cron', '0 9 * * 1-5', '--tool', 'codex',
+      '--cwd', fix.root, '--json',
+    ], fh.home);
+    assert.equal(r.status, 0);
+    const payload = JSON.parse(r.stdout) as {
+      ok: boolean;
+      name: string;
+      tool: string;
+      installMode: string;
+      attestation: { auth_mode: string };
+    };
+    assert.equal(payload.ok, true);
+    assert.equal(payload.tool, 'codex');
+    assert.equal(payload.installMode, 'ui-handoff');
+    assert.equal(payload.attestation.auth_mode, 'chatgpt');
+  } finally {
+    fix.cleanup();
+    fh.cleanup();
+  }
+});
+
+// Suppress unused-import warnings: homedir is reserved for future tests.
+void homedir;

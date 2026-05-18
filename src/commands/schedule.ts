@@ -6,15 +6,23 @@ import {
   type ClaudeInstallOpts,
   type ClaudeInstallResult,
 } from '../lib/schedule-install.ts';
+import {
+  installCodexSchedule,
+  type CodexInstallOpts,
+  type CodexInstallResult,
+} from '../lib/codex-install.ts';
 import { getPlatform } from '../lib/platform.ts';
 import {
   EXIT_OK,
   EXIT_ERROR,
-  RosterError,
   linuxClaudeUnsupportedError,
   cloudRoutineNotImplementedError,
+  unsupportedViaModeError,
+  windowsCronNotSupportedError,
+  linuxCodexHandoffUnsupportedError,
 } from '../lib/errors.ts';
-import type { ToolValue } from '../lib/schedule-schema.ts';
+import type { ToolValue, InstallModeValue } from '../lib/schedule-schema.ts';
+import type { ViaMode } from '../lib/schedule-args.ts';
 
 export type ScheduleValidateOptions = {
   cwd: string;
@@ -29,6 +37,7 @@ export type ScheduleInstallOptions = {
   plan: string;
   cron: string;
   tool: ToolValue;
+  via: ViaMode | undefined;
   name: string | undefined;
   dryRun: boolean;
   cloudRoutine: boolean;
@@ -97,9 +106,6 @@ export function executeScheduleValidate(opts: ScheduleValidateOptions): number {
 }
 
 function preflightInstall(opts: ScheduleInstallOptions): void {
-  // --cloud-routine is reserved for a follow-up ADR (tracked under future
-  // ROS-XX). Refuse regardless of platform so the Linux gate has a documented
-  // escape hatch and users get a clear "not yet" rather than a partial result.
   if (opts.cloudRoutine) {
     throw cloudRoutineNotImplementedError();
   }
@@ -108,19 +114,24 @@ function preflightInstall(opts: ScheduleInstallOptions): void {
     throw linuxClaudeUnsupportedError();
   }
 
+  // --via cron is codex-only; claude has no programmatic install path today.
+  if (opts.via === 'cron' && opts.tool !== 'codex') {
+    throw unsupportedViaModeError({ tool: opts.tool, via: opts.via });
+  }
+
   if (opts.tool === 'codex') {
-    // Codex install ships in ROS-35; refuse here so users get the right
-    // pointer instead of a half-implemented Claude path running on Codex inputs.
-    throw new RosterError({
-      header: `${chalk.red.bold('roster:')} --tool codex is not implemented in this release`,
-      body: '  Codex install (Automation hand-off and --via cron) lands in ROS-35.',
-      remedy: `  Use ${chalk.bold('--tool claude')} for now, or track ROS-35 for Codex support.`,
-      exitCode: EXIT_ERROR,
-    });
+    // Cron is unavailable on Windows.
+    if (opts.via === 'cron' && getPlatform() === 'win32') {
+      throw windowsCronNotSupportedError();
+    }
+    // Codex desktop app isn't available on Linux — default hand-off has no target.
+    if (opts.via === undefined && getPlatform() === 'linux') {
+      throw linuxCodexHandoffUnsupportedError();
+    }
   }
 }
 
-function renderInstallText(result: ClaudeInstallResult, dryRun: boolean): string[] {
+function renderClaudeInstallText(result: ClaudeInstallResult, dryRun: boolean): string[] {
   const lines: string[] = [];
   lines.push(result.handoffMessage);
   if (dryRun) {
@@ -132,20 +143,77 @@ function renderInstallText(result: ClaudeInstallResult, dryRun: boolean): string
   return lines;
 }
 
+function renderCodexInstallText(result: CodexInstallResult, dryRun: boolean): string[] {
+  const lines: string[] = [];
+  lines.push(result.handoffMessage);
+  if (dryRun) {
+    if (result.installMode === 'ui-handoff') {
+      lines.push(chalk.bold('--- Fields document (would be written) ---'));
+      lines.push(result.fieldsDocContent ?? '');
+      lines.push(chalk.bold('--- End fields document ---'));
+    } else {
+      lines.push(chalk.bold('--- Crontab line (would be installed) ---'));
+      lines.push(result.cronLine ?? '');
+      lines.push(chalk.bold('--- End crontab line ---'));
+    }
+    lines.push('');
+  }
+  return lines;
+}
+
 export function executeScheduleInstall(opts: ScheduleInstallOptions): number {
   preflightInstall(opts);
 
-  const installOpts: ClaudeInstallOpts = {
+  if (opts.tool === 'claude') {
+    const installOpts: ClaudeInstallOpts = {
+      cwd: opts.cwd,
+      functionName: opts.functionName,
+      agent: opts.agent,
+      plan: opts.plan,
+      cron: opts.cron,
+      name: opts.name,
+      dryRun: opts.dryRun,
+    };
+
+    const result = installClaudeSchedule(installOpts);
+
+    if (opts.json) {
+      console.log(
+        JSON.stringify(
+          {
+            ok: true,
+            dryRun: opts.dryRun,
+            name: result.resolvedName,
+            tool: opts.tool,
+            action: result.action,
+            fieldsDocPath: result.fieldsDocPath,
+            schedulesYamlPath: result.schedulesYamlPath,
+            fieldsDocContent: opts.dryRun ? result.fieldsDocContent : undefined,
+          },
+          null,
+          2,
+        ),
+      );
+    } else if (!opts.silent) {
+      for (const line of renderClaudeInstallText(result, opts.dryRun)) console.log(line);
+    }
+    return EXIT_OK;
+  }
+
+  // Codex path
+  const installMode: InstallModeValue = opts.via === 'cron' ? 'via-cron' : 'ui-handoff';
+  const codexOpts: CodexInstallOpts = {
     cwd: opts.cwd,
     functionName: opts.functionName,
     agent: opts.agent,
     plan: opts.plan,
     cron: opts.cron,
     name: opts.name,
+    installMode,
     dryRun: opts.dryRun,
   };
 
-  const result = installClaudeSchedule(installOpts);
+  const result = installCodexSchedule(codexOpts);
 
   if (opts.json) {
     console.log(
@@ -155,18 +223,21 @@ export function executeScheduleInstall(opts: ScheduleInstallOptions): number {
           dryRun: opts.dryRun,
           name: result.resolvedName,
           tool: opts.tool,
+          installMode: result.installMode,
           action: result.action,
           fieldsDocPath: result.fieldsDocPath,
+          cronLine: result.cronLine,
+          logPath: result.logPath,
           schedulesYamlPath: result.schedulesYamlPath,
           fieldsDocContent: opts.dryRun ? result.fieldsDocContent : undefined,
+          attestation: result.attestation,
         },
         null,
         2,
       ),
     );
   } else if (!opts.silent) {
-    for (const line of renderInstallText(result, opts.dryRun)) console.log(line);
+    for (const line of renderCodexInstallText(result, opts.dryRun)) console.log(line);
   }
-
   return EXIT_OK;
 }

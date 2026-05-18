@@ -254,6 +254,7 @@ function runSchedule(args: readonly string[]): number {
       plan: parsed.plan,
       cron: parsed.cron,
       tool: parsed.tool,
+      via: parsed.via,
       name: parsed.name,
       dryRun: parsed.dryRun,
       cloudRoutine: parsed.cloudRoutine,

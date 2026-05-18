@@ -21,6 +21,12 @@ function writeSchedules(root: string, fn: string, content: string): string {
   return path;
 }
 
+const codexAttestation = `    subscription_attestation:
+      auth_mode: chatgpt
+      env_policy: cleared
+      codex_home: /Users/test/.codex
+`;
+
 const validYaml = `version: 1
 schedules:
   - name: cold-outreach-daily
@@ -30,7 +36,7 @@ schedules:
     tool: codex
     install_mode: via-cron
     status: installed
-`;
+${codexAttestation}`;
 
 const invalidEnumYaml = `version: 1
 schedules:
@@ -52,7 +58,7 @@ schedules:
     tool: codex
     install_mode: via-cron
     status: installed
-`;
+${codexAttestation}`;
 
 const duplicateNameYaml = `version: 1
 schedules:
@@ -63,14 +69,14 @@ schedules:
     tool: codex
     install_mode: via-cron
     status: installed
-  - name: alpha
+${codexAttestation}  - name: alpha
     agent: sdr
     plan: cold-outreach
     cron: "0 9 * * 1-5"
     tool: codex
     install_mode: via-cron
     status: installed
-`;
+${codexAttestation}`;
 
 test('findScheduleFiles: empty cwd → []', () => {
   const fix = makeFixture();
@@ -227,6 +233,10 @@ test('validate: missing version field → file-level fail', () => {
     tool: codex
     install_mode: via-cron
     status: installed
+    subscription_attestation:
+      auth_mode: chatgpt
+      env_policy: cleared
+      codex_home: /Users/test/.codex
 `);
     const report = validateSchedulesInCwd(fix.root);
     assert.equal(report.ok, false);
@@ -282,6 +292,10 @@ schedules:
     tool: codex
     install_mode: via-cron
     status: installed
+    subscription_attestation:
+      auth_mode: chatgpt
+      env_policy: cleared
+      codex_home: /Users/test/.codex
     timezone: "America/New_York"
     max_duration_minutes: 30
     hitl_routing: "roster/gtm/pending/"
