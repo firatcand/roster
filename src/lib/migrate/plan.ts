@@ -93,13 +93,10 @@ function renderScheduleInstallCmd(args: {
   tool: 'claude' | 'codex';
   destWorkspace: string;
 }): string {
-  // shellEscape every dynamic token. `tool` is a typed union literal so it stays bare.
-  // The `/` between function and agent is the install-positional convention; both halves
-  // are independently quoted so a `'` cannot bleed across.
-  const fnAgent = `${shellEscape(args.function)}/${shellEscape(args.agent)}`;
+  // `tool` is a typed union literal so it stays unquoted; every other token is single-quoted.
   return [
     'roster schedule install',
-    fnAgent,
+    `${shellEscape(args.function)}/${shellEscape(args.agent)}`,
     shellEscape(args.plan),
     '--cron',
     shellEscape(args.cron),

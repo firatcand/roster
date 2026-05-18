@@ -219,6 +219,32 @@ test('planMigration: rendered command round-trips through bash argv parsing (ROS
   }
 });
 
+test('planMigration: adversarial destWorkspace round-trips intact through bash argv (ROS-64)', () => {
+  // Smuggle hostile chars into destWorkspace. shellEscape on the renderer must keep
+  // them inside the --cwd argument as a single token — no command substitution,
+  // no field splitting.
+  const fix = buildAgentTeamMini();
+  try {
+    const hostileDest = "/tmp/has spaces and 'quotes' and $(echo pwned) and `whoami` and ;rm -rf;";
+    const model = scanSourceWorkspace({ sourceDir: fix.root });
+    const plan = planMigration(model, { destWorkspace: hostileDest, destIsInitialized: true });
+    const dreamer = plan.scheduleInstalls.find((s) => s.wrapperBasename === 'dreamer-nightly')!;
+
+    const script = `set -- ${dreamer.rendered}; printf '%s\\n' "$@"`;
+    const out = execFileSync('bash', ['-c', script], { encoding: 'utf8' });
+    const argv = out.split('\n').slice(0, -1);
+
+    // The --cwd value must be the EXACT hostile string, untouched.
+    const cwdIdx = argv.indexOf('--cwd');
+    assert.notEqual(cwdIdx, -1);
+    assert.equal(argv[cwdIdx + 1], hostileDest);
+    // And the rendered script must contain no token that bash would expand.
+    assert.equal(argv.includes('pwned'), false, 'no command-substitution leakage');
+  } finally {
+    fix.cleanup();
+  }
+});
+
 test('planMigration: pure function — same input twice → identical plans', () => {
   const fix = buildAgentTeamMini();
   const dst = makeDest();

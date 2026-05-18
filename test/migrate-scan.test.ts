@@ -4,7 +4,7 @@ import { parseCrontab } from '../src/lib/migrate/crontab.ts';
 import { mapWrapperToAgentPlan, parseWrapperFile } from '../src/lib/migrate/wrapper.ts';
 import { scanSourceWorkspace, isLikelyRosterWorkspace } from '../src/lib/migrate/scan.ts';
 import { buildAgentTeamMini } from './fixtures/agent-team-mini/_setup.ts';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -183,43 +183,66 @@ test('scanSourceWorkspace: knownAgentPaths is set up for longest-prefix wrapper 
   }
 });
 
-test('scanSourceWorkspace: rejects crontab wrapper paths that escape sourceDir via .. (ROS-64)', () => {
-  // Build a minimal source tree with a crontab entry whose absolute wrapper
-  // path resolves OUTSIDE sourceDir via `..`. The pre-ROS-64 implementation
-  // would naively accept it (startsWith match) and try to read the escape
-  // path; the hardened implementation must fall back to basename translation.
-  const src = mkdtempSync(join(tmpdir(), 'roster-traversal-src-'));
-  const outside = mkdtempSync(join(tmpdir(), 'roster-traversal-outside-'));
+test('scanSourceWorkspace: rejects sibling-prefix wrapper paths that bypass naive startsWith (ROS-64)', () => {
+  // Classic prefix-match exploit: an attacker plants a sibling dir whose name is a
+  // string-extension of sourceDir, then references a wrapper inside it. Pre-fix code
+  // used `wrapperPath.startsWith(sourceDir)` and accepted the escape; the hardened
+  // check uses realpathSync + sep-anchored containment, which rejects it.
+  const parent = mkdtempSync(join(tmpdir(), 'roster-traversal-'));
+  const src = join(parent, 'src');
+  const sibling = join(parent, 'src-evil'); // string-extension of `src`
   try {
-    // Write an "outside" wrapper that should NEVER be read by the scanner.
-    const outsideWrapper = join(outside, 'evil-wrapper.sh');
+    mkdirSync(join(src, 'scripts', 'cron'), { recursive: true });
+    mkdirSync(sibling, { recursive: true });
+    const outsideWrapper = join(sibling, 'wrapper.sh');
     writeFileSync(outsideWrapper, '#!/usr/bin/env bash\nclaude -p "PWNED"\n', 'utf8');
 
-    // Build the traversal path: ${src}/scripts/cron/../../../<outside-basename>/evil-wrapper.sh
-    // — startsWith(src) is TRUE (it begins with src), but path.resolve reveals
-    // the resolved target lives outside src.
-    mkdirSync(join(src, 'scripts', 'cron'), { recursive: true });
-    const outsideRelFromSrc = join('scripts', 'cron', '..', '..', '..', join(outside, 'evil-wrapper.sh').slice(1));
-    const traversalPath = join(src, outsideRelFromSrc);
+    // outsideWrapper = `${parent}/src-evil/wrapper.sh` — startsWith(`${parent}/src`)
+    // is TRUE, but it lives outside the `src` directory.
     writeFileSync(
       join(src, 'scripts', 'cron', 'crontab'),
-      `0 3 * * * ${traversalPath}\n`,
+      `0 3 * * * ${outsideWrapper}\n`,
       'utf8',
     );
 
     const model = scanSourceWorkspace({ sourceDir: src });
 
-    // No wrapper was successfully resolved → cronEntries empty, scanner emitted a wrapper-not-found warning.
-    assert.equal(model.cronEntries.length, 0, 'must not follow .. escape path');
+    // The scanner must NOT have parsed the outside wrapper.
+    assert.equal(model.cronEntries.length, 0, 'sibling-prefix path must not resolve into a cronEntry');
+    const notFound = model.warnings.filter((w) => w.kind === 'wrapper-not-found');
+    assert.equal(notFound.length, 1, 'expected exactly one wrapper-not-found warning');
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test('scanSourceWorkspace: rejects symlink inside sourceDir that targets an ancestor (ROS-64 — realpath containment)', () => {
+  // Even with `path.resolve` (lexical), an attacker who can write into sourceDir can
+  // plant a symlink that resolves to an outside file. The hardened check uses
+  // realpathSync, which dereferences symlinks.
+  const parent = mkdtempSync(join(tmpdir(), 'roster-symlink-'));
+  const src = join(parent, 'src');
+  const outsideTarget = join(parent, 'outside-target.sh');
+  try {
+    mkdirSync(join(src, 'scripts', 'cron'), { recursive: true });
+    writeFileSync(outsideTarget, '#!/usr/bin/env bash\nclaude -p "PWNED"\n', 'utf8');
+
+    // Symlink inside src pointing at the outside file.
+    const symlinkPath = join(src, 'looks-inside.sh');
+    symlinkSync(outsideTarget, symlinkPath);
+
+    writeFileSync(
+      join(src, 'scripts', 'cron', 'crontab'),
+      `0 3 * * * ${symlinkPath}\n`,
+      'utf8',
+    );
+
+    const model = scanSourceWorkspace({ sourceDir: src });
+    assert.equal(model.cronEntries.length, 0, 'symlink escape must be rejected');
     const notFound = model.warnings.filter((w) => w.kind === 'wrapper-not-found');
     assert.equal(notFound.length, 1);
-
-    // Sanity: the outside wrapper still exists and was NOT read — proves we
-    // didn't silently swallow a successful escape.
-    assert.equal(existsSync(outsideWrapper), true);
   } finally {
-    rmSync(src, { recursive: true, force: true });
-    rmSync(outside, { recursive: true, force: true });
+    rmSync(parent, { recursive: true, force: true });
   }
 });
 
