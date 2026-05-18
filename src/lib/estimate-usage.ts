@@ -1,11 +1,12 @@
 import { resolve as resolvePath } from 'node:path';
 import { existsSync } from 'node:fs';
 import chalk from 'chalk';
-import { buildListReport, type ListReport } from './schedule-list.ts';
+import { buildListReport, fmtTs, type ListReport } from './schedule-list.ts';
 import { nextFireTime } from './cron-next.ts';
 import { walkFanout, DEFAULT_DEPTH_CAP } from './agent-fanout.ts';
 import { loadPlanCeilings, type PlanCeilings } from './plan-ceilings.ts';
 import type { ScheduleEntry, ToolValue } from './schedule-schema.ts';
+import type { StateLine } from './schedule-state.ts';
 
 const WEEK_HOURS = 7 * 24;
 
@@ -20,7 +21,11 @@ export type EstimateRow = {
   agent: string;
   plan: string;
   tool: ToolValue;
+  installMode: ScheduleEntry['install_mode'];
   cron: string;
+  status: ScheduleEntry['status'];
+  lastRun: StateLine | undefined;
+  nextDueAt: Date | undefined;
   firesPerWeek: number;
   firesPerDay: number;
   fanout: number;
@@ -101,6 +106,8 @@ function computeRow(
   workspacePath: string,
   functionName: string,
   entry: ScheduleEntry,
+  lastRun: StateLine | undefined,
+  nextDueAt: Date | undefined,
   ceilings: PlanCeilings,
   firesPerWeekFn: (cron: string, from: Date) => number,
   now: Date,
@@ -147,7 +154,11 @@ function computeRow(
     agent: entry.agent,
     plan: entry.plan,
     tool: entry.tool,
+    installMode: entry.install_mode,
     cron: entry.cron,
+    status: entry.status,
+    lastRun,
+    nextDueAt,
     firesPerWeek,
     firesPerDay,
     fanout,
@@ -193,6 +204,8 @@ export function estimateUsage(opts: EstimateOptions): EstimateReport {
         listReport.cwd,
         r.functionName,
         r.entry,
+        r.lastRun,
+        r.nextDueAt,
         ceilings,
         firesPerWeekFn,
         now,
@@ -232,7 +245,12 @@ export function renderEstimateJson(report: EstimateReport): string {
         agent: r.agent,
         plan: r.plan,
         tool: r.tool,
+        install_mode: r.installMode,
         cron: r.cron,
+        status: r.status,
+        last_run: r.lastRun?.timestamp ?? null,
+        last_status: r.lastRun?.status ?? null,
+        next_due_at: r.nextDueAt ? fmtTs(r.nextDueAt) : null,
         fires_per_day: round(r.firesPerDay, 2),
         fires_per_week: r.firesPerWeek,
         fanout: r.fanout,
