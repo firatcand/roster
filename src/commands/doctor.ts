@@ -28,6 +28,7 @@ export type DoctorOptions = {
   silent: boolean;
   fix: boolean;
   cwd: string;
+  dryRun: boolean;
 };
 
 type Summary = { ok: number; missing: number; stale: number };
@@ -173,6 +174,7 @@ export function runFixes(
   cwd: string,
   workspace: WorkspaceAuditResult,
   envPerms: EnvPermissionsResult,
+  dryRun = false,
 ): FixOutcome {
   const fixed: string[] = [];
   const failed: Array<{ what: string; error: string }> = [];
@@ -189,6 +191,10 @@ export function runFixes(
       if (!repairable.includes(item.status)) continue;
 
       const linkPath = join(cwd, item.name);
+      if (dryRun) {
+        fixed.push(`${item.name}: would relink → CONTEXT.md`);
+        continue;
+      }
       try {
         if (item.status !== 'missing') {
           unlinkSync(linkPath);
@@ -203,11 +209,15 @@ export function runFixes(
 
   // .env permissions fix
   if (envPerms.status === 'fail' && envPerms.autoFixable) {
-    try {
-      chmodSync(envPerms.path, 0o600);
-      fixed.push('.env: chmod 0600');
-    } catch (err) {
-      failed.push({ what: '.env', error: (err as Error).message });
+    if (dryRun) {
+      fixed.push('.env: would chmod 0600');
+    } else {
+      try {
+        chmodSync(envPerms.path, 0o600);
+        fixed.push('.env: chmod 0600');
+      } catch (err) {
+        failed.push({ what: '.env', error: (err as Error).message });
+      }
     }
   }
 
@@ -467,8 +477,8 @@ export function executeDoctor(opts: DoctorOptions): number {
   let fixOutcome: FixOutcome = NO_FIX_REQUESTED;
 
   if (opts.fix) {
-    fixOutcome = runFixes(opts.cwd, workspace, initialEnvPerms);
-    if (fixOutcome.fixed.length > 0) {
+    fixOutcome = runFixes(opts.cwd, workspace, initialEnvPerms, opts.dryRun);
+    if (!opts.dryRun && fixOutcome.fixed.length > 0) {
       workspaceFinal = auditWorkspace(opts.cwd);
     }
   }
@@ -523,11 +533,15 @@ export function executeDoctor(opts: DoctorOptions): number {
   } else if (!opts.silent) {
     for (const line of renderText(results, summary, workarounds)) console.log(line);
     for (const line of renderWorkspaceSection(workspaceFinal)) console.log(line);
-    for (const line of renderSchedulingSection(scheduling)) console.log(line);
     for (const line of renderSchedulingDriftSection(schedulingDrift)) console.log(line);
     for (const line of renderSafetySection(safety)) console.log(line);
     for (const line of renderSecretsSection(secrets)) console.log(line);
     for (const line of renderFixSection(fixOutcome)) console.log(line);
+    if (opts.dryRun) {
+      console.log(chalk.dim(opts.fix
+        ? '--dry-run: nothing applied; lines above are what `--fix` would have done.'
+        : '--dry-run: read-only audit; pass `--fix` to preview repairs.'));
+    }
   }
 
   return allOk ? EXIT_OK : EXIT_ERROR;

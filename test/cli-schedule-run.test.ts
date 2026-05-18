@@ -78,6 +78,7 @@ test('executeRun (claude): prints the orchestrator prompt, does NOT spawn anythi
         name: 'nightly',
         functionName: undefined,
         silent: false,
+        dryRun: false,
         spawn: (() => {
           spawnCalls++;
           throw new Error('spawn should not be called for claude');
@@ -107,6 +108,7 @@ test('executeRun (claude) --silent: prints nothing, still returns prompt for cal
         name: 'nightly',
         functionName: undefined,
         silent: true,
+        dryRun: false,
       }),
     );
     assert.equal(out, '');
@@ -145,6 +147,7 @@ test('executeRun (codex): spawns codex exec with workspace + prompt, uses NON-sc
       name: 'heartbeat',
       functionName: undefined,
       silent: true,
+        dryRun: false,
       spawn: fakeSpawn,
       env: interactiveEnv,
       homeDir: home,
@@ -186,6 +189,7 @@ test('executeRun (codex): child non-zero exit propagates to result.exitCode', as
       name: 'heartbeat',
       functionName: undefined,
       silent: true,
+        dryRun: false,
       spawn: fakeSpawn,
       env: { HOME: home, ROSTER_CODEX_PATH: '/opt/test/codex' },
       homeDir: home,
@@ -213,6 +217,7 @@ test('executeRun (codex): refuses when OPENAI_API_KEY in env (codex finding #4)'
         name: 'heartbeat',
         functionName: undefined,
         silent: true,
+        dryRun: false,
         spawn: fakeSpawn,
         env: {
           HOME: home,
@@ -245,6 +250,7 @@ test('executeRun (codex): refuses when CODEX_API_KEY in env', async () => {
         name: 'heartbeat',
         functionName: undefined,
         silent: true,
+        dryRun: false,
         spawn: (() => new EventEmitter() as never) as never,
         env: { HOME: home, CODEX_API_KEY: 'leaked', ROSTER_CODEX_PATH: '/opt/test/codex' },
         homeDir: home,
@@ -268,6 +274,7 @@ test('executeRun (codex): refuses when CODEX_HOME points elsewhere', async () =>
         name: 'heartbeat',
         functionName: undefined,
         silent: true,
+        dryRun: false,
         spawn: (() => new EventEmitter() as never) as never,
         env: {
           HOME: home,
@@ -278,6 +285,92 @@ test('executeRun (codex): refuses when CODEX_HOME points elsewhere', async () =>
       }),
       RosterError,
     );
+  } finally {
+    cleanup();
+    cleanupHome();
+  }
+});
+
+// ── --dry-run (ROS-45) ────────────────────────────────────────────────────
+
+test('executeRun (claude) --dry-run: identical to real fire + dry-run note, no spawn', async () => {
+  const { root, cleanup } = makeWorkspace();
+  try {
+    writeSchedules(root, 'gtm', yamlClaude);
+    let spawnCalls = 0;
+    const { out, result } = await captureStdout(() =>
+      executeRun({
+        cwd: root,
+        name: 'nightly',
+        functionName: undefined,
+        silent: false,
+        dryRun: true,
+        spawn: (() => {
+          spawnCalls++;
+          throw new Error('spawn must not be called under --dry-run');
+        }) as never,
+      }),
+    );
+    assert.equal(spawnCalls, 0);
+    const r = result as { tool: string; exitCode: number };
+    assert.equal(r.tool, 'claude');
+    assert.equal(r.exitCode, 0);
+    assert.match(out, /--dry-run: identical to a real fire/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('executeRun (codex) --dry-run: prints would-be command, spawn NOT called, returns 0', async () => {
+  const { root, cleanup } = makeWorkspace();
+  const { home, cleanup: cleanupHome } = makePreflightHome();
+  try {
+    writeSchedules(root, 'ops', yamlCodex);
+    let spawnCalls = 0;
+    const result = await executeRun({
+      cwd: root,
+      name: 'heartbeat',
+      functionName: undefined,
+      silent: false,
+      dryRun: true,
+      spawn: (() => {
+        spawnCalls++;
+        throw new Error('spawn must not be called under --dry-run');
+      }) as never,
+      env: { HOME: home, ROSTER_CODEX_PATH: '/opt/test/codex' },
+      homeDir: home,
+    });
+    assert.equal(spawnCalls, 0);
+    assert.equal(result.tool, 'codex');
+    assert.equal(result.exitCode, 0);
+  } finally {
+    cleanup();
+    cleanupHome();
+  }
+});
+
+test('executeRun (codex) --dry-run: preflight failure exits 1 without spawning', async () => {
+  const { root, cleanup } = makeWorkspace();
+  const { home, cleanup: cleanupHome } = makePreflightHome();
+  try {
+    writeSchedules(root, 'ops', yamlCodex);
+    let spawnCalls = 0;
+    const result = await executeRun({
+      cwd: root,
+      name: 'heartbeat',
+      functionName: undefined,
+      silent: true,
+      dryRun: true,
+      spawn: (() => {
+        spawnCalls++;
+        throw new Error('spawn must not be called under --dry-run');
+      }) as never,
+      env: { HOME: home, OPENAI_API_KEY: 'leaked', ROSTER_CODEX_PATH: '/opt/test/codex' },
+      homeDir: home,
+    });
+    assert.equal(spawnCalls, 0);
+    assert.equal(result.tool, 'codex');
+    assert.equal(result.exitCode, 1);
   } finally {
     cleanup();
     cleanupHome();

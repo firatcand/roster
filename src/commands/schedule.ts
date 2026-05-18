@@ -41,7 +41,10 @@ export type ScheduleValidateOptions = {
   cwd: string;
   json: boolean;
   silent: boolean;
+  dryRun: boolean;
 };
+
+const READONLY_DRYRUN_LINE = chalk.dim('--dry-run: read-only command; nothing would be written.');
 
 export type ScheduleInstallOptions = {
   cwd: string;
@@ -114,6 +117,7 @@ export function executeScheduleValidate(opts: ScheduleValidateOptions): number {
     console.log(JSON.stringify(report, null, 2));
   } else if (!opts.silent) {
     for (const line of renderText(report)) console.log(line);
+    if (opts.dryRun) console.log(READONLY_DRYRUN_LINE);
   }
 
   return report.ok ? EXIT_OK : EXIT_ERROR;
@@ -264,6 +268,7 @@ export type ScheduleListOptions = {
   cwd: string;
   json: boolean;
   silent: boolean;
+  dryRun: boolean;
 };
 
 export function executeScheduleList(opts: ScheduleListOptions): number {
@@ -272,6 +277,7 @@ export function executeScheduleList(opts: ScheduleListOptions): number {
     console.log(renderListJson(report));
   } else if (!opts.silent) {
     for (const line of renderListText(report)) console.log(line);
+    if (opts.dryRun) console.log(READONLY_DRYRUN_LINE);
   }
   // Warnings emitted to stderr so JSON consumers can still pipe stdout cleanly.
   for (const w of report.warnings) {
@@ -288,6 +294,7 @@ export type ScheduleStatusOptions = {
   functionName: string | undefined;
   json: boolean;
   silent: boolean;
+  dryRun: boolean;
 };
 
 const HISTORY_LIMIT = 5;
@@ -397,6 +404,7 @@ export function executeScheduleStatus(opts: ScheduleStatusOptions): number {
     lines.push('');
     lines.push(chalk.yellow(`! ${state.malformedCount} malformed line${state.malformedCount === 1 ? '' : 's'} in state.md (skipped)`));
   }
+  if (opts.dryRun) lines.push(READONLY_DRYRUN_LINE);
   lines.push('');
 
   for (const line of lines) console.log(line);
@@ -490,6 +498,7 @@ export type ScheduleRunOptions = {
   name: string;
   functionName: string | undefined;
   silent: boolean;
+  dryRun: boolean;
   // Test seam: same factory used by executeRun.
   run?: (opts: ScheduleRunOpts) => Promise<ScheduleRunResult>;
 };
@@ -501,6 +510,7 @@ export async function executeScheduleRun(opts: ScheduleRunOptions): Promise<numb
     name: opts.name,
     functionName: opts.functionName,
     silent: opts.silent,
+    dryRun: opts.dryRun,
   });
   return result.exitCode;
 }

@@ -14,6 +14,7 @@ export type ScheduleRunOpts = {
   name: string;
   functionName: string | undefined;
   silent: boolean;
+  dryRun: boolean;
   // Test seam: spawn factory and env override.
   spawn?: SpawnFn;
   env?: NodeJS.ProcessEnv;
@@ -33,9 +34,9 @@ export type ScheduleRunResult = {
   prompt: string;
 };
 
-function renderClaudeHandoff(workspacePath: string, prompt: string, name: string, silent: boolean): string[] {
+function renderClaudeHandoff(workspacePath: string, prompt: string, name: string, silent: boolean, dryRun: boolean): string[] {
   if (silent) return [];
-  return [
+  const lines = [
     '',
     `${chalk.green('✓')} Manual fire for ${chalk.bold(name)} ${chalk.dim('(tool: claude — print-only)')}`,
     '',
@@ -45,8 +46,10 @@ function renderClaudeHandoff(workspacePath: string, prompt: string, name: string
     '',
     chalk.dim('This is the same prompt the scheduled task fires. Output stays in your chat.'),
     chalk.dim('roster never invokes `claude -p` itself — that would route through the Agent SDK billing pool.'),
-    '',
   ];
+  if (dryRun) lines.push(chalk.dim('--dry-run: identical to a real fire — `schedule run` for claude is already print-only.'));
+  lines.push('');
+  return lines;
 }
 
 function renderCodexBanner(workspacePath: string, prompt: string, name: string, installMode: string, silent: boolean): string[] {
@@ -74,7 +77,7 @@ export async function executeRun(opts: ScheduleRunOpts): Promise<ScheduleRunResu
   );
 
   if (resolved.entry.tool === 'claude') {
-    for (const line of renderClaudeHandoff(resolved.workspacePath, prompt, resolved.entry.name, opts.silent)) {
+    for (const line of renderClaudeHandoff(resolved.workspacePath, prompt, resolved.entry.name, opts.silent, opts.dryRun)) {
       console.log(line);
     }
     return {
@@ -93,16 +96,49 @@ export async function executeRun(opts: ScheduleRunOpts): Promise<ScheduleRunResu
   // Any of those would silently route this fire through API billing instead of
   // the subscription. Mirror the install-time preflight: refuse if any check
   // fails. doctor (ROS-38) will surface the same gates outside of run/install.
+  //
+  // Under --dry-run, preflight failures must still surface (a user using
+  // --dry-run to verify their setup needs to see broken auth), so we exit 1
+  // with the rendered failure list rather than throwing.
   const env = opts.env ?? process.env;
   const homeDir = opts.homeDir ?? homedir();
   const preflight = runCodexPreflight({ homeDir, env });
   if (!preflight.ok) {
+    if (opts.dryRun) {
+      const err = codexPreflightError(preflight.failures);
+      if (!opts.silent) {
+        console.error(err.header);
+        if (err.body) console.error(err.body);
+        if (err.remedy) console.error(err.remedy);
+      }
+      return {
+        tool: 'codex',
+        functionName: resolved.functionName,
+        name: resolved.entry.name,
+        exitCode: 1,
+        prompt,
+      };
+    }
     throw codexPreflightError(preflight.failures);
   }
 
   const codexPath = resolveCodexBinaryPath(env, opts.codexBinaryPathOverride);
   for (const line of renderCodexBanner(resolved.workspacePath, prompt, resolved.entry.name, resolved.entry.install_mode, opts.silent)) {
     console.log(line);
+  }
+
+  if (opts.dryRun) {
+    if (!opts.silent) {
+      console.log(chalk.dim(`--dry-run: spawn skipped. Would run: ${codexPath} exec -C ${resolved.workspacePath} <prompt>`));
+      console.log('');
+    }
+    return {
+      tool: 'codex',
+      functionName: resolved.functionName,
+      name: resolved.entry.name,
+      exitCode: 0,
+      prompt,
+    };
   }
 
   const spawnFn: SpawnFn = opts.spawn ?? (spawn as SpawnFn);

@@ -61,6 +61,7 @@ test('executeScheduleStatus (text): never fired → metadata + (never fired)', (
         functionName: undefined,
         json: false,
         silent: false,
+        dryRun: false,
       });
     });
     assert.match(out, /Schedule:\s+heartbeat/);
@@ -90,6 +91,7 @@ test('executeScheduleStatus (text): with state.md → shows last_run + last_stat
         functionName: undefined,
         json: false,
         silent: false,
+        dryRun: false,
       });
     });
     assert.match(out, /Last run:\s+2026-05-18T10:30:00Z/);
@@ -113,6 +115,7 @@ test('executeScheduleStatus (json): emits structured fields', () => {
         functionName: undefined,
         json: true,
         silent: false,
+        dryRun: false,
       });
     });
     const json = JSON.parse(out);
@@ -147,6 +150,7 @@ garbage line
         functionName: undefined,
         json: true,
         silent: false,
+        dryRun: false,
       });
     });
     const json = JSON.parse(out);
@@ -168,10 +172,58 @@ test('executeScheduleStatus: forward-compat — unknown status value passes thro
         functionName: undefined,
         json: true,
         silent: false,
+        dryRun: false,
       });
     });
     const json = JSON.parse(out);
     assert.equal(json.last_status, 'timeout');
+  } finally {
+    cleanup();
+  }
+});
+
+// ── --dry-run (ROS-45): JSON byte-identity, text adds dim no-op line ──────
+
+test('executeScheduleStatus --dry-run --json: byte-identical to non-dry-run', () => {
+  const { root, cleanup } = makeWorkspace();
+  try {
+    writeSchedules(root, 'ops', yamlCodex);
+    writeState(root, 'ops', `2026-05-18T10:30:00Z | ops/noop/noop/_demo | success\n`);
+    const opts = {
+      cwd: root,
+      name: 'heartbeat',
+      functionName: undefined,
+      json: true,
+      silent: false,
+    } as const;
+    const baseline = captureStdout(() => {
+      executeScheduleStatus({ ...opts, dryRun: false });
+    });
+    const dryRun = captureStdout(() => {
+      executeScheduleStatus({ ...opts, dryRun: true });
+    });
+    assert.equal(dryRun, baseline);
+  } finally {
+    cleanup();
+  }
+});
+
+test('executeScheduleStatus --dry-run (text): appends the read-only no-op line', () => {
+  const { root, cleanup } = makeWorkspace();
+  try {
+    writeSchedules(root, 'ops', yamlCodex);
+    writeState(root, 'ops', `2026-05-18T10:30:00Z | ops/noop/noop/_demo | success\n`);
+    const out = captureStdout(() => {
+      executeScheduleStatus({
+        cwd: root,
+        name: 'heartbeat',
+        functionName: undefined,
+        json: false,
+        silent: false,
+        dryRun: true,
+      });
+    });
+    assert.match(out, /--dry-run: read-only command; nothing would be written\./);
   } finally {
     cleanup();
   }

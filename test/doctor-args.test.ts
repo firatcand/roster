@@ -51,3 +51,26 @@ test('unknown flag ignored (forward-compat)', () => {
   if (r.kind !== 'ok') return;
   assert.equal(r.json, true);
 });
+
+test('--dry-run → dryRun true (ROS-45)', () => {
+  const r = parseDoctorArgs(['--dry-run']);
+  assert.equal(r.kind, 'ok');
+  if (r.kind !== 'ok') return;
+  assert.equal(r.dryRun, true);
+  assert.equal(r.json, false);
+});
+
+test('no --dry-run → dryRun false', () => {
+  const r = parseDoctorArgs([]);
+  assert.equal(r.kind, 'ok');
+  if (r.kind !== 'ok') return;
+  assert.equal(r.dryRun, false);
+});
+
+test('--fix --dry-run → both true (ROS-45 + ROS-38 integration)', () => {
+  const r = parseDoctorArgs(['--fix', '--dry-run']);
+  assert.equal(r.kind, 'ok');
+  if (r.kind !== 'ok') return;
+  assert.equal(r.fix, true);
+  assert.equal(r.dryRun, true);
+});

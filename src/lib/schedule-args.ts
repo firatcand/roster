@@ -25,6 +25,7 @@ export type ParsedScheduleArgs =
       json: boolean;
       silent: boolean;
       cwd: string | undefined;
+      dryRun: boolean;
     }
   | {
       kind: 'ok';
@@ -49,6 +50,7 @@ export type ParsedScheduleArgs =
       json: boolean;
       silent: boolean;
       cwd: string | undefined;
+      dryRun: boolean;
     }
   | {
       kind: 'ok';
@@ -69,6 +71,7 @@ export type ParsedScheduleArgs =
       json: boolean;
       silent: boolean;
       cwd: string | undefined;
+      dryRun: boolean;
     }
   | {
       kind: 'ok';
@@ -77,6 +80,7 @@ export type ParsedScheduleArgs =
       functionName: string | undefined;
       silent: boolean;
       cwd: string | undefined;
+      dryRun: boolean;
     }
   | { kind: 'err'; message: string };
 
@@ -116,11 +120,13 @@ function parseValidate(rest: readonly string[]): ParsedScheduleArgs {
   let json = false;
   let silent = false;
   let cwd: string | undefined;
+  let dryRun = false;
 
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i]!;
     if (arg === '--json') json = true;
     else if (arg === '--silent') silent = true;
+    else if (arg === '--dry-run') dryRun = true;
     else if (arg === '--cwd') {
       const next = rest[i + 1];
       if (next === undefined) return { kind: 'err', message: '--cwd requires a path argument' };
@@ -135,7 +141,7 @@ function parseValidate(rest: readonly string[]): ParsedScheduleArgs {
     }
   }
 
-  return { kind: 'ok', subcommand: 'validate', json, silent, cwd };
+  return { kind: 'ok', subcommand: 'validate', json, silent, cwd, dryRun };
 }
 
 function parseInstall(rest: readonly string[]): ParsedScheduleArgs {
@@ -295,11 +301,13 @@ function parseList(rest: readonly string[]): ParsedScheduleArgs {
   let json = false;
   let silent = false;
   let cwd: string | undefined;
+  let dryRun = false;
 
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i]!;
     if (arg === '--json') json = true;
     else if (arg === '--silent') silent = true;
+    else if (arg === '--dry-run') dryRun = true;
     else if (arg === '--cwd') {
       const next = rest[i + 1];
       if (next === undefined) return { kind: 'err', message: '--cwd requires a path argument' };
@@ -313,7 +321,7 @@ function parseList(rest: readonly string[]): ParsedScheduleArgs {
       return { kind: 'err', message: `unexpected positional argument for 'schedule list': ${arg}` };
     }
   }
-  return { kind: 'ok', subcommand: 'list', json, silent, cwd };
+  return { kind: 'ok', subcommand: 'list', json, silent, cwd, dryRun };
 }
 
 // Shared parser for remove/status/run — each takes a single positional <name>
@@ -354,7 +362,6 @@ function parseNamed(rest: readonly string[], subcommand: 'remove' | 'status' | '
     } else if (arg === '--silent') {
       silent = true;
     } else if (arg === '--dry-run') {
-      if (subcommand !== 'remove') return { kind: 'err', message: `--dry-run is only supported for 'schedule remove'` };
       dryRun = true;
     } else if (arg === '--yes' || arg === '-y') {
       if (subcommand !== 'remove') return { kind: 'err', message: `--yes is only supported for 'schedule remove'` };
@@ -399,6 +406,7 @@ function parseNamed(rest: readonly string[], subcommand: 'remove' | 'status' | '
       json,
       silent,
       cwd,
+      dryRun,
     };
   }
   return {
@@ -408,5 +416,6 @@ function parseNamed(rest: readonly string[], subcommand: 'remove' | 'status' | '
     functionName,
     silent,
     cwd,
+    dryRun,
   };
 }
