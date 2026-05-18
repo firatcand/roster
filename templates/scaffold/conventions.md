@@ -569,7 +569,7 @@ Cron jobs:
 
 1. Live in `scripts/cron/crontab` (versioned)
 2. Invoke a wrapper at `scripts/cron/wrappers/<job>.sh`
-3. Wrapper sets up env, calls `claude -p "<prompt>"` with the right cwd (typically inside an agent's project instance)
+3. Wrapper sets up env, calls `claude -p "<prompt>"` with the right cwd (typically inside an agent's project instance) <!-- roster-audit-ok: claude-p-flag -->
 4. stdout/stderr → `logs/cron/<job>-<YYYY-MM-DD>.log`
 5. Run output → the agent's instance `log/runs/` as normal
 

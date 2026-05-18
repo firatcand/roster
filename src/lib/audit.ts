@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Tool, ToolKey } from './tools.ts';
 import { renderSkillFrontmatterContent } from './frontmatter.ts';
@@ -176,6 +176,22 @@ function isTextFile(name: string): boolean {
 function walkAllFiles(root: string): string[] {
   const out: string[] = [];
   if (!existsSync(root)) return out;
+
+  // Codex 2nd-pass review [MAJOR/8] (ROS-38): allow file roots, not only dirs.
+  // doctor-safety-audit needs to scan individual installed agent .md / .toml
+  // files which live alongside the user's other agents — passing the parent
+  // dir would over-scan into not-our-content. A file root just yields itself.
+  try {
+    const st = statSync(root);
+    if (st.isFile()) {
+      const base = root.slice(root.lastIndexOf('/') + 1);
+      if (isTextFile(base)) out.push(root);
+      return out;
+    }
+  } catch {
+    return out;
+  }
+
   function recurse(dir: string): void {
     for (const dirent of readdirSync(dir, { withFileTypes: true })) {
       if (dirent.name === 'node_modules' || dirent.name.startsWith('.')) continue;
