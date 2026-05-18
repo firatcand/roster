@@ -227,6 +227,70 @@ assert_contains gtm/test-agent/projects/bindings-test-co/config/default.yaml "TO
 "$ROSTER_BIN" init my-test-workspace --silent --no-git --force
 assert_count .gitignore "# Roster defaults" 1 "Roster defaults block appended exactly once"
 
+# 6. Schedule list/status/remove smoke (ROS-36).
+#
+# Writes schedules.yaml + state.md as fixtures directly (skipping install)
+# so the section works cross-platform — `install --tool claude` is
+# macOS/Windows-only, and `install --tool codex` requires a logged-in
+# Codex CLI with cleared env, neither of which Linux CI provides.
+# Install is exercised in its own unit tests + the macOS Mac mini gate
+# (ROS-40). What's being smoked here is the four NEW commands.
+echo ""
+echo "===> 6. Schedule list/status/remove (ROS-36)"
+
+# list on a fresh workspace → no schedules registered
+LIST_OUT=$("$ROSTER_BIN" schedule list 2>&1)
+echo "$LIST_OUT" | grep -q "no schedules registered" && pass "list (empty): prints no-schedules message" || fail "list (empty)"
+
+# Write fixture schedule + state.md
+mkdir -p roster/ops
+cat > roster/ops/schedules.yaml <<'EOF'
+version: 1
+schedules:
+  - name: heartbeat-noop
+    agent: noop
+    plan: noop
+    project: _demo
+    cron: "*/5 * * * *"
+    tool: claude
+    install_mode: ui-handoff
+    status: pending-ui-install
+EOF
+cat > roster/ops/state.md <<'EOF'
+2026-05-18T10:25:00Z | ops/noop/noop/_demo | success
+2026-05-18T10:30:00Z | ops/noop/noop/_demo | success
+EOF
+assert "-f roster/ops/schedules.yaml" "fixture: schedules.yaml written"
+assert "-f roster/ops/state.md" "fixture: state.md written"
+
+# list → shows the fixture
+LIST_OUT=$("$ROSTER_BIN" schedule list 2>&1)
+echo "$LIST_OUT" | grep -q "heartbeat-noop" && pass "list: shows registered schedule" || fail "list: missing schedule name"
+echo "$LIST_OUT" | grep -q "claude" && pass "list: shows tool column" || fail "list: missing tool column"
+echo "$LIST_OUT" | grep -q "2026-05-18T10:30:00Z" && pass "list: shows last_run from state.md" || fail "list: missing last_run"
+
+# status reads state.md
+STATUS_OUT=$("$ROSTER_BIN" schedule status heartbeat-noop 2>&1)
+echo "$STATUS_OUT" | grep -q "Schedule:" && pass "status: prints schedule metadata" || fail "status: missing metadata"
+echo "$STATUS_OUT" | grep -q "2026-05-18T10:30:00Z" && pass "status: prints last_run timestamp" || fail "status: missing last_run"
+echo "$STATUS_OUT" | grep -q "success" && pass "status: prints last_status" || fail "status: missing last_status"
+
+# remove --dry-run leaves YAML intact
+"$ROSTER_BIN" schedule remove heartbeat-noop --dry-run --silent
+assert_contains roster/ops/schedules.yaml "heartbeat-noop" "remove --dry-run: YAML untouched"
+
+# remove --yes strips the entry
+"$ROSTER_BIN" schedule remove heartbeat-noop --yes --silent
+if grep -q "heartbeat-noop" roster/ops/schedules.yaml 2>/dev/null; then
+  fail "remove --yes: YAML still contains entry"
+else
+  pass "remove --yes: YAML entry stripped"
+fi
+
+# list after remove → empty again
+LIST_OUT=$("$ROSTER_BIN" schedule list 2>&1)
+echo "$LIST_OUT" | grep -q "heartbeat-noop" && fail "list (after remove): still shows entry" || pass "list (after remove): empty"
+
 # Summary
 echo ""
 echo "===> $PASS_COUNT passed, $FAIL_COUNT failed"

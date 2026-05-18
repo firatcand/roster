@@ -135,3 +135,23 @@ export function upsertEntryInDoc(
     return { action: 'created' };
   }
 }
+
+export function removeEntryFromDoc(
+  doc: YAML.Document,
+  name: string,
+): { removed: boolean } {
+  const schedules = doc.get('schedules', true);
+  if (!YAML.isSeq(schedules)) return { removed: false };
+
+  for (let i = 0; i < schedules.items.length; i++) {
+    const item = schedules.items[i];
+    if (YAML.isMap(item)) {
+      const itemName = item.get('name');
+      if (itemName === name) {
+        schedules.items.splice(i, 1);
+        return { removed: true };
+      }
+    }
+  }
+  return { removed: false };
+}

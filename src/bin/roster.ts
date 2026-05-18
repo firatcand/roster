@@ -13,7 +13,14 @@ import { parseHooksArgs } from '../lib/hooks-args.ts';
 import { parseMigrateArgs } from '../lib/migrate-args.ts';
 import { executeInit } from '../commands/init.ts';
 import { executeDoctor } from '../commands/doctor.ts';
-import { executeScheduleValidate, executeScheduleInstall } from '../commands/schedule.ts';
+import {
+  executeScheduleValidate,
+  executeScheduleInstall,
+  executeScheduleList,
+  executeScheduleRemove,
+  executeScheduleStatus,
+  executeScheduleRun,
+} from '../commands/schedule.ts';
 import { executeReview } from '../commands/review.ts';
 import { executeHooksInstall } from '../commands/hooks.ts';
 import { executeMigrateFromAgentTeam } from '../commands/migrate.ts';
@@ -64,6 +71,10 @@ function printHelp(version: string): void {
     `  roster doctor                ${chalk.dim('Audit installed skills + agents per AI tool')}`,
     `  roster schedule validate     ${chalk.dim('Validate roster/<function>/schedules.yaml files')}`,
     `  roster schedule install      ${chalk.dim('Register a schedule (Claude: UI hand-off; Codex: ROS-35)')}`,
+    `  roster schedule list         ${chalk.dim('List all registered schedules across roster/<function>/')}`,
+    `  roster schedule status NAME  ${chalk.dim('Show last_run / last_status / next_due_at for a schedule')}`,
+    `  roster schedule run NAME     ${chalk.dim('Manually fire a schedule (Claude: print prompt; Codex: spawn)')}`,
+    `  roster schedule remove NAME  ${chalk.dim('Remove a schedule (strips crontab block if --via cron)')}`,
     `  roster review [function]     ${chalk.dim('Walk roster/*/pending/ HITL items interactively')}`,
     `  roster hooks install         ${chalk.dim('Install SessionStart banner hooks for Claude + Codex')}`,
     `  roster migrate from-agent-team <dir>  ${chalk.dim('Migrate a legacy agent-team workspace into roster')}`,
@@ -79,6 +90,7 @@ function printHelp(version: string): void {
     `  --json                       ${chalk.dim('Emit machine-readable JSON (doctor, schedule validate)')}`,
     `  --cwd <dir>                  ${chalk.dim('Run schedule validate against a different cwd')}`,
     `  --dest <dir>                 ${chalk.dim('Destination workspace for migrate (default: cwd)')}`,
+    `  --project <name>             ${chalk.dim('Project slug for schedule install (default: _demo)')}`,
     `  --dry-run                    ${chalk.dim('Print plan without writes (schedule install, migrate)')}`,
     `  --force-resync               ${chalk.dim('Re-copy source files that changed since last migration (migrate)')}`,
     `  --debug                      ${chalk.dim('Print full stack trace on error (global)')}`,
@@ -236,7 +248,7 @@ async function runInit(args: readonly string[]): Promise<number> {
   return EXIT_OK;
 }
 
-function runSchedule(args: readonly string[]): number {
+async function runSchedule(args: readonly string[]): Promise<number> {
   const parsed = parseScheduleArgs(args);
   if (parsed.kind === 'err') {
     throw new RosterError({
@@ -259,6 +271,7 @@ function runSchedule(args: readonly string[]): number {
       functionName: parsed.functionName,
       agent: parsed.agent,
       plan: parsed.plan,
+      project: parsed.project,
       cron: parsed.cron,
       tool: parsed.tool,
       via: parsed.via,
@@ -266,6 +279,41 @@ function runSchedule(args: readonly string[]): number {
       dryRun: parsed.dryRun,
       cloudRoutine: parsed.cloudRoutine,
       json: parsed.json,
+      silent: parsed.silent,
+    });
+  }
+  if (parsed.subcommand === 'list') {
+    return executeScheduleList({
+      cwd: parsed.cwd ?? process.cwd(),
+      json: parsed.json,
+      silent: parsed.silent,
+    });
+  }
+  if (parsed.subcommand === 'status') {
+    return executeScheduleStatus({
+      cwd: parsed.cwd ?? process.cwd(),
+      name: parsed.name,
+      functionName: parsed.functionName,
+      json: parsed.json,
+      silent: parsed.silent,
+    });
+  }
+  if (parsed.subcommand === 'remove') {
+    return await executeScheduleRemove({
+      cwd: parsed.cwd ?? process.cwd(),
+      name: parsed.name,
+      functionName: parsed.functionName,
+      dryRun: parsed.dryRun,
+      yes: parsed.yes,
+      json: parsed.json,
+      silent: parsed.silent,
+    });
+  }
+  if (parsed.subcommand === 'run') {
+    return await executeScheduleRun({
+      cwd: parsed.cwd ?? process.cwd(),
+      name: parsed.name,
+      functionName: parsed.functionName,
       silent: parsed.silent,
     });
   }
@@ -389,7 +437,7 @@ async function main(): Promise<number> {
     if (first === 'install') return runInstall(rest);
     if (first === 'init') return await runInit(rest);
     if (first === 'doctor') return runDoctor(rest);
-    if (first === 'schedule') return runSchedule(rest);
+    if (first === 'schedule') return await runSchedule(rest);
     if (first === 'review') return await runReview(rest);
     if (first === 'hooks') return await runHooks(rest);
     if (first === 'migrate') return runMigrate(rest);

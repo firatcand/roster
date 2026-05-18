@@ -235,6 +235,56 @@ export function migrateSourceAlreadyRosterError(sourceDir: string): RosterError 
   });
 }
 
+export function scheduleNotFoundError(name: string, knownNames: ReadonlyArray<string>): RosterError {
+  const body =
+    knownNames.length === 0
+      ? '  No schedules are registered in this workspace.'
+      : '  Known schedules:\n' + knownNames.map((n) => `    - ${n}`).join('\n');
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} schedule ${chalk.yellow(`'${name}'`)} not found`,
+    body,
+    remedy: `  Run ${chalk.bold('roster schedule list')} to see all registered schedules.`,
+    exitCode: EXIT_ERROR,
+  });
+}
+
+export function scheduleNotInFunctionError(
+  name: string,
+  filterFn: string,
+  foundInFns: ReadonlyArray<string>,
+): RosterError {
+  const fnList = foundInFns.map((f) => chalk.bold(f)).join(', ');
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} schedule ${chalk.yellow(`'${name}'`)} not found in function '${filterFn}'`,
+    body: `  But it does exist in: ${fnList}`,
+    remedy:
+      foundInFns.length === 1
+        ? `  Drop ${chalk.bold(`--function ${filterFn}`)}, or use ${chalk.bold(`--function ${foundInFns[0]}`)}.`
+        : `  Drop ${chalk.bold(`--function ${filterFn}`)}, or pick one of: --function ${foundInFns.join(' | --function ')}.`,
+    exitCode: EXIT_ERROR,
+  });
+}
+
+export function scheduleAmbiguousError(name: string, functions: ReadonlyArray<string>): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} schedule name ${chalk.yellow(`'${name}'`)} is ambiguous`,
+    body:
+      '  Matches an entry in multiple functions:\n' +
+      functions.map((f) => `    - roster/${f}/schedules.yaml`).join('\n'),
+    remedy: `  Pass ${chalk.bold('--function <name>')} to disambiguate.`,
+    exitCode: EXIT_ERROR,
+  });
+}
+
+export function userCancelledRemove(): RosterError {
+  return new RosterError({
+    header: `${chalk.dim('roster:')} cancelled`,
+    body: '  Nothing removed.',
+    remedy: `  Re-run with ${chalk.bold('--yes')} to skip the confirmation prompt.`,
+    exitCode: EXIT_CANCELLED,
+  });
+}
+
 export function unexpectedError(err: unknown): RosterError {
   const message = err instanceof Error ? err.message : String(err);
   const wrapped = new RosterError({

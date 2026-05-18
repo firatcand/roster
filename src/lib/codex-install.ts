@@ -1,5 +1,4 @@
 import { mkdirSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import chalk from 'chalk';
@@ -26,6 +25,7 @@ import {
   upsertCronEntry,
   defaultCrontabIO,
   getMarkerStrings,
+  resolveCodexBinaryPath,
   type CrontabIO,
 } from './codex-cron.ts';
 
@@ -34,6 +34,7 @@ export type CodexInstallOpts = {
   functionName: string;
   agent: string;
   plan: string;
+  project: string;
   cron: string;
   name: string | undefined;
   installMode: InstallModeValue;
@@ -62,32 +63,15 @@ export type CodexInstallResult = {
 
 const KEBAB_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
-function resolveCodexBinaryPath(env: NodeJS.ProcessEnv, override: string | undefined): string {
-  if (override !== undefined && override !== '') return override;
-  const fromEnv = env['ROSTER_CODEX_PATH'];
-  if (fromEnv !== undefined && fromEnv !== '') return fromEnv;
-  // Resolve via `command -v` (POSIX) so we get the binary the user's $PATH would pick.
-  const r = spawnSync('/bin/sh', ['-c', 'command -v codex'], { encoding: 'utf8', env });
-  if (r.status === 0) {
-    const out = (r.stdout ?? '').trim();
-    if (out.length > 0) return out;
-  }
-  throw new RosterError({
-    header: `${chalk.red.bold('roster:')} codex binary not found on PATH`,
-    body: '  Install codex CLI (https://developers.openai.com/codex) and ensure it is on your PATH.',
-    remedy: '  Or pass ROSTER_CODEX_PATH=/abs/path/to/codex when invoking roster.',
-    exitCode: EXIT_ERROR,
-  });
-}
-
 export function renderCodexHandoffDoc(args: {
   name: string;
   cron: string;
   workspacePath: string;
   agent: string;
   plan: string;
+  project: string;
 }): string {
-  const prompt = buildOrchestratorPrompt(args.agent, args.plan);
+  const prompt = buildOrchestratorPrompt(args.agent, args.plan, args.project);
   return [
     `# Codex App Automation — ${args.name}`,
     '',
@@ -202,6 +186,7 @@ export function installCodexSchedule(opts: CodexInstallOpts): CodexInstallResult
     name: resolvedName,
     agent: opts.agent,
     plan: opts.plan,
+    project: opts.project,
     cron: opts.cron,
     tool: 'codex',
     install_mode: opts.installMode,
@@ -239,6 +224,7 @@ export function installCodexSchedule(opts: CodexInstallOpts): CodexInstallResult
         workspacePath,
         agent: validatedEntry.agent,
         plan: validatedEntry.plan,
+        project: validatedEntry.project,
       })
     : null;
 
@@ -249,7 +235,7 @@ export function installCodexSchedule(opts: CodexInstallOpts): CodexInstallResult
       cron: validatedEntry.cron,
       workspacePath,
       codexBinaryPath,
-      prompt: buildOrchestratorPrompt(validatedEntry.agent, validatedEntry.plan),
+      prompt: buildOrchestratorPrompt(validatedEntry.agent, validatedEntry.plan, validatedEntry.project),
       logPath: logPath!,
     });
   }

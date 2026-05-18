@@ -175,3 +175,108 @@ export function upsertCronEntry(
 export function getMarkerStrings(name: string): { begin: string; end: string } {
   return { begin: markerBegin(name), end: markerEnd(name) };
 }
+
+export function removeCronEntry(
+  io: CrontabIO,
+  name: string,
+): { removed: boolean } {
+  const r = io.read();
+  let content: string;
+  if (r.ok) {
+    content = r.content;
+  } else if (r.reason === 'no-crontab') {
+    return { removed: false };
+  } else {
+    throw new RosterError({
+      header: `${chalk.red.bold('roster:')} cannot read existing crontab`,
+      body: `  ${r.message}`,
+      remedy: `  Run 'crontab -l' manually to diagnose, then retry.`,
+      exitCode: EXIT_ERROR,
+    });
+  }
+
+  const beginMarker = markerBegin(name);
+  const endMarker = markerEnd(name);
+
+  const matches = findMarkerBlocks(content, name);
+  if (matches.length === 0) return { removed: false };
+
+  if (matches.length > 1) {
+    throw new RosterError({
+      header: `${chalk.red.bold('roster:')} duplicate marker blocks for schedule '${name}'`,
+      body: `  Found ${matches.length} '${beginMarker}' lines in crontab.\n  Refusing to guess which block to remove.`,
+      remedy: `  Run 'crontab -e', remove duplicate blocks manually, then re-run.`,
+      exitCode: EXIT_ERROR,
+    });
+  }
+
+  const beginIdx = matches[0]!;
+  const endBefore = content.indexOf(endMarker, beginIdx);
+  if (endBefore < 0) {
+    throw new RosterError({
+      header: `${chalk.red.bold('roster:')} malformed managed block for schedule '${name}'`,
+      body: `  Found '${beginMarker}' but no matching '${endMarker}'.\n  Refusing to guess the block boundary — user lines could be lost.`,
+      remedy: `  Run 'crontab -e', restore the missing ':end' marker (or delete the orphan ':begin' line), then re-run.`,
+      exitCode: EXIT_ERROR,
+    });
+  }
+
+  // Strip the managed block, inverting upsertCronEntry's separator logic.
+  //
+  // upsert (see findMarkerBlocks / upsertCronEntry above) inserts:
+  //   - `{block}\n`        if crontab is empty
+  //   - `\n{block}\n`      if crontab already ends with `\n`
+  //   - `\n\n{block}\n`    if crontab is non-empty but lacks trailing `\n`
+  //
+  // Symmetric remove: also strip the separator characters that upsert added.
+  // Codex review impl-pass finding #5 (ROS-36): the previous version always
+  // stripped a single leading `\n` when it found `\n\n` before the block,
+  // which over-trimmed for the third case (initial content had no trailing
+  // newline) — leaving `MAILTO=me\n` instead of restoring `MAILTO=me`.
+  let stripStart = beginIdx;
+  let stripEnd = endBefore + endMarker.length;
+  if (content[stripEnd] === '\n') stripEnd += 1;
+
+  if (stripStart >= 2 && content.slice(stripStart - 2, stripStart) === '\n\n') {
+    // Block was preceded by '\n\n'. If the char at -3 (or pre-file-start) is
+    // also '\n', the user actually had a blank line there → strip ONE newline,
+    // preserving the user's blank line. Otherwise upsert inserted both
+    // newlines as a separator → strip BOTH to restore the original byte stream.
+    if (stripStart >= 3 && content[stripStart - 3] === '\n') {
+      stripStart -= 1;
+    } else {
+      stripStart -= 2;
+    }
+  } else if (stripStart >= 1 && content[stripStart - 1] === '\n' && stripEnd === content.length) {
+    // Block was the only content after a single newline at start — trim that newline.
+    stripStart -= 1;
+  }
+
+  const next = content.slice(0, stripStart) + content.slice(stripEnd);
+  io.write(next);
+  return { removed: true };
+}
+
+// Resolve the codex binary path on the user's $PATH. Used by `schedule install`
+// (build a crontab line with an absolute path) and `schedule run` (spawn the
+// same binary the cron line would). Extracted from codex-install.ts so both
+// callers share one resolution policy.
+export function resolveCodexBinaryPath(
+  env: NodeJS.ProcessEnv,
+  override: string | undefined,
+): string {
+  if (override !== undefined && override !== '') return override;
+  const fromEnv = env['ROSTER_CODEX_PATH'];
+  if (fromEnv !== undefined && fromEnv !== '') return fromEnv;
+  const r = spawnSync('/bin/sh', ['-c', 'command -v codex'], { encoding: 'utf8', env });
+  if (r.status === 0) {
+    const out = (r.stdout ?? '').trim();
+    if (out.length > 0) return out;
+  }
+  throw new RosterError({
+    header: `${chalk.red.bold('roster:')} codex binary not found on PATH`,
+    body: '  Install codex CLI (https://developers.openai.com/codex) and ensure it is on your PATH.',
+    remedy: '  Or pass ROSTER_CODEX_PATH=/abs/path/to/codex when invoking roster.',
+    exitCode: EXIT_ERROR,
+  });
+}

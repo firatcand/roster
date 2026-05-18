@@ -15,6 +15,7 @@ export type ClaudeInstallOpts = {
   functionName: string;
   agent: string;
   plan: string;
+  project: string;
   cron: string;
   name: string | undefined;
   dryRun: boolean;
@@ -47,8 +48,11 @@ export function deriveScheduleName(agent: string, plan: string, override: string
   return `${agent}-${plan}`;
 }
 
-export function buildOrchestratorPrompt(agent: string, plan: string): string {
-  return `Use the roster-orchestrator skill to run plan ${plan} for agent ${agent}`;
+// Contract: skills/roster-orchestrator/SKILL.md:50-65 — the orchestrator parses
+// <agent>, <plan>, and <project> from the prompt and refuses if any are missing.
+// All three must be present in the fire-time prompt.
+export function buildOrchestratorPrompt(agent: string, plan: string, project: string): string {
+  return `Use the roster-orchestrator skill to run plan ${plan} for agent ${agent} on project ${project}`;
 }
 
 export function renderFieldsDoc(args: {
@@ -57,8 +61,9 @@ export function renderFieldsDoc(args: {
   workspacePath: string;
   agent: string;
   plan: string;
+  project: string;
 }): string {
-  const prompt = buildOrchestratorPrompt(args.agent, args.plan);
+  const prompt = buildOrchestratorPrompt(args.agent, args.plan, args.project);
   const allowedTools = DEFAULT_ALLOWED_TOOLS.join(', ');
   return [
     `# Claude Desktop Scheduled Task — ${args.name}`,
@@ -133,6 +138,7 @@ export function installClaudeSchedule(opts: ClaudeInstallOpts): ClaudeInstallRes
     name: resolvedName,
     agent: opts.agent,
     plan: opts.plan,
+    project: opts.project,
     cron: opts.cron,
     tool: 'claude',
     install_mode: 'ui-handoff',
@@ -174,6 +180,7 @@ export function installClaudeSchedule(opts: ClaudeInstallOpts): ClaudeInstallRes
     workspacePath,
     agent: validatedEntry.agent,
     plan: validatedEntry.plan,
+    project: validatedEntry.project,
   });
 
   if (opts.dryRun) {
