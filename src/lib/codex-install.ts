@@ -279,21 +279,29 @@ export function installCodexSchedule(opts: CodexInstallOpts): CodexInstallResult
     };
   }
 
-  // ── YAML upsert ─────────────────────────────────────────────────────────
+  // ── YAML pre-flight: validate upsert would succeed (tool-mismatch guard) ──
+  // We compute the upsert against an in-memory copy first so a YAML conflict
+  // doesn't surface AFTER we've already mutated the user's crontab. The real
+  // write happens last, after any side-effects on disk that could fail.
   const { doc } = readExistingSchedulesDoc(schedulesYamlPath);
   const { action } = upsertEntryInDoc(doc, validatedEntry);
-  atomicWriteFile(schedulesYamlPath, doc.toString());
 
-  // ── Mode-specific writes ────────────────────────────────────────────────
+  // ── Side-effect writes (crontab/fields doc) before YAML ─────────────────
+  // Codex review impl-pass: YAML-first ordering meant a crontab write failure
+  // would leave schedules.yaml claiming status=installed with no live cron
+  // line. Side-effects now run before the YAML write — if any of them fail,
+  // schedules.yaml stays consistent with the previous (un-touched) state.
   if (opts.installMode === 'ui-handoff') {
     atomicWriteFile(fieldsDocPath!, fieldsDocContent!);
   } else {
-    // Create logs/cron/ first so the cron redirect has a parent dir.
     const logDir = join(workspacePath, 'logs', 'cron');
     mkdirSync(logDir, { recursive: true });
     const io = opts.crontabIO ?? defaultCrontabIO();
     upsertCronEntry(io, resolvedName, cronLine!);
   }
+
+  // ── YAML write last (commit) ────────────────────────────────────────────
+  atomicWriteFile(schedulesYamlPath, doc.toString());
 
   return {
     resolvedName,

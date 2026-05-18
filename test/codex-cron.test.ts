@@ -73,6 +73,24 @@ test('shellQuote: value with dollar sign → quoted', () => {
   assert.equal(shellQuote('$HOME'), "'$HOME'");
 });
 
+test('shellQuote: value with embedded newline → throws RosterError (impl-review)', () => {
+  assert.throws(
+    () => shellQuote('a\nb'),
+    (err: unknown) => {
+      assert.ok(err instanceof RosterError);
+      assert.match(err.header, /newline or NUL/);
+      return true;
+    },
+  );
+});
+
+test('shellQuote: value with NUL byte → throws (impl-review)', () => {
+  assert.throws(
+    () => shellQuote('a\0b'),
+    (err: unknown) => err instanceof RosterError,
+  );
+});
+
 // ── renderCronLine ────────────────────────────────────────────────────────
 
 test('renderCronLine: standard shape matches ADR-0001 Spike 1 verified form', () => {
@@ -199,6 +217,26 @@ test('upsertCronEntry: existing block → action=updated, replaced in place', ()
   assert.ok(!io.current.includes('old-line'));
   assert.match(io.current, /# user line/);
   assert.match(io.current, /# trailing user line/);
+});
+
+test('upsertCronEntry: begin marker present but end marker missing → throws (impl-review)', () => {
+  // Codex impl-review caught: previous fallback ate user lines through EOF.
+  const orphan = [
+    '# roster:schedule:mine:begin (managed)',
+    '0 0 * * * orphan-line',
+    '# UNRELATED USER LINE 1',
+    '# UNRELATED USER LINE 2',
+  ].join('\n');
+  const io = fakeIO(orphan);
+  assert.throws(
+    () => upsertCronEntry(io, 'mine', 'new-line'),
+    (err: unknown) => {
+      assert.ok(err instanceof RosterError);
+      assert.match(err.header, /malformed managed block/);
+      return true;
+    },
+  );
+  assert.equal(io.written.length, 0, 'no write should happen on malformed block');
 });
 
 test('upsertCronEntry: duplicate marker blocks → throws RosterError, no write', () => {

@@ -309,6 +309,31 @@ test('codex install: invalid cron throws RosterError naming cron', () => {
   }
 });
 
+// Codex impl-review c=9: side-effects must run before YAML write so a
+// crontab failure doesn't leave schedules.yaml claiming `status: installed`.
+test('codex install (via-cron): crontab IO failure leaves schedules.yaml unwritten', () => {
+  const fx = makeWorkspaceAndHome();
+  try {
+    const failingIO: CrontabIO = {
+      read() { return { ok: true, content: '' }; },
+      write() { throw new Error('crontab write failed (simulated)'); },
+    };
+    const yamlPath = join(fx.cwd, 'roster', 'gtm', 'schedules.yaml');
+    assert.throws(
+      () => installCodexSchedule({
+        ...baseOpts(fx.cwd, fx.home),
+        installMode: 'via-cron',
+        crontabIO: failingIO,
+        codexBinaryPathOverride: '/opt/homebrew/bin/codex',
+      }),
+      (err: unknown) => err instanceof Error,
+    );
+    assert.ok(!existsSync(yamlPath), 'schedules.yaml must not be written when crontab fails');
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test('codex install: non-kebab function name throws', () => {
   const fx = makeWorkspaceAndHome();
   try {

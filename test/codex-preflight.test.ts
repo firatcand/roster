@@ -242,6 +242,56 @@ test('preflight: collects ALL failures (no short-circuit)', () => {
   }
 });
 
+test('preflight: TOML multiline string for model_provider fails closed (impl-review)', () => {
+  // Codex impl-review: `model_provider = """custom"""` (basic multiline) used
+  // to bypass the safe-value regex and pass preflight. Must now fail closed.
+  const fx = makeFakeCodexHome();
+  try {
+    writeAuth(fx.codex, { auth_mode: 'chatgpt', OPENAI_API_KEY: null });
+    writeConfig(fx.codex, 'model_provider = """custom"""\n');
+    const result = runCodexPreflight({ homeDir: fx.home, env: {} });
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      const f = failuresByCheck(result.failures);
+      assert.ok(f['config_active_model_provider']);
+    }
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('preflight: TOML literal-multiline for model_provider fails closed (impl-review)', () => {
+  const fx = makeFakeCodexHome();
+  try {
+    writeAuth(fx.codex, { auth_mode: 'chatgpt', OPENAI_API_KEY: null });
+    writeConfig(fx.codex, "model_provider = '''custom'''\n");
+    const result = runCodexPreflight({ homeDir: fx.home, env: {} });
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      const f = failuresByCheck(result.failures);
+      assert.ok(f['config_active_model_provider']);
+    }
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('preflight: empty value for model_provider fails closed', () => {
+  const fx = makeFakeCodexHome();
+  try {
+    writeAuth(fx.codex, { auth_mode: 'chatgpt', OPENAI_API_KEY: null });
+    writeConfig(fx.codex, 'model_provider =\n');
+    const result = runCodexPreflight({ homeDir: fx.home, env: {} });
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      const f = failuresByCheck(result.failures);
+      assert.ok(f['config_active_model_provider']);
+    }
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test('preflight: comments in config.toml are ignored', () => {
   const fx = makeFakeCodexHome();
   try {

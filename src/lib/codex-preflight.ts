@@ -81,7 +81,15 @@ function scanConfigToml(codexHome: string): TomlScan {
   let currentSection: string | null = null;
 
   const sectionRe = /^\[([^\]]+)\]\s*(?:#.*)?$/;
-  const providerSelectorRe = /^model_provider\s*=\s*(?:"([^"]*)"|'([^']*)')\s*(?:#.*)?$/;
+  // Permissive key-detector: catch any `model_provider = ...` line at the
+  // start of file scope. We deliberately do NOT try to fully parse TOML's
+  // string forms (basic strings, literal strings, multiline """..."""/'''...''',
+  // unicode escapes). Instead we recognize the safe single-line forms
+  // explicitly; anything else fails closed with the raw rest-of-line as the
+  // "actual" value (codex review impl-pass: multiline string forms would
+  // otherwise bypass the safe-value match entirely).
+  const providerKeyRe = /^model_provider\s*=\s*(.*?)\s*$/;
+  const safeValueRe = /^(?:"openai"|'openai')(?:\s*#.*)?$/;
 
   for (const rawLine of raw.split('\n')) {
     const stripped = rawLine.trim();
@@ -100,9 +108,17 @@ function scanConfigToml(codexHome: string): TomlScan {
     }
 
     if (currentSection === null) {
-      const selectorMatch = stripped.match(providerSelectorRe);
-      if (selectorMatch !== null) {
-        activeModelProvider = (selectorMatch[1] ?? selectorMatch[2]) ?? null;
+      const keyMatch = stripped.match(providerKeyRe);
+      if (keyMatch !== null) {
+        const rawValue = keyMatch[1] ?? '';
+        if (rawValue.match(safeValueRe) !== null) {
+          activeModelProvider = 'openai';
+        } else {
+          // Fail-closed: anything not exactly "openai"/'openai' is suspicious.
+          // Multiline strings, custom providers, env-substituted refs — all
+          // surface as the raw value for the failure remedy.
+          activeModelProvider = rawValue.length > 0 ? rawValue : '<empty>';
+        }
       }
     }
   }
@@ -191,9 +207,9 @@ export function runCodexPreflight(opts: PreflightOpts): PreflightResult {
     if (scan.activeModelProvider !== null && scan.activeModelProvider !== 'openai') {
       failures.push({
         check: 'config_active_model_provider',
-        actual: `model_provider = "${scan.activeModelProvider}"`,
-        expected: 'unset or "openai"',
-        remedy: `Remove the top-level model_provider key from ${codexHome}/config.toml.`,
+        actual: `model_provider = ${scan.activeModelProvider}`,
+        expected: 'unset or model_provider = "openai" (single-line form only)',
+        remedy: `Remove the top-level model_provider key from ${codexHome}/config.toml, or set it to the single-line form: model_provider = "openai".`,
       });
     }
   }

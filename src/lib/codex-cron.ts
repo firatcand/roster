@@ -43,7 +43,18 @@ export function defaultCrontabIO(): CrontabIO {
 // POSIX single-quote escape. Wraps the value in single quotes and uses the
 // '\'' dance to embed any single quotes from the value itself. Safe for any
 // byte sequence including spaces, double quotes, backticks, dollar signs.
+// Refuses newlines and NUL bytes (codex review impl-pass): a literal '\n' in
+// a single-quoted value survives quoting and breaks crontab into multiple
+// lines; NUL would silently truncate.
 export function shellQuote(value: string): string {
+  if (value.includes('\n') || value.includes('\0')) {
+    throw new RosterError({
+      header: `${chalk.red.bold('roster:')} cannot shell-quote value with newline or NUL`,
+      body: `  Value contains a forbidden control character. Crontab lines must be single-line.`,
+      remedy: `  Move the workspace to a path that does not contain newlines or NUL bytes.`,
+      exitCode: EXIT_ERROR,
+    });
+  }
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
@@ -144,14 +155,18 @@ export function upsertCronEntry(
 
   const beginIdx = matches[0]!;
   const endBeforeReplace = content.indexOf(endMarker, beginIdx);
-  let replaceEnd: number;
   if (endBeforeReplace < 0) {
-    const tailFromBegin = content.slice(beginIdx);
-    const blank = tailFromBegin.indexOf('\n\n');
-    replaceEnd = blank < 0 ? content.length : beginIdx + blank;
-  } else {
-    replaceEnd = endBeforeReplace + endMarker.length;
+    // Codex review impl-pass: the previous fallback ("replace through next
+    // blank line or EOF") could eat unrelated user lines if the begin marker
+    // was hand-broken. Refuse instead — the user must repair the crontab.
+    throw new RosterError({
+      header: `${chalk.red.bold('roster:')} malformed managed block for schedule '${name}'`,
+      body: `  Found '# roster:schedule:${name}:begin' but no matching ':end' marker.\n  Refusing to guess the block boundary — user lines could be lost.`,
+      remedy: `  Run 'crontab -e', restore the missing ':end' marker (or delete the orphan ':begin' line), then re-run this command.`,
+      exitCode: EXIT_ERROR,
+    });
   }
+  const replaceEnd = endBeforeReplace + endMarker.length;
   const next = content.slice(0, beginIdx) + block + content.slice(replaceEnd);
   io.write(next);
   return { action: 'updated' };
