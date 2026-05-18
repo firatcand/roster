@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync, statSync, lstatSync } from 'node:fs';
-import { basename, join, relative } from 'node:path';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync, lstatSync } from 'node:fs';
+import { basename, join, relative, sep } from 'node:path';
 import { parseCrontab, type CrontabLine } from './crontab.ts';
 import { parseWrapperFile, type ParsedWrapper, type KnownAgentPath } from './wrapper.ts';
 
@@ -275,8 +275,19 @@ function collectCronEntries(sourceDir: string, warnings: ScanWarning[]): CronWra
 function resolveWrapperPath(line: CrontabLine, sourceDir: string): string | null {
   if (line.wrapperPath === null) return null;
   if (line.wrapperPath.startsWith('/')) {
-    // Absolute path. If it points inside sourceDir, keep it; otherwise translate via basename.
-    if (line.wrapperPath.startsWith(sourceDir)) return line.wrapperPath;
+    // Use realpathSync (not lexical path.resolve) so a symlink planted inside sourceDir
+    // that targets an ancestor cannot bypass containment. realpathSync throws on missing
+    // paths — fall back to basename translation (same UX as the pre-existing "wrong
+    // absolute path" branch).
+    try {
+      const realDir = realpathSync(sourceDir);
+      const realPath = realpathSync(line.wrapperPath);
+      if (realPath === realDir || realPath.startsWith(realDir + sep)) {
+        return realPath;
+      }
+    } catch {
+      // Fall through to basename translation.
+    }
     const base = basename(line.wrapperPath);
     return join(sourceDir, 'scripts', 'cron', 'wrappers', base);
   }
