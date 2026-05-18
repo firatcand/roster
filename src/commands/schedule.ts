@@ -12,6 +12,7 @@ import {
   type CodexInstallResult,
 } from '../lib/codex-install.ts';
 import { buildListReport, renderListText, renderListJson, type ListReport } from '../lib/schedule-list.ts';
+import { estimateUsage, renderEstimateText, renderEstimateJson } from '../lib/estimate-usage.ts';
 import {
   executeRemove,
   renderRemovePreview,
@@ -28,6 +29,7 @@ import { join } from 'node:path';
 import {
   EXIT_OK,
   EXIT_ERROR,
+  RosterError,
   linuxClaudeUnsupportedError,
   cloudRoutineNotImplementedError,
   unsupportedViaModeError,
@@ -513,4 +515,45 @@ export async function executeScheduleRun(opts: ScheduleRunOptions): Promise<numb
     dryRun: opts.dryRun,
   });
   return result.exitCode;
+}
+
+// ── estimate-usage ───────────────────────────────────────────────────────
+
+export type ScheduleEstimateUsageOptions = {
+  cwd: string;
+  json: boolean;
+  silent: boolean;
+  dryRun: boolean;
+  plan: string | undefined;
+  warnThreshold: number;
+};
+
+export function executeScheduleEstimateUsage(opts: ScheduleEstimateUsageOptions): number {
+  let report;
+  try {
+    report = estimateUsage({
+      cwd: opts.cwd,
+      warnThreshold: opts.warnThreshold,
+      planFilter: opts.plan,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith('--plan')) {
+      throw new RosterError({
+        header: `${chalk.red.bold('roster:')} ${err.message}`,
+        body: '',
+        remedy: `  Pick from the available plan ids listed above.`,
+        exitCode: EXIT_ERROR,
+      });
+    }
+    throw err;
+  }
+
+  if (opts.json) {
+    console.log(renderEstimateJson(report));
+  } else if (!opts.silent) {
+    for (const line of renderEstimateText(report)) console.log(line);
+    if (opts.dryRun) console.log(READONLY_DRYRUN_LINE);
+  }
+
+  return EXIT_OK;
 }

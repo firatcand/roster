@@ -1,0 +1,57 @@
+# Plan-ceiling figures for `roster schedule estimate-usage` (ROS-44 / ADR-0001).
+#
+# Advisory estimates of interactive-session caps published by OpenAI and
+# Anthropic. The CLI never queries vendor APIs — these numbers are read from
+# this file at runtime and compared against projected schedule usage.
+#
+# Update this file as vendors publish new limits. Bump `as_of` per entry and
+# cite the public doc URL. Schema version is immutable at 1 — bump and migrate
+# if the shape ever changes.
+
+version: 1
+
+plans:
+  chatgpt-plus:
+    tool: codex
+    label: "ChatGPT Plus"
+    msgs_per_window: 250
+    window_hours: 5
+    msgs_per_week: 2100
+    source_url: "https://help.openai.com/en/articles/6643017-chatgpt-plus-faq"
+    as_of: "2026-05-18"
+
+  chatgpt-pro:
+    tool: codex
+    label: "ChatGPT Pro"
+    msgs_per_window: 1000
+    window_hours: 5
+    msgs_per_week: 8400
+    source_url: "https://help.openai.com/en/articles/8675309-chatgpt-pro"
+    as_of: "2026-05-18"
+
+  claude-pro:
+    tool: claude
+    label: "Claude Pro"
+    msgs_per_window: 45
+    window_hours: 5
+    msgs_per_week: 1200
+    source_url: "https://support.anthropic.com/en/articles/8324991-about-claude-pro-usage"
+    as_of: "2026-05-18"
+
+  claude-max-5x:
+    tool: claude
+    label: "Claude Max 5x"
+    msgs_per_window: 225
+    window_hours: 5
+    msgs_per_week: 6000
+    source_url: "https://support.anthropic.com/en/articles/9534406-about-claude-max-usage"
+    as_of: "2026-05-18"
+
+  claude-max-20x:
+    tool: claude
+    label: "Claude Max 20x"
+    msgs_per_window: 900
+    window_hours: 5
+    msgs_per_week: 24000
+    source_url: "https://support.anthropic.com/en/articles/9534406-about-claude-max-usage"
+    as_of: "2026-05-18"
