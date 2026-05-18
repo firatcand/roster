@@ -125,12 +125,15 @@ test('auditCronDrift: marker block matches rendered line → ok', () => {
       cron: '0 9 * * 1-5',
       install_mode: 'via-cron',
     }]);
+    // ROS-42: auditCronDrift now passes exitPath when re-rendering — match
+    // that here so the byte-exact comparison succeeds.
     const expected = renderCronLine({
       cron: '0 9 * * 1-5',
       workspacePath: dir,
       codexBinaryPath: FAKE_CODEX_BINARY,
       prompt: buildOrchestratorPrompt('sdr', 'cold-outreach', '_demo'),
       logPath: join(dir, 'logs', 'cron', 'sdr-cold.log'),
+      exitPath: join(dir, 'logs', 'cron', 'sdr-cold.exit'),
     });
     const crontab = buildMarkerBlock('sdr-cold', expected);
     const r = auditCronDrift({

@@ -138,6 +138,131 @@ test('renderCronLine: workspace with apostrophe is escaped correctly', () => {
   assert.match(line, /'\/tmp\/firat'\\''s-test'/);
 });
 
+// ── renderCronLine: ROS-42 wrapped form with exit-code capture ────────────
+
+test('renderCronLine: exitPath set → wraps in /bin/sh -c, captures $?', () => {
+  const line = renderCronLine({
+    cron: '0 9 * * 1-5',
+    workspacePath: '/Users/firat/my-roster',
+    codexBinaryPath: '/opt/homebrew/bin/codex',
+    prompt: 'Use the roster-orchestrator skill',
+    logPath: '/Users/firat/my-roster/logs/cron/sdr.log',
+    exitPath: '/Users/firat/my-roster/logs/cron/sdr.exit',
+  });
+  // env prefix unchanged
+  assert.match(line, /^0 9 \* \* 1-5 \/usr\/bin\/env -i HOME="\$HOME" /);
+  // /bin/sh -c wraps the inner command
+  assert.match(line, / \/bin\/sh -c '/);
+  // inner: codex exec + redirect + rc capture + exit
+  assert.match(line, /printf %s "\$rc"/);
+  assert.match(line, /exit "\$rc"/);
+  // exit path is embedded
+  assert.ok(line.includes("'/Users/firat/my-roster/logs/cron/sdr.exit'"));
+});
+
+test('renderCronLine: exitPath unset → legacy un-wrapped form (byte-exact backwards-compat)', () => {
+  const line = renderCronLine({
+    cron: '0 9 * * 1-5',
+    workspacePath: '/work',
+    codexBinaryPath: '/opt/homebrew/bin/codex',
+    prompt: 'p',
+    logPath: '/work/log',
+  });
+  // No /bin/sh -c wrap.
+  assert.ok(!line.includes('/bin/sh -c'));
+  assert.ok(!line.includes('printf'));
+  // Trailing token is the legacy redirect.
+  assert.match(line, />> '\/work\/log' 2>&1$/);
+});
+
+test('renderCronLine: eventsPath set → adds --json, splits stdout/stderr redirects', () => {
+  const line = renderCronLine({
+    cron: '*/15 * * * *',
+    workspacePath: '/w',
+    codexBinaryPath: '/usr/local/bin/codex',
+    prompt: 'p',
+    logPath: '/w/log',
+    exitPath: '/w/exit',
+    eventsPath: '/w/events.jsonl',
+  });
+  // --json present in inner script (note: single quotes are escaped as '\'' by
+  // the outer wrap, so `' exec --json '` appears as `'\'' exec --json '\''`).
+  assert.ok(line.includes(" exec --json "));
+  // stdout → events.jsonl, stderr → log (paths embedded with the '\'' dance)
+  assert.ok(line.includes(">> '\\''/w/events.jsonl'\\'' 2>> '\\''/w/log'\\''"));
+  // still wrapped (exitPath set)
+  assert.match(line, / \/bin\/sh -c '/);
+});
+
+test('renderCronLine: eventsPath without exitPath is ignored (no wrapper, no --json)', () => {
+  const line = renderCronLine({
+    cron: '0 * * * *',
+    workspacePath: '/w',
+    codexBinaryPath: '/codex',
+    prompt: 'p',
+    logPath: '/w/log',
+    eventsPath: '/w/events.jsonl',
+  });
+  assert.ok(!line.includes('--json'));
+  assert.ok(!line.includes('events.jsonl'));
+});
+
+// ── renderCronLine: shell-syntax sanity via /bin/sh -n ────────────────────
+//
+// /bin/sh -n parses the script without executing — catches quoting and
+// redirection mistakes (a missing `'`, an unbalanced `"`, a stray `&`) that
+// would otherwise only surface at fire-time.
+
+import { spawnSync as _spawnSync } from 'node:child_process';
+
+function shellParses(line: string): { ok: boolean; stderr: string } {
+  // Strip the cron schedule (first 5 fields) so we feed the actual command to sh -n.
+  const fields = line.split(/\s+/);
+  const cmd = fields.slice(5).join(' ');
+  const r = _spawnSync('/bin/sh', ['-n', '-c', cmd], { encoding: 'utf8' });
+  return { ok: r.status === 0, stderr: r.stderr ?? '' };
+}
+
+test('renderCronLine: wrapped form parses as valid POSIX shell', () => {
+  const line = renderCronLine({
+    cron: '0 9 * * 1-5',
+    workspacePath: '/Users/firat/my-roster',
+    codexBinaryPath: '/opt/homebrew/bin/codex',
+    prompt: 'Use the roster-orchestrator skill to run plan cold for agent sdr on project _demo',
+    logPath: '/Users/firat/my-roster/logs/cron/sdr.log',
+    exitPath: '/Users/firat/my-roster/logs/cron/sdr.exit',
+  });
+  const r = shellParses(line);
+  assert.ok(r.ok, `sh -n rejected the rendered line:\n${r.stderr}\nline:\n${line}`);
+});
+
+test('renderCronLine: wrapped form with apostrophe path parses', () => {
+  const line = renderCronLine({
+    cron: '0 9 * * *',
+    workspacePath: "/tmp/firat's-test",
+    codexBinaryPath: '/opt/homebrew/bin/codex',
+    prompt: "Run plan that's important",
+    logPath: "/tmp/firat's-test/log",
+    exitPath: "/tmp/firat's-test/exit",
+  });
+  const r = shellParses(line);
+  assert.ok(r.ok, `sh -n rejected the apostrophe-path line:\n${r.stderr}`);
+});
+
+test('renderCronLine: events form parses', () => {
+  const line = renderCronLine({
+    cron: '*/15 * * * *',
+    workspacePath: '/w',
+    codexBinaryPath: '/usr/local/bin/codex',
+    prompt: 'p',
+    logPath: '/w/log',
+    exitPath: '/w/exit',
+    eventsPath: '/w/events.jsonl',
+  });
+  const r = shellParses(line);
+  assert.ok(r.ok, `sh -n rejected the events-form line:\n${r.stderr}`);
+});
+
 // ── findMarkerBlocks ──────────────────────────────────────────────────────
 
 test('findMarkerBlocks: empty content → empty', () => {

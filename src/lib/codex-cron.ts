@@ -64,29 +64,86 @@ export type CronLineOpts = {
   codexBinaryPath: string;
   prompt: string;
   logPath: string;
+  // ROS-42: when set, the rendered command is wrapped in /bin/sh -c so the
+  // child's exit code lands in `exitPath` as a 1-3 byte ASCII integer.
+  // doctor + `roster pending sync` read these files to detect failures
+  // independent of state.md (which is only written if the agent runs to
+  // completion). Optional to keep backwards-compat with the original
+  // un-wrapped form; codex-install always passes this for new installs.
+  exitPath?: string;
+  // ROS-42: when set together with exitPath, the codex invocation gains the
+  // `--json` flag and its stdout is redirected to eventsPath (the structured
+  // event stream). Stderr still goes to logPath. Without exitPath, this is
+  // ignored — there is no inner shell to do the split redirect.
+  eventsPath?: string;
 };
 
 export function renderCronLine(opts: CronLineOpts): string {
   const codexDir = dirname(opts.codexBinaryPath);
   const pathValue = `${codexDir}:/usr/bin:/bin`;
-  const parts = [
+  const envPrefix = [
     opts.cron,
     '/usr/bin/env',
     '-i',
     'HOME="$HOME"',
     `PATH=${shellQuote(pathValue)}`,
     'CODEX_HOME="$HOME/.codex"',
-    shellQuote(opts.codexBinaryPath),
-    'exec',
+  ];
+
+  // Legacy un-wrapped form (no exit capture). Kept so call sites that still
+  // pass the v0.2.4 shape produce identical bytes — the byte-exact path makes
+  // auditCronDrift's mismatch test simpler to reason about during rollout.
+  if (opts.exitPath === undefined) {
+    const parts = [
+      ...envPrefix,
+      shellQuote(opts.codexBinaryPath),
+      'exec',
+      '-C',
+      shellQuote(opts.workspacePath),
+      '-c',
+      'shell_environment_policy.inherit=core',
+      shellQuote(opts.prompt),
+      '>>',
+      shellQuote(opts.logPath),
+      '2>&1',
+    ];
+    return parts.join(' ');
+  }
+
+  // Wrapped form with exit-code capture. The inner script runs the codex
+  // invocation, captures $? immediately, writes it to exitPath as 1-3 ASCII
+  // bytes, then re-exits with the same code so cron's MAILTO behavior is
+  // preserved. printf is used (not echo) to avoid a trailing newline.
+  //
+  // Event capture (when eventsPath is set): codex --json prints structured
+  // events to stdout; we redirect stdout to events.jsonl and stderr to log.
+  // Without --json codex's human-readable output goes to log via `>> log 2>&1`.
+  const codexArgs: string[] = ['exec'];
+  if (opts.eventsPath !== undefined) codexArgs.push('--json');
+  codexArgs.push(
     '-C',
     shellQuote(opts.workspacePath),
     '-c',
     'shell_environment_policy.inherit=core',
     shellQuote(opts.prompt),
-    '>>',
-    shellQuote(opts.logPath),
-    '2>&1',
-  ];
+  );
+  const redirect =
+    opts.eventsPath !== undefined
+      ? `>> ${shellQuote(opts.eventsPath)} 2>> ${shellQuote(opts.logPath)}`
+      : `>> ${shellQuote(opts.logPath)} 2>&1`;
+
+  // Build the inner script. Single-quoting the whole script via shellQuote
+  // means $? / $rc / "$rc" survive to the inner /bin/sh -c, where they are
+  // resolved at run time. The codex review pattern is to keep the inner
+  // script as one POSIX-portable line: no arrays, no $PIPESTATUS, no bash-isms.
+  const inner = [
+    shellQuote(opts.codexBinaryPath),
+    ...codexArgs,
+    redirect,
+    `; rc=$?; printf %s "$rc" > ${shellQuote(opts.exitPath)}; exit "$rc"`,
+  ].join(' ');
+
+  const parts = [...envPrefix, '/bin/sh', '-c', shellQuote(inner)];
   return parts.join(' ');
 }
 

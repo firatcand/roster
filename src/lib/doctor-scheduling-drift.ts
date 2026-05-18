@@ -11,6 +11,7 @@ import {
 } from './codex-cron.ts';
 import { scheduleFileSchema, type ScheduleEntry } from './schedule-schema.ts';
 import { buildOrchestratorPrompt } from './schedule-install.ts';
+import { exitPathFor, eventsPathFor, logPathFor } from './cron-exit-log.ts';
 
 // =====================================================================
 // Crontab ↔ schedules.yaml drift (check 3)
@@ -179,7 +180,11 @@ export function auditCronDrift(opts: CronDriftOpts): CronDriftAudit {
       workspacePath,
       codexBinaryPath,
       prompt: buildOrchestratorPrompt(entry.agent, entry.plan, entry.project),
-      logPath: join(workspacePath, 'logs', 'cron', `${entry.name}.log`),
+      logPath: logPathFor(workspacePath, entry.name),
+      exitPath: exitPathFor(workspacePath, entry.name),
+      ...(entry.capture_events === true
+        ? { eventsPath: eventsPathFor(workspacePath, entry.name) }
+        : {}),
     });
     const actual = extractActualCronLine(content, entry.name);
     if (actual !== expected) {
