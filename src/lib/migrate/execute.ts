@@ -203,6 +203,11 @@ export function executeMigration(plan: MigrationPlan, opts: ExecuteOptions): Exe
     };
   }
 
+  // Manifest read/write is not concurrency-safe: two parallel `roster migrate
+  // from-agent-team` invocations against the same dest could last-writer-wins.
+  // Acceptable today because migrate is a one-shot CLI flow run interactively
+  // against one source-dest pair. Tracked: ROS-63 (file lock or CAS write if
+  // concurrent migration becomes a real surface).
   const sourceHash = sourceHashFor(plan.sourceDir);
   const manifestPath = manifestPathFor(plan.destWorkspace, sourceHash);
   const previousManifest = readManifest(manifestPath);
