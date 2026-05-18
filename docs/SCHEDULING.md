@@ -282,7 +282,7 @@ Not currently supported for Codex (no Codex cloud routine primitive at parity ye
 
 1. **Symlink/dual-write integrity.** `CONTEXT.md` exists and `CLAUDE.md` / `AGENTS.md` resolve to it (symlink on mac/linux; dual-write content-equal on Windows).
 2. **`schedules.yaml` parse + schema.** All `roster/<function>/schedules.yaml` files match the schema and reference valid agents/plans.
-3. **Cron drift detection.** Every Codex `--via cron` entry in `schedules.yaml` has a matching live crontab line. Drift = warning.
+3. **Cron drift detection** (deferred to [ROS-42](https://linear.app/firatdogan/issue/ROS-42)). Cross-referencing every Codex `--via cron` entry in `schedules.yaml` against the live crontab is not yet implemented — today's doctor checks YAML well-formedness + schema only.
 4. **Codex auth pre-flight.** `~/.codex/auth.json` `auth_mode == "chatgpt"`; no API-key field; `~/.codex/config.toml` has no non-default `model_provider` override.
 5. **Banned-string scan.** Grep installed skills/templates for `claude -p`, `ANTHROPIC_API_KEY`, Agent SDK imports. Fail on match.
 6. **Env-var blocklist.** Verify generated crontab lines wrap with `env -i` and don't leak `OPENAI_API_KEY` / `CODEX_API_KEY` / `ANTHROPIC_API_KEY`.
@@ -298,6 +298,16 @@ Most checks support `--fix`: e.g., re-create the missing `CLAUDE.md` symlink, ch
 ## Manual macOS Mac mini end-to-end verification
 
 Before you trust a schedule for unattended production runs, walk through this once on the actual Mac mini. Browser-based UI hand-offs can't be CI'd; missed-fire detection in CI is intentionally muted ([ROS-40](https://linear.app/firatdogan/issue/ROS-40)).
+
+### CI coverage vs. manual gate
+
+Most of the install-path machinery is exercised in CI by `test/e2e-schedule.sh` (`pnpm e2e:schedule`) — it packs and globally installs the tarball, stubs `crontab` on `PATH`, installs one Codex `--via cron` schedule, asserts the generated cron line contains `env -i` + `shell_environment_policy.inherit=core`, then removes it. **No real cron entry is ever written, no scheduled session ever fires in CI** — this is intentional to avoid subscription-quota consumption from automated runs.
+
+That leaves three things this manual gate must verify that CI cannot:
+
+1. **Claude Desktop / Codex app UI hand-off actually flows.** The `.fields.md` artifacts paste cleanly into the dialogs and the resulting schedule fires.
+2. **An interactive fire actually bills against your subscription**, not API credit (verify in the relevant usage dashboard).
+3. **Real cron entries survive a reboot** and unattended app restarts.
 
 ### Pre-flight (~10 min)
 
@@ -341,6 +351,15 @@ tail -n 20 logs/heartbeat.log
 tail -n 20 logs/cron/heartbeat-noop.log   # Codex --via cron only
 # expect: two `codex exec` invocations, exit code 0
 ```
+
+### Verify subscription billing (cannot be automated)
+
+The single thing the e2e shell test fundamentally cannot verify is that the fired session bills against your interactive subscription instead of API credit. After the two fires above:
+
+- **Claude side:** Open the Claude usage page (or Settings → Plan & billing). Confirm the two fires show under your Claude Pro/Max usage counter, **not** under Agent SDK / API spend.
+- **Codex side:** Open the ChatGPT usage dashboard (Settings → Plan → Usage). Confirm the two fires count toward your Codex (ChatGPT Plus/Pro) limit, **not** the API tokens dashboard at `platform.openai.com/usage`.
+
+If either fire shows up under API spend, **stop**: `roster doctor` missed something. File against [ROS-38](https://linear.app/firatdogan/issue/ROS-38) with the exact crontab line / Scheduled Task contents.
 
 ### Disruption checks (optional but recommended)
 
