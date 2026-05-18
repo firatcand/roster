@@ -208,6 +208,10 @@ schedules:
     tool: codex
     install_mode: via-cron
     status: installed
+    subscription_attestation:
+      auth_mode: chatgpt
+      env_policy: cleared
+      codex_home: /Users/test/.codex
 `;
 
 const invalidScheduleYaml = `version: 1

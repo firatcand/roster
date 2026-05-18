@@ -127,6 +127,62 @@ export function cloudRoutineNotImplementedError(): RosterError {
   });
 }
 
+export type ToolForViaError = { tool: string; via: string };
+
+export function unsupportedViaModeError(args: ToolForViaError): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} --via ${args.via} is not supported with --tool ${args.tool}`,
+    body: `  Only ${chalk.bold('--tool codex')} supports ${chalk.bold(`--via ${args.via}`)} mode.`,
+    remedy: `  Drop the ${chalk.bold(`--via ${args.via}`)} flag (Claude uses UI hand-off via ${chalk.bold('--tool claude')}).`,
+    exitCode: EXIT_ERROR,
+  });
+}
+
+export function windowsCronNotSupportedError(): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} --via cron is not supported on Windows`,
+    body: '  Windows has no POSIX cron daemon to install the scheduled line into.',
+    remedy: `  Use the default mode (drop ${chalk.bold('--via cron')}) and create the Automation via the Codex desktop app instead.`,
+    exitCode: EXIT_ERROR,
+  });
+}
+
+export function linuxCodexHandoffUnsupportedError(): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} Codex desktop app is not available on Linux`,
+    body: [
+      '  The default install mode hands off a prompt to the Codex desktop app,',
+      '  which only ships on macOS and Windows.',
+    ].join('\n'),
+    remedy: `  Add ${chalk.bold('--via cron')} to install the schedule via crontab instead.`,
+    exitCode: EXIT_ERROR,
+  });
+}
+
+// Forward declare for the codex-preflight import — defined inline below to
+// avoid a circular import (codex-install imports errors; errors knows the
+// preflight failure shape but does not import codex-preflight).
+export type CodexPreflightFailureSummary = {
+  check: string;
+  actual: string;
+  expected: string;
+  remedy: string;
+};
+
+export function codexPreflightError(failures: CodexPreflightFailureSummary[]): RosterError {
+  const bodyLines: string[] = ['  Subscription-safety preflight failed. Codex schedule install would otherwise risk per-token API billing.', ''];
+  for (const f of failures) {
+    bodyLines.push(`  - [${f.check}] expected ${f.expected}, got ${f.actual}`);
+    bodyLines.push(`      → ${f.remedy}`);
+  }
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} codex subscription-safety preflight failed (${failures.length} check${failures.length === 1 ? '' : 's'})`,
+    body: bodyLines.join('\n'),
+    remedy: '  Address each failure above and re-run. See docs/adr/0001-scheduling-architecture.md for context.',
+    exitCode: EXIT_ERROR,
+  });
+}
+
 export function unexpectedError(err: unknown): RosterError {
   const message = err instanceof Error ? err.message : String(err);
   const wrapped = new RosterError({
