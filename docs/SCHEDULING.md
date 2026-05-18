@@ -282,7 +282,7 @@ Not currently supported for Codex (no Codex cloud routine primitive at parity ye
 
 1. **Symlink/dual-write integrity.** `CONTEXT.md` exists and `CLAUDE.md` / `AGENTS.md` resolve to it (symlink on mac/linux; dual-write content-equal on Windows).
 2. **`schedules.yaml` parse + schema.** All `roster/<function>/schedules.yaml` files match the schema and reference valid agents/plans.
-3. **Cron drift detection** (deferred to [ROS-42](https://linear.app/firatdogan/issue/ROS-42)). Cross-referencing every Codex `--via cron` entry in `schedules.yaml` against the live crontab is not yet implemented — today's doctor checks YAML well-formedness + schema only.
+3. **Cron drift detection.** Every Codex `--via cron` entry in `schedules.yaml` is cross-referenced against the live crontab. Surfaces three failure modes: a registered entry with no crontab marker block, a crontab line that differs from what `renderCronLine` would emit today, and an unreadable crontab (permissions). Implemented in [ROS-38](https://linear.app/firatdogan/issue/ROS-38); see `src/lib/doctor-scheduling-drift.ts`.
 4. **Codex auth pre-flight.** `~/.codex/auth.json` `auth_mode == "chatgpt"`; no API-key field; `~/.codex/config.toml` has no non-default `model_provider` override.
 5. **Banned-string scan.** Grep installed skills/templates for `claude -p`, `ANTHROPIC_API_KEY`, Agent SDK imports. Fail on match.
 6. **Env-var blocklist.** Verify generated crontab lines wrap with `env -i` and don't leak `OPENAI_API_KEY` / `CODEX_API_KEY` / `ANTHROPIC_API_KEY`.
