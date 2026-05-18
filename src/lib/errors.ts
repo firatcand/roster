@@ -183,6 +183,58 @@ export function codexPreflightError(failures: CodexPreflightFailureSummary[]): R
   });
 }
 
+export function migrateSourceNotFoundError(sourceDir: string): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} source directory not found`,
+    body: `  ${sourceDir}`,
+    remedy: `  Pass the path to your legacy agent-team workspace, e.g. ${chalk.bold('~/repos/agent-team')}.`,
+    exitCode: EXIT_ERROR,
+  });
+}
+
+export function migrateDestNotInitializedError(destDir: string): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} destination is not an initialized roster workspace`,
+    body: [
+      `  ${destDir}`,
+      '  No CONTEXT.md or roster/ directory found.',
+    ].join('\n'),
+    remedy: [
+      `  Run ${chalk.bold('roster init')} in the destination first, then re-run migrate.`,
+      `  Or pass ${chalk.bold('--dest <other-dir>')} to point at an initialized workspace.`,
+    ].join('\n'),
+    exitCode: EXIT_ERROR,
+  });
+}
+
+export function envPermissionTooOpenError(envPath: string, mode: number): RosterError {
+  const octal = (mode & 0o777).toString(8).padStart(3, '0');
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} source .env permissions are too open`,
+    body: [
+      `  ${envPath} is mode 0${octal}; roster requires 0600 before copying secrets.`,
+      '  ADR-0001 § Secrets handling — do not silently downgrade or upgrade.',
+    ].join('\n'),
+    remedy: [
+      `  Run:  ${chalk.bold(`chmod 600 ${envPath}`)}`,
+      `  Then re-run the migrate command.`,
+    ].join('\n'),
+    exitCode: EXIT_ERROR,
+  });
+}
+
+export function migrateSourceAlreadyRosterError(sourceDir: string): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} source directory looks like a roster workspace`,
+    body: [
+      `  ${sourceDir} contains CONTEXT.md or roster/.`,
+      '  This command migrates a legacy agent-team workspace, not a roster one.',
+    ].join('\n'),
+    remedy: '  Point --dest at the source dir if you meant to operate in-place; otherwise re-check the path.',
+    exitCode: EXIT_ERROR,
+  });
+}
+
 export function unexpectedError(err: unknown): RosterError {
   const message = err instanceof Error ? err.message : String(err);
   const wrapped = new RosterError({
