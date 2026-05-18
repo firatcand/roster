@@ -20,6 +20,7 @@ import {
   executeScheduleRemove,
   executeScheduleStatus,
   executeScheduleRun,
+  executeScheduleEstimateUsage,
 } from '../commands/schedule.ts';
 import { executeReview } from '../commands/review.ts';
 import { executeHooksInstall } from '../commands/hooks.ts';
@@ -75,6 +76,7 @@ function printHelp(version: string): void {
     `  roster schedule status NAME  ${chalk.dim('Show last_run / last_status / next_due_at for a schedule')}`,
     `  roster schedule run NAME     ${chalk.dim('Manually fire a schedule (Claude: print prompt; Codex: spawn)')}`,
     `  roster schedule remove NAME  ${chalk.dim('Remove a schedule (strips crontab block if --via cron)')}`,
+    `  roster schedule estimate-usage  ${chalk.dim('Estimate plan-message consumption per schedule')}`,
     `  roster review [function]     ${chalk.dim('Walk roster/*/pending/ HITL items interactively')}`,
     `  roster hooks install         ${chalk.dim('Install SessionStart banner hooks for Claude + Codex')}`,
     `  roster migrate from-agent-team <dir>  ${chalk.dim('Migrate a legacy agent-team workspace into roster')}`,
@@ -320,6 +322,16 @@ async function runSchedule(args: readonly string[]): Promise<number> {
       functionName: parsed.functionName,
       silent: parsed.silent,
       dryRun: parsed.dryRun,
+    });
+  }
+  if (parsed.subcommand === 'estimate-usage') {
+    return await executeScheduleEstimateUsage({
+      cwd: parsed.cwd ?? process.cwd(),
+      json: parsed.json,
+      silent: parsed.silent,
+      dryRun: parsed.dryRun,
+      plan: parsed.plan,
+      warnThreshold: parsed.warnThreshold,
     });
   }
   // Exhaustive guard.

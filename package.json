@@ -12,6 +12,7 @@
     "skills/",
     "agents/",
     "templates/",
+    "data/",
     "README.md",
     "LICENSE"
   ],

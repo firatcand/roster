@@ -1,6 +1,6 @@
 import { TOOL_VALUES, type ToolValue } from './schedule-schema.ts';
 
-export type ScheduleSubcommand = 'validate' | 'install' | 'list' | 'remove' | 'status' | 'run';
+export type ScheduleSubcommand = 'validate' | 'install' | 'list' | 'remove' | 'status' | 'run' | 'estimate-usage';
 
 export const SCHEDULE_SUBCOMMANDS: ReadonlySet<ScheduleSubcommand> = new Set<ScheduleSubcommand>([
   'validate',
@@ -9,6 +9,7 @@ export const SCHEDULE_SUBCOMMANDS: ReadonlySet<ScheduleSubcommand> = new Set<Sch
   'remove',
   'status',
   'run',
+  'estimate-usage',
 ]);
 
 const SUBCOMMAND_LIST = Array.from(SCHEDULE_SUBCOMMANDS).join(' | ');
@@ -82,6 +83,16 @@ export type ParsedScheduleArgs =
       cwd: string | undefined;
       dryRun: boolean;
     }
+  | {
+      kind: 'ok';
+      subcommand: 'estimate-usage';
+      json: boolean;
+      silent: boolean;
+      cwd: string | undefined;
+      dryRun: boolean;
+      plan: string | undefined;
+      warnThreshold: number;
+    }
   | { kind: 'err'; message: string };
 
 function isScheduleSubcommand(value: string): value is ScheduleSubcommand {
@@ -113,7 +124,75 @@ export function parseScheduleArgs(args: readonly string[]): ParsedScheduleArgs {
   if (first === 'list') return parseList(rest);
   if (first === 'remove') return parseNamed(rest, 'remove');
   if (first === 'status') return parseNamed(rest, 'status');
-  return parseNamed(rest, 'run');
+  if (first === 'run') return parseNamed(rest, 'run');
+  return parseEstimateUsage(rest);
+}
+
+function parseEstimateUsage(rest: readonly string[]): ParsedScheduleArgs {
+  let json = false;
+  let silent = false;
+  let cwd: string | undefined;
+  let dryRun = false;
+  let plan: string | undefined;
+  // ROS-44 default: 70% of any plan ceiling triggers a warning.
+  let warnThreshold = 0.70;
+
+  const parsePct = (raw: string): { ok: true; value: number } | { ok: false; message: string } => {
+    const trimmed = raw.endsWith('%') ? raw.slice(0, -1) : raw;
+    const n = Number(trimmed);
+    if (!Number.isFinite(n)) {
+      return { ok: false, message: `--warn-threshold: expected a number (got '${raw}')` };
+    }
+    // Accept either 0..1 fraction or 0..100 percent.
+    const value = n > 1 ? n / 100 : n;
+    if (value < 0 || value > 1) {
+      return { ok: false, message: `--warn-threshold: must be between 0 and 100 (got '${raw}')` };
+    }
+    return { ok: true, value };
+  };
+
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i]!;
+    if (arg === '--json') json = true;
+    else if (arg === '--silent') silent = true;
+    else if (arg === '--dry-run') dryRun = true;
+    else if (arg === '--cwd') {
+      const next = rest[i + 1];
+      if (next === undefined) return { kind: 'err', message: '--cwd requires a path argument' };
+      cwd = next;
+      i++;
+    } else if (arg.startsWith('--cwd=')) {
+      cwd = arg.slice('--cwd='.length);
+    } else if (arg === '--plan') {
+      const next = rest[i + 1];
+      if (next === undefined || next.startsWith('-')) {
+        return { kind: 'err', message: '--plan requires a plan id (e.g. claude-pro, chatgpt-plus)' };
+      }
+      plan = next;
+      i++;
+    } else if (arg.startsWith('--plan=')) {
+      plan = arg.slice('--plan='.length);
+    } else if (arg === '--warn-threshold') {
+      const next = rest[i + 1];
+      if (next === undefined || next.startsWith('-')) {
+        return { kind: 'err', message: '--warn-threshold requires a value (e.g. 70 or 0.7)' };
+      }
+      const r = parsePct(next);
+      if (!r.ok) return { kind: 'err', message: r.message };
+      warnThreshold = r.value;
+      i++;
+    } else if (arg.startsWith('--warn-threshold=')) {
+      const r = parsePct(arg.slice('--warn-threshold='.length));
+      if (!r.ok) return { kind: 'err', message: r.message };
+      warnThreshold = r.value;
+    } else if (arg.startsWith('-')) {
+      return { kind: 'err', message: `unknown flag for 'schedule estimate-usage': ${arg}` };
+    } else {
+      return { kind: 'err', message: `unexpected positional argument for 'schedule estimate-usage': ${arg}` };
+    }
+  }
+
+  return { kind: 'ok', subcommand: 'estimate-usage', json, silent, cwd, dryRun, plan, warnThreshold };
 }
 
 function parseValidate(rest: readonly string[]): ParsedScheduleArgs {
