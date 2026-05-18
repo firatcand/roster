@@ -189,7 +189,7 @@ This pattern keeps secrets out of agent.md (which is committed) and into per-pro
 
 Scheduling is a layer above plans, not part of them. Plans don't have a `schedule` field.
 
-Schedules fire from each AI tool's **native local desktop scheduler** — Claude Desktop Scheduled Tasks, Codex Automations, or `codex exec --via cron`. Roster installs schedule entries via `roster schedule install`; each fire spawns a fresh CLI session in the workspace, loads `CONTEXT.md`, invokes the `roster-orchestrator` skill, and dispatches the agent's subagent in isolated context. All model usage bills against the user's interactive Claude Pro/Max or ChatGPT Plus/Pro plan — `claude -p`, the Anthropic Agent SDK, and any programmatic API key path are banned and enforced by `roster doctor`.
+Schedules fire from each AI tool's **native local desktop scheduler** — Claude Desktop Scheduled Tasks, Codex Automations, or a hardened crontab line installed by `roster schedule install --tool codex --via cron`. Roster registers schedule entries via `roster schedule install`; each fire spawns a fresh CLI session in the workspace, loads `CONTEXT.md`, invokes the `roster-orchestrator` skill, and dispatches the agent's subagent in isolated context. All model usage bills against the user's interactive Claude Pro/Max or ChatGPT Plus/Pro plan — `claude -p`, the Anthropic Agent SDK, and any programmatic API key path are banned and enforced by `roster doctor`.
 
 Why this split: scheduling concerns (when, retry policy, dependencies) are different from workflow concerns (what to do). Keeping them separate means you can change the cadence without touching the plan, and you can run the same plan ad-hoc without a scheduler.
 

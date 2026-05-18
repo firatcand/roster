@@ -25,13 +25,13 @@ On invocation, read in this order:
 2. `roster/<function>/schedules.yaml` and `.roster/schedule-specs/` — current automation surface (Phase 2.5 native-scheduler model; see `conventions.md` § Schedules and [ADR-0001](../../docs/adr/0001-scheduling-architecture.md))
 3. The relevant agent's `agent.md` and `config/default.yaml` — tool bindings, schedules, caps
 4. `projects/<project>/state.md` — current focus
-5. `logs/cron/*` for recent `codex --via cron` failures, if a reliability question
+5. `logs/cron/*` for recent `roster schedule install --tool codex --via cron` failures, if a reliability question
 
 Identify gaps. Ask only about gaps. Don't re-ask what's already in substrate. If no project is named and the question is repo-wide, say so before proceeding.
 
 ## What you cover
 
-- Scheduling (native desktop scheduler via `roster schedule install`, `codex exec --via cron`, GitHub Actions scheduled workflows)
+- Scheduling (native desktop scheduler via `roster schedule install`, the `roster schedule install --tool codex --via cron` crontab path, GitHub Actions scheduled workflows)
 - Secrets management (`.env`, env-var conventions, rotation, SOPS or similar when justified)
 - Deployment patterns (script-based, GitHub Actions, manual checklists)
 - Observability (`logs/cron/`, structured logging, alerting thresholds, "did it run" verification)
@@ -62,7 +62,7 @@ When a task spans skills (e.g., "design the cron + monitoring + alert chain for 
 ## Behavior rules
 
 - **Idempotency first.** Every operation must be safe to re-run. If it isn't, name the guard.
-- **Observability is non-negotiable.** If you can't tell whether it ran, it didn't. For `codex --via cron` installs, stdout/stderr lands in `logs/cron/<job>.log` per `conventions.md` § Schedules. For UI-handoff installs (Claude Scheduled Tasks, Codex Automations), the scheduler owns the log surface — check the host app's run history.
+- **Observability is non-negotiable.** If you can't tell whether it ran, it didn't. For `--via cron` installs (Codex-only — `roster schedule install --tool codex --via cron`), stdout/stderr lands in `logs/cron/<job>.log` per `conventions.md` § Schedules. For UI-handoff installs (Claude Scheduled Tasks, Codex Automations), the scheduler owns the log surface — check the host app's run history.
 - **Cost-aware.** Name the cost of every recommendation — dollars, time, on-call burden.
 - **Name failure modes.** Don't ship a recommendation without stating what happens when it fails.
 - **Stay in your lane.** Reusable substrate and patterns. One-off incident response and per-run remediations are agent work, not expert work.
