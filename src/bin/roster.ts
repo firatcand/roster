@@ -10,11 +10,13 @@ import { parseDoctorArgs } from '../lib/doctor-args.ts';
 import { parseScheduleArgs } from '../lib/schedule-args.ts';
 import { parseReviewArgs } from '../lib/review-args.ts';
 import { parseHooksArgs } from '../lib/hooks-args.ts';
+import { parseMigrateArgs } from '../lib/migrate-args.ts';
 import { executeInit } from '../commands/init.ts';
 import { executeDoctor } from '../commands/doctor.ts';
 import { executeScheduleValidate, executeScheduleInstall } from '../commands/schedule.ts';
 import { executeReview } from '../commands/review.ts';
 import { executeHooksInstall } from '../commands/hooks.ts';
+import { executeMigrateFromAgentTeam } from '../commands/migrate.ts';
 import {
   EXIT_OK,
   EXIT_ERROR,
@@ -29,7 +31,7 @@ import {
   userCancelledInstall,
 } from '../lib/errors.ts';
 
-type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'hooks';
+type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'hooks' | 'migrate';
 const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'install',
   'init',
@@ -37,6 +39,7 @@ const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'schedule',
   'review',
   'hooks',
+  'migrate',
 ]);
 
 function tildify(path: string): string {
@@ -63,6 +66,7 @@ function printHelp(version: string): void {
     `  roster schedule install      ${chalk.dim('Register a schedule (Claude: UI hand-off; Codex: ROS-35)')}`,
     `  roster review [function]     ${chalk.dim('Walk roster/*/pending/ HITL items interactively')}`,
     `  roster hooks install         ${chalk.dim('Install SessionStart banner hooks for Claude + Codex')}`,
+    `  roster migrate from-agent-team <dir>  ${chalk.dim('Migrate a legacy agent-team workspace into roster')}`,
     '',
     chalk.bold('Flags:'),
     `  -h, --help                   ${chalk.dim('Show this help')}`,
@@ -74,6 +78,9 @@ function printHelp(version: string): void {
     `  --migrate                    ${chalk.dim('Upgrade pre-CONTEXT.md workspace, preserving CLAUDE.md content (init)')}`,
     `  --json                       ${chalk.dim('Emit machine-readable JSON (doctor, schedule validate)')}`,
     `  --cwd <dir>                  ${chalk.dim('Run schedule validate against a different cwd')}`,
+    `  --dest <dir>                 ${chalk.dim('Destination workspace for migrate (default: cwd)')}`,
+    `  --dry-run                    ${chalk.dim('Print plan without writes (schedule install, migrate)')}`,
+    `  --force-resync               ${chalk.dim('Re-copy source files that changed since last migration (migrate)')}`,
     `  --debug                      ${chalk.dim('Print full stack trace on error (global)')}`,
     '',
     chalk.bold('Exit codes:'),
@@ -289,6 +296,27 @@ async function runReview(args: readonly string[]): Promise<number> {
   });
 }
 
+function runMigrate(args: readonly string[]): number {
+  const parsed = parseMigrateArgs(args);
+  if (parsed.kind === 'err') {
+    throw new RosterError({
+      header: `${chalk.red.bold('roster:')} ${parsed.message}`,
+      body: '',
+      remedy: `  Run ${chalk.bold('roster --help')} for usage.`,
+      exitCode: EXIT_ERROR,
+    });
+  }
+  return executeMigrateFromAgentTeam({
+    sourceDir: parsed.sourceDir,
+    dest: parsed.dest,
+    dryRun: parsed.dryRun,
+    forceResync: parsed.forceResync,
+    json: parsed.json,
+    silent: parsed.silent,
+    cwd: process.cwd(),
+  });
+}
+
 async function runHooks(args: readonly string[]): Promise<number> {
   const parsed = parseHooksArgs(args);
   if (parsed.kind === 'err') {
@@ -364,6 +392,7 @@ async function main(): Promise<number> {
     if (first === 'schedule') return runSchedule(rest);
     if (first === 'review') return await runReview(rest);
     if (first === 'hooks') return await runHooks(rest);
+    if (first === 'migrate') return runMigrate(rest);
   }
 
   throw unknownCommandError(first);
