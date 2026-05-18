@@ -92,7 +92,7 @@ function printHelp(version: string): void {
     `  --cwd <dir>                  ${chalk.dim('Run schedule validate against a different cwd')}`,
     `  --dest <dir>                 ${chalk.dim('Destination workspace for migrate (default: cwd)')}`,
     `  --project <name>             ${chalk.dim('Project slug for schedule install (default: _demo)')}`,
-    `  --dry-run                    ${chalk.dim('Print plan without writes (schedule install, migrate)')}`,
+    `  --dry-run                    ${chalk.dim('Print plan without writes (schedule *, doctor, migrate)')}`,
     `  --force-resync               ${chalk.dim('Re-copy source files that changed since last migration (migrate)')}`,
     `  --debug                      ${chalk.dim('Print full stack trace on error (global)')}`,
     '',
@@ -264,6 +264,7 @@ async function runSchedule(args: readonly string[]): Promise<number> {
       cwd: parsed.cwd ?? process.cwd(),
       json: parsed.json,
       silent: parsed.silent,
+      dryRun: parsed.dryRun,
     });
   }
   if (parsed.subcommand === 'install') {
@@ -288,6 +289,7 @@ async function runSchedule(args: readonly string[]): Promise<number> {
       cwd: parsed.cwd ?? process.cwd(),
       json: parsed.json,
       silent: parsed.silent,
+      dryRun: parsed.dryRun,
     });
   }
   if (parsed.subcommand === 'status') {
@@ -297,6 +299,7 @@ async function runSchedule(args: readonly string[]): Promise<number> {
       functionName: parsed.functionName,
       json: parsed.json,
       silent: parsed.silent,
+      dryRun: parsed.dryRun,
     });
   }
   if (parsed.subcommand === 'remove') {
@@ -316,6 +319,7 @@ async function runSchedule(args: readonly string[]): Promise<number> {
       name: parsed.name,
       functionName: parsed.functionName,
       silent: parsed.silent,
+      dryRun: parsed.dryRun,
     });
   }
   // Exhaustive guard.
@@ -400,7 +404,7 @@ function runDoctor(args: readonly string[]): number {
       exitCode: EXIT_ERROR,
     });
   }
-  const code = executeDoctor({ json: parsed.json, silent: parsed.silent, fix: parsed.fix, cwd: process.cwd() });
+  const code = executeDoctor({ json: parsed.json, silent: parsed.silent, fix: parsed.fix, dryRun: parsed.dryRun, cwd: process.cwd() });
   if (code === EXIT_NO_TOOLS && !parsed.json) {
     throw noToolsError(toolHints(allTools()));
   }
