@@ -26,6 +26,10 @@ export type PreflightResult =
 export type PreflightOpts = {
   homeDir: string;
   env: NodeJS.ProcessEnv;
+  // Test/override hook: when ROSTER_CODEX_HOME is set, the codex config dir is
+  // not `$HOME/.codex`. Pass it here so the preflight reads auth.json /
+  // config.toml from the right place. Defaults to join(homeDir, '.codex').
+  codexHome?: string;
 };
 
 type AuthJson = {
@@ -128,7 +132,7 @@ function scanConfigToml(codexHome: string): TomlScan {
 
 export function runCodexPreflight(opts: PreflightOpts): PreflightResult {
   const { homeDir, env } = opts;
-  const codexHome = join(homeDir, '.codex');
+  const codexHome = opts.codexHome ?? join(homeDir, '.codex');
   const failures: PreflightFailure[] = [];
 
   // Checks 1 + 2: auth.json
@@ -215,7 +219,9 @@ export function runCodexPreflight(opts: PreflightOpts): PreflightResult {
   }
 
   // Check 8: CODEX_HOME env var
-  const expectedCodexHome = codexHome;
+  // When the codexHome is overridden (tests / ROSTER_CODEX_HOME), the expected
+  // home is the override itself. Otherwise it's the canonical $HOME/.codex.
+  const expectedCodexHome = opts.codexHome ?? join(homeDir, '.codex');
   const actualCodexHome = env['CODEX_HOME'];
   if (actualCodexHome !== undefined && actualCodexHome !== '' && actualCodexHome !== expectedCodexHome) {
     failures.push({

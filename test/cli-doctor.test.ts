@@ -16,6 +16,17 @@ function makeHomes(present: ReadonlyArray<'claude' | 'codex' | 'gemini'>): Homes
   const codex = join(root, 'codex');
   const gemini = join(root, 'gemini');
   for (const key of present) mkdirSync(join(root, key), { recursive: true });
+  // Seed a valid chatgpt-subscription auth.json for the codex preflight
+  // (wired into doctor as part of ROS-38). Without this, doctor's safety
+  // audit reports a billing-safety failure for every test that includes
+  // 'codex' in `present`, masking the actual assertion under test.
+  if (present.includes('codex')) {
+    writeFileSync(
+      join(codex, 'auth.json'),
+      JSON.stringify({ auth_mode: 'chatgpt', OPENAI_API_KEY: null }),
+      'utf8',
+    );
+  }
   return { root, claude, codex, gemini, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 

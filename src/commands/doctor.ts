@@ -474,12 +474,18 @@ export function executeDoctor(opts: DoctorOptions): number {
   }
 
   const schedulesForLeak = listAllScheduleEntries(opts.cwd);
+  // ROSTER_CODEX_HOME mirrors the override used by src/lib/tools.ts (codexHome()).
+  // Honor it here too so doctor's Codex preflight reads from the same synthetic
+  // dir tests / advanced users may have wired up — otherwise preflight would
+  // silently fall back to $HOME/.codex and report a misleading failure in CI.
+  const codexHomeOverride = process.env['ROSTER_CODEX_HOME'];
   const safety = runSafetyAudit({
     rosterRoot: ROSTER_ROOT,
     toolAudits: results,
     detectedTools: detected,
     homeDir: home,
     env: process.env,
+    ...(codexHomeOverride !== undefined && codexHomeOverride !== '' ? { codexHome: codexHomeOverride } : {}),
   });
   const secrets = runSecretsAudit({
     cwd: opts.cwd,

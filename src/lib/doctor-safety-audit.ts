@@ -96,6 +96,11 @@ export type CodexPreflightOpts = {
   homeDir: string;
   env: NodeJS.ProcessEnv;
   codexDetected: boolean;
+  // When tests set ROSTER_CODEX_HOME to point at a synthetic codex dir, the
+  // preflight must read auth.json / config.toml from that dir, not from the
+  // host's real $HOME/.codex. Defaults to join(homeDir, '.codex') inside
+  // runCodexPreflight when omitted.
+  codexHome?: string;
 };
 
 function fromPreflightResult(result: PreflightResult): Exclude<CodexPreflightAudit, { status: 'skipped' }> {
@@ -109,7 +114,11 @@ export function auditCodexPreflight(opts: CodexPreflightOpts): CodexPreflightAud
   if (!opts.codexDetected) {
     return { status: 'skipped', reason: 'codex-not-detected' };
   }
-  const result = runCodexPreflight({ homeDir: opts.homeDir, env: opts.env });
+  const result = runCodexPreflight({
+    homeDir: opts.homeDir,
+    env: opts.env,
+    ...(opts.codexHome !== undefined ? { codexHome: opts.codexHome } : {}),
+  });
   return fromPreflightResult(result);
 }
 
@@ -129,6 +138,7 @@ export type SafetyAuditOpts = {
   detectedTools: ReadonlyArray<Tool>;
   homeDir: string;
   env: NodeJS.ProcessEnv;
+  codexHome?: string; // override; see CodexPreflightOpts.codexHome
 };
 
 export function runSafetyAudit(opts: SafetyAuditOpts): SafetyAuditResult {
@@ -138,6 +148,7 @@ export function runSafetyAudit(opts: SafetyAuditOpts): SafetyAuditResult {
     homeDir: opts.homeDir,
     env: opts.env,
     codexDetected,
+    ...(opts.codexHome !== undefined ? { codexHome: opts.codexHome } : {}),
   });
 
   const codexOk = codexPreflight.status === 'ok' || codexPreflight.status === 'skipped';
