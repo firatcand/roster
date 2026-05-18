@@ -2,7 +2,11 @@ import { join, resolve } from 'node:path';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import YAML from 'yaml';
 import { scheduleEntrySchema, type ScheduleEntry } from './schedule-schema.ts';
-import { scheduleNotFoundError, scheduleAmbiguousError } from './errors.ts';
+import {
+  scheduleNotFoundError,
+  scheduleAmbiguousError,
+  scheduleNotInFunctionError,
+} from './errors.ts';
 
 // Resolve a bare <name> argument across all roster/<fn>/schedules.yaml files,
 // or short-circuit when --function is supplied. Shared by remove/status/run.
@@ -77,6 +81,21 @@ export function resolveScheduleByName(opts: ResolveOptions): ResolvedSchedule {
   }
 
   if (matches.length === 0) {
+    // Codex review finding #6 (ROS-36): when --function was supplied and the
+    // name wasn't in that function, also scan all other functions. If the
+    // name DOES exist elsewhere, surface that — the typical user error is
+    // "wrong --function flag," not a missing schedule.
+    if (opts.functionName !== undefined) {
+      const otherFns = listFunctionDirs(workspacePath, undefined).filter((f) => f !== opts.functionName);
+      const foundIn: string[] = [];
+      for (const fn of otherFns) {
+        const entries = readEntries(workspacePath, fn);
+        if (entries.some((e) => e.name === opts.name)) foundIn.push(fn);
+      }
+      if (foundIn.length > 0) {
+        throw scheduleNotInFunctionError(opts.name, opts.functionName, foundIn);
+      }
+    }
     const unique = Array.from(new Set(allNames)).sort();
     throw scheduleNotFoundError(opts.name, unique);
   }

@@ -204,6 +204,7 @@ schedules:
   - name: cold-outreach-daily
     agent: sdr
     plan: cold-outreach
+    project: _demo
     cron: "0 9 * * 1-5"
     tool: codex
     install_mode: via-cron
@@ -219,6 +220,7 @@ schedules:
   - name: bad
     agent: sdr
     plan: cold-outreach
+    project: _demo
     cron: "0 9 * * 8"
     tool: gemini
     install_mode: via-cron

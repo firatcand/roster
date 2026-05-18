@@ -48,6 +48,7 @@ export type ScheduleInstallOptions = {
   functionName: string;
   agent: string;
   plan: string;
+  project: string;
   cron: string;
   tool: ToolValue;
   via: ViaMode | undefined;
@@ -183,6 +184,7 @@ export function executeScheduleInstall(opts: ScheduleInstallOptions): number {
       functionName: opts.functionName,
       agent: opts.agent,
       plan: opts.plan,
+      project: opts.project,
       cron: opts.cron,
       name: opts.name,
       dryRun: opts.dryRun,
@@ -220,6 +222,7 @@ export function executeScheduleInstall(opts: ScheduleInstallOptions): number {
     functionName: opts.functionName,
     agent: opts.agent,
     plan: opts.plan,
+    project: opts.project,
     cron: opts.cron,
     name: opts.name,
     installMode,
@@ -377,6 +380,7 @@ export function executeScheduleStatus(opts: ScheduleStatusOptions): number {
   }
   if (nextDueAt) {
     lines.push(`${chalk.bold('Next due:')}    ${fmtTs(nextDueAt)} ${chalk.dim(`(${relativeAgo(now, nextDueAt)})`)}`);
+    lines.push(chalk.dim('              ↑ UTC; cron honors daemon\'s local TZ (timezone display: ROS-42)'));
   } else {
     lines.push(`${chalk.bold('Next due:')}    ${chalk.dim(`(cannot compute: ${next.ok ? '' : next.reason})`)}`);
   }

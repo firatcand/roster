@@ -248,6 +248,23 @@ export function scheduleNotFoundError(name: string, knownNames: ReadonlyArray<st
   });
 }
 
+export function scheduleNotInFunctionError(
+  name: string,
+  filterFn: string,
+  foundInFns: ReadonlyArray<string>,
+): RosterError {
+  const fnList = foundInFns.map((f) => chalk.bold(f)).join(', ');
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} schedule ${chalk.yellow(`'${name}'`)} not found in function '${filterFn}'`,
+    body: `  But it does exist in: ${fnList}`,
+    remedy:
+      foundInFns.length === 1
+        ? `  Drop ${chalk.bold(`--function ${filterFn}`)}, or use ${chalk.bold(`--function ${foundInFns[0]}`)}.`
+        : `  Drop ${chalk.bold(`--function ${filterFn}`)}, or pick one of: --function ${foundInFns.join(' | --function ')}.`,
+    exitCode: EXIT_ERROR,
+  });
+}
+
 export function scheduleAmbiguousError(name: string, functions: ReadonlyArray<string>): RosterError {
   return new RosterError({
     header: `${chalk.red.bold('roster:')} schedule name ${chalk.yellow(`'${name}'`)} is ambiguous`,

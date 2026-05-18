@@ -185,6 +185,7 @@ export function renderListText(report: ListReport): string[] {
   const fnWord = fns === 1 ? 'function' : 'functions';
   const schWord = report.rows.length === 1 ? 'schedule' : 'schedules';
   lines.push(chalk.dim(`${report.rows.length} ${schWord} across ${fns} ${fnWord}.`));
+  lines.push(chalk.dim('LAST RUN shown in UTC; cron daemons honor local TZ (timezone support: ROS-42).'));
 
   if (report.warnings.length > 0) {
     lines.push('');

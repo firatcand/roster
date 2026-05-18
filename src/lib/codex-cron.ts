@@ -221,16 +221,32 @@ export function removeCronEntry(
     });
   }
 
-  // Strip block including any trailing newline. The block was written as
-  // `\n{block}\n` (or `{block}\n` at start of file); remove the leading
-  // separator newline if it exists so the surrounding crontab stays clean.
+  // Strip the managed block, inverting upsertCronEntry's separator logic.
+  //
+  // upsert (see findMarkerBlocks / upsertCronEntry above) inserts:
+  //   - `{block}\n`        if crontab is empty
+  //   - `\n{block}\n`      if crontab already ends with `\n`
+  //   - `\n\n{block}\n`    if crontab is non-empty but lacks trailing `\n`
+  //
+  // Symmetric remove: also strip the separator characters that upsert added.
+  // Codex review impl-pass finding #5 (ROS-36): the previous version always
+  // stripped a single leading `\n` when it found `\n\n` before the block,
+  // which over-trimmed for the third case (initial content had no trailing
+  // newline) — leaving `MAILTO=me\n` instead of restoring `MAILTO=me`.
   let stripStart = beginIdx;
   let stripEnd = endBefore + endMarker.length;
   if (content[stripEnd] === '\n') stripEnd += 1;
-  // If the block was preceded by a blank line we left behind, remove that too —
-  // upsertCronEntry inserts `\n\n{block}\n` when appending to non-empty crontab.
+
   if (stripStart >= 2 && content.slice(stripStart - 2, stripStart) === '\n\n') {
-    stripStart -= 1;
+    // Block was preceded by '\n\n'. If the char at -3 (or pre-file-start) is
+    // also '\n', the user actually had a blank line there → strip ONE newline,
+    // preserving the user's blank line. Otherwise upsert inserted both
+    // newlines as a separator → strip BOTH to restore the original byte stream.
+    if (stripStart >= 3 && content[stripStart - 3] === '\n') {
+      stripStart -= 1;
+    } else {
+      stripStart -= 2;
+    }
   } else if (stripStart >= 1 && content[stripStart - 1] === '\n' && stripEnd === content.length) {
     // Block was the only content after a single newline at start — trim that newline.
     stripStart -= 1;

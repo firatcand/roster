@@ -111,8 +111,13 @@ function parseCron(expr: string): CronMasks {
     dom: expandField(domF, 1, 31, 'day-of-month'),
     month: expandField(monthF, 1, 12, 'month'),
     dow: expandField(dowF, 0, 7, 'day-of-week'),
-    domRestricted: domF !== '*',
-    dowRestricted: dowF !== '*',
+    // Vixie cron: a dom/dow field is "restricted" iff it does NOT start with
+    // `*`. So `*/2`, `*/5`, and bare `*` are unrestricted; `5`, `1-5`, `1,15`
+    // are restricted. Both restricted → OR; either unrestricted → AND.
+    // Codex review finding #2 (ROS-36): previous `!== '*'` treated `*/2` as
+    // restricted, producing wrong matches for expressions like `0 0 */2 * 1`.
+    domRestricted: !domF.startsWith('*'),
+    dowRestricted: !dowF.startsWith('*'),
   };
 }
 
@@ -125,10 +130,11 @@ function matches(d: Date, m: CronMasks): boolean {
   const dow = d.getUTCDay();
   const domHit = m.dom.has(dom);
   const dowHit = m.dow.has(dow);
+  // Vixie semantics: BOTH restricted → OR; otherwise AND.
+  // When dom or dow is starred (unrestricted), the expanded mask covers every
+  // possible value so the AND-side hit is trivially true and falls through.
   if (m.domRestricted && m.dowRestricted) return domHit || dowHit;
-  if (m.domRestricted) return domHit;
-  if (m.dowRestricted) return dowHit;
-  return true;
+  return domHit && dowHit;
 }
 
 const MAX_STEPS = 366 * 24 * 60; // 366 days of minutes

@@ -1,8 +1,11 @@
 import { spawn, type SpawnOptions, type ChildProcess } from 'node:child_process';
+import { homedir } from 'node:os';
 import chalk from 'chalk';
 import { resolveScheduleByName } from './schedule-resolve.ts';
 import { buildOrchestratorPrompt } from './schedule-install.ts';
 import { resolveCodexBinaryPath } from './codex-cron.ts';
+import { runCodexPreflight } from './codex-preflight.ts';
+import { codexPreflightError } from './errors.ts';
 
 export type SpawnFn = (cmd: string, args: ReadonlyArray<string>, options?: SpawnOptions) => ChildProcess;
 
@@ -14,6 +17,7 @@ export type ScheduleRunOpts = {
   // Test seam: spawn factory and env override.
   spawn?: SpawnFn;
   env?: NodeJS.ProcessEnv;
+  homeDir?: string;
   codexBinaryPathOverride?: string;
 };
 
@@ -63,7 +67,11 @@ export async function executeRun(opts: ScheduleRunOpts): Promise<ScheduleRunResu
     functionName: opts.functionName,
   });
 
-  const prompt = buildOrchestratorPrompt(resolved.entry.agent, resolved.entry.plan);
+  const prompt = buildOrchestratorPrompt(
+    resolved.entry.agent,
+    resolved.entry.plan,
+    resolved.entry.project,
+  );
 
   if (resolved.entry.tool === 'claude') {
     for (const line of renderClaudeHandoff(resolved.workspacePath, prompt, resolved.entry.name, opts.silent)) {
@@ -79,7 +87,19 @@ export async function executeRun(opts: ScheduleRunOpts): Promise<ScheduleRunResu
   }
 
   // Codex path: spawn `codex exec -C <workspace> <prompt>`.
+  // Subscription-safety preflight (codex review finding #4, ROS-36):
+  // `run` inherits the user's interactive env, which can contain
+  // OPENAI_API_KEY / CODEX_API_KEY / ANTHROPIC_API_KEY / non-default CODEX_HOME.
+  // Any of those would silently route this fire through API billing instead of
+  // the subscription. Mirror the install-time preflight: refuse if any check
+  // fails. doctor (ROS-38) will surface the same gates outside of run/install.
   const env = opts.env ?? process.env;
+  const homeDir = opts.homeDir ?? homedir();
+  const preflight = runCodexPreflight({ homeDir, env });
+  if (!preflight.ok) {
+    throw codexPreflightError(preflight.failures);
+  }
+
   const codexPath = resolveCodexBinaryPath(env, opts.codexBinaryPathOverride);
   for (const line of renderCodexBanner(resolved.workspacePath, prompt, resolved.entry.name, resolved.entry.install_mode, opts.silent)) {
     console.log(line);

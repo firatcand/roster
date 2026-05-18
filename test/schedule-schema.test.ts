@@ -13,6 +13,7 @@ const minimalEntry = {
   name: 'cold-outreach-daily',
   agent: 'sdr',
   plan: 'cold-outreach',
+  project: '_demo',
   cron: '0 9 * * 1-5',
   tool: 'codex',
   install_mode: 'via-cron',

@@ -41,6 +41,7 @@ schedules:
   - name: nightly
     agent: sdr
     plan: cold-outreach
+    project: _demo
     cron: "0 9 * * 1-5"
     tool: claude
     install_mode: ui-handoff
@@ -52,6 +53,7 @@ schedules:
   - name: heartbeat
     agent: noop
     plan: noop
+    project: _demo
     cron: "*/5 * * * *"
     tool: codex
     install_mode: via-cron
@@ -67,6 +69,7 @@ schedules:
   - name: weekly-report
     agent: gtm
     plan: report
+    project: _demo
     cron: "0 9 * * 1"
     tool: codex
     install_mode: ui-handoff
@@ -306,6 +309,45 @@ test('executeRemove: kept-for-audit hints populated correctly per tool/mode', as
     });
     assert.ok(r.logPathHint?.endsWith('logs/cron/heartbeat.log'));
     assert.equal(r.fieldsDocPathHint, null);
+  } finally {
+    cleanup();
+  }
+});
+
+test('resolveScheduleByName: --function mismatch surfaces the right function (codex finding #6)', () => {
+  const { root, cleanup } = makeWorkspace();
+  try {
+    writeSchedules(root, 'gtm', yamlClaude);
+    // 'nightly' is in gtm. User passes --function ops by mistake.
+    assert.throws(
+      () => resolveScheduleByName({ cwd: root, name: 'nightly', functionName: 'ops' }),
+      (err: unknown) => {
+        assert.ok(err instanceof RosterError);
+        assert.match(err.header, /not found in function 'ops'/);
+        assert.match(err.body, /gtm/);
+        assert.match(err.remedy, /--function gtm/);
+        return true;
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('resolveScheduleByName: --function set and name truly missing → regular not-found error', () => {
+  const { root, cleanup } = makeWorkspace();
+  try {
+    writeSchedules(root, 'gtm', yamlClaude);
+    assert.throws(
+      () => resolveScheduleByName({ cwd: root, name: 'truly-missing', functionName: 'gtm' }),
+      (err: unknown) => {
+        assert.ok(err instanceof RosterError);
+        assert.match(err.header, /not found/);
+        // Not the not-in-function variant.
+        assert.doesNotMatch(err.header, /not found in function/);
+        return true;
+      },
+    );
   } finally {
     cleanup();
   }

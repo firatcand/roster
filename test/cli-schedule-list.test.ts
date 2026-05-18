@@ -27,6 +27,7 @@ schedules:
   - name: ${name}
     agent: ${agent}
     plan: ${plan}
+    project: _demo
     cron: "${cron}"
     tool: codex
     install_mode: via-cron
@@ -42,6 +43,7 @@ schedules:
   - name: ${name}
     agent: ${agent}
     plan: ${plan}
+    project: _demo
     cron: "${cron}"
     tool: claude
     install_mode: ui-handoff

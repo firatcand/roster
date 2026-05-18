@@ -5,10 +5,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { executeRun } from '../src/lib/schedule-run.ts';
+import { RosterError } from '../src/lib/errors.ts';
 
 function makeWorkspace(): { root: string; cleanup: () => void } {
   const root = mkdtempSync(join(tmpdir(), 'roster-run-'));
   return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+// Build a synthetic $HOME with a passing codex-preflight setup so the Codex
+// run path doesn't refuse before spawning. Mirrors test/codex-install.test.ts.
+function makePreflightHome(): { home: string; cleanup: () => void } {
+  const root = mkdtempSync(join(tmpdir(), 'roster-run-home-'));
+  const codex = join(root, '.codex');
+  mkdirSync(codex, { recursive: true });
+  writeFileSync(join(codex, 'auth.json'), JSON.stringify({ auth_mode: 'chatgpt', OPENAI_API_KEY: null }), 'utf8');
+  return { home: root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
 function writeSchedules(root: string, fn: string, body: string): void {
@@ -33,6 +44,7 @@ schedules:
   - name: nightly
     agent: sdr
     plan: cold-outreach
+    project: _demo
     cron: "0 9 * * 1-5"
     tool: claude
     install_mode: ui-handoff
@@ -44,6 +56,7 @@ schedules:
   - name: heartbeat
     agent: noop
     plan: noop
+    project: _demo
     cron: "*/5 * * * *"
     tool: codex
     install_mode: via-cron
@@ -106,6 +119,7 @@ test('executeRun (claude) --silent: prints nothing, still returns prompt for cal
 
 test('executeRun (codex): spawns codex exec with workspace + prompt, uses NON-scrubbed env', async () => {
   const { root, cleanup } = makeWorkspace();
+  const { home, cleanup: cleanupHome } = makePreflightHome();
   try {
     writeSchedules(root, 'ops', yamlCodex);
     let captured: { cmd: string; args: readonly string[]; cwd: string | undefined; env: NodeJS.ProcessEnv | undefined } | null = null;
@@ -119,7 +133,7 @@ test('executeRun (codex): spawns codex exec with workspace + prompt, uses NON-sc
     }) as never;
 
     const interactiveEnv = {
-      HOME: '/Users/test',
+      HOME: home,
       PATH: '/usr/local/bin:/usr/bin:/bin',
       SHELL: '/bin/zsh',
       USER_CUSTOM: 'value',
@@ -133,6 +147,7 @@ test('executeRun (codex): spawns codex exec with workspace + prompt, uses NON-sc
       silent: true,
       spawn: fakeSpawn,
       env: interactiveEnv,
+      homeDir: home,
     });
 
     assert.ok(captured, 'spawn must have been called');
@@ -148,13 +163,16 @@ test('executeRun (codex): spawns codex exec with workspace + prompt, uses NON-sc
     assert.equal(c.env?.SHELL, '/bin/zsh');
     assert.equal(result.tool, 'codex');
     assert.equal(result.exitCode, 0);
+    assert.match(c.args[3]!, /on project _demo/);
   } finally {
     cleanup();
+    cleanupHome();
   }
 });
 
 test('executeRun (codex): child non-zero exit propagates to result.exitCode', async () => {
   const { root, cleanup } = makeWorkspace();
+  const { home, cleanup: cleanupHome } = makePreflightHome();
   try {
     writeSchedules(root, 'ops', yamlCodex);
     const fakeSpawn = (() => {
@@ -169,10 +187,99 @@ test('executeRun (codex): child non-zero exit propagates to result.exitCode', as
       functionName: undefined,
       silent: true,
       spawn: fakeSpawn,
-      env: { ROSTER_CODEX_PATH: '/opt/test/codex' },
+      env: { HOME: home, ROSTER_CODEX_PATH: '/opt/test/codex' },
+      homeDir: home,
     });
     assert.equal(result.exitCode, 42);
   } finally {
     cleanup();
+    cleanupHome();
+  }
+});
+
+test('executeRun (codex): refuses when OPENAI_API_KEY in env (codex finding #4)', async () => {
+  const { root, cleanup } = makeWorkspace();
+  const { home, cleanup: cleanupHome } = makePreflightHome();
+  try {
+    writeSchedules(root, 'ops', yamlCodex);
+    let spawned = false;
+    const fakeSpawn = (() => {
+      spawned = true;
+      return new EventEmitter() as never;
+    }) as never;
+    await assert.rejects(
+      executeRun({
+        cwd: root,
+        name: 'heartbeat',
+        functionName: undefined,
+        silent: true,
+        spawn: fakeSpawn,
+        env: {
+          HOME: home,
+          OPENAI_API_KEY: 'sk-leaked-key',
+          ROSTER_CODEX_PATH: '/opt/test/codex',
+        },
+        homeDir: home,
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof RosterError);
+        assert.match(err.header, /preflight failed/);
+        return true;
+      },
+    );
+    assert.equal(spawned, false, 'spawn must NOT be reached when preflight fails');
+  } finally {
+    cleanup();
+    cleanupHome();
+  }
+});
+
+test('executeRun (codex): refuses when CODEX_API_KEY in env', async () => {
+  const { root, cleanup } = makeWorkspace();
+  const { home, cleanup: cleanupHome } = makePreflightHome();
+  try {
+    writeSchedules(root, 'ops', yamlCodex);
+    await assert.rejects(
+      executeRun({
+        cwd: root,
+        name: 'heartbeat',
+        functionName: undefined,
+        silent: true,
+        spawn: (() => new EventEmitter() as never) as never,
+        env: { HOME: home, CODEX_API_KEY: 'leaked', ROSTER_CODEX_PATH: '/opt/test/codex' },
+        homeDir: home,
+      }),
+      RosterError,
+    );
+  } finally {
+    cleanup();
+    cleanupHome();
+  }
+});
+
+test('executeRun (codex): refuses when CODEX_HOME points elsewhere', async () => {
+  const { root, cleanup } = makeWorkspace();
+  const { home, cleanup: cleanupHome } = makePreflightHome();
+  try {
+    writeSchedules(root, 'ops', yamlCodex);
+    await assert.rejects(
+      executeRun({
+        cwd: root,
+        name: 'heartbeat',
+        functionName: undefined,
+        silent: true,
+        spawn: (() => new EventEmitter() as never) as never,
+        env: {
+          HOME: home,
+          CODEX_HOME: '/elsewhere/.codex',
+          ROSTER_CODEX_PATH: '/opt/test/codex',
+        },
+        homeDir: home,
+      }),
+      RosterError,
+    );
+  } finally {
+    cleanup();
+    cleanupHome();
   }
 });

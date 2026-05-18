@@ -73,6 +73,24 @@ test('Vixie semantics: both dom and dow restricted → OR', () => {
   assert.equal(nextIso('0 0 5 * 1', '2026-04-30T00:00:00Z'), '2026-05-04T00:00:00Z');
 });
 
+test('Vixie semantics: starred dom (*/N) AND-matches dow (codex finding #2)', () => {
+  // `0 0 */2 * 1` = midnight, every-other-day-of-month, Monday only.
+  // `*/2` for dom expands from min=1 step 2 → {1,3,5,...,31} (odd days).
+  // dom starts with `*` → unrestricted → AND with dow.
+  // 2026-05-04 Mon day 4 (even) → no. 2026-05-11 Mon day 11 (odd) → match.
+  // The previous `!= '*'` semantics would OR these, returning 2026-05-04
+  // by Vixie's dom-only rule. The starts-with-`*` fix returns 2026-05-11.
+  assert.equal(nextIso('0 0 */2 * 1', '2026-05-04T00:00:01Z'), '2026-05-11T00:00:00Z');
+});
+
+test('Vixie semantics: starred dow (*/N) AND-matches dom', () => {
+  // `0 0 15 * */2` = midnight on the 15th, day-of-week in {Sun, Tue, Thu, Sat}.
+  // dow starts with `*` → unrestricted → AND with dom.
+  // 2026-05-15 Fri — no. 2026-06-15 Mon — no. 2026-07-15 Wed — no.
+  // 2026-08-15 Sat (dow=6) — first match.
+  assert.equal(nextIso('0 0 15 * */2', '2026-05-01T00:00:00Z'), '2026-08-15T00:00:00Z');
+});
+
 test('current time exactly matches → returns next match, never the same minute', () => {
   // Cron should fire AT the matching minute; nextFireTime from that minute
   // must advance to the *next* match, not return now.

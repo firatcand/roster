@@ -99,6 +99,17 @@ const kebabString = (label: string) =>
     .min(1, { message: `${label}: required` })
     .refine((s) => KEBAB_RE.test(s), { message: `${label}: must be kebab-case (lowercase letters, digits, hyphens)` });
 
+// Project slugs match kebab plus the scaffold template convention `_demo` /
+// `_template` — a leading underscore is allowed for projects only.
+const PROJECT_SLUG_RE = /^_?[a-z0-9]+(-[a-z0-9]+)*$/;
+const projectString = (label: string) =>
+  z
+    .string()
+    .min(1, { message: `${label}: required` })
+    .refine((s) => PROJECT_SLUG_RE.test(s), {
+      message: `${label}: must be kebab-case (optionally prefixed with '_' for scaffold templates)`,
+    });
+
 const cronString = z
   .string()
   .min(1, { message: 'cron: required' })
@@ -152,6 +163,7 @@ export const scheduleEntrySchema = z
     name: kebabString('name'),
     agent: kebabString('agent'),
     plan: kebabString('plan'),
+    project: projectString('project'),
     cron: cronString,
     tool: z.enum(TOOL_VALUES, {
       error: (issue) => {
