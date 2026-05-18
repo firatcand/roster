@@ -528,9 +528,7 @@ export type ScheduleEstimateUsageOptions = {
   warnThreshold: number;
 };
 
-export async function executeScheduleEstimateUsage(
-  opts: ScheduleEstimateUsageOptions,
-): Promise<number> {
+export function executeScheduleEstimateUsage(opts: ScheduleEstimateUsageOptions): number {
   let report;
   try {
     report = estimateUsage({
@@ -543,7 +541,7 @@ export async function executeScheduleEstimateUsage(
       throw new RosterError({
         header: `${chalk.red.bold('roster:')} ${err.message}`,
         body: '',
-        remedy: `  Run ${chalk.bold('roster schedule estimate-usage --help')} for available plan ids.`,
+        remedy: `  Pick from the available plan ids listed above.`,
         exitCode: EXIT_ERROR,
       });
     }
@@ -553,7 +551,7 @@ export async function executeScheduleEstimateUsage(
   if (opts.json) {
     console.log(renderEstimateJson(report));
   } else if (!opts.silent) {
-    for (const line of await renderEstimateText(report)) console.log(line);
+    for (const line of renderEstimateText(report)) console.log(line);
     if (opts.dryRun) console.log(READONLY_DRYRUN_LINE);
   }
 

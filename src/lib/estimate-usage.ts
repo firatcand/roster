@@ -1,12 +1,18 @@
-import { join, resolve as resolvePath } from 'node:path';
+import { resolve as resolvePath } from 'node:path';
 import { existsSync } from 'node:fs';
+import chalk from 'chalk';
 import { buildListReport, type ListReport } from './schedule-list.ts';
 import { nextFireTime } from './cron-next.ts';
 import { walkFanout, DEFAULT_DEPTH_CAP } from './agent-fanout.ts';
-import { loadPlanCeilings, type PlanCeilings, type PlanCeiling } from './plan-ceilings.ts';
+import { loadPlanCeilings, type PlanCeilings } from './plan-ceilings.ts';
 import type { ScheduleEntry, ToolValue } from './schedule-schema.ts';
 
 const WEEK_HOURS = 7 * 24;
+
+// chalk emits ANSI SGR sequences as ESC + '[' + digits/';' + 'm'. Build the
+// regex from a string literal so the ESC byte is the explicit \x1b escape,
+// not an invisible-in-source 0x1b byte (which makes regex-literal sources rot).
+const ANSI_SGR_RE = new RegExp('\\x1b\\[[0-9;]*m', 'g');
 
 export type EstimateRow = {
   functionName: string;
@@ -192,7 +198,6 @@ export function estimateUsage(opts: EstimateOptions): EstimateReport {
     );
   }
 
-  // Sort: tool, then function, then schedule name.
   rows.sort((a, b) => {
     if (a.tool !== b.tool) return a.tool.localeCompare(b.tool);
     if (a.functionName !== b.functionName) return a.functionName.localeCompare(b.functionName);
@@ -267,9 +272,7 @@ function pct(fraction: number): string {
   return `${(fraction * 100).toFixed(0)}%`;
 }
 
-// renderEstimateText is split from the JSON renderer; uses chalk only here.
-export async function renderEstimateText(report: EstimateReport): Promise<string[]> {
-  const { default: chalk } = await import('chalk');
+export function renderEstimateText(report: EstimateReport): string[] {
   const lines: string[] = [''];
   lines.push(chalk.bold('roster schedule estimate-usage'));
   lines.push(chalk.dim(`cwd: ${report.cwd}`));
@@ -285,7 +288,6 @@ export async function renderEstimateText(report: EstimateReport): Promise<string
     return lines;
   }
 
-  // Group rows by tool, render one table per tool.
   const byTool = new Map<ToolValue, EstimateRow[]>();
   for (const r of report.rows) {
     const arr = byTool.get(r.tool) ?? [];
@@ -318,14 +320,14 @@ export async function renderEstimateText(report: EstimateReport): Promise<string
           row.push('-');
         } else {
           const cell = pct(load.weeklyLoadFraction);
-          row.push(load.warn ? chalkWarn(chalk, cell) : cell);
+          row.push(load.warn ? chalk.yellow(cell) : cell);
         }
       }
       return row;
     });
 
-    // Visible widths (strip ANSI for width calc).
-    const widthOf = (s: string): number => s.replace(/\[[0-9;]*m/g, '').length;
+    // Strip ANSI SGR sequences for visible width (chalk emits ESC + [ + ... + m).
+    const widthOf = (s: string): number => s.replace(ANSI_SGR_RE, '').length;
     const widths = headers.map((h, i) =>
       Math.max(widthOf(h), ...cells.map((row) => widthOf(row[i]!))),
     );
@@ -341,7 +343,6 @@ export async function renderEstimateText(report: EstimateReport): Promise<string
     for (const row of cells) lines.push(pad(row));
   }
 
-  // Plan-ceiling provenance footer.
   lines.push('');
   lines.push(chalk.bold('Plan ceilings:'));
   for (const c of report.ceilings) {
@@ -352,7 +353,6 @@ export async function renderEstimateText(report: EstimateReport): Promise<string
     );
   }
 
-  // Surface per-row warnings.
   const warnings = report.rows.flatMap((r) =>
     r.planLoads
       .filter((p) => p.warn)
@@ -364,7 +364,6 @@ export async function renderEstimateText(report: EstimateReport): Promise<string
     for (const w of warnings) lines.push(chalk.yellow(`  - ${w}`));
   }
 
-  // Surface schedule-level warnings (missing agent.md, cycle detected, etc.)
   const otherWarnings: string[] = [...report.warnings];
   for (const r of report.rows) for (const w of r.warnings) otherWarnings.push(`${r.name}: ${w}`);
   if (otherWarnings.length > 0) {
@@ -373,8 +372,4 @@ export async function renderEstimateText(report: EstimateReport): Promise<string
   }
 
   return lines;
-}
-
-function chalkWarn(chalk: typeof import('chalk').default, s: string): string {
-  return chalk.yellow(s);
 }

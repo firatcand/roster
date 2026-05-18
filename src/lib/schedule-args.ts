@@ -143,8 +143,9 @@ function parseEstimateUsage(rest: readonly string[]): ParsedScheduleArgs {
     if (!Number.isFinite(n)) {
       return { ok: false, message: `--warn-threshold: expected a number (got '${raw}')` };
     }
-    // Accept either 0..1 fraction or 0..100 percent.
-    const value = n > 1 ? n / 100 : n;
+    // Accept either 0..1 fraction or 1..100 percent. Treat n >= 2 as percent
+    // (so `--warn-threshold 1` correctly means 100%, not 1%).
+    const value = n >= 2 || raw.endsWith('%') ? n / 100 : n;
     if (value < 0 || value > 1) {
       return { ok: false, message: `--warn-threshold: must be between 0 and 100 (got '${raw}')` };
     }

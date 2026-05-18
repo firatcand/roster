@@ -325,7 +325,7 @@ async function runSchedule(args: readonly string[]): Promise<number> {
     });
   }
   if (parsed.subcommand === 'estimate-usage') {
-    return await executeScheduleEstimateUsage({
+    return executeScheduleEstimateUsage({
       cwd: parsed.cwd ?? process.cwd(),
       json: parsed.json,
       silent: parsed.silent,
