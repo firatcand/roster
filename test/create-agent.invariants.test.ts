@@ -19,6 +19,7 @@ import {
   validateToolBindings,
   validateSlashDescription,
   validateNoPlaceholders,
+  validateNoPlaceholdersSlash,
 } from '../src/lib/create-agent/invariants.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -245,11 +246,15 @@ test('Invariant 4: slash description > 80 chars trips with "is N chars (max 80)"
 
 test('Invariant 4: slash description containing "TODO:" trips with "contains literal"', () => {
   const output = cloneOutput(happyPathOutput());
+  // Quoted-string scalar — ROS-59 made I4 parse the frontmatter as YAML, so a
+  // raw payload like `content-agent — TODO: fill in later` would now trip the
+  // yaml-parse-error path (nested mapping). Quoting keeps this test focused
+  // on the TODO: check it was written for.
   output.slashCommand = {
     ...output.slashCommand,
     content: output.slashCommand.content.replace(
       /^description:.*$/m,
-      'description: content-agent — TODO: fill in later',
+      'description: "content-agent — TODO: fill in later"',
     ),
   };
   assert.throws(
@@ -334,4 +339,82 @@ test('tamper: a single mutation that trips an invariant fails the aggregate', ()
     }
   }
   assert.throws(() => validateInvariants(broken), /Invariant 1/);
+});
+
+// ROS-59 — slash command frontmatter is parsed as YAML before the I4/I5 split.
+
+test('Invariant 4: block-scalar description containing "<foo>" trips on "<"', () => {
+  const slash =
+    '---\nname: x\ndescription: |\n  see <foo>\n---\n# /x\n\nclean body.\n';
+  assert.throws(
+    () => validateSlashDescription(slash),
+    /Invariant 4 \(slash description\): description contains "<" character/,
+  );
+});
+
+test('Invariant 5: multi-line block-scalar description does not leak into body scan', () => {
+  // No `<` in the description value — pure proof that the frontmatter block
+  // is fully stripped (continuation line `  multi-line ok` was previously
+  // visible to the body scan under the old single-line strip).
+  const slash =
+    '---\nname: x\ndescription: |\n  multi-line description that is ok\n---\n# /x\n\nclean body.\n';
+  assert.doesNotThrow(() => validateNoPlaceholdersSlash(slash));
+});
+
+test('Invariant 4: empty block scalar (description: |) trips empty-description error', () => {
+  const slash = '---\nname: x\ndescription: |\n---\n# /x\n';
+  assert.throws(
+    () => validateSlashDescription(slash),
+    /Invariant 4 \(slash description\): description line is empty/,
+  );
+});
+
+test('Invariant 4: missing frontmatter fence trips "frontmatter missing"', () => {
+  const slash = '# /x\n\nno frontmatter here.\n';
+  assert.throws(
+    () => validateSlashDescription(slash),
+    /Invariant 4 \(slash description\): frontmatter missing/,
+  );
+});
+
+test('Invariant 4: unterminated frontmatter trips "frontmatter not terminated"', () => {
+  const slash = '---\nname: x\ndescription: hello\n# /x — no closing fence\n';
+  assert.throws(
+    () => validateSlashDescription(slash),
+    /Invariant 4 \(slash description\): frontmatter not terminated/,
+  );
+});
+
+test('Invariant 4: multi-document frontmatter trips "multiple YAML documents"', () => {
+  // A `...` (document-end marker) inside the frontmatter region splits it
+  // into multiple YAML documents. Markdown frontmatter must be exactly one.
+  // Note: a stray `---` inside frontmatter would be eaten as the closing
+  // fence by the closer-first scan, so the multi-doc trip is only reachable
+  // via `...`-separated streams within a single fenced region.
+  const slash =
+    '---\nname: x\ndescription: first\n...\nname: y\ndescription: second\n---\n# /x\n';
+  assert.throws(
+    () => validateSlashDescription(slash),
+    /Invariant 4 \(slash description\): frontmatter contains multiple YAML documents/,
+  );
+});
+
+test('Invariant 4: non-string description scalar (number) trips "plain-string"', () => {
+  const slash = '---\nname: x\ndescription: 42\n---\n# /x\n';
+  assert.throws(
+    () => validateSlashDescription(slash),
+    /Invariant 4 \(slash description\): description must be a plain-string YAML scalar \(got number\)/,
+  );
+});
+
+test('Invariant 4: unquoted colon in description trips with yaml parse error (Codex ROS-59 #6)', () => {
+  // YAML parses `description: Fix: improve thing` as a nested compact mapping
+  // {Fix: "improve thing"} and emits a parse error. Surfaces the renderer
+  // laxity at templates.ts (description emitted unquoted). Follow-up ticket
+  // will tighten the renderer/schema.
+  const slash = '---\nname: x\ndescription: Fix: improve thing\n---\n# /x\n';
+  assert.throws(
+    () => validateSlashDescription(slash),
+    /Invariant 4 \(slash description\): frontmatter yaml did not parse/,
+  );
 });
