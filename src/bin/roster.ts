@@ -11,6 +11,8 @@ import { parseScheduleArgs } from '../lib/schedule-args.ts';
 import { parseReviewArgs } from '../lib/review-args.ts';
 import { parseHooksArgs } from '../lib/hooks-args.ts';
 import { parseMigrateArgs } from '../lib/migrate-args.ts';
+import { parsePendingArgs } from '../lib/pending-args.ts';
+import { executePendingSync } from '../commands/pending-sync.ts';
 import { executeInit } from '../commands/init.ts';
 import { executeDoctor } from '../commands/doctor.ts';
 import {
@@ -38,7 +40,7 @@ import {
   userCancelledInstall,
 } from '../lib/errors.ts';
 
-type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'hooks' | 'migrate';
+type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'hooks' | 'migrate' | 'pending';
 const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'install',
   'init',
@@ -47,6 +49,7 @@ const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'review',
   'hooks',
   'migrate',
+  'pending',
 ]);
 
 function tildify(path: string): string {
@@ -76,6 +79,7 @@ function printHelp(version: string): void {
     `  roster schedule run NAME     ${chalk.dim('Manually fire a schedule (Claude: print prompt; Codex: spawn)')}`,
     `  roster schedule remove NAME  ${chalk.dim('Remove a schedule (strips crontab block if --via cron)')}`,
     `  roster review [function]     ${chalk.dim('Walk roster/*/pending/ HITL items interactively')}`,
+    `  roster pending sync          ${chalk.dim('Synthesize HITL items from failed-fire signals (.exit + STALE)')}`,
     `  roster hooks install         ${chalk.dim('Install SessionStart banner hooks for Claude + Codex')}`,
     `  roster migrate from-agent-team <dir>  ${chalk.dim('Migrate a legacy agent-team workspace into roster')}`,
     '',
@@ -370,6 +374,24 @@ function runMigrate(args: readonly string[]): number {
   });
 }
 
+function runPending(args: readonly string[]): number {
+  const parsed = parsePendingArgs(args);
+  if (parsed.kind === 'err') {
+    throw new RosterError({
+      header: `${chalk.red.bold('roster:')} ${parsed.message}`,
+      body: '',
+      remedy: `  Run ${chalk.bold('roster --help')} for usage.`,
+      exitCode: EXIT_ERROR,
+    });
+  }
+  return executePendingSync({
+    cwd: parsed.cwd ?? process.cwd(),
+    silent: parsed.silent,
+    json: parsed.json,
+    dryRun: parsed.dryRun,
+  });
+}
+
 async function runHooks(args: readonly string[]): Promise<number> {
   const parsed = parseHooksArgs(args);
   if (parsed.kind === 'err') {
@@ -446,6 +468,7 @@ async function main(): Promise<number> {
     if (first === 'review') return await runReview(rest);
     if (first === 'hooks') return await runHooks(rest);
     if (first === 'migrate') return runMigrate(rest);
+    if (first === 'pending') return runPending(rest);
   }
 
   throw unknownCommandError(first);
