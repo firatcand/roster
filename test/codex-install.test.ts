@@ -132,7 +132,13 @@ test('codex install (via-cron): writes schedules.yaml + invokes crontab IO + cre
     assert.ok(existsSync(join(fx.cwd, 'logs', 'cron')), 'logs/cron/ should be pre-created');
     assert.equal(io.writes.length, 1);
     assert.match(io.current, /# roster:schedule:sdr-cold-outreach:begin/);
-    assert.match(io.current, /codex' exec -C/);
+    // ROS-42: cron line is now wrapped in /bin/sh -c, so the codex path's
+    // single quotes are escaped via the '\'' dance.
+    assert.match(io.current, / \/bin\/sh -c '/);
+    assert.match(io.current, /codex'\\''/);
+    // % is escaped as \% for crontab safety (codex review impl-pass).
+    assert.match(io.current, /printf \\%s "\$rc" > /);
+    assert.match(io.current, /\.exit'\\''/);
 
     const yaml = YAML.parse(readFileSync(result.schedulesYamlPath, 'utf8'));
     assert.equal(yaml.schedules[0].install_mode, 'via-cron');

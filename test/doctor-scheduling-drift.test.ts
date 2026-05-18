@@ -125,12 +125,15 @@ test('auditCronDrift: marker block matches rendered line → ok', () => {
       cron: '0 9 * * 1-5',
       install_mode: 'via-cron',
     }]);
+    // ROS-42: auditCronDrift now passes exitPath when re-rendering — match
+    // that here so the byte-exact comparison succeeds.
     const expected = renderCronLine({
       cron: '0 9 * * 1-5',
       workspacePath: dir,
       codexBinaryPath: FAKE_CODEX_BINARY,
       prompt: buildOrchestratorPrompt('sdr', 'cold-outreach', '_demo'),
       logPath: join(dir, 'logs', 'cron', 'sdr-cold.log'),
+      exitPath: join(dir, 'logs', 'cron', 'sdr-cold.exit'),
     });
     const crontab = buildMarkerBlock('sdr-cold', expected);
     const r = auditCronDrift({
@@ -343,6 +346,254 @@ test('runSchedulingDriftAudit: alt-skill warn does NOT flip ok', () => {
     });
     assert.equal(r.ok, true);
     assert.equal(r.altSkillPath.status, 'warn');
+  } finally {
+    cleanup();
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// auditStaleFires (ROS-42)
+// ──────────────────────────────────────────────────────────────────────
+
+import { auditStaleFires } from '../src/lib/doctor-scheduling-drift.ts';
+import { exitPathFor } from '../src/lib/cron-exit-log.ts';
+import { utimesSync } from 'node:fs';
+
+function writeExit(cwd: string, name: string, code: string, mtimeUtc?: Date): void {
+  mkdirSync(join(cwd, 'logs', 'cron'), { recursive: true });
+  const p = exitPathFor(cwd, name);
+  writeFileSync(p, code, 'utf8');
+  if (mtimeUtc !== undefined) {
+    const sec = mtimeUtc.getTime() / 1000;
+    utimesSync(p, sec, sec);
+  }
+}
+
+function writeStateMd(cwd: string, fnName: string, lines: string[]): void {
+  const fnDir = join(cwd, 'roster', fnName);
+  mkdirSync(fnDir, { recursive: true });
+  writeFileSync(join(fnDir, 'state.md'), lines.join('\n') + '\n', 'utf8');
+}
+
+test('auditStaleFires: no schedules → ok empty', () => {
+  const { dir, cleanup } = mkTmp('stale-empty-');
+  try {
+    const r = auditStaleFires({ cwd: dir });
+    assert.equal(r.status, 'ok');
+    assert.equal(r.items.length, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test('auditStaleFires: failed last fire → status=fail, item.status=fail', () => {
+  const { dir, cleanup } = mkTmp('stale-failed-');
+  try {
+    writeSchedulesYaml(dir, 'gtm', [{
+      name: 'sdr', agent: 'sdr', plan: 'cold', project: '_demo',
+      cron: '0 9 * * 1-5', install_mode: 'via-cron',
+    }]);
+    writeExit(dir, 'sdr', '137');
+    const r = auditStaleFires({ cwd: dir });
+    assert.equal(r.status, 'fail');
+    assert.equal(r.items.length, 1);
+    if (r.items[0]!.status === 'fail') {
+      assert.equal(r.items[0]!.exitCode, 137);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('auditStaleFires: stale last_run → status=warn, item missed-window', () => {
+  const { dir, cleanup } = mkTmp('stale-warn-');
+  try {
+    writeSchedulesYaml(dir, 'gtm', [{
+      name: 'sdr', agent: 'sdr', plan: 'cold', project: '_demo',
+      cron: '0 9 * * 1-5', install_mode: 'via-cron',
+    }]);
+    writeStateMd(dir, 'gtm', ['2026-05-15T09:05:00Z | gtm/sdr/cold/_demo | success']);
+    const r = auditStaleFires({
+      cwd: dir,
+      now: new Date('2026-05-18T12:00:00Z'),
+    });
+    assert.equal(r.status, 'warn');
+    assert.equal(r.items.length, 1);
+    if (r.items[0]!.status === 'warn') {
+      assert.equal(r.items[0]!.reason, 'missed-window');
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('auditStaleFires: zero exit + recent state.md → ok recent-run', () => {
+  const { dir, cleanup } = mkTmp('stale-ok-');
+  try {
+    writeSchedulesYaml(dir, 'gtm', [{
+      name: 'sdr', agent: 'sdr', plan: 'cold', project: '_demo',
+      cron: '0 9 * * 1-5', install_mode: 'via-cron',
+    }]);
+    writeStateMd(dir, 'gtm', ['2026-05-18T09:05:00Z | gtm/sdr/cold/_demo | success']);
+    writeExit(dir, 'sdr', '0', new Date('2026-05-18T09:00:00Z'));
+    const r = auditStaleFires({
+      cwd: dir,
+      now: new Date('2026-05-18T10:00:00Z'),
+    });
+    assert.equal(r.status, 'ok');
+    if (r.items[0]!.status === 'ok') {
+      assert.equal(r.items[0]!.reason, 'recent-run');
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('runSchedulingDriftAudit: stale fires WARN does not flip ok; FAIL does', () => {
+  const { dir, cleanup } = mkTmp('aggregate-stale-');
+  try {
+    writeSchedulesYaml(dir, 'gtm', [{
+      name: 'sdr', agent: 'sdr', plan: 'cold', project: '_demo',
+      cron: '0 9 * * 1-5', install_mode: 'via-cron',
+    }]);
+    writeStateMd(dir, 'gtm', ['2026-05-15T09:05:00Z | gtm/sdr/cold/_demo | success']);
+    // Crontab matches what install would render — drift=ok. Stale warns.
+    const expected = renderCronLine({
+      cron: '0 9 * * 1-5',
+      workspacePath: dir,
+      codexBinaryPath: FAKE_CODEX_BINARY,
+      prompt: buildOrchestratorPrompt('sdr', 'cold', '_demo'),
+      logPath: join(dir, 'logs', 'cron', 'sdr.log'),
+      exitPath: join(dir, 'logs', 'cron', 'sdr.exit'),
+    });
+    const crontab = buildMarkerBlock('sdr', expected);
+    const warnRun = runSchedulingDriftAudit({
+      cwd: dir,
+      homeDir: dir,
+      crontabIO: fakeCrontab(crontab),
+      env: { PATH: FAKE_CODEX_BINARY },
+      codexBinaryPathOverride: FAKE_CODEX_BINARY,
+      now: new Date('2026-05-18T12:00:00Z'),
+    });
+    assert.equal(warnRun.staleFires.status, 'warn');
+    assert.equal(warnRun.ok, true, 'WARN must not flip ok');
+
+    // Now add a failed exit → status flips to fail and ok flips to false.
+    writeExit(dir, 'sdr', '137');
+    const failRun = runSchedulingDriftAudit({
+      cwd: dir,
+      homeDir: dir,
+      crontabIO: fakeCrontab(crontab),
+      env: { PATH: FAKE_CODEX_BINARY },
+      codexBinaryPathOverride: FAKE_CODEX_BINARY,
+      now: new Date('2026-05-18T12:00:00Z'),
+    });
+    assert.equal(failRun.staleFires.status, 'fail');
+    assert.equal(failRun.ok, false, 'FAIL must flip ok');
+  } finally {
+    cleanup();
+  }
+});
+
+// ── auditCronDrift: capture_events=true re-renders the events form ──────
+
+test('auditCronDrift: capture_events=true entry → events form matches installed line', () => {
+  const { dir, cleanup } = mkTmp('drift-capture-events-');
+  try {
+    // Write schedules.yaml inline so we can include capture_events: true.
+    const fnDir = join(dir, 'roster', 'gtm');
+    mkdirSync(fnDir, { recursive: true });
+    writeFileSync(join(fnDir, 'schedules.yaml'), [
+      'version: 1',
+      'schedules:',
+      '  - name: sdr-events',
+      '    agent: sdr',
+      '    plan: cold',
+      '    project: _demo',
+      '    cron: "0 9 * * 1-5"',
+      '    tool: codex',
+      '    install_mode: via-cron',
+      '    status: installed',
+      '    capture_events: true',
+      '    subscription_attestation:',
+      '      auth_mode: chatgpt',
+      '      env_policy: cleared',
+      '      codex_home: /tmp/.codex',
+      '',
+    ].join('\n'), 'utf8');
+
+    const expected = renderCronLine({
+      cron: '0 9 * * 1-5',
+      workspacePath: dir,
+      codexBinaryPath: FAKE_CODEX_BINARY,
+      prompt: buildOrchestratorPrompt('sdr', 'cold', '_demo'),
+      logPath: join(dir, 'logs', 'cron', 'sdr-events.log'),
+      exitPath: join(dir, 'logs', 'cron', 'sdr-events.exit'),
+      eventsPath: join(dir, 'logs', 'cron', 'sdr-events.events.jsonl'),
+    });
+    // Sanity: the rendered line includes --json (events form signature).
+    assert.ok(expected.includes(' exec --json '), 'expected --json in rendered line');
+
+    const crontab = buildMarkerBlock('sdr-events', expected);
+    const r = auditCronDrift({
+      cwd: dir,
+      crontabIO: fakeCrontab(crontab),
+      env: { PATH: FAKE_CODEX_BINARY },
+      codexBinaryPathOverride: FAKE_CODEX_BINARY,
+    });
+    assert.equal(r.status, 'ok');
+    assert.equal(r.items[0]!.status, 'ok');
+  } finally {
+    cleanup();
+  }
+});
+
+test('auditCronDrift: capture_events=true entry vs non-events crontab line → cron-line-mismatch', () => {
+  // If a user manually installed without capture_events but the schedules.yaml
+  // says capture_events: true, the byte-exact re-render diverges → drift.
+  const { dir, cleanup } = mkTmp('drift-capture-events-mismatch-');
+  try {
+    const fnDir = join(dir, 'roster', 'gtm');
+    mkdirSync(fnDir, { recursive: true });
+    writeFileSync(join(fnDir, 'schedules.yaml'), [
+      'version: 1',
+      'schedules:',
+      '  - name: sdr-events',
+      '    agent: sdr',
+      '    plan: cold',
+      '    project: _demo',
+      '    cron: "0 9 * * 1-5"',
+      '    tool: codex',
+      '    install_mode: via-cron',
+      '    status: installed',
+      '    capture_events: true',
+      '    subscription_attestation:',
+      '      auth_mode: chatgpt',
+      '      env_policy: cleared',
+      '      codex_home: /tmp/.codex',
+      '',
+    ].join('\n'), 'utf8');
+
+    // Crontab has the non-events form (older install before capture_events flip).
+    const nonEvents = renderCronLine({
+      cron: '0 9 * * 1-5',
+      workspacePath: dir,
+      codexBinaryPath: FAKE_CODEX_BINARY,
+      prompt: buildOrchestratorPrompt('sdr', 'cold', '_demo'),
+      logPath: join(dir, 'logs', 'cron', 'sdr-events.log'),
+      exitPath: join(dir, 'logs', 'cron', 'sdr-events.exit'),
+    });
+    const crontab = buildMarkerBlock('sdr-events', nonEvents);
+    const r = auditCronDrift({
+      cwd: dir,
+      crontabIO: fakeCrontab(crontab),
+      env: { PATH: FAKE_CODEX_BINARY },
+      codexBinaryPathOverride: FAKE_CODEX_BINARY,
+    });
+    assert.equal(r.status, 'fail');
+    if (r.items[0]!.status === 'fail') {
+      assert.equal(r.items[0]!.reason, 'cron-line-mismatch');
+    }
   } finally {
     cleanup();
   }

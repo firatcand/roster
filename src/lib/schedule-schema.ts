@@ -199,6 +199,13 @@ export const scheduleEntrySchema = z
       })
       .optional(),
     retry_policy: retryPolicySchema.optional(),
+    // ROS-42: opt-in `codex exec --json` event capture. When true, the cron
+    // wrapper rendered by codex-install passes --json to codex and redirects
+    // stdout to `logs/cron/<name>.events.jsonl`. Without this flag, codex's
+    // human-readable stdout/stderr both land in `<name>.log` (legacy behavior).
+    // codex-only — Claude UI-handoff schedules cannot capture events because
+    // Claude Desktop owns the fire.
+    capture_events: z.boolean().optional(),
   })
   .strict()
   .superRefine((entry, ctx) => {
@@ -217,6 +224,25 @@ export const scheduleEntrySchema = z
         code: 'custom',
         path: ['subscription_attestation'],
         message: 'subscription_attestation: forbidden when tool=claude (codex-only field)',
+      });
+    }
+    // ROS-42: capture_events is codex-only (Claude UI-handoff has no wrapper).
+    if (entry.tool === 'claude' && entry.capture_events === true) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['capture_events'],
+        message: 'capture_events: forbidden when tool=claude (codex-only field; Claude Desktop owns the fire)',
+      });
+    }
+    // ROS-42 codex review impl-pass: capture_events also requires
+    // install_mode=via-cron — ui-handoff routes through the desktop app and
+    // there's no wrapper to redirect stdout to events.jsonl. Accepting it
+    // silently writes a misleading schedules.yaml entry.
+    if (entry.tool === 'codex' && entry.install_mode === 'ui-handoff' && entry.capture_events === true) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['capture_events'],
+        message: 'capture_events: requires install_mode=via-cron (ui-handoff routes through the Codex app; no wrapper to redirect stdout)',
       });
     }
   });

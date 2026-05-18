@@ -11,6 +11,8 @@ import {
 } from './codex-cron.ts';
 import { scheduleFileSchema, type ScheduleEntry } from './schedule-schema.ts';
 import { buildOrchestratorPrompt } from './schedule-install.ts';
+import { exitPathFor, eventsPathFor, logPathFor, readExitRecord } from './cron-exit-log.ts';
+import { detectStale, findMostRecentRun, readStateMd } from './schedule-state.ts';
 
 // =====================================================================
 // Crontab ↔ schedules.yaml drift (check 3)
@@ -179,7 +181,11 @@ export function auditCronDrift(opts: CronDriftOpts): CronDriftAudit {
       workspacePath,
       codexBinaryPath,
       prompt: buildOrchestratorPrompt(entry.agent, entry.plan, entry.project),
-      logPath: join(workspacePath, 'logs', 'cron', `${entry.name}.log`),
+      logPath: logPathFor(workspacePath, entry.name),
+      exitPath: exitPathFor(workspacePath, entry.name),
+      ...(entry.capture_events === true
+        ? { eventsPath: eventsPathFor(workspacePath, entry.name) }
+        : {}),
     });
     const actual = extractActualCronLine(content, entry.name);
     if (actual !== expected) {
@@ -317,6 +323,149 @@ export function auditAltSkillPaths(opts: AltSkillPathOpts): AltSkillPathAudit {
 }
 
 // =====================================================================
+// Stale fires (ROS-42)
+// =====================================================================
+
+export type StaleFireItem =
+  | { name: string; functionName: string; status: 'ok'; reason: 'recent-run' | 'recent-fire' | 'never-fired-yet' }
+  | { name: string; functionName: string; status: 'warn'; reason: 'missed-window'; expectedBeforeUtc: string }
+  | { name: string; functionName: string; status: 'fail'; reason: 'failed-last-fire'; exitCode: number | null; firedAtUtc: string };
+
+export type StaleFireAudit = {
+  status: 'ok' | 'warn' | 'fail';
+  items: StaleFireItem[];
+  graceMinutes: number;
+};
+
+export type StaleFireAuditOpts = {
+  cwd: string;
+  now?: Date;
+  graceMinutes?: number;
+};
+
+const DEFAULT_GRACE_MINUTES = 120;
+
+function loadAllSchedules(cwd: string): Array<{ entry: ScheduleEntry; functionName: string }> {
+  const rosterDir = join(cwd, 'roster');
+  let fns: string[];
+  try {
+    fns = readdirSync(rosterDir);
+  } catch {
+    return [];
+  }
+  const out: Array<{ entry: ScheduleEntry; functionName: string }> = [];
+  for (const fn of fns.sort()) {
+    const fnDir = join(rosterDir, fn);
+    let st: Stats;
+    try {
+      st = statSync(fnDir);
+    } catch {
+      continue;
+    }
+    if (!st.isDirectory()) continue;
+    const yamlPath = join(fnDir, 'schedules.yaml');
+    let raw: string;
+    try {
+      raw = readFileSync(yamlPath, 'utf8');
+    } catch {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = YAML.parse(raw);
+    } catch {
+      continue;
+    }
+    const valid = scheduleFileSchema.safeParse(parsed);
+    if (!valid.success) continue;
+    for (const entry of valid.data.schedules) {
+      out.push({ entry, functionName: fn });
+    }
+  }
+  return out;
+}
+
+export function auditStaleFires(opts: StaleFireAuditOpts): StaleFireAudit {
+  const cwd = opts.cwd;
+  const now = opts.now ?? new Date();
+  const graceMinutes = opts.graceMinutes ?? DEFAULT_GRACE_MINUTES;
+
+  const stateCache = new Map<string, ReturnType<typeof readStateMd>>();
+  function stateFor(functionName: string) {
+    const cached = stateCache.get(functionName);
+    if (cached !== undefined) return cached;
+    const state = readStateMd(join(cwd, 'roster', functionName, 'state.md'));
+    stateCache.set(functionName, state);
+    return state;
+  }
+
+  const items: StaleFireItem[] = [];
+  for (const { entry, functionName } of loadAllSchedules(cwd)) {
+    const state = stateFor(functionName);
+    const lastRun = findMostRecentRun(state.lines, functionName, entry.agent, entry.plan);
+
+    let exitMtimeMs: number | undefined;
+    let failed: { exitCode: number | null; firedAtUtc: string } | undefined;
+    if (entry.tool === 'codex' && entry.install_mode === 'via-cron') {
+      const exitRecord = readExitRecord(exitPathFor(cwd, entry.name));
+      if (exitRecord !== null) {
+        exitMtimeMs = exitRecord.mtimeMs;
+        if (exitRecord.exitCode !== null && exitRecord.exitCode !== 0) {
+          failed = {
+            exitCode: exitRecord.exitCode,
+            firedAtUtc: new Date(exitRecord.mtimeMs).toISOString(),
+          };
+        }
+      }
+    }
+
+    if (failed !== undefined) {
+      items.push({
+        name: entry.name,
+        functionName,
+        status: 'fail',
+        reason: 'failed-last-fire',
+        exitCode: failed.exitCode,
+        firedAtUtc: failed.firedAtUtc,
+      });
+      continue;
+    }
+
+    const stale = detectStale({
+      cronExpr: entry.cron,
+      lastRun,
+      lastFireMtimeMs: exitMtimeMs,
+      now,
+      graceMinutes,
+    });
+    if (stale.stale) {
+      items.push({
+        name: entry.name,
+        functionName,
+        status: 'warn',
+        reason: 'missed-window',
+        expectedBeforeUtc: stale.expectedBeforeUtc,
+      });
+    } else {
+      items.push({
+        name: entry.name,
+        functionName,
+        status: 'ok',
+        reason: stale.reason ?? 'recent-run',
+      });
+    }
+  }
+
+  const hasFail = items.some((i) => i.status === 'fail');
+  const hasWarn = items.some((i) => i.status === 'warn');
+  return {
+    status: hasFail ? 'fail' : hasWarn ? 'warn' : 'ok',
+    items,
+    graceMinutes,
+  };
+}
+
+// =====================================================================
 // Aggregate
 // =====================================================================
 
@@ -324,6 +473,7 @@ export type SchedulingDriftAuditResult = {
   ok: boolean;
   cronDrift: CronDriftAudit;
   altSkillPath: AltSkillPathAudit;
+  staleFires: StaleFireAudit;
 };
 
 export type SchedulingDriftAuditOpts = {
@@ -332,6 +482,8 @@ export type SchedulingDriftAuditOpts = {
   crontabIO?: CrontabIO;
   env?: NodeJS.ProcessEnv;
   codexBinaryPathOverride?: string;
+  now?: Date;
+  graceMinutes?: number;
 };
 
 export function runSchedulingDriftAudit(opts: SchedulingDriftAuditOpts): SchedulingDriftAuditResult {
@@ -342,14 +494,24 @@ export function runSchedulingDriftAudit(opts: SchedulingDriftAuditOpts): Schedul
     codexBinaryPathOverride: opts.codexBinaryPathOverride,
   });
   const altSkillPath = auditAltSkillPaths({ homeDir: opts.homeDir });
+  const staleFires = auditStaleFires({
+    cwd: opts.cwd,
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    ...(opts.graceMinutes !== undefined ? { graceMinutes: opts.graceMinutes } : {}),
+  });
 
   // Alt-skill warnings do NOT flip ok (per acceptance: check 5 "warns").
   // Unreadable crontab also does not flip ok — drift section reports the
   // unreadable status as guidance; the user fixes their crontab perms.
+  // Stale fires: warn does NOT flip ok (transient missed window may resolve
+  // on next fire), but fail (non-zero exit code captured) DOES flip ok —
+  // user needs to act.
   const cronOk = cronDrift.status === 'ok' || cronDrift.status === 'unreadable-crontab';
+  const staleOk = staleFires.status !== 'fail';
   return {
-    ok: cronOk,
+    ok: cronOk && staleOk,
     cronDrift,
     altSkillPath,
+    staleFires,
   };
 }

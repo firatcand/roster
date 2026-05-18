@@ -28,6 +28,7 @@ import {
   resolveCodexBinaryPath,
   type CrontabIO,
 } from './codex-cron.ts';
+import { exitPathFor, eventsPathFor, logPathFor } from './cron-exit-log.ts';
 
 export type CodexInstallOpts = {
   cwd: string;
@@ -213,7 +214,10 @@ export function installCodexSchedule(opts: CodexInstallOpts): CodexInstallResult
     ? join(workspacePath, '.roster', 'schedule-specs', `${resolvedName}.codex.fields.md`)
     : null;
   const logPath = opts.installMode === 'via-cron'
-    ? join(workspacePath, 'logs', 'cron', `${resolvedName}.log`)
+    ? logPathFor(workspacePath, resolvedName)
+    : null;
+  const exitPath = opts.installMode === 'via-cron'
+    ? exitPathFor(workspacePath, resolvedName)
     : null;
 
   // ── Rendered content ────────────────────────────────────────────────────
@@ -237,6 +241,10 @@ export function installCodexSchedule(opts: CodexInstallOpts): CodexInstallResult
       codexBinaryPath,
       prompt: buildOrchestratorPrompt(validatedEntry.agent, validatedEntry.plan, validatedEntry.project),
       logPath: logPath!,
+      exitPath: exitPath!,
+      ...(validatedEntry.capture_events === true
+        ? { eventsPath: eventsPathFor(workspacePath, resolvedName) }
+        : {}),
     });
   }
 
