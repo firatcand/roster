@@ -357,3 +357,65 @@ if [ "$ELAPSED" -le 4 ]; then
 else
   fail "suspicious latency: ${ELAPSED}s for a no-op script"
 fi
+
+# -----------------------------------------------------------------------------
+# Test 11: malformed registry slug — defense-in-depth (ROS-69).
+# A hand-edited .config/functions.yaml may register a slug that bypasses
+# the regex enforcement in create-function.sh. read_functions must reject
+# such entries at READ time so any consumer (write_slash_command etc.)
+# gets a guaranteed-shape value. Test four representative classes that
+# parse cleanly as YAML scalars but fail the slug regex
+# `^[a-z][a-z0-9-]*$`:
+#   - uppercase letter
+#   - underscore (non-kebab separator)
+#   - leading dot (path-traversal footgun, see ROS-62 fix history)
+#   - embedded double-quote (the YAML hazard that motivated ROS-69; would
+#     break out of the double-quoted scalar in write_slash_command)
+#
+# Only ONE of the two runtime paths in read_functions runs per invocation
+# (the Python-yaml path if `python3 + pyyaml` is installed, else the
+# grep/awk fallback). Both implementations use the same regex literal, so
+# rejection behavior is identical; CI exercises whichever path the runner
+# has. Tests for the explicit fallback path are out of scope here.
+# -----------------------------------------------------------------------------
+echo ""
+echo "===> Test 11: malformed registry slug rejection (ROS-69)"
+
+run_malformed_case() {
+  local label="$1" slug_yaml="$2" tmp
+  tmp="$TMPDIR_ROOT/t11-$(printf '%s' "$label" | tr -c 'a-z0-9' '_')"
+  make_workspace "$tmp"
+  # Replace the canonical registry with one that has a malformed slug as
+  # the FIRST entry — read_functions must surface the error before reaching
+  # any well-formed entry.
+  cat > "$tmp/.config/functions.yaml" <<YAML
+functions:
+  - slug: $slug_yaml
+    description: hand-edited bad entry
+    has_expert: false
+  - slug: gtm
+    description: well-formed entry
+    has_expert: true
+YAML
+  touch_agent_tree "$tmp" "gtm" "ok-agent"
+  # Invoking new-agent.sh against the well-formed `gtm` function still
+  # exercises read_functions (via is_valid_function), so a bad first entry
+  # must cause the script to fail.
+  run_subject "$tmp" --slash-only gtm ok-agent > /dev/null 2> "$tmp/stderr"
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    pass "rejected malformed slug ($label)"
+  else
+    fail "accepted malformed slug ($label) — stderr: $(cat $tmp/stderr)"
+  fi
+  if grep -q "malformed slug" "$tmp/stderr"; then
+    pass "stderr explains the malformed-slug refusal ($label)"
+  else
+    fail "stderr missing 'malformed slug' message ($label) — got: $(cat $tmp/stderr)"
+  fi
+}
+
+run_malformed_case "uppercase"     "BadSlug"
+run_malformed_case "underscore"    "bad_slug"
+run_malformed_case "leading-dot"   ".badslug"
+run_malformed_case "embedded-quote" 'bad"quote'

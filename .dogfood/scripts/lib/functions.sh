@@ -20,7 +20,8 @@ read_functions() {
   fi
   if _have_pyyaml; then
     python3 -c "
-import yaml, sys
+import yaml, re, sys
+SLUG_RE = re.compile(r'^[a-z][a-z0-9-]*\$')
 try:
     with open('$config') as f:
         data = yaml.safe_load(f) or {}
@@ -29,12 +30,23 @@ except yaml.YAMLError as e:
     sys.exit(1)
 for fn in data.get('functions', []):
     slug = fn.get('slug', '')
-    if slug:
-        print(slug)
+    if not slug:
+        continue
+    if not SLUG_RE.match(slug):
+        sys.stderr.write(\"ERROR: malformed slug '\" + slug + \"' in $config — must match ^[a-z][a-z0-9-]*\$\n\")
+        sys.exit(1)
+    print(slug)
 " || return 1
   else
-    grep -E '^[[:space:]]*-[[:space:]]*slug:[[:space:]]*' "$config" \
-      | sed -E 's/^[[:space:]]*-[[:space:]]*slug:[[:space:]]*//; s/[[:space:]]*$//'
+    local slug
+    while IFS= read -r slug; do
+      if ! [[ "$slug" =~ ^[a-z][a-z0-9-]*$ ]]; then
+        echo "ERROR: malformed slug '$slug' in $config — must match ^[a-z][a-z0-9-]*\$" >&2
+        return 1
+      fi
+      printf '%s\n' "$slug"
+    done < <(grep -E '^[[:space:]]*-[[:space:]]*slug:[[:space:]]*' "$config" \
+      | sed -E 's/^[[:space:]]*-[[:space:]]*slug:[[:space:]]*//; s/[[:space:]]*$//')
   fi
 }
 
