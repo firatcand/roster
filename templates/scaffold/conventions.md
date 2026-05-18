@@ -9,7 +9,7 @@ Full reference. CLAUDE.md is the short behavioral guide loaded at session start;
 3. **Tooling is scoped where it belongs.** Universal MCPs/skills/plugins at root. Agent-scoped at the agent. No per-project tooling — projects share the agent's tools.
 4. **Files are the memory layer.** No vector DB, no embedding store. Markdown + YAML + Git.
 5. **Project-scoped lessons override global on conflict.** Local always wins at runtime.
-6. **Schedules are stateless.** Cron invokes `claude -p` headlessly.
+6. **Schedules are stateless.** A native local scheduler (Claude Desktop Scheduled Tasks, Codex app Automations, or a Codex cron entry installed via `roster schedule install --via cron`) fires a fresh CLI session that loads `CONTEXT.md` and invokes the `roster-orchestrator` skill. All model usage draws from the user's interactive subscription — no Agent SDK, no headless API keys.
 7. **The dreamer learns; agents act.** Reinforcement is a separate, deliberate process. Live agents don't update playbooks.
 
 ## Directory map
@@ -565,15 +565,31 @@ Approval expires after 24h by default. Workflows specify own TTL if different.
 
 ## Schedules
 
-Cron jobs:
+Schedules fire from a native local desktop scheduler. Each fire spawns a fresh CLI session in the workspace that loads `CONTEXT.md` and invokes the `roster-orchestrator` skill; the orchestrator dispatches the agent's subagent via the tool's native primitive (Claude `Task` tool or Codex agent invocation). No `claude -p`, no Anthropic Agent SDK, no programmatic API keys — all model usage draws from the user's interactive Claude Pro/Max or ChatGPT Plus/Pro subscription. `roster doctor` enforces this.
 
-1. Live in `scripts/cron/crontab` (versioned)
-2. Invoke a wrapper at `scripts/cron/wrappers/<job>.sh`
-3. Wrapper sets up env, calls `claude -p "<prompt>"` with the right cwd (typically inside an agent's project instance) <!-- roster-audit-ok: claude-p-flag -->
-4. stdout/stderr → `logs/cron/<job>-<YYYY-MM-DD>.log`
-5. Run output → the agent's instance `log/runs/` as normal
+Canonical entry point:
 
-*(Cron primitives — `scripts/cron/install.sh`, `scripts/new-cron.sh`, and the wrapper layout — ship in Phase 2.5; see [ROS-39](https://linear.app/firatdogan/issue/ROS-39) for the canonical reference once available.)*
+```sh
+roster schedule install <function>/<agent> <plan> \
+  --cron "<expr>" --tool claude|codex [--via cron]
+```
+
+The first two positional arguments are `<function>/<agent>` (e.g., `gtm/sdr`) and the plan path within that agent. `--cron` and `--tool` are required; `--via` defaults to `ui-handoff`, `--name` defaults to `<agent>-<plan>`, `--project` defaults to `_demo`. The command writes one entry per schedule to `roster/<function>/schedules.yaml` and renders a tool-specific install artifact:
+
+- `--tool claude` — emits `.roster/schedule-specs/<name>.claude.fields.md` for paste-in to Claude Code's Desktop Scheduled Tasks UI. Programmatic install is tracked upstream at [anthropics/claude-code#41364](https://github.com/anthropics/claude-code/issues/41364); until it lands, hand-off is markdown, not JSON.
+- `--tool codex` (default `--via ui-handoff`) — emits `.roster/schedule-specs/<name>.codex.fields.md` for paste-in to the Codex desktop Automations UI.
+- `--tool codex --via cron` — installs a hardened crontab line directly (wrapped by `env -i` for environment scrubbing, with a subscription-attestation preflight). Codex-only; refused on Windows.
+
+Each run:
+
+1. Loads `CONTEXT.md` (via the `CLAUDE.md` or `AGENTS.md` symlink)
+2. Invokes the `roster-orchestrator` skill
+3. Orchestrator dispatches the agent subagent in isolated context (nested subagents allowed)
+4. Run output → the agent's instance `log/runs/` as normal
+5. HITL items → `roster/<function>/pending/` — chat sessions surface a banner on next start
+6. Exits
+
+See [ADR-0001: Scheduling architecture](https://github.com/firatcand/roster/blob/main/docs/adr/0001-scheduling-architecture.md) for the rationale and rejected alternatives.
 
 ## External-action gates
 
