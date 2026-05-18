@@ -13,7 +13,8 @@
 // Pinned to skills/chief-of-staff/SKILL.md lines 326-339 (invariant list).
 // Any change to the invariant set there MUST update this module.
 
-import { parseDocument } from 'yaml';
+import { parseAllDocuments, parseDocument } from 'yaml';
+import type { Document } from 'yaml';
 
 import type { RenderOutput } from './render.ts';
 
@@ -159,12 +160,63 @@ export function validateToolBindings(output: RenderOutput): void {
 // Invariant 4 — slash command description is real
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function validateSlashDescription(slashContent: string): void {
-  const match = slashContent.match(/^description:\s*(.*)$/m);
-  if (!match) {
-    throw new Error(`Invariant 4 (slash description): no "description:" line found in slash command frontmatter`);
+interface SlashFrontmatter {
+  doc: Document;
+  body: string;
+}
+
+// Parses the leading YAML frontmatter block (between the opening `---\n` and
+// the next `^---\s*$` line). Returns the parsed Document plus the body that
+// follows the closing fence. Throws Invariant 4 (slash description)-prefixed
+// errors for any structural defect so I4 and the slash variant of I5 share
+// one parse + one consistent failure surface. ROS-59.
+function parseSlashFrontmatter(slashContent: string): SlashFrontmatter {
+  if (!slashContent.startsWith('---\n')) {
+    throw new Error(
+      `Invariant 4 (slash description): frontmatter missing — slash command must start with "---" fence`,
+    );
   }
-  const desc = match[1].trim();
+  const afterOpen = slashContent.slice(4);
+  const closeMatch = afterOpen.match(/^---\s*$/m);
+  if (!closeMatch || closeMatch.index === undefined) {
+    throw new Error(
+      `Invariant 4 (slash description): frontmatter not terminated — missing closing "---" fence`,
+    );
+  }
+  const yamlText = afterOpen.slice(0, closeMatch.index);
+  const body = afterOpen.slice(closeMatch.index + closeMatch[0].length);
+
+  // A second `---` inside the frontmatter region is legal YAML stream syntax
+  // but ambiguous in markdown frontmatter — reject. Codex review ROS-59 #3.
+  const docs = parseAllDocuments(yamlText);
+  if (docs.length > 1) {
+    throw new Error(
+      `Invariant 4 (slash description): frontmatter contains multiple YAML documents — expected exactly one`,
+    );
+  }
+  const doc = parseDocument(yamlText);
+  if (doc.errors.length > 0) {
+    throw new Error(
+      `Invariant 4 (slash description): frontmatter yaml did not parse: ${doc.errors[0].message}`,
+    );
+  }
+  return { doc, body };
+}
+
+export function validateSlashDescription(slashContent: string): void {
+  const { doc } = parseSlashFrontmatter(slashContent);
+  const raw = doc.get('description');
+  if (raw === undefined || raw === null) {
+    throw new Error(
+      `Invariant 4 (slash description): no "description:" line found in slash command frontmatter`,
+    );
+  }
+  if (typeof raw !== 'string') {
+    throw new Error(
+      `Invariant 4 (slash description): description must be a plain-string YAML scalar (got ${Array.isArray(raw) ? 'array' : typeof raw})`,
+    );
+  }
+  const desc = raw.trim();
   if (desc.length === 0) {
     throw new Error(`Invariant 4 (slash description): description line is empty`);
   }
@@ -219,11 +271,11 @@ export function validateNoPlaceholders(agentMdContent: string, label = 'agent.md
   }
 }
 
-// Scan the slash command body (excluding the `description:` frontmatter
-// line, which invariant 4 already owns). Per pr-toolkit review.
-function validateNoPlaceholdersSlash(slashContent: string): void {
-  // Strip frontmatter `description:` line — I4 governs that.
-  const body = slashContent.replace(/^description:.*$/m, '');
+// Scan the slash command body. Strips the entire frontmatter block so a
+// multi-line description value (e.g., a YAML block scalar) does not leak
+// continuation lines into the body scan. ROS-59 — see Codex review.
+export function validateNoPlaceholdersSlash(slashContent: string): void {
+  const { body } = parseSlashFrontmatter(slashContent);
   validateNoPlaceholders(body, 'slash command body');
 }
 
