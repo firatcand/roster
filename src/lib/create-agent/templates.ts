@@ -205,9 +205,12 @@ ${stepLines}
 }
 
 export function renderSlashCommand(fn: string, agent: string, description: string): string {
+  // ROS-62: quote via JSON.stringify so YAML-special characters (`:`, `#`,
+  // `{`, `[`, `&`, `*`, etc.) in the description don't trip the I4 YAML
+  // parser. JSON.stringify produces a valid YAML double-quoted scalar.
   return `---
 name: ${agent}
-description: ${description}
+description: ${JSON.stringify(description)}
 ---
 
 # /${agent}

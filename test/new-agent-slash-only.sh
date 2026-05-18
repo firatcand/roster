@@ -129,7 +129,7 @@ if [ -f "$WS/.claude/commands/happy-agent.md" ]; then
 else
   fail "slash command file missing at .claude/commands/happy-agent.md"
 fi
-if grep -q "description: gtm agent" "$WS/.claude/commands/happy-agent.md" 2>/dev/null; then
+if grep -q 'description: "gtm agent' "$WS/.claude/commands/happy-agent.md" 2>/dev/null; then
   pass "description renders with function name"
 else
   fail "description did not substitute function name"
