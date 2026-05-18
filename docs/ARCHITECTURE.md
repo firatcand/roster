@@ -189,17 +189,11 @@ This pattern keeps secrets out of agent.md (which is committed) and into per-pro
 
 Scheduling is a layer above plans, not part of them. Plans don't have a `schedule` field.
 
-Use Claude Code's native `/schedule` (or Claude Desktop's scheduled tasks) with a prompt like:
-
-```
-/sdr run cold-outreach for _demo
-```
-
-at e.g. `0 9 * * 1-5` (weekdays 9am).
+Schedules fire from each AI tool's **native local desktop scheduler** — Claude Desktop Scheduled Tasks, Codex Automations, or a hardened crontab line installed by `roster schedule install --tool codex --via cron`. Roster registers schedule entries via `roster schedule install`; each fire spawns a fresh CLI session in the workspace, loads `CONTEXT.md`, invokes the `roster-orchestrator` skill, and dispatches the agent's subagent in isolated context. All model usage bills against the user's interactive Claude Pro/Max or ChatGPT Plus/Pro plan — `claude -p`, the Anthropic Agent SDK, and any programmatic API key path are banned and enforced by `roster doctor`.
 
 Why this split: scheduling concerns (when, retry policy, dependencies) are different from workflow concerns (what to do). Keeping them separate means you can change the cadence without touching the plan, and you can run the same plan ad-hoc without a scheduler.
 
-Cron-style scheduling via `claude -p` is also supported (see `scripts/cron/`), for users who prefer a real cron daemon. The plan invocation looks the same.
+See [SCHEDULING.md](SCHEDULING.md) for the platform × tool matrix and install flows, and [ADR-0001](adr/0001-scheduling-architecture.md) for the rationale and rejected alternatives (notably the rejected `claude -p` cron and custom in-session scheduler daemon that earlier drafts of this section described).
 
 ## Why these opinions
 
@@ -217,7 +211,7 @@ Each opinion was driven by a specific constraint:
 ## What this is not
 
 - **Not a hosted SaaS.** You run it locally connected to your own Claude Code.
-- **Not LLM-agnostic.** It depends on Claude Code's slash commands, scheduled tasks, and `claude -p` headless mode. Porting to another CLI is non-trivial and out of scope.
+- **Not LLM-agnostic.** It depends on Claude Code and Codex CLI primitives — slash commands, native desktop scheduled tasks (Claude Scheduled Tasks / Codex Automations), the `Task` tool / Codex agents, and `CLAUDE.md` / `AGENTS.md` context discovery. Porting to another CLI is non-trivial and out of scope.
 - **Not a goal-directed agent framework.** The goals come from you and live in plans and project guidelines. The framework just orchestrates execution.
 - **Not multi-tenant.** It's optimized for one or a small team of contributors. Scaling beyond that is a separate problem.
 - **Not a replacement for thinking.** It's structure for organizing your thinking and your agents' execution.

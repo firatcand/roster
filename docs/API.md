@@ -357,9 +357,9 @@ Validates agent structure: agent.md required sections, plans/, slash command, RE
 
 Aggregator. Runs project audits and agent audits. Adds repo-level checks (universal `.mcp.json`, root files, orphaned instances).
 
-### `new-cron.sh <wrapper-name>`
+### Scheduling
 
-Scaffolds a cron wrapper at `scripts/cron/wrappers/<name>.sh`. Outputs the suggested crontab line.
+Schedules are installed via the `roster schedule install` CLI subcommand, not a scaffold script. Each fire spawns a fresh CLI session that loads `CONTEXT.md` and invokes the `roster-orchestrator` skill. See [SCHEDULING.md](SCHEDULING.md) for the platform × tool matrix and [ADR-0001](adr/0001-scheduling-architecture.md) for the rationale.
 
 ---
 
