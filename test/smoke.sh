@@ -227,10 +227,14 @@ assert_contains gtm/test-agent/projects/bindings-test-co/config/default.yaml "TO
 "$ROSTER_BIN" init my-test-workspace --silent --no-git --force
 assert_count .gitignore "# Roster defaults" 1 "Roster defaults block appended exactly once"
 
-# 6. Schedule list/status/remove smoke (ROS-36). Uses Claude UI-handoff path
-#    only — codex install requires preflight (env-cleared, ~/.codex present)
-#    which the smoke sandbox doesn't provide; codex paths are covered by unit
-#    tests with mocked spawn + crontabIO.
+# 6. Schedule list/status/remove smoke (ROS-36).
+#
+# Writes schedules.yaml + state.md as fixtures directly (skipping install)
+# so the section works cross-platform — `install --tool claude` is
+# macOS/Windows-only, and `install --tool codex` requires a logged-in
+# Codex CLI with cleared env, neither of which Linux CI provides.
+# Install is exercised in its own unit tests + the macOS Mac mini gate
+# (ROS-40). What's being smoked here is the four NEW commands.
 echo ""
 echo "===> 6. Schedule list/status/remove (ROS-36)"
 
@@ -238,18 +242,37 @@ echo "===> 6. Schedule list/status/remove (ROS-36)"
 LIST_OUT=$("$ROSTER_BIN" schedule list 2>&1)
 echo "$LIST_OUT" | grep -q "no schedules registered" && pass "list (empty): prints no-schedules message" || fail "list (empty)"
 
-# Install a claude schedule, then exercise list/status/remove against it.
-"$ROSTER_BIN" schedule install ops/heartbeat noop --cron '*/5 * * * *' --tool claude --silent
-assert "-f roster/ops/schedules.yaml" "schedule install: schedules.yaml written"
+# Write fixture schedule + state.md
+mkdir -p roster/ops
+cat > roster/ops/schedules.yaml <<'EOF'
+version: 1
+schedules:
+  - name: heartbeat-noop
+    agent: noop
+    plan: noop
+    cron: "*/5 * * * *"
+    tool: claude
+    install_mode: ui-handoff
+    status: pending-ui-install
+EOF
+cat > roster/ops/state.md <<'EOF'
+2026-05-18T10:25:00Z | ops/noop/noop/_demo | success
+2026-05-18T10:30:00Z | ops/noop/noop/_demo | success
+EOF
+assert "-f roster/ops/schedules.yaml" "fixture: schedules.yaml written"
+assert "-f roster/ops/state.md" "fixture: state.md written"
 
+# list → shows the fixture
 LIST_OUT=$("$ROSTER_BIN" schedule list 2>&1)
-echo "$LIST_OUT" | grep -q "heartbeat-noop" && pass "list: shows installed schedule" || fail "list: missing schedule name"
-echo "$LIST_OUT" | grep -q "claude" && pass "list: shows tool=claude" || fail "list: missing tool column"
+echo "$LIST_OUT" | grep -q "heartbeat-noop" && pass "list: shows registered schedule" || fail "list: missing schedule name"
+echo "$LIST_OUT" | grep -q "claude" && pass "list: shows tool column" || fail "list: missing tool column"
+echo "$LIST_OUT" | grep -q "2026-05-18T10:30:00Z" && pass "list: shows last_run from state.md" || fail "list: missing last_run"
 
-# status on never-fired schedule
+# status reads state.md
 STATUS_OUT=$("$ROSTER_BIN" schedule status heartbeat-noop 2>&1)
 echo "$STATUS_OUT" | grep -q "Schedule:" && pass "status: prints schedule metadata" || fail "status: missing metadata"
-echo "$STATUS_OUT" | grep -q "never fired" && pass "status (never fired): graceful default" || fail "status: never-fired path"
+echo "$STATUS_OUT" | grep -q "2026-05-18T10:30:00Z" && pass "status: prints last_run timestamp" || fail "status: missing last_run"
+echo "$STATUS_OUT" | grep -q "success" && pass "status: prints last_status" || fail "status: missing last_status"
 
 # remove --dry-run leaves YAML intact
 "$ROSTER_BIN" schedule remove heartbeat-noop --dry-run --silent
