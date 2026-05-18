@@ -589,6 +589,17 @@ Each run:
 5. HITL items → `roster/<function>/pending/` — chat sessions surface a banner on next start
 6. Exits
 
+### Failure observability
+
+Two complementary signals catch the cases where a fire doesn't complete cleanly:
+
+- **`roster/<function>/state.md`** — orchestrator skill appends one line per fire (`<utc-iso> | <function>/<agent>/<plan>/<project> | success|failed`). This is the *agent-level* signal: it requires the orchestrator to actually run to completion.
+- **`logs/cron/<name>.exit`** — for codex `--via cron` schedules, the wrapper records the process exit code (1-3 byte ASCII integer) independently of the agent. Non-zero here means cron fired but the codex process exited with an error.
+
+`roster doctor` (the `Scheduling fires` section) cross-references both. `roster pending sync` synthesizes `roster/<function>/pending/error-<id>.md` items from any non-zero `.exit` or STALE detection (last run older than expected next-fire + 2h grace). The SessionStart hook runs `pending sync` automatically before counting items, so a failed fire surfaces in the very next chat session — no manual step required.
+
+Optional: add `capture_events: true` to a codex via-cron entry to also capture the `codex exec --json` event stream at `logs/cron/<name>.events.jsonl` (stdout split from log).
+
 See [ADR-0001: Scheduling architecture](https://github.com/firatcand/roster/blob/main/docs/adr/0001-scheduling-architecture.md) for the rationale and rejected alternatives.
 
 ## External-action gates
