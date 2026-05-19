@@ -2,276 +2,130 @@
 
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![npm](https://img.shields.io/npm/v/@firatcand/roster.svg)](https://www.npmjs.com/package/@firatcand/roster)
 
 # Roster
 
-> A CLI that installs and scaffolds an opinionated multi-agent workspace for Claude Code today, with Codex CLI and Gemini support landing in v0.2 — role-based agents for GTM, product, design, and ops, with a reinforcement loop that compounds learning.
+> **A lightweight operator agent framework.** A CLI that scaffolds role-based agents — GTM, product, design, ops — into your existing AI coding tool, and runs them on schedules with human approval before anything ships.
 
-## What is this?
+```
+  ● 7am Monday. Three agents have already run while you slept.
+  │
+  ●  gtm/sdr        last night's signups triaged · 5 personalized intros queued
+  ●  product/pm     3 competitor changelogs summarized · LinkedIn post drafted
+  ●  design/critic  yesterday's PR screenshots audited · 2 contrast issues flagged
+  │
+  ✓ All parked in your approval queue. You approve, edit, or reject over coffee.
+```
 
-`@firatcand/roster` is an npm CLI. You run it once and it does two things:
+| Pillar | What it means |
+|---|---|
+| **Lightweight** | One npm install. No servers, no databases, no SaaS layer. Tiny tarball, no proprietary DSL — your workspace is just markdown and YAML you own and can hand-edit. |
+| **Subscription-safe** | Runs on the flat-rate [Claude Code](https://claude.com/code) or [Codex CLI](https://github.com/openai/codex) subscription you already pay for. No per-token API bills, no third-party agent platform. |
+| **Operator-first** | Built by someone running a real business. GTM, product, design, and ops are first-class roles — not a chatbot wrapped in marketing copy. |
+| **Schedule-native** | Agents run on cron-like schedules through your host tool's native scheduler. Daily morning runs, weekly competitor sweeps, PR-triggered design QA. |
+| **HITL by default** | Risky outputs (emails, PR comments, social posts) land in `pending/` queues. Nothing ships until you say so. |
 
-1. **`roster install`** — copies a curated set of skills and agent definitions into your AI coding tool's config dir. Detects and installs to `~/.claude/`, `~/.codex/`, and `~/.gemini/`.
-2. **`roster init`** — scaffolds a structured agent-team workspace in any directory. v0.1 produces the minimal scaffold (`CLAUDE.md` + `projects/_demo/`); v0.2 adds the full tree (function dirs, role-based agents, maintenance agent, reinforcement agent).
+---
 
-The workspace it scaffolds separates **substrate** (strategic context: brand voice, ICPs, messaging) from **artifacts** (daily output: emails, posts, components), and runs work through named YAML **plans** that are deterministic, auditable, and schedule-friendly.
-
-If you're a solo founder or ≤5-person team using Claude Code (or Codex / Gemini) and you need outbound, content, design, and ops work done without losing context between sessions — this might fit.
-
-## Getting started
-
-First-time install and first run — under 10 minutes on a Mac with Node ≥ 22.
+## Quick Install
 
 ```bash
-# 1. Install skills + agents into your AI tool's config dir
 npx @firatcand/roster install
+```
 
-# 2. Scaffold a workspace in a fresh directory
+Detects Claude Code, Codex CLI, and Gemini, then copies skills + agents into each tool's config dir. macOS, Linux, and Windows.
+
+## Setup prompt
+
+Want the agent to do the install for you? Paste this into Claude Code, Codex, or Cursor:
+
+```
+Set up https://github.com/firatcand/roster for me. Read install.md and follow
+the steps to install roster and scaffold a workspace in this directory.
+```
+
+The agent reads [install.md](install.md), runs the install, scaffolds your workspace, verifies with `roster doctor`, and tells you the next command.
+
+---
+
+## Getting Started
+
+```bash
 mkdir my-team && cd my-team
-npx @firatcand/roster init
-
-# 3. Open Claude Code in that directory
-claude
-
-# 4. Scaffold your first agent (interactive five-phase dialogue)
-/chief-of-staff create-agent gtm <your-agent-name>
-
-# 5. Run a plan, read the run log, and provide feedback — lessons
-#    surface in dreamer/pending/ on the next nightly reinforcement pass.
+npx @firatcand/roster init       # scaffold workspace
+claude                            # or `codex`, or open Cursor
+/chief-of-staff create-agent gtm sdr
 ```
 
-[docs/HOWTO.md](docs/HOWTO.md) has the long-form step-by-step.
+The five-phase guided dialogue interviews you for the gaps a stub can't fill — subagents, tools, plan names, project-specific failure modes — and writes a populated `agent.md`. Worked example in [docs/HOWTO.md](docs/HOWTO.md).
 
-### What `roster install` looks like
-
-```
-$ npx --yes @firatcand/roster install --all
-
-roster v0.1.0
-Multi-agent workspace scaffolder for Claude Code, Codex CLI, and Gemini.
-
-✓ Claude Code — 3 skills → ~/.claude/skills, 3 agents → ~/.claude/agents
-✓ Codex CLI — 3 skills → ~/.codex/skills, 3 agents → ~/.codex/agents
-✓ Gemini CLI — 3 skills → ~/.gemini/extensions, 3 agents → ~/.gemini/agents
-
-Next: roster init to scaffold a workspace.
-```
-
-Without `--all`, you'll get an interactive checkbox to pick which tools to receive the skills + agents. Exit codes: 0 success, 1 error, 2 cancelled, 3 no tools detected.
-
-## Subcommands
+### Common commands
 
 | Command | What it does |
 |---|---|
-| `roster install` | Detect installed AI tools, prompt for selection, copy skills + agents into each tool's config dir. Idempotent. |
-| `roster install --all` | Install to every detected tool, non-interactive (good for CI / scripted migration). |
-| `roster install --tool <name>` | Install to a single named tool (`claude`, `codex`, or `gemini`), non-interactive. |
-| `roster init [name]` | Scaffold the agent-team workspace into CWD. Substitutes `{{PROJECT_NAME}}`. |
-| `roster doctor` | Audit installed skills/agents per AI tool; exits non-zero on drift. Includes a Scheduling section that runs `schedule validate` against the current workspace. |
-| `roster schedule validate` | Validate every `roster/<function>/schedules.yaml` file in the workspace. `--json` / `--silent` / `--cwd <dir>`. Exits non-zero on schema or cron errors. |
-| `roster review [function]` | Walk `roster/<function>/pending/*.md` HITL items interactively. Approve/reject/defer each; approved items move to the `target_on_approve:` path in their front-matter. `--json` for non-interactive listing. |
-| `roster hooks install` | Install SessionStart banner hooks into `~/.claude/settings.json` and `~/.codex/hooks.json` so any chat session in a roster workspace shows pending-HITL counts on start. Idempotent. `--tool claude\|codex\|all`. |
-| `roster migrate from-agent-team <dir>` | Migrate a legacy agent-team workspace into roster: walks discovered cron entries and emits `roster schedule install` commands to a reviewable shell script, copies pending HITL items, run logs, and `.env` (enforced 0600). Refuses with hint if `.env` is more permissive. `--dest <dir>` / `--dry-run` / `--force-resync` / `--json` / `--silent`. Idempotent via a per-source manifest at `.roster/migration-manifests/`. |
-| `roster --help` / `--version` | Usage + version from `package.json`. |
+| `roster install` | Install skills + agents into detected AI tools (idempotent) |
+| `roster init` | Scaffold an agent-team workspace in CWD |
+| `roster doctor` | Audit installation; exits non-zero on drift |
+| `roster schedule validate` | Validate every `roster/<function>/schedules.yaml` |
+| `roster schedule install` | Install a schedule into your host tool's native scheduler |
+| `roster review [function]` | Walk pending HITL items interactively (approve / reject / defer) |
+| `roster hooks install` | Wire SessionStart banners so chat sessions surface pending counts |
 
-Scheduling primitives (Phase 2.5) — see [docs/SCHEDULING.md](docs/SCHEDULING.md) for the platform × tool matrix, UI hand-off flows for Claude Desktop and Codex Automations, `codex --via cron` install, the Linux Claude gap, the Codex Windows subagent workaround, and the subscription-billing rules (including why `claude -p` is banned).
+Full subcommand reference in [docs/HOWTO.md](docs/HOWTO.md). Scheduling rules, UI hand-off, and platform matrix in [docs/SCHEDULING.md](docs/SCHEDULING.md).
+
+---
+
+## How it works
+
+Roster scaffolds an opinionated **function → agent → plan** tree. Functions are top-level domains (`gtm/`, `product/`, `design/`, `ops/`). Each function holds named agents (`gtm/sdr/`, `design/critic/`). Each agent has named YAML **plans** — the schedulable, auditable workflow recipes.
+
+The opinion that keeps it useful at week 12 is **substrate vs artifacts**: long-lived context (ICPs, brand voice, messaging) lives under `projects/<project>/`; daily output (emails, posts, PR comments) lands in agent-owned `pending/` queues. Experts shape substrate. Agents produce artifacts. Don't conflate them.
+
+A nightly **reinforcement** pass (the `dreamer` skill) reads runs + feedback, detects recurring patterns, and proposes lessons for the right scope — global, project, or agent. You approve before anything is written. Quality compounds.
+
+---
 
 ## Tool support
 
-| Tool | Status | Skills installed to | Agents installed to |
+| Tool | Status | Skills → | Agents → |
 |---|---|---|---|
-| Claude Code | Supported | `~/.claude/skills/<skill>/` (directory per skill) | `~/.claude/agents/<agent>.md` |
-| Codex CLI | Supported | `~/.codex/skills/<skill>/` (directory per skill) | `~/.codex/agents/<agent>.md` |
-| Gemini CLI | Supported | `~/.gemini/extensions/<skill>/` (directory per skill) | `~/.gemini/agents/<agent>.md` |
-| Cursor | **Out of scope** — see [docs/roadmap.md](docs/roadmap.md) | — | — |
+| Claude Code | Supported | `~/.claude/skills/<skill>/` | `~/.claude/agents/<agent>.md` |
+| Codex CLI | Supported | `~/.codex/skills/<skill>/` | `~/.codex/agents/<agent>.md` |
+| Gemini CLI | Supported | `~/.gemini/extensions/<skill>/` | `~/.gemini/agents/<agent>.md` |
+| Cursor | On the roadmap | — | — |
 
-Detection is presence-only: roster considers a tool installed if its config root exists. Override via `ROSTER_CLAUDE_HOME` / `ROSTER_CODEX_HOME` / `ROSTER_GEMINI_HOME` (used by the test suite).
+Detection is presence-only — roster considers a tool installed if its config root exists. Override via `ROSTER_CLAUDE_HOME` / `ROSTER_CODEX_HOME` / `ROSTER_GEMINI_HOME` (used by the test suite).
 
-## What roster installs
-
-`roster install` copies three framework skills and three reinforcement agents into each detected tool's config dir. Roster ships **framework primitives only** — no preinstalled domain agents (SDR, content writers, designers). You scaffold those yourself via `/chief-of-staff create-agent`.
-
-**Skills**
-
-| Skill | Purpose |
-|---|---|
-| `chief-of-staff` | Repo maintenance for roster workspaces — create, archive, rename, and audit projects, agents, and functions. Wraps `scripts/` with confirmation gates for destructive operations. |
-| `dreamer` | Off-hours reflection. Reads recent runs + feedback, detects recurring patterns, drafts lesson candidates, and writes approved lessons to the right playbook scope. The only agent that writes to playbook files. |
-| `roster-orchestrator` | Bootstraps roster workspaces on session start and dispatches scheduled fires through the host tool's native subagent primitive. Subscription-billed primitives only. |
-
-**Agents** (called by skills, not invoked directly)
-
-| Agent | Owner skill | Purpose |
-|---|---|---|
-| `lesson-drafter` | `dreamer` | Takes a candidate pattern and drafts a lesson file in the schema defined by `conventions.md`. One lesson per invocation. |
-| `pattern-detector` | `dreamer` | Reads runs + matched feedback, returns raw candidate patterns with cited evidence. Returns everything that recurs. |
-| `promotion-arbiter` | `dreamer` | Decides whether a project-validated lesson should be promoted to global, kept project-specific, or marked as conflicting. Decisions only. |
-
-Every skill and agent ships with version `0.1.0` (frontmatter pin). `roster doctor` will surface drift between installed and shipped versions in v0.2.
-
-From **v0.4.0**, `/chief-of-staff create-agent <function> <agent>` runs an interactive five-phase dialogue by default in a TTY — it interviews you for the gaps a stub can't fill (subagents, tools, plan names, project-specific failure modes) and writes a fully populated `agent.md` instead of placeholders. CI / scripts / non-TTY contexts get the legacy stub mode automatically; force it explicitly with `AGENT_TEAM_NO_CONFIRM=1`. See [docs/HOWTO.md → Creating an agent](docs/HOWTO.md#creating-an-agent) for the worked example.
-
-## What `init` scaffolds
-
-`roster init` is non-destructive — re-running merges new files in without overwriting your edits. The full scaffold:
-
-```
-my-team/                            ← full layout
-├── CLAUDE.md, conventions.md       ← workspace-level context
-├── gtm/, product/, design/, ops/   ← functions (top-level domains)
-│   ├── EXPERT.md                   ← function-level expert (substrate-shaping)
-│   └── <agent-role>/               ← role-based agents you scaffold via
-│       │                             /chief-of-staff create-agent (none preinstalled)
-│       ├── agent.md                ← contract: purpose, inputs, plans, outputs
-│       ├── plans/*.yaml            ← named workflows the agent can run
-│       ├── subagents/*.md          ← reusable building blocks
-│       └── projects/<project>/     ← per-project instance with config + logs
-├── projects/<project>/             ← project-level shared substrate
-│   └── CLAUDE.md, guidelines/      ← voice, ICPs, messaging, brand-book
-├── chief-of-staff/                 ← cross-cutting maintenance agent
-├── dreamer/                        ← cross-cutting reinforcement agent
-├── scripts/                        ← backing scripts (create/archive/audit/rename)
-└── .claude/commands/               ← workspace-level slash commands
-```
-
-The two big ideas behind the layout:
-
-1. **Substrate vs artifacts**: experts shape substrate (project guidelines), agents produce artifacts (specific outputs). Don't conflate them.
-2. **Plans**: each agent has named plans (YAML workflow recipes). Cron-friendly. Auditable. Reusable.
-
-## Migrating from agent-team
-
-If you've been running the original `~/repos/agent-team` layout, here's the verbatim migration. Project substrate and `.env` carry over; the framework (skills, agents, scripts, conventions) comes from `roster init`.
-
-```bash
-# 1. Install roster (locally until v0.1 publishes; npx after)
-npx @firatcand/roster install
-
-# 2. Scaffold a fresh workspace
-mkdir ~/repos/my-agent-team && cd ~/repos/my-agent-team
-npx @firatcand/roster init
-
-# 3. Copy project-level substrate (guidelines, ICPs, brand voice)
-cp -r ~/repos/agent-team/projects/{athelea,firatdogan} projects/
-
-# 4. Scaffold each agent you previously had under agent-team, then copy
-#    per-agent project instances (run logs, configs) into the new tree:
-#      /chief-of-staff create-agent gtm sdr
-#      cp -r ~/repos/agent-team/gtm/sdr/projects/* gtm/sdr/projects/
-#      # repeat for every function/agent (e.g. gtm/content, product/pm, …)
-
-# 5. Copy credentials
-cp ~/repos/agent-team/.env .env
-
-# 6. Archive the old repo
-mv ~/repos/agent-team ~/repos/_archived/agent-team
-```
-
-Adjust the project names in step 3 to match what's actually under your `agent-team/projects/`. The agent scaffold itself (`agent.md`, plans, subagents) is regenerated by `/chief-of-staff create-agent` — only the per-project state needs to be copied across.
-
-Audit after migration:
-
-```bash
-roster doctor          # confirms skills + agents are in place
-```
+---
 
 ## Security
 
-Three guarantees about what `npm install -g @firatcand/roster` and `npx @firatcand/roster` do — and don't — do on your machine.
+- **No `preinstall` / `install` / `postinstall` scripts.** `npm install -g @firatcand/roster` writes files and stops. Asserted in `test/security.test.ts`.
+- **No telemetry.** Nothing is collected — no analytics, no error reporting, no usage pings. Any future telemetry will be opt-in, gated behind a flag, and disclosed here before the release that introduces it.
+- **npm provenance.** Releases are signed via `npm publish --provenance` from GitHub Actions on tag push. Verify with `npm info @firatcand/roster dist.integrity` or the provenance badge on the npm page.
+- **Path-traversal guards** on `install` / `init` audited under ROS-30 — regression suite in `test/security.test.ts`.
 
-- **No `preinstall` / `install` / `postinstall` scripts.** The CLI runs only when you invoke it. `npm install -g @firatcand/roster` writes files to your global prefix and stops there. Asserted in `test/security.test.ts` ("no npm install lifecycle hooks in package.json").
-- **No telemetry.** v0.1 collects nothing — no analytics, no error reporting, no usage pings. If telemetry is ever added it will be opt-in, gated behind a `--no-telemetry` flag, and disclosed here before the release that introduces it.
-- **npm provenance.** Releases are signed via `npm publish --provenance` from GitHub Actions on `v*` tag push. Verify the signature with `npm info @firatcand/roster dist.integrity` or the provenance badge on the npm page.
-
-Path-traversal guards on `install` / `init` were audited under ROS-30 — see `test/security.test.ts` for the regression suite.
-
-## v0.2 roadmap
-
-Items the SPEC deferred from v0.1, in roughly the order they're likely to land. Open to feedback on priority.
-
-- **Companion-skill installers.** Install GTM / product / design domain expertise alongside the framework, similar to forge's `companions`. Will point at `firatcand/founder-skills`.
-- **Per-skill versioning gate in `doctor`.** Skills already ship with `version:` in frontmatter; `roster doctor` will surface drift between installed and shipped versions, mirroring how npm handles outdated globals.
-- **`roster sync`.** Pull the latest skills from the installed roster package into existing tool config dirs without re-running the full `install` flow.
-- **`roster migrate <path>`.** Replace the manual `cp`-based migration documented in [Migrating from agent-team](#migrating-from-agent-team) with a single command that copies project substrate + `.env` and runs `roster init`.
-- **Cursor support.** Promoted from "out of scope" once the Cursor skill API stabilizes — the layout maps cleanly to `~/.cursor/`.
+---
 
 ## Documentation
 
-- [docs/HOWTO.md](docs/HOWTO.md) — recipes for common tasks (install, init, create project, run agent, audit, etc.)
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — design rationale, the substrate-vs-artifacts model, lessons protocol, dreamer reinforcement loop
-- [docs/API.md](docs/API.md) — every script, config schema, and convention
+- [docs/HOWTO.md](docs/HOWTO.md) — install, init, create-agent, run a plan, audit
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — substrate-vs-artifacts, lessons protocol, reinforcement loop
+- [docs/SCHEDULING.md](docs/SCHEDULING.md) — schedule install/validate, UI hand-off, Codex subagent workaround, subscription-billing rules
+- [docs/API.md](docs/API.md) — every script, config schema, convention
 - [docs/roadmap.md](docs/roadmap.md) — what's shipped, what's next
 
-## Opinions you can replace
+---
 
-The CLI ships a curated set of skills and agent definitions — these are starting points, not law.
+## Contributing
 
-- Function categories (`gtm/`, `product/`, `design/`, `ops/`) are defaults. Add your own with `/chief-of-staff create-function`.
-- The example experts reflect one founder's judgment. Replace freely.
-- The demo project (`projects/_demo/`) is safe to delete after init.
+Bug reports, fixes, and docs improvements welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, PR process, release pipeline, and the CI gates a PR has to clear. Contributors working on the CLI itself should also read [CLAUDE.md](CLAUDE.md) for build/test/layout conventions.
 
-## What this is NOT
-
-- Not a hosted SaaS — you run it locally against your own AI coding tool.
-- Not a build/CI tool — for that, see [forge](https://github.com/firatcand/forge) (complementary, not bundled).
-- Not a substitute for thinking — it's a structure for organizing your thinking.
+---
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
 
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md). Contributors working on the CLI itself should read [CLAUDE.md](CLAUDE.md) for build/test/layout conventions.
-
-### CI / branch protection
-
-PRs into `main` run [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — typecheck, test, build, `npm pack --dry-run`, `pnpm smoke`. Repo admins should enable branch protection on `main` (one-time manual step in **Settings → Branches → Branch protection rules → Add rule**):
-
-- Require status checks to pass before merging: `CI / verify`
-- Require branches to be up-to-date before merging
-- (Optional) Require linear history
-
-All third-party actions in `ci.yml` and `publish.yml` are pinned to 40-character commit SHAs (with a trailing `# vX.Y.Z` comment) and auto-updated weekly via [Dependabot](.github/dependabot.yml).
-
-### Publishing / Releases
-
-Releases are triggered by pushing a version tag:
-
-```bash
-git tag v0.1.0 && git push origin v0.1.0
-```
-
-The [publish workflow](.github/workflows/publish.yml) runs the full quality gate (`typecheck`, `test`, `build`), asserts the tag matches `package.json` version, publishes to npm with provenance, and creates a GitHub Release with auto-generated notes.
-
-**One-time setup — `NPM_TOKEN` secret:**
-
-1. Mint a Granular Access Token at [npmjs.com](https://www.npmjs.com/) → Account → Access Tokens → Generate New Token → Granular.
-   - Permissions: **Read and write** scoped to `@firatcand/roster` (publish; deprecation is intentionally kept manual — see rollback note below).
-   - Set an expiry (90–365 days recommended).
-2. In this repo: **Settings → Secrets and variables → Actions → New repository secret**.
-   - Name: `NPM_TOKEN`
-   - Value: the token from step 1.
-
-No additional setup is needed for provenance — the workflow's `id-token: write` permission handles OIDC attestation automatically.
-
-**One-time setup — `production` environment (manual `workflow_dispatch` approval gate):**
-
-The publish workflow's `workflow_dispatch` trigger lets a maintainer manually run a publish against an existing tag (used for partial-publish recovery). To prevent anyone with `Actions: write` from triggering an unreviewed publish, manual dispatches are gated behind a GitHub environment named `production` that requires maintainer approval. Tag-push releases (the canonical `git tag vX.Y.Z && git push --tags` path) are **not** gated — they run immediately.
-
-1. GitHub repo → **Settings → Environments → New environment**, name: `production`.
-2. **Required reviewers:** add the maintainer (Firat). **Do NOT enable "Prevent self-review"** — this is a solo-maintainer project and enabling it would leave every dispatch permanently stuck.
-3. **Wait timer:** 0.
-4. **Deployment branches and tags:** leave on the default "All branches and tags." A `v*` tag rule sounds appealing as belt-and-suspenders but actually blocks `workflow_dispatch` — on dispatch, `github.ref` is the default branch, not the tag (which is supplied separately via the `tag` input and checked out later in the job).
-
-Because self-approval is allowed, the maintainer account becomes the only barrier between an `Actions: write` actor and an npm publish. **Enable TOTP-based 2FA on the GitHub account** (and on the npm account that owns `NPM_TOKEN`) as the compensating control.
-
-After this, any manual `workflow_dispatch` of the publish workflow will pause in "Waiting for review" state until approved in the Actions UI.
-
-**Pre-release tags** (e.g. `v0.1.0-rc.1`) are detected by suffix and automatically published to the `next` dist-tag on npm and marked as pre-release on GitHub. Stable tags publish to `latest`.
-
-If a bad version ships, `npm deprecate @firatcand/roster@<version> "<reason>"` and publish a fix as the next patch — never reuse a version number.
-
-## Acknowledgments
-
-Built on top of [Claude Code](https://claude.com/code) and the broader AI-coding-tool ecosystem.
+Built on top of [Claude Code](https://claude.com/code), [Codex CLI](https://github.com/openai/codex), and the broader AI-coding-tool ecosystem.
