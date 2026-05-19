@@ -19,6 +19,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
+EXPECTED_VERSION="$(node -p "require('./package.json').version")"
 
 # Note: this script tests SHIPPED behavior (npm pack + install + roster init).
 # Tests for unshipped artifacts under .dogfood/ live in separate scripts and
@@ -123,7 +124,7 @@ npm install -g "$TARBALL" --prefix "$NPM_PREFIX" --no-audit --no-fund --silent >
 ROSTER_BIN="$NPM_PREFIX/bin/roster"
 assert "-x \"$ROSTER_BIN\"" "roster binary installed at $ROSTER_BIN"
 VER=$("$ROSTER_BIN" --version)
-assert "\"$VER\" = '0.1.0'" "roster --version → 0.1.0 (got '$VER')"
+assert "\"$VER\" = '$EXPECTED_VERSION'" "roster --version → $EXPECTED_VERSION (got '$VER')"
 
 # 4. roster install (Claude redirected via ROSTER_CLAUDE_HOME)
 echo ""
