@@ -7,7 +7,7 @@ Full reference. CLAUDE.md is the short behavioral guide loaded at session start;
 1. **Agents are the unit of reuse.** An agent's logic lives once. Per-project differences live as instances under that agent.
 2. **Project guidelines are cross-agent.** Voice, ICPs, design, do-and-don't, compliance, competitors are project-level — every agent that operates on the project reads them. They live under `projects/<project>/guidelines/`.
 3. **Tooling is scoped where it belongs.** Universal MCPs/skills/plugins at root. Agent-scoped at the agent. No per-project tooling — projects share the agent's tools.
-4. **Files are the memory layer.** No vector DB, no embedding store. Markdown + YAML + Git.
+4. **Files are the memory layer for agent operations.** Run logs, playbook lessons, configs, and guidelines are Markdown/YAML in Git — no vector DB, no embedding store. Output artifacts (enriched data, drafts, structured results) are not memory; use whatever storage fits — a DB is fine.
 5. **Project-scoped lessons override global on conflict.** Local always wins at runtime.
 6. **Schedules are stateless.** A native local scheduler (Claude Desktop Scheduled Tasks, Codex app Automations, or a Codex cron entry installed via `roster schedule install --via cron`) fires a fresh CLI session that loads `CONTEXT.md` and invokes the `roster-orchestrator` skill. All model usage draws from the user's interactive subscription — no Agent SDK, no headless API keys.
 7. **The dreamer learns; agents act.** Reinforcement is a separate, deliberate process. Live agents don't update playbooks.
