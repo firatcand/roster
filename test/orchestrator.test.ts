@@ -304,8 +304,8 @@ test('subagent dispatch (codex): persona.md is the runtime-injection payload for
   // renderer would re-emit. If this drifts, the Windows orchestrator hand-off
   // breaks silently.
   const agentsRoot = join(repoRoot, 'agents');
-  const fixturePath = join(agentsRoot, 'critic.md');
-  assert.ok(existsSync(fixturePath), 'fixture: agents/critic.md exists');
+  const fixturePath = join(agentsRoot, 'lesson-drafter.md');
+  assert.ok(existsSync(fixturePath), 'fixture: agents/lesson-drafter.md exists');
   // Sanity: the schema test in test/agent-render.test.ts already proves
   // round-trip parseability across every shipped agent; here we just assert
   // the contract that anchors the doctor + install + audit chain.

@@ -107,8 +107,10 @@ for expected in \
   package/templates/scaffold/scripts/lib/bindings-prompt.sh \
   package/templates/scaffold/chief-of-staff/agent.md \
   package/templates/scaffold/dreamer/agent.md \
-  package/templates/scaffold/gtm/sdr/agent.md \
-  package/templates/scaffold/gtm/sdr/plans/cold-outreach.yaml \
+  package/templates/scaffold/gtm/EXPERT.md \
+  package/templates/scaffold/product/EXPERT.md \
+  package/templates/scaffold/design/EXPERT.md \
+  package/templates/scaffold/ops/EXPERT.md \
   package/templates/scaffold/projects/_demo/CLAUDE.md \
   package/templates/scaffold/projects/_demo/state.md \
   package/templates/scaffold/projects/_demo/config/default.yaml \
@@ -166,7 +168,11 @@ assert "-f projects/_demo/state.md" "projects/_demo/state.md exists"
 assert "-f projects/_demo/config/default.yaml" "projects/_demo/config/default.yaml exists"
 assert "-f projects/_demo/guidelines/voice.md" "projects/_demo/guidelines/voice.md exists"
 assert "-f conventions.md" "conventions.md ported into workspace"
-assert "-f gtm/sdr/agent.md" "gtm/sdr/agent.md ported"
+assert "-f gtm/EXPERT.md" "gtm/EXPERT.md ported (function dir, no preinstalled agent)"
+assert "-f product/EXPERT.md" "product/EXPERT.md ported"
+assert "-f design/EXPERT.md" "design/EXPERT.md ported"
+assert "-f ops/EXPERT.md" "ops/EXPERT.md ported"
+assert "! -e gtm/sdr" "no SDR worked example shipped into workspace"
 assert "-f chief-of-staff/agent.md" "chief-of-staff/agent.md ported"
 assert "-f dreamer/agent.md" "dreamer/agent.md ported"
 assert "-x scripts/new-project.sh" "scripts/new-project.sh ported + executable"

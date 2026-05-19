@@ -37,13 +37,13 @@ test('every shipped agent renders with current Codex field names only', () => {
 });
 
 test('header comment references openai/codex#19399 with removal-trigger note', () => {
-  const { toml } = renderCodexAgentToml(readAgent('critic.md'));
+  const { toml } = renderCodexAgentToml(readAgent('lesson-drafter.md'));
   assert.match(toml, /openai\/codex#19399/, 'header cites upstream issue');
   assert.match(toml, /Remove the Windows runtime-injection workaround when this issue closes/, 'removal trigger present');
 });
 
 test('persona body equals the source body sans frontmatter (and leading blank lines trimmed)', () => {
-  const source = readAgent('critic.md');
+  const source = readAgent('lesson-drafter.md');
   const expectedBody =
     source.replace(/^---\n[\s\S]*?\n---\n/, '').replace(/^[\n\r]+/, '').replace(/\s+$/, '') + '\n';
   const { personaBody } = renderCodexAgentToml(source);
@@ -51,7 +51,7 @@ test('persona body equals the source body sans frontmatter (and leading blank li
 });
 
 test('renderCodexAgentToml is idempotent on the rendered output reading the same source twice', () => {
-  const source = readAgent('writer.md');
+  const source = readAgent('pattern-detector.md');
   const a = renderCodexAgentToml(source);
   const b = renderCodexAgentToml(source);
   assert.equal(a.toml, b.toml);

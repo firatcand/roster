@@ -73,12 +73,12 @@ test('doctor exits 1 and reports MISSING after a skill dir is deleted', () => {
   const h = makeHomes(['claude']);
   try {
     runCli(['install', '--all', '--silent'], envFor(h));
-    rmSync(join(h.claude, 'skills', 'sdr'), { recursive: true, force: true });
+    rmSync(join(h.claude, 'skills', 'chief-of-staff'), { recursive: true, force: true });
 
     const doc = runCli(['doctor'], envFor(h));
     assert.equal(doc.status, 1, `stderr: ${doc.stderr}\nstdout: ${doc.stdout}`);
     assert.match(doc.stdout, /MISSING/);
-    assert.match(doc.stdout, /sdr/);
+    assert.match(doc.stdout, /chief-of-staff/);
     assert.match(doc.stdout, /roster install/);
   } finally {
     h.cleanup();
@@ -89,12 +89,12 @@ test('doctor exits 1 and reports STALE after a skill file is modified', () => {
   const h = makeHomes(['claude']);
   try {
     runCli(['install', '--all', '--silent'], envFor(h));
-    writeFileSync(join(h.claude, 'skills', 'sdr', 'SKILL.md'), '# tampered\n');
+    writeFileSync(join(h.claude, 'skills', 'chief-of-staff', 'SKILL.md'), '# tampered\n');
 
     const doc = runCli(['doctor'], envFor(h));
     assert.equal(doc.status, 1, `stderr: ${doc.stderr}\nstdout: ${doc.stdout}`);
     assert.match(doc.stdout, /STALE/);
-    assert.match(doc.stdout, /sdr/);
+    assert.match(doc.stdout, /chief-of-staff/);
   } finally {
     h.cleanup();
   }
@@ -125,7 +125,7 @@ test('doctor --json after deleting a skill: ok=false, item missing', () => {
   const h = makeHomes(['claude']);
   try {
     runCli(['install', '--all', '--silent'], envFor(h));
-    rmSync(join(h.claude, 'skills', 'sdr'), { recursive: true, force: true });
+    rmSync(join(h.claude, 'skills', 'chief-of-staff'), { recursive: true, force: true });
 
     const doc = runCli(['doctor', '--json'], envFor(h));
     assert.equal(doc.status, 1);
@@ -134,9 +134,9 @@ test('doctor --json after deleting a skill: ok=false, item missing', () => {
       tools: Array<{ items: Array<{ name: string; kind: string; status: string }> }>;
     };
     assert.equal(payload.ok, false);
-    const sdrItem = payload.tools.flatMap((t) => t.items).find((i) => i.kind === 'skill' && i.name === 'sdr');
-    assert.ok(sdrItem);
-    assert.equal(sdrItem.status, 'missing');
+    const deletedItem = payload.tools.flatMap((t) => t.items).find((i) => i.kind === 'skill' && i.name === 'chief-of-staff');
+    assert.ok(deletedItem);
+    assert.equal(deletedItem.status, 'missing');
   } finally {
     h.cleanup();
   }
@@ -189,11 +189,11 @@ test('doctor never prompts — symlinked skill + no inherited TTY exits cleanly'
   try {
     runCli(['install', '--all', '--silent'], envFor(h));
 
-    const sdrTarget = join(h.claude, 'skills', 'sdr');
-    const replica = join(h.root, 'sdr-replica');
-    cpSync(sdrTarget, replica, { recursive: true });
-    rmSync(sdrTarget, { recursive: true, force: true });
-    symlinkSync(replica, sdrTarget, 'dir');
+    const skillTarget = join(h.claude, 'skills', 'chief-of-staff');
+    const replica = join(h.root, 'chief-of-staff-replica');
+    cpSync(skillTarget, replica, { recursive: true });
+    rmSync(skillTarget, { recursive: true, force: true });
+    symlinkSync(replica, skillTarget, 'dir');
 
     const doc = runCli(['doctor'], envFor(h));
     assert.equal(doc.status, 0, `stderr: ${doc.stderr}\nstdout: ${doc.stdout}`);

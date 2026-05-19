@@ -99,8 +99,10 @@ test('roster init produces the full scaffold tree (gtm, dreamer, chief-of-staff,
       'chief-of-staff/plans/audit-repo.yaml',
       'dreamer/agent.md',
       'dreamer/subagents/lesson-drafter.md',
-      'gtm/sdr/agent.md',
-      'gtm/sdr/projects/_demo/config/default.yaml',
+      'gtm/EXPERT.md',
+      'product/EXPERT.md',
+      'design/EXPERT.md',
+      'ops/EXPERT.md',
       'projects/_demo/CLAUDE.md',
       'projects/_demo/config/default.yaml',
       'projects/_demo/guidelines/voice.md',
@@ -123,8 +125,8 @@ test('roster init re-run preserves user-edited scaffold files', async () => {
     const { logger } = silentLogger();
     await executeInit({ cwd, name: 'acme', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
 
-    const target = join(cwd, 'gtm', 'sdr', 'agent.md');
-    const userContent = '# my custom agent contract\n';
+    const target = join(cwd, 'gtm', 'EXPERT.md');
+    const userContent = '# my custom expert prompt\n';
     writeFileSync(target, userContent, 'utf8');
 
     await executeInit({
@@ -290,13 +292,13 @@ test('roster init with forge marker but no CLAUDE.md warns and proceeds', async 
     assert.equal(warns.length, 1, 'one warn line');
     assert.match(warns[0]!, /forge/i);
     assert.ok(existsSync(join(cwd, 'CLAUDE.md')), 'CLAUDE.md exists (symlink)');
-    assert.ok(existsSync(join(cwd, 'gtm', 'sdr', 'agent.md')), 'scaffold written');
+    assert.ok(existsSync(join(cwd, 'gtm', 'EXPERT.md')), 'scaffold written');
   } finally {
     cleanup();
   }
 });
 
-test('roster init with forge marker but no CLAUDE.md AND --silent suppresses the warn', async () => {
+test('roster init with forge marker but no CLAUDE.md AND --silent suppresses the warn (still writes scaffold)', async () => {
   const { cwd, cleanup } = makeTmp();
   try {
     writeFileSync(join(cwd, 'BRIEF.md'), '# forge brief\n', 'utf8');
@@ -316,7 +318,7 @@ test('roster init with forge marker but no CLAUDE.md AND --silent suppresses the
 
     assert.equal(result.status, 'ok');
     assert.equal(warns.length, 0, '--silent suppresses informational warns');
-    assert.ok(existsSync(join(cwd, 'gtm', 'sdr', 'agent.md')), 'scaffold still written');
+    assert.ok(existsSync(join(cwd, 'gtm', 'EXPERT.md')), 'scaffold still written');
   } finally {
     cleanup();
   }

@@ -33,11 +33,11 @@ npx @firatcand/roster init
 # 3. Open Claude Code in that directory
 claude
 
-# 4. Run the demo SDR plan
-/sdr run cold-outreach for _demo
+# 4. Scaffold your first agent (interactive five-phase dialogue)
+/chief-of-staff create-agent gtm <your-agent-name>
 
-# 5. Read the run log and provide feedback — lessons surface
-#    in dreamer/pending/ on the next nightly reinforcement pass.
+# 5. Run a plan, read the run log, and provide feedback — lessons
+#    surface in dreamer/pending/ on the next nightly reinforcement pass.
 ```
 
 [docs/HOWTO.md](docs/HOWTO.md) has the long-form step-by-step.
@@ -50,9 +50,9 @@ $ npx --yes @firatcand/roster install --all
 roster v0.1.0
 Multi-agent workspace scaffolder for Claude Code, Codex CLI, and Gemini.
 
-✓ Claude Code — 3 skills → ~/.claude/skills, 7 agents → ~/.claude/agents
-✓ Codex CLI — 4 skills → ~/.codex/skills, 7 agents → ~/.codex/agents
-✓ Gemini CLI — 3 skills → ~/.gemini/extensions, 7 agents → ~/.gemini/agents
+✓ Claude Code — 3 skills → ~/.claude/skills, 3 agents → ~/.claude/agents
+✓ Codex CLI — 3 skills → ~/.codex/skills, 3 agents → ~/.codex/agents
+✓ Gemini CLI — 3 skills → ~/.gemini/extensions, 3 agents → ~/.gemini/agents
 
 Next: roster init to scaffold a workspace.
 ```
@@ -89,7 +89,7 @@ Detection is presence-only: roster considers a tool installed if its config root
 
 ## What roster installs
 
-`roster install` copies three skills and seven agents into each detected tool's config dir. Skills are the entry points (one per agent function); agents are the building blocks the skills call.
+`roster install` copies three framework skills and three reinforcement agents into each detected tool's config dir. Roster ships **framework primitives only** — no preinstalled domain agents (SDR, content writers, designers). You scaffold those yourself via `/chief-of-staff create-agent`.
 
 **Skills**
 
@@ -97,16 +97,12 @@ Detection is presence-only: roster considers a tool installed if its config root
 |---|---|
 | `chief-of-staff` | Repo maintenance for roster workspaces — create, archive, rename, and audit projects, agents, and functions. Wraps `scripts/` with confirmation gates for destructive operations. |
 | `dreamer` | Off-hours reflection. Reads recent runs + feedback, detects recurring patterns, drafts lesson candidates, and writes approved lessons to the right playbook scope. The only agent that writes to playbook files. |
-| `sdr` | Cold outreach for a project — find prospects matching an ICP, enrich, draft personalized first-touch messages in the project's voice, and route through HITL approval. |
+| `roster-orchestrator` | Bootstraps roster workspaces on session start and dispatches scheduled fires through the host tool's native subagent primitive. Subscription-billed primitives only. |
 
 **Agents** (called by skills, not invoked directly)
 
 | Agent | Owner skill | Purpose |
 |---|---|---|
-| `critic` | `sdr` | Reviews drafts for tone, brand fit, risk, compliance. Returns pass/fail with specific feedback. Does not rewrite. |
-| `enricher` | `sdr` | Fills missing fields on prospects (recent posts, company news) via Apollo, HeyReach, web search. Does not score or contact. |
-| `prospector` | `sdr` | Finds prospects matching ICP criteria. Read-only — no enrichment beyond search, no contact, no CRM writes. |
-| `writer` | `sdr` | Drafts a single first-touch message for a single prospect using enrichment context and lessons. Does not send. |
 | `lesson-drafter` | `dreamer` | Takes a candidate pattern and drafts a lesson file in the schema defined by `conventions.md`. One lesson per invocation. |
 | `pattern-detector` | `dreamer` | Reads runs + matched feedback, returns raw candidate patterns with cited evidence. Returns everything that recurs. |
 | `promotion-arbiter` | `dreamer` | Decides whether a project-validated lesson should be promoted to global, kept project-specific, or marked as conflicting. Decisions only. |
@@ -124,7 +120,8 @@ my-team/                            ← full layout
 ├── CLAUDE.md, conventions.md       ← workspace-level context
 ├── gtm/, product/, design/, ops/   ← functions (top-level domains)
 │   ├── EXPERT.md                   ← function-level expert (substrate-shaping)
-│   └── <agent-role>/               ← role-based agents (sdr, ux-designer, ...)
+│   └── <agent-role>/               ← role-based agents you scaffold via
+│       │                             /chief-of-staff create-agent (none preinstalled)
 │       ├── agent.md                ← contract: purpose, inputs, plans, outputs
 │       ├── plans/*.yaml            ← named workflows the agent can run
 │       ├── subagents/*.md          ← reusable building blocks
@@ -157,8 +154,11 @@ npx @firatcand/roster init
 # 3. Copy project-level substrate (guidelines, ICPs, brand voice)
 cp -r ~/repos/agent-team/projects/{athelea,firatdogan} projects/
 
-# 4. Copy per-agent project instances (run logs, configs)
-cp -r ~/repos/agent-team/gtm/sdr/projects/* gtm/sdr/projects/
+# 4. Scaffold each agent you previously had under agent-team, then copy
+#    per-agent project instances (run logs, configs) into the new tree:
+#      /chief-of-staff create-agent gtm sdr
+#      cp -r ~/repos/agent-team/gtm/sdr/projects/* gtm/sdr/projects/
+#      # repeat for every function/agent (e.g. gtm/content, product/pm, …)
 
 # 5. Copy credentials
 cp ~/repos/agent-team/.env .env
@@ -167,7 +167,7 @@ cp ~/repos/agent-team/.env .env
 mv ~/repos/agent-team ~/repos/_archived/agent-team
 ```
 
-Adjust the project names in step 3 to match what's actually under your `agent-team/projects/`, and extend step 4 for every function that has its own `projects/` dir (e.g. `gtm/content/projects/`, `product/pm/projects/`).
+Adjust the project names in step 3 to match what's actually under your `agent-team/projects/`. The agent scaffold itself (`agent.md`, plans, subagents) is regenerated by `/chief-of-staff create-agent` — only the per-project state needs to be copied across.
 
 Audit after migration:
 
@@ -226,7 +226,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Contributors working on the CLI itself s
 
 ### CI / branch protection
 
-PRs into `main` run [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — typecheck, test, build, `npm pack --dry-run`, `pnpm smoke`, `pnpm e2e`. Repo admins should enable branch protection on `main` (one-time manual step in **Settings → Branches → Branch protection rules → Add rule**):
+PRs into `main` run [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — typecheck, test, build, `npm pack --dry-run`, `pnpm smoke`. Repo admins should enable branch protection on `main` (one-time manual step in **Settings → Branches → Branch protection rules → Add rule**):
 
 - Require status checks to pass before merging: `CI / verify`
 - Require branches to be up-to-date before merging

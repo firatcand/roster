@@ -29,7 +29,7 @@ This directive applies to both scheduled fires and interactive chat sessions.
 
 - `chief-of-staff/` — repo maintenance and project wiring
 - `dreamer/` — reflection; promotes lessons to playbooks
-- `gtm/sdr/` — outbound sales development
+- `gtm/`, `product/`, `design/`, `ops/` — function dirs with an `EXPERT.md`; populate with agents via `/chief-of-staff create-agent <function> <agent>`
 - `<function>/<agent>/agent.md` — contract for each agent (inputs, steps, tools, outputs)
 
 ## Key files
