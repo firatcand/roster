@@ -1,75 +1,46 @@
 # Roster Roadmap
 
-Public view of what's shipped, what's in flight, and what's next. Detailed task tracking lives in Linear under project `roster` (issues `ROS-*`); planning artifacts (`spec/`, `plans/phases.yaml`) are local-only and not in the repo.
+Public view of what's shipped, what's deferred, and what's next. Detailed task tracking lives in Linear under project `roster` (issues `ROS-*`); planning artifacts (`spec/`, `plans/phases.yaml`) are local-only and not in the repo.
 
-## v0.1.0 — Phase 1: Foundations (complete)
+## Released
 
-Closed **2026-05-12**. Retro: [retros/phase-1.md](retros/phase-1.md).
+### v0.4.0 — 2026-05-19
 
-- CLI entry — `roster --help`, `roster --version`, exit codes 0/1/2/3.
-- Tool detection — `~/.claude/` only in Phase 1.
-- `roster install` — copies the `chief-of-staff` skill and `lesson-drafter` agent into `~/.claude/skills/` and `~/.claude/agents/`. Idempotent. Handles symlinks and EACCES.
-- `roster init <name>` — writes a minimal workspace (`CLAUDE.md` with `{{PROJECT_NAME}}` substituted, `projects/_demo/` placeholder, gitignore-defaults appended idempotently).
-- `npm pack` — clean 13 kB tarball, 11 files. Local install verified via `pnpm smoke`.
+First feature-complete release. Rolls up Phases 2, 2.5, and 4 — all of which landed on `main` after v0.1.0 but were never published as separate npm releases. Full changelog: [CHANGELOG.md](../CHANGELOG.md#040--2026-05-19).
 
-Status: not published to npm yet — locally installable via `npm pack && npm install -g <tarball>`.
+Phase summary:
 
-## v0.2.0 — Phase 2: Core Features (complete)
+| Phase | Theme | Closed | Retro |
+|---|---|---|---|
+| 1 | Foundations | 2026-05-12 | [phase-1.md](retros/phase-1.md) |
+| 2 | Core Features | 2026-05-14 | [phase-2.md](retros/phase-2.md) |
+| 3 | Polish and Launch | 2026-05-17 | [phase-3.md](retros/phase-3.md) |
+| 4 | Guided Agent Authoring | 2026-05-17 | [phase-4.md](retros/phase-4.md) |
+| 2.5 | Scheduling Primitives | 2026-05-18 | [phase-2.5.md](retros/phase-2.5.md) |
 
-Closed **2026-05-14**. Retro: [retros/phase-2.md](retros/phase-2.md).
+What this means for users:
 
-- Full skill/agent content shipped — `dreamer`, `sdr`, `chief-of-staff` skills with companion agents.
-- All four AI-tool targets — Claude Code, Codex CLI, Gemini, plus multi-tool selection (`--all`, `--tool <name>`).
-- Full `templates/scaffold/` tree — `init` lays down the complete workspace, non-destructive on re-run.
-- `roster doctor` — detects missing/stale skills and reports drift; exits 1 on mismatch.
-- Hardening — structured error UX with `--debug`, path-traversal security audit, GitHub Actions CI with smoke + e2e gates.
+- **Install** — `npm i -g @firatcand/roster`; `roster install` writes skills + agents into Claude Code, Codex CLI, or Gemini (use `--all` or `--tool <name>`).
+- **Scaffold** — `roster init <name>` lays down the full agent-team workspace (`gtm/`, `product/`, `design/`, `ops/`, `chief-of-staff/`, `dreamer/`, `projects/_demo/`, `CONTEXT.md`, `conventions.md`). Non-destructive on re-run, forge-aware.
+- **Schedule** — `roster schedule install --tool <claude|codex>` produces a UI hand-off spec (Claude Desktop / Codex Automations) or, with `--via cron` on Codex, writes a hardened crontab line. All firing is subscription-billed — no Agent SDK, no `claude -p`. See [SCHEDULING.md](SCHEDULING.md) and [ADR-0001](adr/0001-scheduling-architecture.md).
+- **Maintain** — `roster doctor [--fix]` audits skills, scheduling, subscription-safety, and `.env` secrets; `roster review` and the SessionStart banner surface HITL items from scheduled runs.
+- **Author** — `/chief-of-staff create-agent` runs a guided five-phase dialogue in TTY contexts (anti-fabrication, atomic write with rollback). Stub mode preserved via `AGENT_TEAM_NO_CONFIRM=1` and non-TTY contexts.
 
-## v0.2.5 — Phase 2.5: Scheduling primitives (planning)
+### v0.1.0 — 2026-05-17
 
-Goal: schedule roster agents on macOS and Windows via each tool's native local scheduler (Claude Desktop Scheduled Tasks; Codex Automations or `codex exec` cron). All firing is subscription-billed — no Agent SDK or `claude -p`. Each scheduled fire is a fresh CLI session that loads `CONTEXT.md`, invokes the `roster-orchestrator` skill, and dispatches subagents in isolated context. HITL items flow through a filesystem queue surfaced as banners in any chat session.
+Initial public release. Retro: [phase-1.md](retros/phase-1.md). Tool detection limited to `~/.claude/`; the `chief-of-staff` skill and `lesson-drafter` agent only. Superseded by v0.4.0.
 
-Architecture decision: [ADR-0001 Scheduling architecture](adr/0001-scheduling-architecture.md).
+## Deferred
 
-### In scope (highlights)
+Currently in the Linear backlog, both Low priority and not pickup-eligible under the "defer internal hardening pre-launch" rule. Will be reconsidered after the v0.4.0 launch settles.
 
-- `CONTEXT.md` template + symlink (macOS/Linux) or dual-write (Windows) of `CLAUDE.md` / `AGENTS.md` from `roster init`.
-- `roster-orchestrator` skill that bootstraps from `CONTEXT.md` on every fresh session.
-- `roster schedule install --tool <claude|codex> [--via cron]` — writes crontab line or prints UI-import spec.
-- HITL queue + SessionStart banner surface.
-- `roster doctor` extended to detect symlink, crontab, and `.env` drift; static audit that no installed skill imports the Anthropic SDK or invokes `claude -p`.
-
-## v0.3.0 — Phase 3: Polish and Launch (blocked on 2.5)
-
-- Published to npm under `@firatcand/roster`.
-- Migration docs for users coming from the original `~/repos/agent-team` layout.
-- Optional: a `roster update` command that re-installs skills from latest package without re-running interactive prompts.
-- Versioned skills with frontmatter `version` field; `doctor` reports stale by version instead of byte comparison.
-
-## v0.4.0 — Phase 4: Guided Agent Authoring (planning, blocked on 3)
-
-Goal: replace today's stub-only `/chief-of-staff create-agent` flow with a dialogue-first plan. Interactive sessions get a short interview that populates `agent.md`, an initial plan YAML, every named subagent file, and the slash-command description — instead of the placeholder strings the user has to fill in by hand today. Non-interactive sessions (CI, piped stdin, `AGENT_TEAM_NO_CONFIRM=1`) keep today's stub behavior byte-for-byte so e2e tests and power-user scripts don't break.
-
-The skill is **correctness over completeness**: it loads `<function>/EXPERT.md` as shape reference, drafts only what it can ground in the user's prose or follow-up Q&A, and refuses to fabricate steps/subagents/tools. Write is atomic with rollback on failure.
-
-### In scope (highlights)
-
-- Rewritten `chief-of-staff/plans/create-agent.yaml` with TTY-aware mode branch (stub vs guided).
-- Five-phase dialogue contract documented in `chief-of-staff/SKILL.md`: prose intake → classify (boilerplate / grounded / uncertain) → targeted follow-up Q&A until uncertain bucket empty → consolidated preview with `y/revise/cancel` → atomic write.
-- Anti-fabrication invariant stated verbatim in the skill body.
-- Cross-file invariants enforced before write: every subagent has a file, every step appears in the starter plan, every tool has a bindings block, no `<placeholder>` strings, slash description ≤80 chars.
-- `scripts/new-agent.sh --slash-only` recovery path for the rare case where the agent tree writes succeed but the slash command write fails.
-- Fixture-driven golden-snapshot test harness so the dialogue mode is regression-testable without invoking an LLM in CI.
-
-### Out of scope (deferred to v0.5+)
-
-- Refining an existing agent via dialogue (`refine-agent` plan).
-- Project-instance content generation — per-project config stays manual.
-- Multi-agent batch creation. One agent per invocation.
-- Automated `.mcp.json` population.
+- [ROS-63](https://linear.app/firatdogan/issue/ROS-63) — `migrate`: file-lock or CAS for manifest writes (TOCTOU window, only matters if two `roster migrate` runs race against each other on the same workspace).
+- [ROS-57](https://linear.app/firatdogan/issue/ROS-57) — periodic re-check of the `claude://` URL scheme for a schedule-creation deep-link (passive watch on Claude Desktop releases; spike already filed in [anthropics/claude-code#41364](https://github.com/anthropics/claude-code/issues/41364)).
 
 ## Out of scope
 
 - **Cursor** — its rule-file model (`.cursor/rules/*.mdc`) injects static markdown into every chat. That doesn't fit roster's skill/agent/subagent semantics: no first-class skill invocation, no subagents, no slash commands as workflow entry points. Shipping there would only bloat Cursor conversations without delivering the workflow value. Cursor users can still get value from `roster init` (the workspace pattern + conventions) without `install`.
 - PRD/SPEC/phases lifecycle — see [forge](https://github.com/firatcand/forge). Roster is complementary; the two don't bundle.
 - Hosted SaaS — roster runs locally.
+- Agent SDK / `claude -p` for scheduled firing — every fire must be subscription-billed (see [ADR-0001](adr/0001-scheduling-architecture.md)).
 - Substrate-vs-artifacts model changes — core opinion, not up for redesign in this repo.
