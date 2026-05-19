@@ -8,16 +8,18 @@ Lean-but-complete reference to every public surface in roster. For design ration
 
 All slash commands live at `.claude/commands/<name>.md` and are invoked via `/<name> <args>`. They route to an agent's `agent.md` + a named plan.
 
-### `/sdr`
+Roster ships only the framework slash commands listed below (`/chief-of-staff`, `/dreamer`). Domain agents (e.g. an SDR for cold outreach, a content writer, a graphic designer) are *not* preinstalled — you scaffold them with `/chief-of-staff create-agent <function> <agent>`, which generates the agent contract, plans, subagents, and a matching `/<agent>` slash command. The example below shows the shape of a domain slash command you'd get back.
 
-GTM SDR — outbound prospecting, cold outreach, reply handling.
+### `/<agent>` (scaffolded — example shape)
+
+After `/chief-of-staff create-agent gtm sdr` you'd have a `/sdr` command at `.claude/commands/sdr.md` that routes to `gtm/sdr/agent.md`. The invocation shape is the same for any agent you scaffold.
 
 **Usage:**
-- `/sdr run <plan> for <project>` — execute a named plan
-- `/sdr for <project>` — list available plans, prompt for choice
-- `/sdr` — list projects and plans, prompt for both
+- `/<agent> run <plan> for <project>` — execute a named plan
+- `/<agent> for <project>` — list available plans, prompt for choice
+- `/<agent>` — list projects and plans, prompt for both
 
-**Plans available:** `cold-outreach` (and any others added under `gtm/sdr/plans/`).
+**Plans available:** whatever is under `<function>/<agent>/plans/`.
 
 ### `/chief-of-staff`
 

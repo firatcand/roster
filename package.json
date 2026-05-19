@@ -27,7 +27,6 @@
     "test:update-golden": "node --experimental-strip-types scripts/update-golden.ts",
     "test:update-golden:stub": "node --experimental-strip-types scripts/update-golden-stub.ts",
     "smoke": "bash test/smoke.sh",
-    "e2e": "bash test/e2e-sdr.sh",
     "e2e:schedule": "bash test/e2e-schedule.sh",
     "perf": "bash test/perf.sh",
     "test:dogfood-scripts": "bash test/new-agent-slash-only.sh && bash test/scripts-parity.sh",

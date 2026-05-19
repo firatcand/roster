@@ -6,6 +6,10 @@ Per-phase retrospectives live in [`docs/retros/`](docs/retros/) and carry the lo
 
 ## [Unreleased]
 
+### Removed
+
+- **SDR worked example removed from the shipped surface.** `roster install` no longer copies an `sdr` skill or its `critic` / `enricher` / `prospector` / `writer` subagents; `roster init` no longer scaffolds `gtm/sdr/`. SDR was always a worked example, not a framework primitive — users now get an empty `gtm/` function dir (matching `product/` / `design/` / `ops/`) and scaffold their own agents via `/chief-of-staff create-agent <function> <agent>`. The reference SDR implementation still lives in `.dogfood/gtm/sdr/` for contributors. Dropped: `pnpm e2e` script and `test/e2e-sdr.sh` (CI no longer asserts an SDR-specific contract). Cuts ~20 files / ~30 KB from the npm tarball.
+
 ## [0.4.0] — 2026-05-19
 
 This release rolls up Phases 2 (Core Features), 2.5 (Scheduling Primitives), and 4 (Guided Agent Authoring) — all of which landed on `main` after v0.1.0 but never shipped as separate npm releases. v0.4.0 is roster's first feature-complete release: full multi-tool install, the complete skill set, scheduling, doctor, migrate, and guided agent authoring.
