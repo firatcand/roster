@@ -2,6 +2,10 @@
 
 This repo builds and ships **`@firatcand/roster`**, an npm CLI that installs/scaffolds the agent-team pattern across Claude Code, Codex CLI, and Gemini. See `README.md` for the user-facing pitch; this file is for contributors working on the CLI itself.
 
+> **Working on Roster?** This file describes **Roster the product** — what it is, where things live, how it builds and ships.
+>
+> For the **Forge methodology** we use to build Roster (planning workflow, phase status, build conventions, Linear tracking, worktree/PR rules), see [`.forge/CLAUDE.md`](.forge/CLAUDE.md). Keep the two sets of rules separate so they do not bleed into each other.
+
 ## Repo layout
 
 ```
@@ -18,11 +22,12 @@ skills/     Skills shipped to AI tools by `roster install`. One dir per skill.
 agents/     Agent .md files shipped alongside skills (Claude Code only).
 test/       Node test runner specs + smoke.sh integration test.
 docs/       Public docs — HOWTO.md, ARCHITECTURE.md, API.md, roadmap.md, retros.
-spec/       Local-only PRD/SPEC/CONTEXT (gitignored, forge planning workflow).
-plans/      Local-only phases.yaml (gitignored, forge planning workflow).
+.forge/     Forge methodology rules + worktree harness state (not shipped).
+spec/       Local-only PRD/SPEC/CONTEXT (gitignored — see .forge/CLAUDE.md).
+plans/      Local-only phases.yaml (gitignored — see .forge/CLAUDE.md).
 ```
 
-**Shipped to npm** (verified via `npm pack --dry-run`): `bin/`, `lib/`, `skills/`, `agents/`, `templates/`, `README.md`, `LICENSE`. Allowlist is in `package.json` under `files`.
+**Shipped to npm** (verified via `npm pack --dry-run`): `bin/`, `lib/`, `skills/`, `agents/`, `templates/`, `README.md`, `LICENSE`. Allowlist is in `package.json` under `files`. `.forge/`, `spec/`, `plans/` never ship.
 
 ## Build & verify
 
@@ -60,24 +65,14 @@ The Phase gate command (run before opening a PR): `pnpm typecheck && pnpm build 
 4. Add a test case in `test/install.test.ts` exercising the new target.
 5. Update `README.md` install matrix.
 
-## Phase status
-
-Phase 1 — Foundations: **complete** (closed 2026-05-12; retro at `docs/retros/phase-1.md`).
-Phase 2 — Core Features: **complete** (closed 2026-05-14; retro at `docs/retros/phase-2.md`).
-Phase 3 — Polish and Launch: **complete** (`ROS-27` v0.1.0 published 2026-05-17). v0.1.0 ships install/init/doctor only; scheduling lands in v0.2.5+.
-Phase 4 — Guided Agent Authoring: **complete** (closed 2026-05-17 with PR #75 / `ROS-55`). Delivered: mode-branched `create-agent.yaml` (`ROS-49`), guided-dialogue contract in `skills/chief-of-staff/SKILL.md` (`ROS-50`), per-file content contracts + cross-file invariants (`ROS-51`), atomic-write spec (`ROS-52`), `--slash-only` recovery flag (`ROS-53`), fixture-driven golden-snapshot harness (`ROS-54`), invariants + atomic-write modules + stub regression tests (`ROS-55`), dialogue-mode docs (`ROS-56`), scaffold scripts (`ROS-58`). Targeted for v0.4.0 release.
-Phase 2.5 — Scheduling primitives: **active**. Goals: subscription-safe scheduling for Claude Code + Codex CLI via native local schedulers, `CONTEXT.md` symlink architecture, `roster-orchestrator` skill, `roster schedule install/validate`, HITL queue. See `docs/adr/0001-scheduling-architecture.md` and `docs/roadmap.md`.
-
-Local planning (PRD/SPEC/phases.yaml) lives in `spec/` and `plans/` and is gitignored — public roadmap in `docs/roadmap.md`, work items tracked in Linear (ROS-*).
-
-## Conventions
+## Code conventions
 
 - TypeScript, ESM, strict mode. No CommonJS.
 - File names: lowercase kebab-case.
 - Prefer hand-rolled argv parsing over commander/yargs to keep tarball small.
 - No comments unless behavior is non-obvious. No docstrings.
-- Conventional commits: `feat(scope):`, `fix(scope):`, `chore(scope):`, `docs(scope):`. Include Linear ID (`ROS-N`) when applicable.
-- Never auto-commit. Show the diff, then ask.
+
+(Build conventions — Linear IDs in commits, phase gates, worktree/PR rules, never auto-commit — live in [`.forge/CLAUDE.md`](.forge/CLAUDE.md). Roadmap is `docs/roadmap.md`; work items tracked in Linear under `ROS-*`.)
 
 ## Dogfooding
 
@@ -85,4 +80,4 @@ There is no in-repo agent-team workspace anymore. To exercise the workspace patt
 
 ## When in doubt
 
-Read this file end-to-end, then check `README.md` and `docs/HOWTO.md`. If a CLI convention isn't clear, ask before guessing — this is going on npm and inconsistent UX propagates to everyone who installs it.
+Start here, then check [`.forge/CLAUDE.md`](.forge/CLAUDE.md) for build methodology and Linear/phase rules, then `README.md` and `docs/HOWTO.md`. If a CLI convention isn't clear, ask before guessing — this is going on npm and inconsistent UX propagates to everyone who installs it.
