@@ -43,7 +43,7 @@ This directive applies to both scheduled fires and interactive chat sessions.
 - Modify agent contracts during a run (that is a deliberate, separate task).
 - Invoke agents across project boundaries.
 - Invent tools, MCP servers, or capabilities that are not installed.
-- Write secrets or credentials to any tracked file.
+- Commit secrets or credentials to git. Tool API keys your agents need (Apollo, HeyReach, Slack, Linear, etc.) belong in `.env`, which is gitignored.
 
 ## When in doubt
 

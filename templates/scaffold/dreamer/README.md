@@ -17,7 +17,7 @@ Cross-domain pattern detection matters. A lesson observed in Twitter automation 
 
 ## Invocation
 
-Nightly via the native desktop scheduler. Register with `roster schedule install` — each fire spawns a fresh CLI session in the workspace, loads `CONTEXT.md`, invokes the `roster-orchestrator` skill, and dispatches the dreamer in isolated subagent context. See `conventions.md` § Schedules and [ADR-0001](../../docs/adr/0001-scheduling-architecture.md) for the model. Subscription-billed only; `claude -p` and the Anthropic Agent SDK are banned and enforced by `roster doctor`.
+Nightly via the native desktop scheduler. Register with `roster schedule install` — each fire spawns a fresh CLI session in the workspace, loads `CONTEXT.md`, invokes the `roster-orchestrator` skill, and dispatches the dreamer in isolated subagent context. See `conventions.md` § Schedules for the model.
 
 On-demand from a session: "Run the dreamer on the last week's outreach runs across all projects."
 

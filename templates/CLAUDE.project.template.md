@@ -37,7 +37,7 @@ format, project structure. When the convention isn't clear, ask before guessing.
 - Call agents across projects. An agent on Project A cannot invoke a different project's
   instance of itself.
 - Invent tools, connectors, or capabilities. If something isn't available, say so.
-- Write secrets, API keys, or credentials to any file under version control.
+- Commit secrets, API keys, or credentials to git. Tool API keys your agents need (Apollo, HeyReach, Slack, Linear, etc.) belong in `.env`, which is gitignored.
 
 ## When in doubt
 
