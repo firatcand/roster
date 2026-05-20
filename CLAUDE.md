@@ -20,7 +20,6 @@ test/       Node test runner specs + smoke.sh integration test.
 docs/       Public docs — HOWTO.md, ARCHITECTURE.md, API.md, roadmap.md, retros.
 spec/       Local-only PRD/SPEC/CONTEXT (gitignored, forge planning workflow).
 plans/      Local-only phases.yaml (gitignored, forge planning workflow).
-.dogfood/   Active dogfood instance of the agent-team workspace. Not shipped.
 ```
 
 **Shipped to npm** (verified via `npm pack --dry-run`): `bin/`, `lib/`, `skills/`, `agents/`, `templates/`, `README.md`, `LICENSE`. Allowlist is in `package.json` under `files`.
@@ -34,11 +33,11 @@ pnpm build           # tsdown → bin/roster.js with shebang
 pnpm test            # node --test on test/**/*.test.ts
 pnpm smoke           # bash test/smoke.sh — pack, install, init end-to-end
 pnpm perf            # bash test/perf.sh — measure install/init/doctor + tarball against SPEC budgets (dev-machine only)
-pnpm test:dogfood-scripts  # bash test/new-agent-slash-only.sh — covers .dogfood/scripts/ (unshipped)
+pnpm test:scaffold-scripts # bash test/new-agent-slash-only.sh — exercises templates/scaffold/scripts/new-agent.sh
 npm pack --dry-run   # confirm tarball stays clean (~64 kB, ~80 files at v0.1.0)
 ```
 
-The Phase gate command (run before opening a PR): `pnpm typecheck && pnpm build && pnpm test`. When the diff touches `.dogfood/scripts/`, also run `pnpm test:dogfood-scripts`.
+The Phase gate command (run before opening a PR): `pnpm typecheck && pnpm build && pnpm test`. When the diff touches `templates/scaffold/scripts/`, also run `pnpm test:scaffold-scripts`.
 
 ## Where things live in the CLI
 
@@ -80,9 +79,9 @@ Local planning (PRD/SPEC/phases.yaml) lives in `spec/` and `plans/` and is gitig
 - Conventional commits: `feat(scope):`, `fix(scope):`, `chore(scope):`, `docs(scope):`. Include Linear ID (`ROS-N`) when applicable.
 - Never auto-commit. Show the diff, then ask.
 
-## Working on the dogfood
+## Dogfooding
 
-If you're invoking `/sdr`, `/chief-of-staff`, or `/dreamer`, you're working on the **dogfood instance**, not the CLI. `cd .dogfood/` and Claude Code will load that directory's `CLAUDE.md` and `.claude/commands/`. Framework conventions live in `.dogfood/conventions.md`.
+There is no in-repo agent-team workspace anymore. To exercise the workspace pattern shipped by `roster init` (`/sdr`, `/chief-of-staff`, `/dreamer`, etc.), scaffold a workspace outside this repo with `roster init` and report regressions back here. The shipped scaffold is exercised in-CI by `pnpm smoke` (`roster init` into a tmpdir) and `pnpm test:scaffold-scripts` (the `new-agent.sh --slash-only` regression suite).
 
 ## When in doubt
 

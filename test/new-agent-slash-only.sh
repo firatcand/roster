@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Subprocess test for .dogfood/scripts/new-agent.sh --slash-only.
+# Subprocess test for templates/scaffold/scripts/new-agent.sh --slash-only.
 #
 # Why shell, not Node test runner: the target IS a shell script, so a Node
 # wrapper would add noise. Why subprocess with </dev/null + timeout: the
@@ -8,17 +8,16 @@
 # timeout converts that into a loud failure instead of a silent CI stall
 # (see docs/learnings/2026-Q2/non-interactive-flags-need-tty-audits.md).
 #
-# This script tests an unshipped artifact under .dogfood/. It is not wired
-# into `pnpm smoke` (which is for shipped behavior only); invoke directly
-# via `pnpm test:dogfood-scripts`.
+# Tests the shipped scaffold copy directly — no in-repo dogfood fixture.
+# Invoked via `pnpm test:scaffold-scripts`.
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-SOURCE_SCRIPT="$REPO_ROOT/.dogfood/scripts/new-agent.sh"
-SOURCE_LIB="$REPO_ROOT/.dogfood/scripts/lib/functions.sh"
-SOURCE_CONFIG="$REPO_ROOT/.dogfood/.config/functions.yaml"
+SOURCE_SCRIPT="$REPO_ROOT/templates/scaffold/scripts/new-agent.sh"
+SOURCE_LIB="$REPO_ROOT/templates/scaffold/scripts/lib/functions.sh"
+SOURCE_CONFIG="$REPO_ROOT/templates/scaffold/.config/functions.yaml"
 
 if [ ! -f "$SOURCE_SCRIPT" ]; then
   echo "ERROR: $SOURCE_SCRIPT not found" >&2; exit 1
@@ -27,8 +26,7 @@ if [ ! -f "$SOURCE_LIB" ]; then
   echo "ERROR: $SOURCE_LIB not found" >&2; exit 1
 fi
 if [ ! -f "$SOURCE_CONFIG" ]; then
-  # Fall back to the shipped scaffold config if the dogfood copy is absent.
-  SOURCE_CONFIG="$REPO_ROOT/templates/scaffold/.config/functions.yaml"
+  echo "ERROR: $SOURCE_CONFIG not found" >&2; exit 1
 fi
 
 TMPDIR_ROOT="$(mktemp -d -t roster-slash-only-XXXXXXXX)"

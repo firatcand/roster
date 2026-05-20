@@ -22,8 +22,8 @@ cd "$REPO_ROOT"
 EXPECTED_VERSION="$(node -p "require('./package.json').version")"
 
 # Note: this script tests SHIPPED behavior (npm pack + install + roster init).
-# Tests for unshipped artifacts under .dogfood/ live in separate scripts and
-# are invoked via `pnpm test:dogfood-scripts` (e.g. test/new-agent-slash-only.sh).
+# Regression tests for individual scaffold scripts (e.g. new-agent.sh --slash-only)
+# live in test/new-agent-slash-only.sh and are invoked via `pnpm test:scaffold-scripts`.
 # Keep this gate focused on what end users actually receive.
 
 SMOKE_DIR="$(mktemp -d -t roster-smoke-XXXXXXXX)"

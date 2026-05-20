@@ -94,7 +94,7 @@ function resolveAgentMdPath(
   if (existsSync(nested)) return { path: nested, exists: true };
 
   // Convention: when function name matches agent name, agent.md collapses
-  // to <function>/agent.md (see .dogfood/chief-of-staff/agent.md).
+  // to <function>/agent.md (see templates/scaffold/chief-of-staff/agent.md).
   if (functionName === agentName) {
     const collapsed = resolvePath(workspacePath, functionName, 'agent.md');
     if (existsSync(collapsed)) return { path: collapsed, exists: true };
