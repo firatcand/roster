@@ -32,7 +32,7 @@ pnpm test
 pnpm smoke        # full pack + install + init end-to-end
 ```
 
-The pre-PR gate is `pnpm typecheck && pnpm build && pnpm test`. When the diff touches `.dogfood/scripts/`, also run `pnpm test:dogfood-scripts`.
+The pre-PR gate is `pnpm typecheck && pnpm build && pnpm test`. When the diff touches `templates/scaffold/scripts/`, also run `pnpm test:scaffold-scripts`.
 
 Read [CLAUDE.md](CLAUDE.md) for repo layout and conventions (ESM, kebab-case filenames, hand-rolled argv, no docstrings).
 

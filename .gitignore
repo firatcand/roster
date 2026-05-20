@@ -13,10 +13,8 @@
 
 # Cron logs (committed example: keep .gitkeep, ignore actual logs)
 logs/cron/*.log
-.dogfood/logs/cron/*.log
 
 # Large binary brand assets (use external storage)
-.dogfood/projects/*/brand/assets/
 roster-banner*.png
 *.mp4
 *.mov
@@ -34,19 +32,9 @@ __pycache__/
 *.pyc
 node_modules/
 
-# Local Claude Code permission overrides (root + any nested .claude/, e.g. .dogfood/.claude/)
+# Local Claude Code permission overrides (root + any nested .claude/)
 **/.claude/settings.local.json
 **/.claude/scheduled_tasks.lock
-
-# Dogfood runtime state — preserve directories with .gitkeep, ignore actual logs
-.dogfood/chief-of-staff/logs/2*/
-.dogfood/dreamer/logs/2*/
-.dogfood/**/log/runs/2*/
-.dogfood/**/log/feedback/2*/
-
-# Dreamer pending candidates (regenerated each run)
-.dogfood/dreamer/pending/*
-!.dogfood/dreamer/pending/.gitkeep
 
 # Forge planning artifacts — internal framework design, not shipped.
 # Anchored to repo root so nested `plans/`/`spec/` (e.g. inside templates/scaffold/) are not ignored.
@@ -70,4 +58,3 @@ node_modules/
 # (users get their own docs/learnings/ when they scaffold), but our entries
 # are CLI-development specific and don't ship with the open-source repo.
 docs/learnings/
-
