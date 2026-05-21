@@ -34,7 +34,7 @@ Read at runtime:
 - `dreamer/plans/<plan>.yaml` — the workflow recipe
 - `dreamer/state.md` — last processed cutoff and run summary
 - `dreamer/pending/` — queued candidates awaiting Slack approval
-- All `<function>/<agent>/projects/<project>/log/runs/` and `log/feedback/` for material since the cutoff
+- All `<function>/<agent>/logs/runs/` and `<function>/<agent>/logs/feedback/` for material since the cutoff
 - Existing playbook lessons for evidence comparison
 
 ## Plans
@@ -59,7 +59,7 @@ Typically scheduled nightly via cron or `/schedule`. When invoked without a plan
 
 ## Tools and bindings
 
-- File reads across the entire repo (the one agent that crawls broadly) — no per-project bindings
+- File reads across the entire repo (the one agent that crawls broadly) — no external tool bindings
 - `Slack` MCP — for HITL posting (from universal `.mcp.json`); HITL channel resolved via `SLACK_HITL_CHANNEL_ADMIN` env var
 - No external APIs needed beyond Slack
 
@@ -67,7 +67,7 @@ Typically scheduled nightly via cron or `/schedule`. When invoked without a plan
 
 Run file at `dreamer/logs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md` containing:
 
-- Material processed (counts by project and agent)
+- Material processed (counts by agent)
 - Patterns detected
 - Lesson candidates drafted (Slack thread links)
 - Promotion candidates
@@ -109,5 +109,5 @@ The dreamer writes lessons FOR other agents. It does not write lessons about its
 
 - **No new material**: log no-op run, exit cleanly
 - **Slack unavailable**: queue candidates locally in `dreamer/pending/`, retry next run
-- **Conflicting lessons across projects**: do NOT auto-merge. Surface conflict; HITL decides.
+- **Conflicting lessons across agents**: do NOT auto-merge. Surface conflict; HITL decides.
 - **Threshold not met**: keep candidate in `observing` status, accumulate evidence next pass
