@@ -12,7 +12,7 @@ trigger_conditions:
 
 Structural maintenance for a roster v1 workspace. **Operate on the workspace itself**, not on the business workflows inside it. This skill scaffolds empty agent and function structure and audits completeness. Filling content into the scaffolds is a separate concern handled by function-level experts and role-level agents.
 
-When in doubt, defer to `conventions.md` in the workspace root for the canonical structure schema, and to the `_template/` directories for the canonical scaffold contents.
+When in doubt, defer to `conventions.md` in the workspace root for the canonical structure schema, and to `scripts/new-agent.sh` for the canonical scaffold contents (heredocs inside the script are the source of truth for every generated file).
 
 ## Working directory
 
@@ -33,7 +33,7 @@ When invoked without a plan, list the available plans and ask which to run.
 
 ### Out-of-scope intents
 
-"create project X" requests have no v1 plan — roster v1 is single-project. The workspace identity lives in `config/project.yaml`. To start a fresh workspace, run `roster init` in a new directory.
+Requests phrased as `create project ...` are not a v1 plan — the workspace identity lives in `config/project.yaml`. To start a fresh workspace, run `roster init` in a new directory.
 
 ## Plans
 
@@ -68,7 +68,7 @@ Mode selection priority (first match wins): `${inputs.mode}` → `AGENT_TEAM_NO_
 
 > The skill MUST NOT write a Step, Subagent, Tool, Plan body, or Failure mode unless that content was supplied by the user (in prose or follow-up) or comes from documented convention. If the skill catches itself about to invent content, it stops and asks instead.
 
-This invariant is load-bearing. Guided mode is **not a content generator** — it is a structured interviewer that organizes what the user said into the canonical `agent.md` shape. Every non-boilerplate line in the generated agent.md must be traceable to either (a) the prose intake, (b) a follow-up answer, or (c) a documented convention in `conventions.md` / `_template/`. Never fill in plausible-looking defaults to make the output feel complete — gaps stay gaps, surfaced explicitly as follow-up questions.
+This invariant is load-bearing. Guided mode is **not a content generator** — it is a structured interviewer that organizes what the user said into the canonical `agent.md` shape. Every non-boilerplate line in the generated agent.md must be traceable to either (a) the prose intake, (b) a follow-up answer, or (c) a documented convention in `conventions.md` / `scripts/new-agent.sh`. Never fill in plausible-looking defaults to make the output feel complete — gaps stay gaps, surfaced explicitly as follow-up questions.
 
 ### EXPERT.md auto-load
 
@@ -91,7 +91,7 @@ Accept the answer as-is — no structure required. Capture it verbatim; it seeds
 
 Partition every required `agent.md` field into one of three buckets:
 
-- **boilerplate** — filled silently from `conventions.md` / `_template/`. Examples: standard "Read at runtime" file paths, the lessons-protocol paragraph, the `approval_channel: auto` default, the canonical "Confirmation gate denied" failure mode wording.
+- **boilerplate** — filled silently from `conventions.md` / `scripts/new-agent.sh` heredocs. Examples: standard "Read at runtime" file paths, the lessons-protocol paragraph, the `approval_channel: auto` default, the canonical "Confirmation gate denied" failure mode wording.
 - **grounded** — drafted directly from the prose intake. Examples: the `Purpose` paragraph, the `Outputs` description, the agent's headline role.
 - **uncertain** — content the prose did not specify and convention cannot fill. Examples: which subagents exist, which tools/MCPs are needed, agent-specific failure modes, plan names.
 
@@ -284,10 +284,10 @@ Every file the guided plan writes has a per-file content contract. Stub mode pro
 
 | File | Guided-mode contract | Stub-mode contract |
 | --- | --- | --- |
-| `agent.md` | See per-section disposition below. Populated and grounded fields filled from prose + Phase 3 answers; boilerplate fields filled from `_template/` and `conventions.md`. Zero literal `<placeholder>` strings remain (explicit `TODO: <gap>` markers allowed only where the user deferred during Phase 3). | Identical to `bash scripts/new-agent.sh` output: every grounded/uncertain field carries its `<placeholder>` text verbatim. |
+| `agent.md` | See per-section disposition below. Populated and grounded fields filled from prose + Phase 3 answers; boilerplate fields filled from `scripts/new-agent.sh` heredocs and `conventions.md`. Zero literal `<placeholder>` strings remain (explicit `TODO: <gap>` markers allowed only where the user deferred during Phase 3). | Identical to `bash scripts/new-agent.sh` output: every grounded/uncertain field carries its `<placeholder>` text verbatim. |
 | `plans/<plan>.yaml` | Created only if the user named at least one plan during Phase 3. Step `id:` fields 1:1 with `agent.md ## Steps` — they cannot drift. Inputs / outputs schemas come from the user's plan description. | `plans/.gitkeep` only. No starter plan file. |
-| `subagents/<name>.md` | One file per name listed in `agent.md ## Subagents`. All **six** required sections present and populated: `Role`, `Inputs`, `Output`, `Tools`, `Boundaries`, `Quality bar`. **Never half-populate a subagent.** If a section cannot be populated from prose / follow-ups, either remove the subagent from `agent.md ## Subagents` entirely or Phase 3 re-asks. `subagents/_template.md` is also written byte-for-byte from `_template/` (same as stub mode). | `subagents/_template.md` only. No per-name files. |
-| `.claude/commands/<agent>.md` | `description:` field is a real sentence: ≤ 80 chars, contains no `<` character, and contains no literal `TODO:` substring. The body matches the canonical routing-logic template from `_template/` with `<agent>` and `<function>` substituted. | `description: <function> agent — TODO: fill in description`. Canonical body otherwise unchanged. |
+| `subagents/<name>.md` | One file per name listed in `agent.md ## Subagents`. All **six** required sections present and populated: `Role`, `Inputs`, `Output`, `Tools`, `Boundaries`, `Quality bar`. **Never half-populate a subagent.** If a section cannot be populated from prose / follow-ups, either remove the subagent from `agent.md ## Subagents` entirely or Phase 3 re-asks. `subagents/_template.md` is also written byte-for-byte from the `scripts/new-agent.sh` heredoc (same as stub mode). | `subagents/_template.md` only. No per-name files. |
+| `.claude/commands/<agent>.md` | `description:` field is a real sentence: ≤ 80 chars, contains no `<` character, and contains no literal `TODO:` substring. The body matches the canonical routing-logic template emitted by `write_slash_command` in `scripts/new-agent.sh`, with `<agent>` and `<function>` substituted. | `description: <function> agent — TODO: fill in description`. Canonical body otherwise unchanged. |
 | `README.md`, `.mcp.json`, `.claude/settings.json`, `config.yaml`, `asset-references.md`, every `.gitkeep` | Identical to stub mode — byte-for-byte. These files do not vary by mode. | (canonical) |
 
 ### `agent.md` per-section disposition
