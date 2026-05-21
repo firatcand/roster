@@ -27,6 +27,8 @@ Public roadmap lives in `docs/roadmap.md`. Work items are tracked in Linear unde
 - Phase 3 — Polish and Launch: **complete** (`ROS-27` v0.1.0 published 2026-05-17).
 - Phase 4 — Guided Agent Authoring: **complete** (closed 2026-05-17 with PR #75 / `ROS-55`). Targeted for v0.4.0 release.
 - Phase 2.5 — Scheduling primitives: **active**. Subscription-safe scheduling for Claude Code + Codex CLI via native local schedulers. See `docs/adr/0001-scheduling-architecture.md` and `docs/roadmap.md`.
+- Phase v1-1 — Workspace shape: **complete** (closed 2026-05-21; retro at `docs/retros/phase-v1-1.md`; 8 tickets ROS-72..79).
+- Phase v1-2 — CLI plumbing: **active**. ROS-80..88 — schedule schema collapse, init substitution, env-merge loader, doctor checks 13/14/15.
 
 ## Build conventions
 
