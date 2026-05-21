@@ -1,23 +1,22 @@
 ---
 name: chief-of-staff
-description: "Repo maintenance for roster workspaces — create, archive, rename, audit projects, agents, and functions. Wraps shell scripts in scripts/ with mandatory confirmation gates for destructive operations. Triggers when the user asks to scaffold or restructure a roster workspace, or invokes the /chief-of-staff slash command."
-version: "0.1.0"
+description: "Workspace maintenance for a roster v1 workspace — create agents under a function, register new functions, and audit completeness. Wraps shell scripts in scripts/. Triggers when the user asks to scaffold or audit a roster workspace, or invokes the /chief-of-staff slash command."
+version: "1.0.0"
 trigger_conditions:
   - "User invokes the /chief-of-staff slash command"
-  - "User asks to create, archive, rename, or audit a project (e.g., 'archive _demo', 'create project acme with gtm/sdr')"
-  - "User asks to add or remove an agent from an existing project"
-  - "User asks for a repo or project completeness audit"
+  - "User asks to scaffold a new agent or register a new function (e.g., 'create a gtm/sdr agent', 'add a design function')"
+  - "User asks for a repo or agent completeness audit"
 ---
 
 # Chief of Staff
 
-Structural maintenance for a roster workspace. **Operate on the workspace itself**, not on the business workflows inside it. This skill scaffolds empty structure, archives completed projects, renames things, and audits completeness. Filling content into the scaffolds is a separate concern handled by function-level experts and role-level agents.
+Structural maintenance for a roster v1 workspace. **Operate on the workspace itself**, not on the business workflows inside it. This skill scaffolds empty agent and function structure and audits completeness. Filling content into the scaffolds is a separate concern handled by function-level experts and role-level agents.
 
 When in doubt, defer to `conventions.md` in the workspace root for the canonical structure schema, and to the `_template/` directories for the canonical scaffold contents.
 
 ## Working directory
 
-This skill operates from the workspace root only — the directory that contains `CLAUDE.md`, `conventions.md`, and the function dirs (`gtm/`, `product/`, etc.). If invoked from elsewhere, abort with:
+This skill operates from the workspace root only — the directory that contains `CLAUDE.md`, `conventions.md`, `config/project.yaml`, `roster/`, and the function dirs (`gtm/`, `product/`, etc.). If invoked from elsewhere, abort with:
 
 > Run chief-of-staff from your roster workspace root.
 
@@ -25,45 +24,36 @@ This skill operates from the workspace root only — the directory that contains
 
 The user invokes via slash command or natural language. Parse intent into a plan name plus parameters. Examples:
 
-- `/chief-of-staff create-project acme with gtm/sdr` → `plan=create-project project=acme agents=[gtm/sdr]`
-- `/chief-of-staff archive-project test-scaffold` → `plan=archive-project project=test-scaffold`
+- `/chief-of-staff create-agent gtm sdr` → `plan=create-agent function=gtm agent=sdr`
+- `/chief-of-staff create-function design` → `plan=create-function function=design`
+- `/chief-of-staff audit-agent product/copy-agent` → `plan=audit-agent function=product agent=copy-agent`
 - `/chief-of-staff audit-repo` → `plan=audit-repo`
-- "Add content-agent to _demo" → `plan=add-agent-to-project project=_demo function=gtm agent=content-agent`
 
 When invoked without a plan, list the available plans and ask which to run.
 
+### Out-of-scope intents
+
+"create project X" requests have no v1 plan — roster v1 is single-project. The workspace identity lives in `config/project.yaml`. To start a fresh workspace, run `roster init` in a new directory.
+
 ## Plans
 
-| Plan | Description | Destructive? |
-|---|---|---|
-| `create-project` | Create a new project, optionally with agent instances | no |
-| `create-agent` | Create a new global agent under a function (interactive dialogue by default — see § "Guided agent creation"; `mode=stub` for headless) | no |
-| `create-function` | Add a new function category to the registry | no |
-| `add-agent-to-project` | Add an agent instance to an existing project | no |
-| `remove-agent-from-project` | Archive an agent instance (preserved in `_archive`) | yes |
-| `archive-project` | Archive a project plus all its instances | yes |
-| `unarchive-project` | Restore an archived project | no |
-| `rename-project` | Rename a project everywhere it appears | yes |
-| `audit-project` | Validate a project's completeness; reports issues with suggested fixes | no |
-| `audit-agent` | Validate an agent's structure and instances | no |
-| `audit-repo` | Full repo audit aggregating project + agent reports | no |
+| Plan | Description |
+|---|---|
+| `create-agent` | Create a new agent under a function (interactive dialogue by default — see § "Guided agent creation"; `mode=stub` for headless) |
+| `create-function` | Add a new function category to the registry |
+| `audit-agent` | Validate an agent's structure |
+| `audit-repo` | Full repo audit aggregating agent + workspace completeness reports |
 
 Each plan lives in `chief-of-staff/plans/<plan>.yaml` in the workspace, backed by a script in `scripts/`.
 
 ## Common preamble for every plan
 
-1. **Confirm cwd is repo root.** Check for `CLAUDE.md`, `conventions.md`, `gtm/`, `projects/`. If not all present, abort with the message above.
+1. **Confirm cwd is workspace root.** Check for `CLAUDE.md`, `conventions.md`, `config/project.yaml`, and `roster/`. If not all present, abort with the message above.
 2. **Parse the user's request.** Extract plan name and parameters. If ambiguous, ask before proceeding.
-3. **Show the plan.** For destructive plans, summarize exactly what will happen (paths created, moved, modified) and ask `proceed?`.
+3. **Show the plan.** Summarize exactly what will happen (paths created, modified).
 4. **Execute by invoking the plan's backing script.** Scripts in `scripts/` do the work; this skill orchestrates and parses output. Do not duplicate the script logic.
-5. **Report.** Summarize what changed (paths created, modified, moved). Note anything skipped or any warnings.
+5. **Report.** Summarize what changed (paths created, modified). Note anything skipped or any warnings.
 6. **Never auto-commit to git.** Leave commits for the user.
-
-## Mandatory confirmation gates
-
-Destructive plans (`archive-project`, `unarchive-project`, `rename-project`, `remove-agent-from-project`) MUST display the planned changes and ask `proceed?` before executing.
-
-Cross-link prompts during `create-project` (which agents to instance) and `create-agent` (which projects to instance into) are also session-only — they cannot be answered headlessly. Power users skip the prompt by passing `agents=` or `add-to-projects=` inline.
 
 ## Guided agent creation
 
@@ -103,7 +93,7 @@ Partition every required `agent.md` field into one of three buckets:
 
 - **boilerplate** — filled silently from `conventions.md` / `_template/`. Examples: standard "Read at runtime" file paths, the lessons-protocol paragraph, the `approval_channel: auto` default, the canonical "Confirmation gate denied" failure mode wording.
 - **grounded** — drafted directly from the prose intake. Examples: the `Purpose` paragraph, the `Outputs` description, the agent's headline role.
-- **uncertain** — content the prose did not specify and convention cannot fill. Examples: which subagents exist, which tools/MCPs are needed, project-specific failure modes, plan names.
+- **uncertain** — content the prose did not specify and convention cannot fill. Examples: which subagents exist, which tools/MCPs are needed, agent-specific failure modes, plan names.
 
 Boilerplate is written without asking. Grounded is drafted but explicitly flagged in the Phase 4 preview ("drafted from your prose — review before accepting"). Uncertain becomes the queue for Phase 3.
 
@@ -183,18 +173,14 @@ Enumerate every directory the transaction creates **explicitly** (no `mkdir -p` 
 - `<fn>/<agent>/`
 - `<fn>/<agent>/subagents/`
 - `<fn>/<agent>/playbook/`
+- `<fn>/<agent>/pending/`
 - `<fn>/<agent>/logs/`
+- `<fn>/<agent>/logs/runs/`
+- `<fn>/<agent>/logs/feedback/`
 - `<fn>/<agent>/.claude/`
 - `<fn>/<agent>/.claude/skills/`
 - `<fn>/<agent>/.claude/plugins/`
 - `<fn>/<agent>/plans/`
-- `<fn>/<agent>/projects/`
-- `<fn>/<agent>/projects/_template/`
-- `<fn>/<agent>/projects/_template/config/`
-- `<fn>/<agent>/projects/_template/playbook/`
-- `<fn>/<agent>/projects/_template/log/`
-- `<fn>/<agent>/projects/_template/log/runs/`
-- `<fn>/<agent>/projects/_template/log/feedback/`
 
 If a directory already exists at the moment we try to create it (e.g., racing process, or `<fn>/` exists from a prior function), do NOT append it to `rollback` — pre-existing paths are not ours to delete. Skip and continue. The parent `<fn>/` itself is never in `rollback` for the same reason (it predates this transaction or was created as `<fn>/<agent>/`'s implicit parent — see invariant: if `<fn>/` does not exist, abort the whole transaction before Step 4 and ask the user to register the function via `create-function` first).
 
@@ -213,16 +199,15 @@ Order:
 5.  `<fn>/<agent>/subagents/<name>.md` (one per `agent.md ## Subagents` entry; zero files if none named)
 6.  `<fn>/<agent>/plans/.gitkeep`
 7.  `<fn>/<agent>/plans/<plan>.yaml` (one per plan named in Phase 3; absent in stub mode and when no plan named)
-8.  `<fn>/<agent>/projects/_template/config/default.yaml`
-9.  `<fn>/<agent>/projects/_template/asset-references.md`
+8.  `<fn>/<agent>/config.yaml`
+9.  `<fn>/<agent>/asset-references.md`
 10. `<fn>/<agent>/playbook/.gitkeep`
-11. `<fn>/<agent>/logs/.gitkeep`
-12. `<fn>/<agent>/.claude/skills/.gitkeep`
-13. `<fn>/<agent>/.claude/plugins/.gitkeep`
-14. `<fn>/<agent>/projects/_template/playbook/.gitkeep`
-15. `<fn>/<agent>/projects/_template/log/runs/.gitkeep`
-16. `<fn>/<agent>/projects/_template/log/feedback/.gitkeep`
-17. `<fn>/<agent>/agent.md`  ← **LAST. Canonical contract.**
+11. `<fn>/<agent>/pending/.gitkeep`
+12. `<fn>/<agent>/logs/runs/.gitkeep`
+13. `<fn>/<agent>/logs/feedback/.gitkeep`
+14. `<fn>/<agent>/.claude/skills/.gitkeep`
+15. `<fn>/<agent>/.claude/plugins/.gitkeep`
+16. `<fn>/<agent>/agent.md`  ← **LAST. Canonical contract.**
 
 **Why `agent.md` last:** It is the canonical orchestrator contract — the file roster's commands grep for to detect an agent's existence. Writing it last guarantees that any process **keyed off the existence of `agent.md`** observes either no agent or a complete one. A mid-Step-5 crash leaves either no `agent.md` at all, or — after Step 7 rollback — an empty `<fn>/<agent>/` parent that no contract-aware reader will treat as a valid agent.
 
@@ -303,7 +288,7 @@ Every file the guided plan writes has a per-file content contract. Stub mode pro
 | `plans/<plan>.yaml` | Created only if the user named at least one plan during Phase 3. Step `id:` fields 1:1 with `agent.md ## Steps` — they cannot drift. Inputs / outputs schemas come from the user's plan description. | `plans/.gitkeep` only. No starter plan file. |
 | `subagents/<name>.md` | One file per name listed in `agent.md ## Subagents`. All **six** required sections present and populated: `Role`, `Inputs`, `Output`, `Tools`, `Boundaries`, `Quality bar`. **Never half-populate a subagent.** If a section cannot be populated from prose / follow-ups, either remove the subagent from `agent.md ## Subagents` entirely or Phase 3 re-asks. `subagents/_template.md` is also written byte-for-byte from `_template/` (same as stub mode). | `subagents/_template.md` only. No per-name files. |
 | `.claude/commands/<agent>.md` | `description:` field is a real sentence: ≤ 80 chars, contains no `<` character, and contains no literal `TODO:` substring. The body matches the canonical routing-logic template from `_template/` with `<agent>` and `<function>` substituted. | `description: <function> agent — TODO: fill in description`. Canonical body otherwise unchanged. |
-| `README.md`, `.mcp.json`, `.claude/settings.json`, `projects/_template/**`, every `.gitkeep` | Identical to stub mode — byte-for-byte. These files do not vary by mode. | (canonical) |
+| `README.md`, `.mcp.json`, `.claude/settings.json`, `config.yaml`, `asset-references.md`, every `.gitkeep` | Identical to stub mode — byte-for-byte. These files do not vary by mode. | (canonical) |
 
 ### `agent.md` per-section disposition
 
@@ -313,14 +298,14 @@ For each section of the agent.md template (the structure emitted by `scripts/new
 | --- | --- |
 | `## Purpose` | **grounded** — drafted from the Phase 1 prose. |
 | `## Inputs` — orchestrator-expected list | **grounded** — drafted from prose + Phase 3 answers about what triggers a run. |
-| `## Inputs` — "Read at runtime" list | **boilerplate** — canonical paths from `conventions.md` (agent.md, instance config, project CLAUDE.md, project guidelines, playbooks, recent runs). |
+| `## Inputs` — "Read at runtime" list | **boilerplate** — canonical paths from `conventions.md` (agent.md, agent `config.yaml`, workspace `CLAUDE.md`, workspace `guidelines/`, playbooks, recent runs). |
 | `## Steps` | **grounded** — every step comes from prose / Phase 3. Must have matching ids in `plans/<plan>.yaml`. |
 | `## Subagents` | **uncertain → guided** — Phase 3 collects the subagent list (or empty). Each named subagent gets a fully populated `subagents/<name>.md`. |
 | `## Tools` | **uncertain → guided** — Phase 3 collects tool / MCP names. Each tool listed gets a bindings block (invariant 3). |
 | `## Outputs` | **boilerplate + grounded** — canonical run-file path is boilerplate; the artifact description is grounded from prose. |
 | `## Approval` | **boilerplate** — `approval_channel: auto` line with the standard Slack / HITL routing paragraph. |
 | `## Lessons protocol` | **boilerplate** — canonical paragraph, identical in every agent. |
-| `## Failure modes` | **boilerplate + uncertain** — standard failures (cwd wrong, slug invalid, script fails) are boilerplate; project-specific failures come from Phase 3. |
+| `## Failure modes` | **boilerplate + uncertain** — standard failures (cwd wrong, slug invalid, script fails) are boilerplate; agent-specific failures come from Phase 3. |
 
 ### Cross-file invariants
 
@@ -340,14 +325,14 @@ Then re-enters Phase 3 for the section that owns the tripped invariant. The atom
 
 ## Outputs
 
-- **Mutation plans:** Summary printed to chat (paths created, moved, modified). The backing script also appends to `chief-of-staff/logs/<YYYY-MM>/operations-<YYYY-MM-DD>.md` (one log file per day, append-only).
+- **Mutation plans:** Summary printed to chat (paths created, modified). The backing script also appends to `chief-of-staff/logs/<YYYY-MM>/operations-<YYYY-MM-DD>.md` (one log file per day, append-only).
 - **Audit plans:** A report file at `chief-of-staff/logs/<YYYY-MM>/audit-...-<YYYY-MM-DD-HHMM>.md`, plus a condensed stdout summary.
 
 Per-plan output schemas are declared in each plan's `outputs:` block in its YAML.
 
 ## Lessons protocol
 
-If you observe a recurring pattern during operations (e.g., users forgetting to run `create-agent` before `add-agent-to-project`), log it inline in the operation's log entry under a `## Candidate lessons` section. The dreamer picks it up on the next reflection pass.
+If you observe a recurring pattern during operations (e.g., users forgetting to fill `config/project.yaml` before running `create-agent`), log it inline in the operation's log entry under a `## Candidate lessons` section. The dreamer picks it up on the next reflection pass.
 
 Never write directly to `chief-of-staff/playbook/` during operations. The user may write a lesson by hand with `source: human`; those are respected.
 
@@ -356,7 +341,7 @@ Never write directly to `chief-of-staff/playbook/` during operations. The user m
 - **Cwd not workspace root** → abort with clear message
 - **Invalid slug or function name** → abort with an example of valid format
 - **Collision (target already exists)** → abort, tell the user the existing path
-- **Missing dependency** (e.g., agent doesn't exist for `add-agent-to-project`) → abort, suggest the prerequisite plan
+- **Missing dependency** (e.g., function not registered when running `create-agent` — run `create-function` first) → abort, suggest the prerequisite plan
 - **Script fails** → surface the script's stderr; do not attempt to recover by doing the work directly
 - **YAML/JSON parse error in audit** → report as failure with the line number from the audit script
 - **Confirmation gate denied** → abort cleanly, no changes
@@ -369,6 +354,6 @@ Never write directly to `chief-of-staff/playbook/` during operations. The user m
 ## What this skill does NOT do
 
 - Run business workflows (SDR outreach, design generation, content authoring). Those are separate role-level skills.
-- Edit guidelines, ICPs, voice, or any project substrate content. That's expert-level work.
+- Edit guidelines, ICPs, voice, or any workspace content. That's expert-level work.
 - Make git commits. Always leave commits for the user.
 - Touch files outside the workspace.
