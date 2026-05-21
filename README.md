@@ -53,12 +53,15 @@ The agent reads [install.md](install.md), runs the install, scaffolds your works
 
 ```bash
 mkdir my-team && cd my-team
-npx @firatcand/roster init       # scaffold workspace
-claude                            # or `codex`, or open Cursor
+npx @firatcand/roster init my-team   # scaffold workspace (config/, guidelines/, function dirs)
+$EDITOR config/project.yaml          # fill workspace identity (stage, audience, motion)
+$EDITOR guidelines/voice.md          # plus messaging.md, brand-book.md, icps/<persona>.md
+cp templates/env.example .env        # then chmod 600 .env and fill secrets
+claude                                # or `codex`, or open Cursor
 /chief-of-staff create-agent gtm sdr
 ```
 
-The five-phase guided dialogue interviews you for the gaps a stub can't fill — subagents, tools, plan names, project-specific failure modes — and writes a populated `agent.md`. Worked example in [docs/HOWTO.md](docs/HOWTO.md).
+The guided dialogue reads your `config/project.yaml` + `guidelines/` and interviews you for the gaps a stub can't fill — subagents, tools, plan names, failure modes — then writes a populated `agent.md`. Worked example in [docs/HOWTO.md](docs/HOWTO.md).
 
 ### Common commands
 
@@ -80,9 +83,9 @@ Full subcommand reference in [docs/HOWTO.md](docs/HOWTO.md). Scheduling rules, U
 
 Roster scaffolds an opinionated **function → agent → plan** tree. Functions are top-level domains (`gtm/`, `product/`, `design/`, `ops/`). Each function holds named agents (`gtm/sdr/`, `design/critic/`). Each agent has named YAML **plans** — the schedulable, auditable workflow recipes.
 
-The opinion that keeps it useful at week 12 is **substrate vs artifacts**: long-lived context (ICPs, brand voice, messaging) lives under `projects/<project>/`; daily output (emails, posts, PR comments) lands in agent-owned `pending/` queues. Experts shape substrate. Agents produce artifacts. Don't conflate them.
+The opinion that keeps it useful at week 12 is **substrate vs artifacts**: long-lived context (voice, ICPs, messaging, brand) lives at the workspace root in `guidelines/`. Daily tactical output (emails, posts, PR comments) lands in `<function>/<agent>/logs/runs/`; anything that needs human approval first lands in `<agent>/pending/`. Experts shape substrate. Agents produce artifacts. Don't conflate them.
 
-A nightly **reinforcement** pass (the `dreamer` skill) reads runs + feedback, detects recurring patterns, and proposes lessons for the right scope — global, project, or agent. You approve before anything is written. Quality compounds.
+A nightly **reinforcement** pass (the `dreamer` skill) reads runs + feedback, detects recurring patterns, and proposes lessons to the agent that produced them. You approve before anything is written. Quality compounds.
 
 ---
 

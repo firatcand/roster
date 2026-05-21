@@ -29,9 +29,7 @@ Repo maintenance. Operates on the repo itself, not on business workflows.
 - `/chief-of-staff <plan-name>` — show inputs the plan needs
 - `/chief-of-staff` — list available plans
 
-**Plans available:** `create-project`, `create-agent`, `create-function`, `add-agent-to-project`, `remove-agent-from-project`, `archive-project`, `unarchive-project`, `rename-project`, `audit-project`, `audit-agent`, `audit-repo`.
-
-Destructive plans (`archive-project`, `unarchive-project`, `rename-project`, `remove-agent-from-project`) always confirm before executing.
+**Plans available:** `create-agent`, `create-function`, `audit-agent`, `audit-repo`.
 
 ### `/dreamer`
 
@@ -94,8 +92,8 @@ caps:
 ### Reference variables
 
 - `${inputs.<field>}` — input passed to the plan invocation
-- `${config.<path>}` — value from the instance's `config/default.yaml`
-- `${tools.<tool>.<binding>}` — value from the instance's `tools:` config block
+- `${config.<path>}` — value from the agent's `config.yaml`
+- `${tools.<tool>.<binding>}` — value from the agent's `config.yaml` `tools:` block (resolved against the merged env)
 - `input_from: <step-id>` — output of a prior step
 
 ### Step types
@@ -165,36 +163,32 @@ attio:
     description: "Attio list ID for prospect records"
 ```
 
-Per-instance values land in `<function>/<agent>/projects/<project>/config/default.yaml` under a `tools:` key. `required: true` bindings cause the agent to error at runtime if left as TODO. `required: false` are optional.
+Per-agent values land in `<function>/<agent>/config.yaml` under a `tools:` key. `required: true` bindings cause the agent to error at runtime if the referenced `env_var` is unset in the merged env (see [ARCHITECTURE.md §Env resolution](ARCHITECTURE.md#env-resolution)). `required: false` are optional.
 
-When you scaffold an instance via `new-agent-instance.sh`, the script reads this schema and prompts interactively. Press Enter or type `skip` to leave as `# TODO:`.
+Tool bindings use `env_var:` references — the value lives in `<agent>/.env` (overrides) or `/.env` (workspace default), never in `config.yaml`.
 
 ---
 
 ## Lesson schema
 
-Lesson files live at `<function>/<agent>/playbook/L-...md` (global) or `<function>/<agent>/projects/<project>/playbook/L-...md` (project-scoped).
+Lesson files live at one path: `<function>/<agent>/playbook/L-YYYY-MM-DD-NNN.md`. Lessons attach to the agent that produced them; there is no project-vs-global scope.
 
 ### Frontmatter
 
 ```yaml
 ---
-id: L-YYYY-MM-DD-NNN             # required
-source: human | dreamer          # required
-scope: global | project          # required; folder location must agree
-project: <slug>                  # required if scope=project; "—" if global
-agent: <name>                    # required
-created: YYYY-MM-DD              # required
-last_observed: YYYY-MM-DD        # required
-status: observing | candidate | validated | retired   # required
-validated_in: [<projects>]       # optional
-extends: <lesson-id>             # optional
-contradicts: <lesson-id>         # optional
-promoted_to_global: true | false # optional, marks origin
-voice_ref: <path>                # optional, links to relevant guideline
-icps_ref: <path>                 # optional
-do_and_dont_ref: <path>          # optional
-compliance_ref: <path>           # optional
+lesson_id: L-YYYY-MM-DD-NNN              # required
+source: human | dreamer                  # required
+agent: <name>                            # required
+created: YYYY-MM-DD                      # required
+last_observed: YYYY-MM-DD                # required
+status: observing | candidate | accepted | retired   # required
+extends: <lesson-id>                     # optional
+contradicts: <lesson-id>                 # optional
+voice_ref: <path>                        # optional, workspace-rooted path
+icps_ref: <path>                         # optional
+do_and_dont_ref: <path>                  # optional
+compliance_ref: <path>                   # optional
 ---
 ```
 
@@ -202,21 +196,19 @@ compliance_ref: <path>           # optional
 
 - `## Pattern observed` — the recurring signal (with evidence pointers)
 - `## Recommendation` — what the agent should do next time
-- `## Why this might be project-specific` — when generalizes, when not
 - `## Retirement criteria` — what evidence would invalidate this
 
 ---
 
 ## Run log schema
 
-Path: `<function>/<agent>/projects/<project>/log/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md`
+Path: `<function>/<agent>/logs/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md`
 
 ### Frontmatter
 
 ```yaml
 ---
 agent: <name>
-project: <slug>
 trigger: cron | session | manual
 session_id: <if session>
 started: <ISO timestamp>
@@ -238,7 +230,7 @@ plan: <plan-name>
 
 ## Feedback log schema
 
-Path: `<function>/<agent>/projects/<project>/log/feedback/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md`
+Path: `<function>/<agent>/logs/feedback/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md`
 
 Mirrors the run filename exactly so they pair.
 
@@ -284,7 +276,6 @@ functions:
 
 Used by:
 - `new-agent.sh` to validate the function exists
-- `new-agent-instance.sh` to validate
 - `audit-repo.sh` to enumerate functions
 - `audit-agent.sh` to validate function membership
 
@@ -296,67 +287,35 @@ Add new functions via `scripts/create-function.sh <slug>` or `/chief-of-staff cr
 
 All scripts in `scripts/` are bash, syntax-checked, and POSIX-portable where possible. Run with `bash scripts/<name>.sh [args]`.
 
-### `new-project.sh <slug>`
-
-Scaffolds `projects/<slug>/` with template files (CLAUDE.md, state.md, GUIDANCE.md, guidelines/voice.md, guidelines/icps/_persona-template.md, guidelines/{do-and-dont,compliance,competitors,messaging,brand-book,asset-links,design,design-tokens}.md).
-
-Validates slug is lowercase kebab-case starting with a letter. Aborts on collision.
-
 ### `new-agent.sh <function> <agent>`
 
-Scaffolds a new global agent under a function. Creates:
+Scaffolds a new agent under a function. Creates:
 - `<function>/<agent>/agent.md` (template)
+- `<function>/<agent>/config.yaml` (tool bindings + guideline refs)
 - `<function>/<agent>/README.md`
 - `<function>/<agent>/.mcp.json` (empty stub)
 - `<function>/<agent>/.claude/settings.json`
 - `<function>/<agent>/subagents/_template.md`
-- `<function>/<agent>/projects/_template/`
 - `<function>/<agent>/plans/.gitkeep`
 - `.claude/commands/<agent>.md` (slash command router)
 
 Runs an interactive tool-definition prompt (skipped under `AGENT_TEAM_NO_CONFIRM=1` or non-interactive stdin).
 
-### `new-agent-instance.sh <project> <function> <agent>`
-
-Scaffolds an agent instance at `<function>/<agent>/projects/<project>/`. Creates `config/default.yaml`, `asset-references.md`, and empty `log/runs/`, `log/feedback/`, `playbook/` dirs.
-
-Reads the agent's `## Tools and bindings` schema and prompts interactively for each binding. Press Enter or type `skip` to leave as `# TODO:`.
-
 ### `create-function.sh <slug> [--description "..."] [--with-expert]`
 
 Adds a function to `.config/functions.yaml`. Scaffolds `<slug>/` directory with README and (if `--with-expert`) `EXPERT.md` stub.
 
-### `archive-project.sh <slug> [reason]`
-
-Moves project root and all instance folders to `_archive/`. Adds an `ARCHIVED.md` file with the reason. Date-suffixes the archive (`-YYYY-MM-DD`); disambiguates with `-2`, `-3` if same-day.
-
-### `unarchive-project.sh <slug> [archive-suffix]`
-
-Restores from `_archive/` back to live tree.
-
-### `rename-project.sh <old> <new>`
-
-Renames folders + replaces project name in CLAUDE.md, GUIDANCE.md, configs, and asset-references. Does NOT auto-update lesson, run, or feedback bodies.
-
-### `remove-agent-from-project.sh <project> <function> <agent>`
-
-Archives the instance to `_archive/<function>/<agent>/projects/<project>-<date>/`.
-
 ### `rename-agent.sh <function> <old> <new>`
 
-Renames an agent everywhere it appears (folder, instance configs, slash command, repo-wide references). Excludes archive, logs, runs, feedback, playbook.
-
-### `audit-project.sh <slug>`
-
-Validates project completeness. Writes report to `chief-of-staff/logs/<YYYY-MM>/audit-<slug>-<timestamp>.md`. Exit code 0 on pass/warn, 1 on failure.
+Renames an agent everywhere it appears (folder, slash command, repo-wide references). Excludes archive, logs, feedback, playbook.
 
 ### `audit-agent.sh <function> <agent>`
 
-Validates agent structure: agent.md required sections, plans/, slash command, README, .mcp.json, subagents, projects/_template/, per-instance configs.
+Validates agent structure: `agent.md` required sections, `config.yaml` schema, `plans/`, slash command, README, `.mcp.json`, subagents.
 
 ### `audit-repo.sh`
 
-Aggregator. Runs project audits and agent audits. Adds repo-level checks (universal `.mcp.json`, root files, orphaned instances).
+Aggregator. Runs agent audits across every `<function>/<agent>/` plus workspace-level checks (universal `.mcp.json`, root files, `config/project.yaml`, `guidelines/` presence).
 
 ### Scheduling
 
@@ -385,7 +344,7 @@ TTL: function plans default to 24h. Dreamer defaults to 7 days. After TTL, items
 
 ### `.env`
 
-Credentials and runtime config. **Not committed.** Copy from `.env.example` and fill in. Required for any agent that uses external tools.
+Workspace secrets. **Not committed** (matched by `/.env` in `.gitignore`). Copy from `templates/env.example` and fill in. Required for any agent that uses external tools. Permissions enforced at `0600` (`roster doctor` check 11). Each agent may override or opt out of individual keys with its own `<function>/<agent>/.env` — see [ARCHITECTURE.md §Env resolution](ARCHITECTURE.md#env-resolution).
 
 ### `.mcp.json` (universal at repo root)
 
@@ -411,9 +370,13 @@ Canonical structure schema. Read when in doubt about file naming, lesson schema,
 
 Behavioral rules loaded at every Claude Code session in this repo. Defines reading order, lesson conflict resolution, HITL routing, etc.
 
-### `projects/<project>/CLAUDE.md`
+### `config/project.yaml`
 
-Project-level rules — identity, active agent instances, project-specific overrides.
+Workspace identity. Fields: `name`, `display_name`, `stage`, `audience`, `motion`, `created`. Filled by `roster init` (name/display_name) and the user (rest). Schema validated by `src/lib/project-schema.ts`.
+
+### `<function>/<agent>/config.yaml`
+
+Per-agent configuration: `plans_dir`, `guideline_refs` (workspace-rooted paths), and `tools:` bindings (each with `env_var` and `required:`). Schema validated by `src/lib/agent-config-schema.ts`.
 
 ### `<agent>/CLAUDE.md` (optional)
 
@@ -444,6 +407,6 @@ Tool-specific (uncomment what you need): `APOLLO_API_KEY`, `HEYREACH_API_KEY`, `
 - Lesson IDs: `L-YYYY-MM-DD-NNN` (3-digit counter)
 - Run files: `YYYY-MM-DD-HHMM.md` (24-hour, local time)
 - Feedback files mirror run filenames exactly so they pair
-- Configs: `<purpose>.yaml` (typically `default.yaml`)
+- Workspace config: `config/project.yaml`. Per-agent config: `<function>/<agent>/config.yaml`.
 - Plan files: `<plan-name>.yaml` (matches the `plan:` field inside)
 - Slash commands: `<agent>.md` (matches the `name:` field in frontmatter)
