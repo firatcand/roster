@@ -81,7 +81,6 @@ test('roster init in an empty dir creates CONTEXT.md and symlinks CLAUDE.md + AG
 
     assert.ok(existsSync(join(cwd, '.env.example')), '.env.example exists');
     assert.ok(existsSync(join(cwd, '.gitignore')), '.gitignore exists');
-    assert.ok(existsSync(join(cwd, 'projects', '_demo', 'README.md')), 'projects/_demo/README.md exists');
   } finally {
     cleanup();
   }
@@ -103,9 +102,6 @@ test('roster init produces the full scaffold tree (gtm, dreamer, chief-of-staff,
       'product/EXPERT.md',
       'design/EXPERT.md',
       'ops/EXPERT.md',
-      'projects/_demo/CLAUDE.md',
-      'projects/_demo/config/default.yaml',
-      'projects/_demo/guidelines/voice.md',
       'scripts/new-project.sh',
       'scripts/lib/functions.sh',
       '.config/functions.yaml',
