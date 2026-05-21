@@ -338,10 +338,10 @@ test('runSecretsAudit: agent-env warn does NOT flip ok; fail does', () => {
 // auditEnvKeyReferences
 // ──────────────────────────────────────────────────────────────────────
 
-function writeConfigYaml(cwd: string, fn: string, agent: string, project: string, name: string, content: string): void {
-  const dir = join(cwd, fn, agent, 'projects', project, 'config');
+function writeConfigYaml(cwd: string, fn: string, agent: string, content: string): void {
+  const dir = join(cwd, fn, agent);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, name), content, 'utf8');
+  writeFileSync(join(dir, 'config.yaml'), content, 'utf8');
 }
 
 test('auditEnvKeyReferences: no .env, no configs → ok empty', () => {
@@ -360,7 +360,7 @@ test('auditEnvKeyReferences: config references key present in .env → ok', () =
   const { dir, cleanup } = makeTmpCwd();
   try {
     writeFileSync(join(dir, '.env'), 'APOLLO_API_KEY=secret\n');
-    writeConfigYaml(dir, 'gtm', 'sdr', '_demo', 'default.yaml', 'apollo_token: ${APOLLO_API_KEY}\n');
+    writeConfigYaml(dir, 'gtm', 'sdr', 'apollo_token: ${APOLLO_API_KEY}\n');
     const r = auditEnvKeyReferences(dir);
     assert.equal(r.status, 'ok');
     assert.deepEqual(r.envKeys, ['APOLLO_API_KEY']);
@@ -374,13 +374,13 @@ test('auditEnvKeyReferences: config references key missing from .env → fail', 
   const { dir, cleanup } = makeTmpCwd();
   try {
     writeFileSync(join(dir, '.env'), 'OTHER=1\n');
-    writeConfigYaml(dir, 'gtm', 'sdr', '_demo', 'default.yaml', 'apollo_token: ${APOLLO_API_KEY}\n');
+    writeConfigYaml(dir, 'gtm', 'sdr', 'apollo_token: ${APOLLO_API_KEY}\n');
     const r = auditEnvKeyReferences(dir);
     assert.equal(r.status, 'fail');
     assert.equal(r.missing.length, 1);
     assert.equal(r.missing[0]!.key, 'APOLLO_API_KEY');
     assert.equal(r.missing[0]!.references.length, 1);
-    assert.match(r.missing[0]!.references[0]!.file, /default\.yaml$/);
+    assert.match(r.missing[0]!.references[0]!.file, /config\.yaml$/);
   } finally {
     cleanup();
   }
@@ -393,7 +393,7 @@ test('auditEnvKeyReferences: empty-string workspace value does NOT satisfy refer
   const { dir, cleanup } = makeTmpCwd();
   try {
     writeFileSync(join(dir, '.env'), 'APOLLO_API_KEY=\n');
-    writeConfigYaml(dir, 'gtm', 'sdr', '_demo', 'default.yaml', 'apollo_token: ${APOLLO_API_KEY}\n');
+    writeConfigYaml(dir, 'gtm', 'sdr', 'apollo_token: ${APOLLO_API_KEY}\n');
     const r = auditEnvKeyReferences(dir);
     assert.equal(r.status, 'fail');
     assert.equal(r.missing[0]!.key, 'APOLLO_API_KEY');
@@ -406,7 +406,7 @@ test('auditEnvKeyReferences: empty-string workspace value does NOT satisfy refer
 test('auditEnvKeyReferences: $BAREWORD form also detected', () => {
   const { dir, cleanup } = makeTmpCwd();
   try {
-    writeConfigYaml(dir, 'gtm', 'sdr', '_demo', 'default.yaml', 'token: $SLACK_TOKEN\n');
+    writeConfigYaml(dir, 'gtm', 'sdr', 'token: $SLACK_TOKEN\n');
     const r = auditEnvKeyReferences(dir);
     assert.equal(r.status, 'fail');
     assert.equal(r.missing[0]!.key, 'SLACK_TOKEN');
@@ -418,7 +418,7 @@ test('auditEnvKeyReferences: $BAREWORD form also detected', () => {
 test('auditEnvKeyReferences: well-known shell vars ($HOME, $PATH) are not flagged', () => {
   const { dir, cleanup } = makeTmpCwd();
   try {
-    writeConfigYaml(dir, 'gtm', 'sdr', '_demo', 'default.yaml', 'path: $HOME/logs\nother: $PATH\n');
+    writeConfigYaml(dir, 'gtm', 'sdr', 'path: $HOME/logs\nother: $PATH\n');
     const r = auditEnvKeyReferences(dir);
     assert.equal(r.status, 'ok');
   } finally {
@@ -430,10 +430,27 @@ test('auditEnvKeyReferences: top-level roster/ and dotdirs are skipped', () => {
   const { dir, cleanup } = makeTmpCwd();
   try {
     // Write a config under roster/ — should be ignored.
-    mkdirSync(join(dir, 'roster', 'gtm', 'sdr', 'projects', '_demo', 'config'), { recursive: true });
-    writeFileSync(join(dir, 'roster', 'gtm', 'sdr', 'projects', '_demo', 'config', 'x.yaml'), 'key: ${SHOULD_NOT_BE_FLAGGED}\n');
+    mkdirSync(join(dir, 'roster', 'gtm', 'sdr'), { recursive: true });
+    writeFileSync(join(dir, 'roster', 'gtm', 'sdr', 'config.yaml'), 'key: ${SHOULD_NOT_BE_FLAGGED}\n');
     const r = auditEnvKeyReferences(dir);
     assert.equal(r.status, 'ok');
+  } finally {
+    cleanup();
+  }
+});
+
+// Regression test for ROS-99. Before this fix, collectConfigYamls walked the
+// dead v0.4 path (<fn>/<agent>/projects/<project>/config/*.yaml) and returned
+// [] for any v1 workspace — so this exact scenario passed silently.
+test('auditEnvKeyReferences: v1 layout — <fn>/<agent>/config.yaml is scanned', () => {
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    writeFileSync(join(dir, '.env'), 'OTHER=1\n');
+    writeConfigYaml(dir, 'gtm', 'sdr', 'apollo_token: ${V1_DETECTED_KEY}\n');
+    const r = auditEnvKeyReferences(dir);
+    assert.equal(r.status, 'fail');
+    assert.equal(r.missing[0]!.key, 'V1_DETECTED_KEY');
+    assert.match(r.missing[0]!.references[0]!.file, /gtm\/sdr\/config\.yaml$/);
   } finally {
     cleanup();
   }

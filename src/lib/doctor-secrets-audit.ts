@@ -243,60 +243,7 @@ const SKIP_TOP = new Set([
 ]);
 
 function collectConfigYamls(cwd: string): string[] {
-  const out: string[] = [];
-  let topEntries: string[];
-  try {
-    topEntries = readdirSync(cwd);
-  } catch {
-    return [];
-  }
-
-  for (const top of topEntries) {
-    if (top.startsWith('.')) continue;
-    if (SKIP_TOP.has(top)) continue;
-    const fnDir = join(cwd, top);
-    let st: Stats;
-    try {
-      st = statSync(fnDir);
-    } catch {
-      continue;
-    }
-    if (!st.isDirectory()) continue;
-
-    let agents: string[];
-    try {
-      agents = readdirSync(fnDir);
-    } catch {
-      continue;
-    }
-    for (const agent of agents) {
-      if (agent.startsWith('.')) continue;
-      // ADR layout: <function>/<agent>/projects/<project>/config/<file>.yaml
-      const projectsDir = join(fnDir, agent, 'projects');
-      let projects: string[];
-      try {
-        projects = readdirSync(projectsDir);
-      } catch {
-        continue;
-      }
-      for (const project of projects) {
-        if (project.startsWith('.')) continue;
-        const configDir = join(projectsDir, project, 'config');
-        let configFiles: string[];
-        try {
-          configFiles = readdirSync(configDir);
-        } catch {
-          continue;
-        }
-        for (const f of configFiles) {
-          if (f.endsWith('.yaml') || f.endsWith('.yml')) {
-            out.push(join(configDir, f));
-          }
-        }
-      }
-    }
-  }
-  return out;
+  return listV1AgentPaths(cwd).map((rel) => join(cwd, rel, 'config.yaml'));
 }
 
 const SHELL_VARS = new Set([
