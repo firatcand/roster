@@ -434,6 +434,47 @@ test('doctor with .env mode 0644 → exit 1; doctor --fix → exit 0 + mode flip
   }
 });
 
+test('doctor with 0666 agent .env → exit 1; doctor --fix → exit 0 + agent .env flipped to 0600 (ROS-85)', () => {
+  if (process.platform === 'win32') return;
+  const h = makeHomes(['claude']);
+  try {
+    runCli(['install', '--all', '--silent'], envFor(h));
+    const ws = mkdtempSync(join(tmpdir(), 'roster-doctor-fix-agent-env-'));
+    try {
+      // Workspace .env locked down — otherwise the workspace check would
+      // dominate the failure signal and we couldn't isolate agent-env logic.
+      const wsEnv = join(ws, '.env');
+      writeFileSync(wsEnv, 'A=1\n');
+      chmodSync(wsEnv, 0o600);
+
+      // Two agent .env files: one warn (0644), one fail (0666).
+      const warnDir = join(ws, 'gtm', 'enricher');
+      const failDir = join(ws, 'ops', 'janitor');
+      mkdirSync(warnDir, { recursive: true });
+      mkdirSync(failDir, { recursive: true });
+      const warnEnv = join(warnDir, '.env');
+      const failEnv = join(failDir, '.env');
+      writeFileSync(warnEnv, 'B=2\n');
+      writeFileSync(failEnv, 'C=3\n');
+      chmodSync(warnEnv, 0o644);
+      chmodSync(failEnv, 0o666);
+
+      const before = runCliInCwd(['doctor'], envFor(h), ws);
+      assert.equal(before.status, 1, `expected fail before fix: ${before.stdout}`);
+      assert.match(before.stdout, /agent \.env perms/);
+
+      const fix = runCliInCwd(['doctor', '--fix'], envFor(h), ws);
+      assert.equal(fix.status, 0, `expected ok after fix: ${fix.stdout}`);
+      assert.equal((statSync(warnEnv).mode & 0o777).toString(8), '600');
+      assert.equal((statSync(failEnv).mode & 0o777).toString(8), '600');
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  } finally {
+    h.cleanup();
+  }
+});
+
 test('doctor --fix NEVER unsets exported ANTHROPIC_API_KEY (billing-safety contract)', () => {
   const h = makeHomes(['claude', 'codex']);
   try {
