@@ -89,14 +89,17 @@ function collectAgentEnvFiles(cwd: string): string[] {
   return out;
 }
 
-// Locates the 1-based line where `key` is defined in `rawContent`. Mirrors
-// parseEnvFile's KEY_RE so audit line numbers and parser keys stay in lockstep.
+// Locates the 1-based line where `key` is effectively defined in `rawContent`.
+// parseEnvFile is last-wins on duplicate keys (Map.set overwrites), so this
+// scan must return the LAST occurrence to stay in lockstep with the parser.
+// Reporting an earlier shadowed line would target the wrong line for deletion.
 const KEY_RE = /^([A-Za-z_][A-Za-z0-9_]*)\s*=/;
 
-export function findLineForKey(rawContent: string, key: string): number | null {
+export function findLastLineForKey(rawContent: string, key: string): number | null {
   let content = rawContent;
   if (content.charCodeAt(0) === 0xfeff) content = content.slice(1);
   const lines = content.split(/\r?\n/);
+  let lastMatch: number | null = null;
   for (let i = 0; i < lines.length; i++) {
     const trimmed = (lines[i] ?? '').replace(/^\s+/, '');
     if (trimmed.length === 0 || trimmed.startsWith('#')) continue;
@@ -105,9 +108,9 @@ export function findLineForKey(rawContent: string, key: string): number | null {
       : trimmed;
     const m = candidate.match(KEY_RE);
     if (m === null) continue;
-    if (m[1] === key) return i + 1;
+    if (m[1] === key) lastMatch = i + 1;
   }
-  return null;
+  return lastMatch;
 }
 
 export function auditAgentEnvRedundancy(cwd: string): AgentEnvRedundancyResult {
@@ -128,12 +131,10 @@ export function auditAgentEnvRedundancy(cwd: string): AgentEnvRedundancyResult {
     }
     const agentMap = parseEnvFile(raw);
     for (const [key, value] of agentMap) {
-      if (value.length === 0) continue;
       const wsValue = workspaceMap.get(key);
       if (wsValue === undefined) continue;
-      if (wsValue.length === 0) continue;
       if (wsValue !== value) continue;
-      const line = findLineForKey(raw, key);
+      const line = findLastLineForKey(raw, key);
       if (line === null) continue;
       items.push({
         agentEnvPath: relative(cwd, envPath),
@@ -163,13 +164,16 @@ export type RemoveLineOutcome =
   | { kind: 'error'; message: string };
 
 // Re-reads `absPath` and removes the line at `oneBasedLine` only if that line
-// still declares `expectedKey`. Guards against concurrent edits during a long
-// interactive prompt session. Atomic write via temp file + rename, preserving
-// the file's existing mode bits.
+// (a) still declares `expectedKey` AND (b) still parses to `expectedValue`.
+// The dual guard catches concurrent edits during a long interactive prompt
+// session — a user could change the line's value to something no longer
+// redundant; we must NOT delete it in that case. Atomic write via temp file +
+// rename, preserving existing mode bits and original newline style (LF vs CRLF).
 export function removeLineForKey(
   absPath: string,
   oneBasedLine: number,
   expectedKey: string,
+  expectedValue: string,
   dryRun: boolean,
 ): RemoveLineOutcome {
   let raw: string;
@@ -179,6 +183,8 @@ export function removeLineForKey(
     return { kind: 'error', message: (err as Error).message };
   }
   const hadTrailingNewline = raw.length > 0 && raw.charCodeAt(raw.length - 1) === 0x0a;
+  const usesCRLF = /\r\n/.test(raw);
+  const newline = usesCRLF ? '\r\n' : '\n';
   const lines = raw.split(/\r?\n/);
   const effectiveLineCount = hadTrailingNewline ? lines.length - 1 : lines.length;
   if (oneBasedLine < 1 || oneBasedLine > effectiveLineCount) {
@@ -193,10 +199,18 @@ export function removeLineForKey(
   if (m === null || m[1] !== expectedKey) {
     return { kind: 'changed', reason: 'line no longer declares expected key' };
   }
+  // Verify the parsed value of THIS line still matches the redundancy snapshot.
+  // Re-using parseEnvFile on a single-line buffer keeps quoting / escape rules
+  // identical to the audit's comparison.
+  const singleLineMap = parseEnvFile(targetLine);
+  const parsedAtLine = singleLineMap.get(expectedKey);
+  if (parsedAtLine === undefined || parsedAtLine !== expectedValue) {
+    return { kind: 'changed', reason: 'line value no longer matches workspace' };
+  }
   if (dryRun) return { kind: 'would-remove' };
 
   const kept = lines.slice(0, oneBasedLine - 1).concat(lines.slice(oneBasedLine));
-  const next = kept.join('\n');
+  const next = kept.join(newline);
 
   let mode = 0o600;
   try {
