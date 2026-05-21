@@ -42,6 +42,146 @@ export function auditEnvPermissions(cwd: string): EnvPermissionsResult {
 }
 
 // =====================================================================
+// Agent .env file permissions (check 13)
+// =====================================================================
+
+export type AgentEnvPermItem =
+  | { status: 'ok'; agentPath: string; envPath: string; mode: string }
+  | {
+      status: 'warn';
+      agentPath: string;
+      envPath: string;
+      mode: string;
+      expected: '0600';
+      autoFixable: true;
+    }
+  | {
+      status: 'fail';
+      agentPath: string;
+      envPath: string;
+      mode: string;
+      expected: '0600';
+      autoFixable: true;
+    };
+
+export type AgentEnvPermResult =
+  | { status: 'ok'; items: AgentEnvPermItem[] }
+  | { status: 'warn'; items: AgentEnvPermItem[] }
+  | { status: 'fail'; items: AgentEnvPermItem[] }
+  | { status: 'skip-platform'; reason: 'win32-mode-bits-not-portable' };
+
+// Reading "world-readable" strictly would flag 0o644 too, but the issue
+// explicitly carves 0o644 out as warn-only. So the failure threshold is
+// any group- or world-write bit — modes that let another user mutate
+// secrets are categorically different from modes that merely expose them.
+function classifyAgentEnvMode(modeBits: number): 'ok' | 'warn' | 'fail' {
+  if (modeBits === 0o600) return 'ok';
+  if ((modeBits & 0o022) !== 0) return 'fail';
+  return 'warn';
+}
+
+// Yield candidate agent directories at depth 1 (top-level agents like
+// `dreamer/` and `chief-of-staff/`) AND depth 2 (`<function>/<agent>/`).
+// The audit then statSyncs `<dir>/.env` on each candidate; dirs without
+// a .env are silently skipped, so over-yielding here is harmless and
+// keeps the walker honest to "wherever a secret-bearing .env can live".
+function listAgentDirs(cwd: string): string[] {
+  const out: string[] = [];
+  let topEntries: string[];
+  try {
+    topEntries = readdirSync(cwd);
+  } catch {
+    return out;
+  }
+
+  for (const top of topEntries) {
+    if (top.startsWith('.')) continue;
+    if (SKIP_TOP.has(top)) continue;
+    const topDir = join(cwd, top);
+    let topStat: Stats;
+    try {
+      topStat = statSync(topDir);
+    } catch {
+      continue;
+    }
+    if (!topStat.isDirectory()) continue;
+
+    out.push(topDir);
+
+    let children: string[];
+    try {
+      children = readdirSync(topDir);
+    } catch {
+      continue;
+    }
+    for (const child of children) {
+      if (child.startsWith('.')) continue;
+      const childDir = join(topDir, child);
+      let childStat: Stats;
+      try {
+        childStat = statSync(childDir);
+      } catch {
+        continue;
+      }
+      if (!childStat.isDirectory()) continue;
+      out.push(childDir);
+    }
+  }
+  return out;
+}
+
+export function auditAgentEnvPermissions(cwd: string): AgentEnvPermResult {
+  if (isWindows()) {
+    return { status: 'skip-platform', reason: 'win32-mode-bits-not-portable' };
+  }
+
+  const items: AgentEnvPermItem[] = [];
+  let aggregate: 'ok' | 'warn' | 'fail' = 'ok';
+
+  for (const agentDir of listAgentDirs(cwd)) {
+    const envPath = join(agentDir, '.env');
+    let st: Stats;
+    try {
+      st = statSync(envPath);
+    } catch {
+      continue;
+    }
+    if (!st.isFile()) continue;
+
+    const modeBits = st.mode & 0o777;
+    const mode = formatMode(st.mode);
+    const agentPath = relative(cwd, agentDir);
+    const cls = classifyAgentEnvMode(modeBits);
+
+    if (cls === 'ok') {
+      items.push({ status: 'ok', agentPath, envPath, mode });
+    } else if (cls === 'warn') {
+      items.push({
+        status: 'warn',
+        agentPath,
+        envPath,
+        mode,
+        expected: '0600',
+        autoFixable: true,
+      });
+      if (aggregate === 'ok') aggregate = 'warn';
+    } else {
+      items.push({
+        status: 'fail',
+        agentPath,
+        envPath,
+        mode,
+        expected: '0600',
+        autoFixable: true,
+      });
+      aggregate = 'fail';
+    }
+  }
+
+  return { status: aggregate, items };
+}
+
+// =====================================================================
 // .env key references in workspace YAML configs (check 12)
 // =====================================================================
 
@@ -501,6 +641,7 @@ export function auditAgentEnvRefs(cwd: string): AgentEnvRefsResult {
 export type SecretsAuditResult = {
   ok: boolean;
   envPermissions: EnvPermissionsResult;
+  agentEnvPermissions: AgentEnvPermResult;
   envKeyReferences: EnvKeyReferenceResult;
   templateSecretLiterals: TemplateSecretLiteralResult;
   promptLeak: PromptLeakResult;
@@ -515,6 +656,7 @@ export type SecretsAuditOpts = {
 
 export function runSecretsAudit(opts: SecretsAuditOpts): SecretsAuditResult {
   const envPermissions = auditEnvPermissions(opts.cwd);
+  const agentEnvPermissions = auditAgentEnvPermissions(opts.cwd);
   const envKeyReferences = auditEnvKeyReferences(opts.cwd);
   const templateSecretLiterals = auditTemplateSecretLiterals(opts.rosterRoot);
   const promptLeak = auditPromptLeak(opts.cwd, opts.schedules);
@@ -525,12 +667,16 @@ export function runSecretsAudit(opts: SecretsAuditOpts): SecretsAuditResult {
   // the errors[] bucket (required:true unset) is fatal.
   // skip-platform on env permissions is treated as ok (Windows mode bits are
   // not POSIX; we can't meaningfully check 0600 there).
+  // Agent-env warn (e.g. 0o644) does NOT flip ok — only fail (world-writable)
+  // does. Mirrors prompt-leak's warn semantics.
   const envOk =
     envPermissions.status === 'ok' ||
     envPermissions.status === 'absent' ||
     envPermissions.status === 'skip-platform';
+  const agentEnvOk = agentEnvPermissions.status !== 'fail';
   const ok =
     envOk &&
+    agentEnvOk &&
     envKeyReferences.status === 'ok' &&
     templateSecretLiterals.status === 'ok' &&
     agentEnvRefs.errors.length === 0;
@@ -538,6 +684,7 @@ export function runSecretsAudit(opts: SecretsAuditOpts): SecretsAuditResult {
   return {
     ok,
     envPermissions,
+    agentEnvPermissions,
     envKeyReferences,
     templateSecretLiterals,
     promptLeak,

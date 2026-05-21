@@ -10,8 +10,10 @@ import { EXIT_OK, EXIT_ERROR, EXIT_NO_TOOLS } from '../lib/errors.ts';
 import { auditWorkspace, type WorkspaceAuditResult, type SymlinkStatus } from '../lib/project-context.ts';
 import { validateSchedulesInCwd, type ValidationReport } from '../lib/schedule-validate.ts';
 import {
+  auditAgentEnvPermissions,
   auditEnvPermissions,
   runSecretsAudit,
+  type AgentEnvPermResult,
   type AgentEnvRefMiss,
   type AgentEnvRefsResult,
   type EnvPermissionsResult,
@@ -178,6 +180,7 @@ export function runFixes(
   cwd: string,
   workspace: WorkspaceAuditResult,
   envPerms: EnvPermissionsResult,
+  agentEnvPerms: AgentEnvPermResult,
   dryRun = false,
 ): FixOutcome {
   const fixed: string[] = [];
@@ -221,6 +224,24 @@ export function runFixes(
         fixed.push('.env: chmod 0600');
       } catch (err) {
         failed.push({ what: '.env', error: (err as Error).message });
+      }
+    }
+  }
+
+  // Agent .env permissions fix — chmod 0600 every warn/fail with autoFixable.
+  if (agentEnvPerms.status === 'warn' || agentEnvPerms.status === 'fail') {
+    for (const item of agentEnvPerms.items) {
+      if (item.status === 'ok') continue;
+      const label = `${item.agentPath}/.env`;
+      if (dryRun) {
+        fixed.push(`${label}: would chmod 0600`);
+        continue;
+      }
+      try {
+        chmodSync(item.envPath, 0o600);
+        fixed.push(`${label}: chmod 0600`);
+      } catch (err) {
+        failed.push({ what: label, error: (err as Error).message });
       }
     }
   }
@@ -452,6 +473,7 @@ function renderSafetySection(audit: SafetyAuditResult): string[] {
 
 function renderSecretsSection(audit: SecretsAuditResult): string[] {
   const env = audit.envPermissions;
+  const agentEnv = audit.agentEnvPermissions;
   const refs = audit.envKeyReferences;
   const templates = audit.templateSecretLiterals;
   const leak = audit.promptLeak;
@@ -459,8 +481,12 @@ function renderSecretsSection(audit: SecretsAuditResult): string[] {
 
   // Skip rendering when there's nothing to show.
   const noEnv = env.status === 'absent' || env.status === 'skip-platform';
+  const agentEnvClean =
+    agentEnv.status === 'skip-platform' ||
+    (agentEnv.status === 'ok' && agentEnv.items.length === 0);
   const allClean =
     noEnv &&
+    agentEnvClean &&
     refs.status === 'ok' &&
     templates.status === 'ok' &&
     leak.status === 'ok' &&
@@ -477,6 +503,32 @@ function renderSecretsSection(audit: SecretsAuditResult): string[] {
     lines.push(`      ${chalk.dim('→ Run `roster doctor --fix` to chmod 0600.')}`);
   } else if (env.status === 'skip-platform') {
     lines.push(`  ${chalk.dim('-')} .env permissions  ${chalk.dim('SKIPPED')} ${chalk.dim('(windows mode bits not portable)')}`);
+  }
+
+  if (agentEnv.status === 'ok' && agentEnv.items.length > 0) {
+    lines.push(`  ${chalk.green('✓')} agent .env perms  ${chalk.dim('OK')} ${chalk.dim(`(${agentEnv.items.length} agent .env${agentEnv.items.length === 1 ? '' : 's'})`)}`);
+  } else if (agentEnv.status === 'warn') {
+    const warnCount = agentEnv.items.filter((i) => i.status === 'warn').length;
+    lines.push(`  ${chalk.yellow('!')} agent .env perms  ${chalk.yellow('WARN')} ${chalk.dim(`(${warnCount} agent .env${warnCount === 1 ? '' : 's'} not 0600)`)}`);
+    for (const item of agentEnv.items.slice(0, 10)) {
+      if (item.status === 'ok') continue;
+      lines.push(`      ${chalk.yellow('-')} ${item.agentPath}/.env ${chalk.dim(`(got ${item.mode}, expected 0600)`)}`);
+    }
+    lines.push(`      ${chalk.dim('→ Run `roster doctor --fix` to chmod 0600.')}`);
+  } else if (agentEnv.status === 'fail') {
+    const failCount = agentEnv.items.filter((i) => i.status === 'fail').length;
+    const warnCount = agentEnv.items.filter((i) => i.status === 'warn').length;
+    const detail = failCount === 1 ? '1 world-writable' : `${failCount} world-writable`;
+    const extra = warnCount > 0 ? `, ${warnCount} other not 0600` : '';
+    lines.push(`  ${chalk.red('✗')} agent .env perms  ${chalk.red('FAIL')} ${chalk.dim(`(${detail}${extra})`)}`);
+    for (const item of agentEnv.items.slice(0, 10)) {
+      if (item.status === 'ok') continue;
+      const marker = item.status === 'fail' ? chalk.red('-') : chalk.yellow('-');
+      lines.push(`      ${marker} ${item.agentPath}/.env ${chalk.dim(`(got ${item.mode}, expected 0600)`)}`);
+    }
+    lines.push(`      ${chalk.dim('→ Run `roster doctor --fix` to chmod 0600.')}`);
+  } else if (agentEnv.status === 'skip-platform') {
+    lines.push(`  ${chalk.dim('-')} agent .env perms  ${chalk.dim('SKIPPED')} ${chalk.dim('(windows mode bits not portable)')}`);
   }
 
   if (refs.status === 'fail') {
@@ -663,6 +715,7 @@ export async function executeDoctor(opts: DoctorOptions): Promise<number> {
   // workspace + secrets sections reflect post-fix reality.
   let workspaceFinal = workspace;
   const initialEnvPerms = auditEnvPermissions(opts.cwd);
+  const initialAgentEnvPerms = auditAgentEnvPermissions(opts.cwd);
   let fixOutcome: FixOutcome = NO_FIX_REQUESTED;
 
   const schedulesForLeak = listAllScheduleEntries(opts.cwd);
@@ -686,7 +739,7 @@ export async function executeDoctor(opts: DoctorOptions): Promise<number> {
   });
 
   if (opts.fix) {
-    fixOutcome = runFixes(opts.cwd, workspace, initialEnvPerms, opts.dryRun);
+    fixOutcome = runFixes(opts.cwd, workspace, initialEnvPerms, initialAgentEnvPerms, opts.dryRun);
 
     // Interactive check-15 fix. Skipped under --json (no TTY contract) and when
     // stdin is not a TTY (CI / pipe). Under --dry-run we still preview.
