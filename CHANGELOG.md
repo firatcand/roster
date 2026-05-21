@@ -12,7 +12,7 @@ _(empty — staging area for post-1.0 work)_
 
 The single-project workspace refactor. v1.0.0 replaces the `projects/<slug>/` multi-tenant layout with a single root-level workspace, introduces shared brand/voice substrate under `config/` + `guidelines/`, and adds agent-level `.env` inheritance. **This is a breaking release — existing v0.4 workspaces require a re-scaffold (see Migration below).**
 
-Per-phase retros: see [docs/retros/v1.0.md](docs/retros/v1.0.md) (rolls up phases v1-1..v1-4).
+Per-phase retro: _TBD ([ROS-98](https://linear.app/firatdogan/issue/ROS-98))_ — rolls up phases v1-1..v1-4 once the retro file lands.
 
 ### Removed
 
