@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  auditAgentEnvPermissions,
   auditEnvKeyReferences,
   auditEnvPermissions,
   auditPromptLeak,
@@ -124,6 +125,212 @@ test('auditEnvPermissions: ROSTER_PLATFORM=win32 → skip-platform', () => {
   } finally {
     if (prev === undefined) delete process.env['ROSTER_PLATFORM'];
     else process.env['ROSTER_PLATFORM'] = prev;
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// auditAgentEnvPermissions
+// ──────────────────────────────────────────────────────────────────────
+
+function writeAgentEnv(cwd: string, fn: string, agent: string, mode: number): string {
+  const agentDir = join(cwd, fn, agent);
+  mkdirSync(agentDir, { recursive: true });
+  const envPath = join(agentDir, '.env');
+  writeFileSync(envPath, 'A=1\n');
+  chmodSync(envPath, mode);
+  return envPath;
+}
+
+test('auditAgentEnvPermissions: no agent .env files → status ok, empty items', () => {
+  if (process.platform === 'win32') return;
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    const r = auditAgentEnvPermissions(dir);
+    assert.equal(r.status, 'ok');
+    if (r.status !== 'ok') return;
+    assert.equal(r.items.length, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test('auditAgentEnvPermissions: 0600 agent .env → ok item', () => {
+  if (process.platform === 'win32') return;
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    writeAgentEnv(dir, 'gtm', 'sdr', 0o600);
+    const r = auditAgentEnvPermissions(dir);
+    assert.equal(r.status, 'ok');
+    if (r.status !== 'ok') return;
+    assert.equal(r.items.length, 1);
+    assert.equal(r.items[0]!.status, 'ok');
+    assert.equal(r.items[0]!.mode, '0600');
+    assert.equal(r.items[0]!.agentPath, join('gtm', 'sdr'));
+  } finally {
+    cleanup();
+  }
+});
+
+test('auditAgentEnvPermissions: 0644 agent .env → warn item, autoFixable', () => {
+  if (process.platform === 'win32') return;
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    writeAgentEnv(dir, 'gtm', 'sdr', 0o644);
+    const r = auditAgentEnvPermissions(dir);
+    assert.equal(r.status, 'warn');
+    if (r.status !== 'warn') return;
+    assert.equal(r.items.length, 1);
+    const item = r.items[0]!;
+    assert.equal(item.status, 'warn');
+    if (item.status !== 'warn') return;
+    assert.equal(item.mode, '0644');
+    assert.equal(item.expected, '0600');
+    assert.equal(item.autoFixable, true);
+  } finally {
+    cleanup();
+  }
+});
+
+test('auditAgentEnvPermissions: 0666 agent .env → fail item (world-writable)', () => {
+  if (process.platform === 'win32') return;
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    writeAgentEnv(dir, 'gtm', 'sdr', 0o666);
+    const r = auditAgentEnvPermissions(dir);
+    assert.equal(r.status, 'fail');
+    if (r.status !== 'fail') return;
+    assert.equal(r.items.length, 1);
+    const item = r.items[0]!;
+    assert.equal(item.status, 'fail');
+    if (item.status !== 'fail') return;
+    assert.equal(item.mode, '0666');
+    assert.equal(item.autoFixable, true);
+  } finally {
+    cleanup();
+  }
+});
+
+test('auditAgentEnvPermissions: mixed agents → aggregate fail, per-item statuses preserved', () => {
+  if (process.platform === 'win32') return;
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    writeAgentEnv(dir, 'gtm', 'sdr', 0o600);
+    writeAgentEnv(dir, 'gtm', 'enricher', 0o644);
+    writeAgentEnv(dir, 'ops', 'janitor', 0o666);
+    const r = auditAgentEnvPermissions(dir);
+    assert.equal(r.status, 'fail');
+    if (r.status !== 'fail') return;
+    const byAgent = new Map(r.items.map((i) => [i.agentPath, i.status]));
+    assert.equal(byAgent.get(join('gtm', 'sdr')), 'ok');
+    assert.equal(byAgent.get(join('gtm', 'enricher')), 'warn');
+    assert.equal(byAgent.get(join('ops', 'janitor')), 'fail');
+  } finally {
+    cleanup();
+  }
+});
+
+test('auditAgentEnvPermissions: catches top-level infra agents (dreamer, chief-of-staff)', () => {
+  if (process.platform === 'win32') return;
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    // dreamer/ and chief-of-staff/ are top-level agents (peers of <function>/
+    // dirs), not nested under any function. The walker must check their
+    // .env at depth 1.
+    const dreamerEnv = join(dir, 'dreamer', '.env');
+    const cosEnv = join(dir, 'chief-of-staff', '.env');
+    mkdirSync(join(dir, 'dreamer'), { recursive: true });
+    mkdirSync(join(dir, 'chief-of-staff'), { recursive: true });
+    writeFileSync(dreamerEnv, 'A=1\n');
+    writeFileSync(cosEnv, 'B=2\n');
+    chmodSync(dreamerEnv, 0o666);
+    chmodSync(cosEnv, 0o644);
+
+    const r = auditAgentEnvPermissions(dir);
+    assert.equal(r.status, 'fail');
+    if (r.status !== 'fail') return;
+    const byAgent = new Map(r.items.map((i) => [i.agentPath, i.status]));
+    assert.equal(byAgent.get('dreamer'), 'fail');
+    assert.equal(byAgent.get('chief-of-staff'), 'warn');
+  } finally {
+    cleanup();
+  }
+});
+
+test('auditAgentEnvPermissions: skips SKIP_TOP dirs (node_modules, src, plans, spec, docs)', () => {
+  if (process.platform === 'win32') return;
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    // These directories should be skipped — placing a 0666 .env under each
+    // would otherwise produce false positives if the walker mis-categorized
+    // them as <function>/<agent> dirs.
+    writeAgentEnv(dir, 'node_modules', 'pkg', 0o666);
+    writeAgentEnv(dir, 'src', 'lib', 0o666);
+    writeAgentEnv(dir, 'plans', 'tasks', 0o666);
+    writeAgentEnv(dir, 'spec', '_archive', 0o666);
+    writeAgentEnv(dir, 'docs', 'learnings', 0o666);
+    const r = auditAgentEnvPermissions(dir);
+    assert.equal(r.status, 'ok');
+    if (r.status !== 'ok') return;
+    assert.equal(r.items.length, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test('auditAgentEnvPermissions: skips dotdirs at function and agent levels', () => {
+  if (process.platform === 'win32') return;
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    writeAgentEnv(dir, '.hidden-fn', 'agent', 0o666);
+    writeAgentEnv(dir, 'gtm', '.hidden-agent', 0o666);
+    const r = auditAgentEnvPermissions(dir);
+    assert.equal(r.status, 'ok');
+    if (r.status !== 'ok') return;
+    assert.equal(r.items.length, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test('auditAgentEnvPermissions: ROSTER_PLATFORM=win32 → skip-platform', () => {
+  const prev = process.env['ROSTER_PLATFORM'];
+  process.env['ROSTER_PLATFORM'] = 'win32';
+  try {
+    const { dir, cleanup } = makeTmpCwd();
+    try {
+      const r = auditAgentEnvPermissions(dir);
+      assert.equal(r.status, 'skip-platform');
+    } finally {
+      cleanup();
+    }
+  } finally {
+    if (prev === undefined) delete process.env['ROSTER_PLATFORM'];
+    else process.env['ROSTER_PLATFORM'] = prev;
+  }
+});
+
+test('runSecretsAudit: agent-env warn does NOT flip ok; fail does', () => {
+  if (process.platform === 'win32') return;
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    // Workspace .env locked down so envPermissions stays ok.
+    const wsEnv = join(dir, '.env');
+    writeFileSync(wsEnv, 'A=1\n');
+    chmodSync(wsEnv, 0o600);
+
+    // Warn-only state: 0644 agent .env.
+    writeAgentEnv(dir, 'gtm', 'sdr', 0o644);
+    const warnAudit = runSecretsAudit({ cwd: dir, rosterRoot: dir, schedules: [] });
+    assert.equal(warnAudit.agentEnvPermissions.status, 'warn');
+    assert.equal(warnAudit.ok, true);
+
+    // Adding a 0666 agent .env flips to fail and ok=false.
+    writeAgentEnv(dir, 'ops', 'janitor', 0o666);
+    const failAudit = runSecretsAudit({ cwd: dir, rosterRoot: dir, schedules: [] });
+    assert.equal(failAudit.agentEnvPermissions.status, 'fail');
+    assert.equal(failAudit.ok, false);
+  } finally {
+    cleanup();
   }
 });
 

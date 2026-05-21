@@ -54,5 +54,6 @@ Every drafted lesson must be:
 
 ## What this subagent does NOT do
 
+- Promote lessons to a different scope. v1 has a single playbook per agent.
 - Write to `playbook/` directly. The orchestrator (dreamer) does that after HITL approval.
 - Edit existing lessons in place without a clear `existing_lesson` input.

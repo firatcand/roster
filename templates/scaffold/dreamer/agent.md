@@ -45,7 +45,6 @@ Typically scheduled nightly via cron or `/schedule`. When invoked without a plan
 
 - `pattern-detector.md` — finds patterns across runs+feedback
 - `lesson-drafter.md` — drafts a single lesson in schema format
-- `promotion-arbiter.md` — decides project vs global scope for validated lessons
 
 ## Tools and bindings
 

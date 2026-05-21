@@ -2,6 +2,12 @@ import { readdirSync, readFileSync, statSync, type Stats } from 'node:fs';
 import { join, relative } from 'node:path';
 import { parseEnvFile, parseEnvKeys } from './dotenv-parse.ts';
 import { isWindows } from './platform.ts';
+import { loadAgentConfig } from './agent-config-schema.ts';
+import { resolveAgentEnv } from './env-merge.ts';
+import {
+  auditAgentEnvRedundancy,
+  type AgentEnvRedundancyResult,
+} from './doctor-agent-env-audit.ts';
 
 // =====================================================================
 // .env file permissions (check 11)
@@ -37,6 +43,146 @@ export function auditEnvPermissions(cwd: string): EnvPermissionsResult {
     return { status: 'ok', path: envPath, mode };
   }
   return { status: 'fail', path: envPath, mode, expected: '0600', autoFixable: true };
+}
+
+// =====================================================================
+// Agent .env file permissions (check 13)
+// =====================================================================
+
+export type AgentEnvPermItem =
+  | { status: 'ok'; agentPath: string; envPath: string; mode: string }
+  | {
+      status: 'warn';
+      agentPath: string;
+      envPath: string;
+      mode: string;
+      expected: '0600';
+      autoFixable: true;
+    }
+  | {
+      status: 'fail';
+      agentPath: string;
+      envPath: string;
+      mode: string;
+      expected: '0600';
+      autoFixable: true;
+    };
+
+export type AgentEnvPermResult =
+  | { status: 'ok'; items: AgentEnvPermItem[] }
+  | { status: 'warn'; items: AgentEnvPermItem[] }
+  | { status: 'fail'; items: AgentEnvPermItem[] }
+  | { status: 'skip-platform'; reason: 'win32-mode-bits-not-portable' };
+
+// Reading "world-readable" strictly would flag 0o644 too, but the issue
+// explicitly carves 0o644 out as warn-only. So the failure threshold is
+// any group- or world-write bit — modes that let another user mutate
+// secrets are categorically different from modes that merely expose them.
+function classifyAgentEnvMode(modeBits: number): 'ok' | 'warn' | 'fail' {
+  if (modeBits === 0o600) return 'ok';
+  if ((modeBits & 0o022) !== 0) return 'fail';
+  return 'warn';
+}
+
+// Yield candidate agent directories at depth 1 (top-level agents like
+// `dreamer/` and `chief-of-staff/`) AND depth 2 (`<function>/<agent>/`).
+// The audit then statSyncs `<dir>/.env` on each candidate; dirs without
+// a .env are silently skipped, so over-yielding here is harmless and
+// keeps the walker honest to "wherever a secret-bearing .env can live".
+function listAgentDirs(cwd: string): string[] {
+  const out: string[] = [];
+  let topEntries: string[];
+  try {
+    topEntries = readdirSync(cwd);
+  } catch {
+    return out;
+  }
+
+  for (const top of topEntries) {
+    if (top.startsWith('.')) continue;
+    if (SKIP_TOP.has(top)) continue;
+    const topDir = join(cwd, top);
+    let topStat: Stats;
+    try {
+      topStat = statSync(topDir);
+    } catch {
+      continue;
+    }
+    if (!topStat.isDirectory()) continue;
+
+    out.push(topDir);
+
+    let children: string[];
+    try {
+      children = readdirSync(topDir);
+    } catch {
+      continue;
+    }
+    for (const child of children) {
+      if (child.startsWith('.')) continue;
+      const childDir = join(topDir, child);
+      let childStat: Stats;
+      try {
+        childStat = statSync(childDir);
+      } catch {
+        continue;
+      }
+      if (!childStat.isDirectory()) continue;
+      out.push(childDir);
+    }
+  }
+  return out;
+}
+
+export function auditAgentEnvPermissions(cwd: string): AgentEnvPermResult {
+  if (isWindows()) {
+    return { status: 'skip-platform', reason: 'win32-mode-bits-not-portable' };
+  }
+
+  const items: AgentEnvPermItem[] = [];
+  let aggregate: 'ok' | 'warn' | 'fail' = 'ok';
+
+  for (const agentDir of listAgentDirs(cwd)) {
+    const envPath = join(agentDir, '.env');
+    let st: Stats;
+    try {
+      st = statSync(envPath);
+    } catch {
+      continue;
+    }
+    if (!st.isFile()) continue;
+
+    const modeBits = st.mode & 0o777;
+    const mode = formatMode(st.mode);
+    const agentPath = relative(cwd, agentDir);
+    const cls = classifyAgentEnvMode(modeBits);
+
+    if (cls === 'ok') {
+      items.push({ status: 'ok', agentPath, envPath, mode });
+    } else if (cls === 'warn') {
+      items.push({
+        status: 'warn',
+        agentPath,
+        envPath,
+        mode,
+        expected: '0600',
+        autoFixable: true,
+      });
+      if (aggregate === 'ok') aggregate = 'warn';
+    } else {
+      items.push({
+        status: 'fail',
+        agentPath,
+        envPath,
+        mode,
+        expected: '0600',
+        autoFixable: true,
+      });
+      aggregate = 'fail';
+    }
+  }
+
+  return { status: aggregate, items };
 }
 
 // =====================================================================
@@ -381,15 +527,130 @@ export function auditPromptLeak(
 }
 
 // =====================================================================
+// Agent env-var references — referenced-but-unset across agents (check 15)
+// =====================================================================
+//
+// For every <function>/<agent>/config.yaml in the workspace, list the env-var
+// keys it declares via `tools.*.env_var` and resolve each via resolveAgentEnv.
+// A key that is unset in both agent .env and workspace /.env counts as missing:
+//   - required: true  → error  (flips SecretsAuditResult.ok to false)
+//   - required: false → warn   (does NOT flip ok)
+//
+// Empty-string ("K=") in either .env counts as unset per resolveAgentEnv
+// semantics — mirrors check 12.
+
+export type AgentEnvRefMiss = {
+  agent: string;
+  binding: string;
+  key: string;
+  required: boolean;
+};
+
+export type AgentEnvRefsResult = {
+  status: 'ok' | 'warn' | 'fail';
+  errors: AgentEnvRefMiss[];
+  warns: AgentEnvRefMiss[];
+};
+
+const AGENT_SEGMENT_RE = /^[a-z][a-z0-9-]*$/;
+
+function listV1AgentPaths(cwd: string): string[] {
+  const out: string[] = [];
+  let topEntries: string[];
+  try {
+    topEntries = readdirSync(cwd);
+  } catch {
+    return [];
+  }
+  for (const top of topEntries) {
+    if (top.startsWith('.')) continue;
+    if (SKIP_TOP.has(top)) continue;
+    if (!AGENT_SEGMENT_RE.test(top)) continue;
+    const fnDir = join(cwd, top);
+    let st: Stats;
+    try {
+      st = statSync(fnDir);
+    } catch {
+      continue;
+    }
+    if (!st.isDirectory()) continue;
+
+    let children: string[];
+    try {
+      children = readdirSync(fnDir);
+    } catch {
+      continue;
+    }
+    for (const child of children) {
+      if (child.startsWith('.')) continue;
+      if (!AGENT_SEGMENT_RE.test(child)) continue;
+      const agentDir = join(fnDir, child);
+      let agentSt: Stats;
+      try {
+        agentSt = statSync(agentDir);
+      } catch {
+        continue;
+      }
+      if (!agentSt.isDirectory()) continue;
+      const cfg = join(agentDir, 'config.yaml');
+      try {
+        if (statSync(cfg).isFile()) {
+          out.push(top + '/' + child);
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+  out.sort();
+  return out;
+}
+
+export function auditAgentEnvRefs(cwd: string): AgentEnvRefsResult {
+  const errors: AgentEnvRefMiss[] = [];
+  const warns: AgentEnvRefMiss[] = [];
+
+  for (const agent of listV1AgentPaths(cwd)) {
+    const loaded = loadAgentConfig(cwd, agent);
+    // Malformed configs (parse / schema / agent-field mismatch / ref shape)
+    // are surfaced by a future config-validity check, not by check 15.
+    if (!loaded.ok) continue;
+    const tools = loaded.config.tools ?? {};
+    const resolved = resolveAgentEnv(cwd, agent);
+    for (const [binding, t] of Object.entries(tools)) {
+      if (Object.prototype.hasOwnProperty.call(resolved, t.env_var)) continue;
+      const miss: AgentEnvRefMiss = {
+        agent,
+        binding,
+        key: t.env_var,
+        required: t.required,
+      };
+      if (t.required) {
+        errors.push(miss);
+      } else {
+        warns.push(miss);
+      }
+    }
+  }
+
+  const status: AgentEnvRefsResult['status'] =
+    errors.length > 0 ? 'fail' : warns.length > 0 ? 'warn' : 'ok';
+  return { status, errors, warns };
+}
+
+// =====================================================================
 // Aggregate
 // =====================================================================
 
 export type SecretsAuditResult = {
   ok: boolean;
   envPermissions: EnvPermissionsResult;
+  agentEnvPermissions: AgentEnvPermResult;
   envKeyReferences: EnvKeyReferenceResult;
   templateSecretLiterals: TemplateSecretLiteralResult;
   promptLeak: PromptLeakResult;
+  agentEnvRefs: AgentEnvRefsResult;
+  agentEnvRedundancy: AgentEnvRedundancyResult;
 };
 
 export type SecretsAuditOpts = {
@@ -400,27 +661,38 @@ export type SecretsAuditOpts = {
 
 export function runSecretsAudit(opts: SecretsAuditOpts): SecretsAuditResult {
   const envPermissions = auditEnvPermissions(opts.cwd);
+  const agentEnvPermissions = auditAgentEnvPermissions(opts.cwd);
   const envKeyReferences = auditEnvKeyReferences(opts.cwd);
   const templateSecretLiterals = auditTemplateSecretLiterals(opts.rosterRoot);
   const promptLeak = auditPromptLeak(opts.cwd, opts.schedules);
+  const agentEnvRefs = auditAgentEnvRefs(opts.cwd);
+  const agentEnvRedundancy = auditAgentEnvRedundancy(opts.cwd);
 
-  // Prompt-leak warnings do NOT flip ok (per acceptance: "warns; doesn't fail").
-  // skip-platform on env permissions is treated as ok (Windows mode bits are
-  // not POSIX; we can't meaningfully check 0600 there).
+  // Prompt-leak, agent-env-redundancy (check 14), and agent-env-ref warns
+  // (required:false unset) do NOT flip ok — only fatal buckets do
+  // (agent-env-ref errors[] for required:true unset, agent-env-perm fail for
+  // world-writable). skip-platform on env permissions is treated as ok
+  // (Windows mode bits are not POSIX; we can't meaningfully check 0600 there).
   const envOk =
     envPermissions.status === 'ok' ||
     envPermissions.status === 'absent' ||
     envPermissions.status === 'skip-platform';
+  const agentEnvOk = agentEnvPermissions.status !== 'fail';
   const ok =
     envOk &&
+    agentEnvOk &&
     envKeyReferences.status === 'ok' &&
-    templateSecretLiterals.status === 'ok';
+    templateSecretLiterals.status === 'ok' &&
+    agentEnvRefs.errors.length === 0;
 
   return {
     ok,
     envPermissions,
+    agentEnvPermissions,
     envKeyReferences,
     templateSecretLiterals,
     promptLeak,
+    agentEnvRefs,
+    agentEnvRedundancy,
   };
 }

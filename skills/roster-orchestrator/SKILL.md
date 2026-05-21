@@ -1,10 +1,10 @@
 ---
 name: roster-orchestrator
-description: "Bootstraps roster workspaces. On chat session start, surfaces pending HITL items as a single banner. On a scheduled fire, verifies the schedule is registered, dispatches the named agent via the host tool's native subagent primitive, writes a run log + state.md entry, and exits. Reads roster/<function>/schedules.yaml and roster/<function>/pending/. Subscription-billed primitives only — never invokes claude -p, claude --prompt, claude api, or the Anthropic SDK."
-version: "0.1.0"
+description: "Bootstraps roster workspaces. On chat session start, surfaces pending HITL items as a single banner. On a scheduled fire, verifies the schedule is registered, resolves the agent's merged env, dispatches the named agent via the host tool's native subagent primitive, writes a run log + state.md entry, and exits. Reads roster/<function>/schedules.yaml plus pending items at both roster/<function>/pending/ (error class) and <function>/<agent>/pending/ (lesson class). Subscription-billed primitives only — never invokes claude -p, claude --prompt, claude api, or the Anthropic SDK."
+version: "1.0.0"
 trigger_conditions:
-  - "Session start in a roster workspace (CONTEXT.md / CLAUDE.md / AGENTS.md present at cwd)"
-  - "A scheduled fire prompt names a roster agent (e.g., 'Run sdr cold-outreach for _demo')"
+  - "Session start in a roster workspace (CLAUDE.md / AGENTS.md / CONTEXT.md present at cwd)"
+  - "A scheduled fire prompt names a roster agent (e.g., 'Run sdr cold-outreach')"
   - "User invokes /roster-orchestrator"
 ---
 
@@ -12,32 +12,34 @@ trigger_conditions:
 
 The bootstrap entry point for every fresh CLI session in a roster workspace. Two modes:
 
-1. **Chat-session bootstrap** — surface a single banner if `roster/*/pending/` has items.
-2. **Scheduled fire** — verify the fire matches a registered schedule, dispatch the named agent, log the run, exit.
+1. **Chat-session bootstrap** — surface a single banner if any HITL surface has items.
+2. **Scheduled fire** — verify the fire matches a registered schedule, resolve the agent's merged env, dispatch the named agent, log the run, exit.
 
 The skill is **stateless**. It re-reads disk on every invocation so `/clear` and fresh fires both work identically.
 
 ## Working directory
 
-Operate from the workspace root only — the directory containing `CONTEXT.md` (or the `CLAUDE.md` / `AGENTS.md` symlink that points to it) plus a `roster/` directory. If invoked elsewhere, abort with:
+Operate from the workspace root only — the directory containing `config/project.yaml` (the v1 workspace identity file) plus a `roster/` directory (scheduler namespace). If invoked elsewhere, abort with:
 
-> Run roster-orchestrator from your roster workspace root (must contain CONTEXT.md and roster/).
+> Run roster-orchestrator from your roster workspace root (must contain config/project.yaml and roster/).
 
 ## Mode detection
 
 Inspect the initial prompt:
 
-- If it matches a scheduled-fire shape (`Run <agent> <plan> for <project>`, `Use the <agent> skill to <plan> for <project>`, etc.) → **scheduled-fire mode**.
+- If it matches a scheduled-fire shape (`Run <agent> <plan>`, `Use the <agent> skill to <plan>`, etc.) → **scheduled-fire mode**.
 - Otherwise → **chat-session-bootstrap mode**.
 
 When ambiguous, default to chat-session-bootstrap (it is the safe no-op when no fire is happening).
 
 ## Mode 1 — Chat-session bootstrap
 
-1. Walk `roster/*/pending/` across all functions (`gtm`, `product`, `design`, `ops`, `marketing`, …).
-2. Count files matching `*.md` (one HITL item per file).
-3. If count == 0 → print nothing, exit silently.
-4. If count > 0 → print one banner line and stop:
+1. Walk both HITL surfaces:
+   - **Error class** — `roster/<function>/pending/*.md` across all functions (synthesized by `roster pending sync` from non-zero cron exit codes / STALE detection).
+   - **Lesson class** — `<function>/<agent>/pending/*.md` across all agents (drafted by the dreamer skill).
+2. Count files matching `*.md` in each surface. Sum the counts (no dedupe — error and lesson namespaces are disjoint).
+3. If sum == 0 → print nothing, exit silently.
+4. If sum > 0 → print one banner line and stop:
    ```
    ⚠ N pending HITL items — run `roster review`
    ```
@@ -47,22 +49,48 @@ No other side effects. Do not read item bodies. Do not modify any file.
 
 ## Mode 2 — Scheduled fire
 
-1. Parse the fire prompt for `<agent>`, `<plan>`, `<project>`.
+1. Parse the fire prompt for `<agent>` and `<plan>`.
    - Preferred shape: `<function>/<agent>` (e.g., `gtm/sdr`). Use this whenever the prompt provides it.
    - Bare-agent shape (e.g., `sdr`): resolve by scanning `<function>/<agent>/` for exactly one matching directory. If zero or more than one match, abort with the parsed fields and the candidate functions.
-   - Refuse if `<agent>`, `<plan>`, or `<project>` is missing — list which one.
+   - Refuse if `<agent>` or `<plan>` is missing — list which one.
 2. Load `roster/<function>/schedules.yaml` using the resolved function from step 1.
-3. Verify an entry exists in `schedules.yaml` with matching `agent` + `plan` + `project`. If not, abort with:
-   > Schedule not registered: <function>/<agent>/<plan> for <project>. Use `roster schedule list` to see registered schedules.
-4. Dispatch the named agent via the host tool's subagent primitive (see "Subagent dispatch" below). Block until the subagent returns. The subagent runs in isolated context; nothing leaks back here.
-5. Append a single line to `roster/<function>/state.md`. Exact format (one line, three fields, pipe-separated with surrounding single spaces):
+3. Verify a matching entry exists (2-tuple lookup):
    ```
-   <utc-iso-8601> | <function>/<agent>/<plan>/<project> | <status>
+   match = none
+   for entry in schedules_yaml.schedules:
+     if entry.agent == "<function>/<agent>" and entry.plan == "<plan>":
+       match = entry
+       break
+   if match is none:
+     abort "Schedule not registered: <function>/<agent>/<plan>. Use `roster schedule list` to see registered schedules."
+   ```
+4. Resolve the agent's merged env via `resolveAgentEnv` (see "Env resolution" below). The dispatch primitive must see this merged env.
+5. Dispatch the named agent via the host tool's subagent primitive (see "Subagent dispatch" below). Block until the subagent returns. The subagent runs in isolated context; nothing leaks back here.
+6. Append a single line to `roster/<function>/state.md`. Exact format (one line, three fields, pipe-separated with surrounding single spaces):
+   ```
+   <utc-iso-8601> | <function>/<agent>/<plan> | <status>
    ```
    - `<utc-iso-8601>`: UTC, second precision, `Z` suffix. Example: `2026-05-16T14:09:00Z`.
    - `<status>`: exactly one of `success` or `failed`. No other values.
-6. The subagent itself is responsible for the full run log at `<function>/<agent>/projects/<project>/log/runs/<ts>.md`. Do not write that file from here.
-7. Exit cleanly. Do not start a new turn.
+7. The subagent itself is responsible for the full run log at `<function>/<agent>/logs/runs/<YYYY-MM>/<ts>.md` (path flattened in v1). Do not write that file from here.
+8. Exit cleanly. Do not start a new turn.
+
+## Env resolution
+
+The dispatched subagent needs workspace-wide secrets plus any agent-specific overrides. v1 ships a pure loader for this:
+
+```ts
+import { resolveAgentEnv } from '<roster-internal>';   // src/lib/env-merge.ts
+const env = resolveAgentEnv(workspaceRoot, "<function>/<agent>");
+```
+
+Precedence (each key resolved independently):
+
+1. `<function>/<agent>/.env` — if the key is defined, use that value. Empty string = explicit unset (does NOT fall through).
+2. `/.env` (workspace) — if the key is defined, use that value.
+3. Otherwise the key is unset.
+
+The orchestrator must ensure the merged env is materialized in the dispatch primitive's environment before the subagent runs — apply via the host's env-application mechanism (Claude `Task` env hand-off, Codex agent env, Gemini equivalent). Subscription-safety: only `.env` values are loaded; never inherit API-key shell exports from the user's interactive session. For scheduled fires this is reinforced upstream by the cron wrap (`env -i`).
 
 ## Subagent dispatch
 
@@ -75,7 +103,7 @@ Use the `Task` tool with `run_in_background: false`:
 ```
 Task(
   subagent_type="<agent>",
-  prompt="Run plan <plan> for project <project>",
+  prompt="Run plan <plan>",
   run_in_background=false,
 )
 ```
@@ -86,7 +114,7 @@ The subagent runs in isolated context. The return value is a short status string
 
 Invoke the subagent via natural language. Codex resolves the agent name against `~/.codex/agents/<agent>.toml`:
 
-> Use the `<agent>` subagent to run plan `<plan>` for project `<project>`.
+> Use the `<agent>` subagent to run plan `<plan>`.
 
 Wait for the subagent to return its status, then proceed to the state.md write.
 
@@ -116,7 +144,7 @@ If you encounter a workflow that seems to require one of the above, stop and sur
 ## Failure modes
 
 - **Cwd not a roster workspace** → abort with the message above.
-- **Fire prompt missing agent/plan/project** → abort, list the parsed fields.
+- **Fire prompt missing agent or plan** → abort, list the parsed fields.
 - **Schedule not registered** → abort with the `roster schedule list` pointer.
 - **Subagent dispatch fails** → write `status=failed` to state.md, do not retry. Failure-class HITL items are created by the next session-start (ROS-42 / failure observability).
 - **`roster/` directory missing** → first run on a fresh init; treat as zero pending items, exit cleanly.
