@@ -8,9 +8,9 @@ import {
   auditEnvPermissions,
   auditPromptLeak,
   auditTemplateSecretLiterals,
-  parseEnvKeys,
   runSecretsAudit,
 } from '../src/lib/doctor-secrets-audit.ts';
+import { parseEnvKeys } from '../src/lib/dotenv-parse.ts';
 
 function makeTmpCwd(): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), 'roster-secrets-audit-'));
@@ -174,6 +174,23 @@ test('auditEnvKeyReferences: config references key missing from .env → fail', 
     assert.equal(r.missing[0]!.key, 'APOLLO_API_KEY');
     assert.equal(r.missing[0]!.references.length, 1);
     assert.match(r.missing[0]!.references[0]!.file, /default\.yaml$/);
+  } finally {
+    cleanup();
+  }
+});
+
+// Symmetry with resolveAgentEnv (env-merge.ts): K= in workspace .env means
+// "explicit unset" and must NOT satisfy ${K} references. Otherwise doctor
+// passes while runtime dispatch fails with a missing-key error.
+test('auditEnvKeyReferences: empty-string workspace value does NOT satisfy reference', () => {
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    writeFileSync(join(dir, '.env'), 'APOLLO_API_KEY=\n');
+    writeConfigYaml(dir, 'gtm', 'sdr', '_demo', 'default.yaml', 'apollo_token: ${APOLLO_API_KEY}\n');
+    const r = auditEnvKeyReferences(dir);
+    assert.equal(r.status, 'fail');
+    assert.equal(r.missing[0]!.key, 'APOLLO_API_KEY');
+    assert.deepEqual(r.envKeys, [], 'empty-valued keys are excluded from envKeys');
   } finally {
     cleanup();
   }

@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync, type Stats } from 'node:fs';
 import { join, relative } from 'node:path';
+import { parseEnvFile, parseEnvKeys } from './dotenv-parse.ts';
 import { isWindows } from './platform.ts';
 
 // =====================================================================
@@ -52,26 +53,6 @@ export type EnvKeyReferenceResult = {
   envKeys: string[];
   missing: EnvKeyReferenceItem[];
 };
-
-// Conservative .env key parser: `KEY=value` lines only. Skips comments and
-// blank lines. Mirrors dotenv's permissive shape minus interpolation.
-const ENV_KEY_RE = /^([A-Za-z_][A-Za-z0-9_]*)\s*=/;
-
-export function parseEnvKeys(content: string): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (line.length === 0 || line.startsWith('#')) continue;
-    const candidate = line.startsWith('export ') ? line.slice('export '.length).trim() : line;
-    const m = candidate.match(ENV_KEY_RE);
-    if (m && !seen.has(m[1]!)) {
-      seen.add(m[1]!);
-      out.push(m[1]!);
-    }
-  }
-  return out;
-}
 
 // Match ${KEY} or $KEY (where KEY is a valid env-var identifier).
 // We deliberately exclude the bare-word form when adjacent to other word
@@ -192,10 +173,15 @@ const SHELL_VARS = new Set([
 
 export function auditEnvKeyReferences(cwd: string): EnvKeyReferenceResult {
   const envPath = join(cwd, '.env');
+  // Mirror resolveAgentEnv (env-merge.ts) semantics: K= in workspace .env is
+  // "explicitly unset" — it must NOT satisfy a ${K} reference, or doctor will
+  // pass while runtime dispatch fails with a missing-key error.
   let envKeys: string[] = [];
   try {
     const raw = readFileSync(envPath, 'utf8');
-    envKeys = parseEnvKeys(raw);
+    envKeys = Array.from(parseEnvFile(raw).entries())
+      .filter(([, v]) => v.length > 0)
+      .map(([k]) => k);
   } catch {
     // No .env — anything referenced is missing. If no configs reference
     // anything, status stays ok by virtue of an empty key set.
