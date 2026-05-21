@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import { chmodSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, type Stats } from 'node:fs';
+import { chmodSync, existsSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import YAML from 'yaml';
@@ -12,9 +12,12 @@ import { validateSchedulesInCwd, type ValidationReport } from '../lib/schedule-v
 import {
   auditEnvPermissions,
   runSecretsAudit,
+  type AgentEnvRefMiss,
+  type AgentEnvRefsResult,
   type EnvPermissionsResult,
   type SecretsAuditResult,
 } from '../lib/doctor-secrets-audit.ts';
+import { parseEnvKeys } from '../lib/dotenv-parse.ts';
 import { runSafetyAudit, type SafetyAuditResult } from '../lib/doctor-safety-audit.ts';
 import {
   runSchedulingDriftAudit,
@@ -225,6 +228,136 @@ export function runFixes(
   return { applied, fixed, failed };
 }
 
+// =====================================================================
+// Agent env-ref --fix (check 15)
+// =====================================================================
+//
+// Interactive: shows a checkbox of unique missing env-var keys (deduped across
+// agents) and appends `KEY=` lines for each user-selected key to the workspace
+// /.env. Idempotent: keys already present in /.env are silently skipped.
+// Workspace /.env is the single declared-keys surface — agent .env is for
+// overrides only, never the place to add new declared keys.
+
+export type AgentEnvFixPrompt = (
+  uniqueKeys: ReadonlyArray<{ key: string; refs: AgentEnvRefMiss[] }>,
+) => Promise<string[]>;
+
+function uniqueKeysFromRefs(refs: AgentEnvRefsResult): Array<{ key: string; refs: AgentEnvRefMiss[] }> {
+  const byKey = new Map<string, AgentEnvRefMiss[]>();
+  // Errors first, then warns — preserves "required-first" ordering in the UI.
+  for (const m of [...refs.errors, ...refs.warns]) {
+    const list = byKey.get(m.key);
+    if (list) list.push(m);
+    else byKey.set(m.key, [m]);
+  }
+  return Array.from(byKey.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, refs]) => ({ key, refs }));
+}
+
+function appendKeysToEnvFile(cwd: string, keys: string[]): { added: string[]; skipped: string[] } {
+  const envPath = join(cwd, '.env');
+  const added: string[] = [];
+  const skipped: string[] = [];
+
+  let existing = '';
+  let hadFile = false;
+  try {
+    existing = readFileSync(envPath, 'utf8');
+    hadFile = true;
+  } catch {
+    // file absent — we'll create it
+  }
+  let existingKeys = new Set<string>();
+  try {
+    existingKeys = new Set(parseEnvKeys(existing));
+  } catch {
+    // malformed existing .env: still try to append, but warn the caller via
+    // an empty existingKeys set so we don't silently skip.
+  }
+
+  const newLines: string[] = [];
+  for (const key of keys) {
+    if (existingKeys.has(key)) {
+      skipped.push(key);
+      continue;
+    }
+    newLines.push(`${key}=`);
+    added.push(key);
+  }
+
+  if (newLines.length === 0) {
+    return { added, skipped };
+  }
+
+  let body = existing;
+  if (body.length > 0 && !body.endsWith('\n')) body += '\n';
+  body += newLines.join('\n') + '\n';
+
+  writeFileSync(envPath, body, { encoding: 'utf8' });
+  if (!hadFile && !isWindows()) {
+    try {
+      chmodSync(envPath, 0o600);
+    } catch {
+      // chmod failure is non-fatal — file was created; check 11 will surface
+      // the wrong-perm finding on the next pass.
+    }
+  }
+  return { added, skipped };
+}
+
+async function defaultAgentEnvPrompt(
+  uniqueKeys: ReadonlyArray<{ key: string; refs: AgentEnvRefMiss[] }>,
+): Promise<string[]> {
+  const { checkbox } = await import('@inquirer/prompts');
+  return checkbox({
+    message: 'Select env keys to append to /.env (empty value — fill in after):',
+    choices: uniqueKeys.map(({ key, refs }) => {
+      const required = refs.some((r) => r.required);
+      const tag = required ? '(required)' : '(optional)';
+      const agents = refs.map((r) => r.agent).join(', ');
+      return { value: key, name: `${key}  ${tag}  ← ${agents}` };
+    }),
+  });
+}
+
+export async function applyAgentEnvFix(
+  cwd: string,
+  refs: AgentEnvRefsResult,
+  opts: { dryRun: boolean; prompt?: AgentEnvFixPrompt },
+): Promise<{ fixed: string[]; failed: Array<{ what: string; error: string }> }> {
+  const fixed: string[] = [];
+  const failed: Array<{ what: string; error: string }> = [];
+  const uniqueKeys = uniqueKeysFromRefs(refs);
+  if (uniqueKeys.length === 0) return { fixed, failed };
+
+  if (opts.dryRun) {
+    for (const { key, refs: agents } of uniqueKeys) {
+      const agentList = agents.map((r) => r.agent).join(', ');
+      fixed.push(`/.env: would append ${key}= ${chalk.dim(`(referenced by ${agentList})`)}`);
+    }
+    return { fixed, failed };
+  }
+
+  let selected: string[];
+  try {
+    selected = await (opts.prompt ?? defaultAgentEnvPrompt)(uniqueKeys);
+  } catch (err) {
+    failed.push({ what: '/.env (interactive prompt)', error: (err as Error).message });
+    return { fixed, failed };
+  }
+  if (selected.length === 0) return { fixed, failed };
+
+  try {
+    const { added, skipped } = appendKeysToEnvFile(cwd, selected);
+    for (const k of added) fixed.push(`/.env: appended ${k}=`);
+    for (const k of skipped) fixed.push(`/.env: ${k} already present (skipped)`);
+  } catch (err) {
+    failed.push({ what: '/.env', error: (err as Error).message });
+  }
+  return { fixed, failed };
+}
+
 function renderFixSection(outcome: FixOutcome): string[] {
   if (!outcome.applied) return [];
   if (outcome.fixed.length === 0 && outcome.failed.length === 0) return [];
@@ -322,10 +455,16 @@ function renderSecretsSection(audit: SecretsAuditResult): string[] {
   const refs = audit.envKeyReferences;
   const templates = audit.templateSecretLiterals;
   const leak = audit.promptLeak;
+  const agentRefs = audit.agentEnvRefs;
 
   // Skip rendering when there's nothing to show.
   const noEnv = env.status === 'absent' || env.status === 'skip-platform';
-  const allClean = noEnv && refs.status === 'ok' && templates.status === 'ok' && leak.status === 'ok';
+  const allClean =
+    noEnv &&
+    refs.status === 'ok' &&
+    templates.status === 'ok' &&
+    leak.status === 'ok' &&
+    agentRefs.status === 'ok';
   if (allClean) return [];
 
   const lines: string[] = [''];
@@ -359,6 +498,32 @@ function renderSecretsSection(audit: SecretsAuditResult): string[] {
     lines.push(`  ${chalk.yellow('!')} prompt-leak       ${chalk.yellow('WARN')} ${chalk.dim(`(${leak.items.length} reference${leak.items.length === 1 ? '' : 's'})`)}`);
     for (const item of leak.items.slice(0, 5)) {
       lines.push(`      ${chalk.yellow('-')} ${item.schedule}: ${item.reference} ${chalk.dim('in ' + item.file + ':' + item.line)}`);
+    }
+  }
+
+  if (agentRefs.status === 'fail' || agentRefs.status === 'warn') {
+    const e = agentRefs.errors.length;
+    const w = agentRefs.warns.length;
+    const counts: string[] = [];
+    if (e > 0) counts.push(`${e} error${e === 1 ? '' : 's'}`);
+    if (w > 0) counts.push(`${w} warn${w === 1 ? '' : 's'}`);
+    const tag = agentRefs.status === 'fail' ? chalk.red('FAIL') : chalk.yellow('WARN');
+    const symbol = agentRefs.status === 'fail' ? chalk.red('✗') : chalk.yellow('!');
+    lines.push(`  ${symbol} agent-env-refs    ${tag} ${chalk.dim(`(${counts.join(', ')})`)}`);
+    for (const m of agentRefs.errors.slice(0, 10)) {
+      lines.push(`      ${chalk.red('-')} ${m.agent}: ${m.key} ${chalk.dim(`(tools.${m.binding}, required)`)}`);
+    }
+    if (agentRefs.errors.length > 10) {
+      lines.push(`      ${chalk.dim(`… (${agentRefs.errors.length - 10} more errors)`)}`);
+    }
+    for (const m of agentRefs.warns.slice(0, 5)) {
+      lines.push(`      ${chalk.yellow('-')} ${m.agent}: ${m.key} ${chalk.dim(`(tools.${m.binding}, optional)`)}`);
+    }
+    if (agentRefs.warns.length > 5) {
+      lines.push(`      ${chalk.dim(`… (${agentRefs.warns.length - 5} more warns)`)}`);
+    }
+    if (e > 0 || w > 0) {
+      lines.push(`      ${chalk.dim('→ Run `roster doctor --fix` to append missing keys to /.env.')}`);
     }
   }
 
@@ -460,7 +625,7 @@ function renderText(results: ToolAuditResult[], summary: Summary, workarounds: W
   return lines;
 }
 
-export function executeDoctor(opts: DoctorOptions): number {
+export async function executeDoctor(opts: DoctorOptions): Promise<number> {
   const detected = detectTools();
   const sources = {
     skills: join(ROSTER_ROOT, 'skills'),
@@ -500,13 +665,6 @@ export function executeDoctor(opts: DoctorOptions): number {
   const initialEnvPerms = auditEnvPermissions(opts.cwd);
   let fixOutcome: FixOutcome = NO_FIX_REQUESTED;
 
-  if (opts.fix) {
-    fixOutcome = runFixes(opts.cwd, workspace, initialEnvPerms, opts.dryRun);
-    if (!opts.dryRun && fixOutcome.fixed.length > 0) {
-      workspaceFinal = auditWorkspace(opts.cwd);
-    }
-  }
-
   const schedulesForLeak = listAllScheduleEntries(opts.cwd);
   // ROSTER_CODEX_HOME mirrors the override used by src/lib/tools.ts (codexHome()).
   // Honor it here too so doctor's Codex preflight reads from the same synthetic
@@ -521,11 +679,58 @@ export function executeDoctor(opts: DoctorOptions): number {
     env: process.env,
     ...(codexHomeOverride !== undefined && codexHomeOverride !== '' ? { codexHome: codexHomeOverride } : {}),
   });
-  const secrets = runSecretsAudit({
+  const initialSecrets = runSecretsAudit({
     cwd: opts.cwd,
     rosterRoot: ROSTER_ROOT,
     schedules: schedulesForLeak,
   });
+
+  if (opts.fix) {
+    fixOutcome = runFixes(opts.cwd, workspace, initialEnvPerms, opts.dryRun);
+
+    // Interactive check-15 fix. Skipped under --json (no TTY contract) and when
+    // stdin is not a TTY (CI / pipe). Under --dry-run we still preview.
+    const refs = initialSecrets.agentEnvRefs;
+    const anyMissing = refs.errors.length > 0 || refs.warns.length > 0;
+    // Node sets process.stdin.isTTY to `true` for a TTY and leaves it
+    // `undefined` otherwise (pipe / file / detached). Only the explicit-true
+    // case means we have a real interactive shell — anything else degrades
+    // to the "rerun interactively" path.
+    const canInteract = !opts.json && process.stdin.isTTY === true;
+    if (anyMissing) {
+      if (opts.dryRun) {
+        const out = await applyAgentEnvFix(opts.cwd, refs, { dryRun: true });
+        fixOutcome.fixed.push(...out.fixed);
+        fixOutcome.failed.push(...out.failed);
+      } else if (canInteract) {
+        const out = await applyAgentEnvFix(opts.cwd, refs, { dryRun: false });
+        fixOutcome.fixed.push(...out.fixed);
+        fixOutcome.failed.push(...out.failed);
+      } else {
+        const reason = opts.json
+          ? 'interactive prompt suppressed under --json'
+          : 'no TTY (non-interactive shell)';
+        fixOutcome.failed.push({
+          what: '/.env (agent-env-refs)',
+          error: `--fix skipped: ${reason}. Rerun in an interactive shell to append missing keys.`,
+        });
+      }
+    }
+
+    if (!opts.dryRun && fixOutcome.fixed.length > 0) {
+      workspaceFinal = auditWorkspace(opts.cwd);
+    }
+  }
+
+  // Re-run secrets audit when a real fix mutated /.env so the rendered section
+  // reflects post-fix state. Other audits are not affected by --fix.
+  const secrets = opts.fix && !opts.dryRun && fixOutcome.fixed.length > 0
+    ? runSecretsAudit({
+        cwd: opts.cwd,
+        rosterRoot: ROSTER_ROOT,
+        schedules: schedulesForLeak,
+      })
+    : initialSecrets;
   const schedulingDrift = runSchedulingDriftAudit({
     cwd: opts.cwd,
     homeDir: home,

@@ -2,6 +2,8 @@ import { readdirSync, readFileSync, statSync, type Stats } from 'node:fs';
 import { join, relative } from 'node:path';
 import { parseEnvFile, parseEnvKeys } from './dotenv-parse.ts';
 import { isWindows } from './platform.ts';
+import { loadAgentConfig } from './agent-config-schema.ts';
+import { resolveAgentEnv } from './env-merge.ts';
 
 // =====================================================================
 // .env file permissions (check 11)
@@ -381,6 +383,118 @@ export function auditPromptLeak(
 }
 
 // =====================================================================
+// Agent env-var references — referenced-but-unset across agents (check 15)
+// =====================================================================
+//
+// For every <function>/<agent>/config.yaml in the workspace, list the env-var
+// keys it declares via `tools.*.env_var` and resolve each via resolveAgentEnv.
+// A key that is unset in both agent .env and workspace /.env counts as missing:
+//   - required: true  → error  (flips SecretsAuditResult.ok to false)
+//   - required: false → warn   (does NOT flip ok)
+//
+// Empty-string ("K=") in either .env counts as unset per resolveAgentEnv
+// semantics — mirrors check 12.
+
+export type AgentEnvRefMiss = {
+  agent: string;
+  binding: string;
+  key: string;
+  required: boolean;
+};
+
+export type AgentEnvRefsResult = {
+  status: 'ok' | 'warn' | 'fail';
+  errors: AgentEnvRefMiss[];
+  warns: AgentEnvRefMiss[];
+};
+
+const AGENT_SEGMENT_RE = /^[a-z][a-z0-9-]*$/;
+
+function listV1AgentPaths(cwd: string): string[] {
+  const out: string[] = [];
+  let topEntries: string[];
+  try {
+    topEntries = readdirSync(cwd);
+  } catch {
+    return [];
+  }
+  for (const top of topEntries) {
+    if (top.startsWith('.')) continue;
+    if (SKIP_TOP.has(top)) continue;
+    if (!AGENT_SEGMENT_RE.test(top)) continue;
+    const fnDir = join(cwd, top);
+    let st: Stats;
+    try {
+      st = statSync(fnDir);
+    } catch {
+      continue;
+    }
+    if (!st.isDirectory()) continue;
+
+    let children: string[];
+    try {
+      children = readdirSync(fnDir);
+    } catch {
+      continue;
+    }
+    for (const child of children) {
+      if (child.startsWith('.')) continue;
+      if (!AGENT_SEGMENT_RE.test(child)) continue;
+      const agentDir = join(fnDir, child);
+      let agentSt: Stats;
+      try {
+        agentSt = statSync(agentDir);
+      } catch {
+        continue;
+      }
+      if (!agentSt.isDirectory()) continue;
+      const cfg = join(agentDir, 'config.yaml');
+      try {
+        if (statSync(cfg).isFile()) {
+          out.push(top + '/' + child);
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+  out.sort();
+  return out;
+}
+
+export function auditAgentEnvRefs(cwd: string): AgentEnvRefsResult {
+  const errors: AgentEnvRefMiss[] = [];
+  const warns: AgentEnvRefMiss[] = [];
+
+  for (const agent of listV1AgentPaths(cwd)) {
+    const loaded = loadAgentConfig(cwd, agent);
+    // Malformed configs (parse / schema / agent-field mismatch / ref shape)
+    // are surfaced by a future config-validity check, not by check 15.
+    if (!loaded.ok) continue;
+    const tools = loaded.config.tools ?? {};
+    const resolved = resolveAgentEnv(cwd, agent);
+    for (const [binding, t] of Object.entries(tools)) {
+      if (Object.prototype.hasOwnProperty.call(resolved, t.env_var)) continue;
+      const miss: AgentEnvRefMiss = {
+        agent,
+        binding,
+        key: t.env_var,
+        required: t.required,
+      };
+      if (t.required) {
+        errors.push(miss);
+      } else {
+        warns.push(miss);
+      }
+    }
+  }
+
+  const status: AgentEnvRefsResult['status'] =
+    errors.length > 0 ? 'fail' : warns.length > 0 ? 'warn' : 'ok';
+  return { status, errors, warns };
+}
+
+// =====================================================================
 // Aggregate
 // =====================================================================
 
@@ -390,6 +504,7 @@ export type SecretsAuditResult = {
   envKeyReferences: EnvKeyReferenceResult;
   templateSecretLiterals: TemplateSecretLiteralResult;
   promptLeak: PromptLeakResult;
+  agentEnvRefs: AgentEnvRefsResult;
 };
 
 export type SecretsAuditOpts = {
@@ -403,8 +518,11 @@ export function runSecretsAudit(opts: SecretsAuditOpts): SecretsAuditResult {
   const envKeyReferences = auditEnvKeyReferences(opts.cwd);
   const templateSecretLiterals = auditTemplateSecretLiterals(opts.rosterRoot);
   const promptLeak = auditPromptLeak(opts.cwd, opts.schedules);
+  const agentEnvRefs = auditAgentEnvRefs(opts.cwd);
 
   // Prompt-leak warnings do NOT flip ok (per acceptance: "warns; doesn't fail").
+  // Agent-env-ref warns (required:false unset) likewise do not flip ok — only
+  // the errors[] bucket (required:true unset) is fatal.
   // skip-platform on env permissions is treated as ok (Windows mode bits are
   // not POSIX; we can't meaningfully check 0600 there).
   const envOk =
@@ -414,7 +532,8 @@ export function runSecretsAudit(opts: SecretsAuditOpts): SecretsAuditResult {
   const ok =
     envOk &&
     envKeyReferences.status === 'ok' &&
-    templateSecretLiterals.status === 'ok';
+    templateSecretLiterals.status === 'ok' &&
+    agentEnvRefs.errors.length === 0;
 
   return {
     ok,
@@ -422,5 +541,6 @@ export function runSecretsAudit(opts: SecretsAuditOpts): SecretsAuditResult {
     envKeyReferences,
     templateSecretLiterals,
     promptLeak,
+    agentEnvRefs,
   };
 }

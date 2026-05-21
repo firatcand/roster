@@ -34,6 +34,18 @@ function captureStdout(fn: () => unknown): string {
   return buf.join('\n');
 }
 
+async function captureStdoutAsync(fn: () => Promise<unknown>): Promise<string> {
+  const buf: string[] = [];
+  const orig = console.log;
+  console.log = (...args: unknown[]) => buf.push(args.map(String).join(' '));
+  try {
+    await fn();
+  } finally {
+    console.log = orig;
+  }
+  return buf.join('\n');
+}
+
 const yamlCodex = `version: 1
 schedules:
   - name: heartbeat
@@ -75,14 +87,14 @@ test('executeScheduleValidate --json: --dry-run output byte-identical to non-dry
   }
 });
 
-test('executeDoctor --json: --dry-run output byte-identical to non-dry-run', () => {
+test('executeDoctor --json: --dry-run output byte-identical to non-dry-run', async () => {
   // Use an isolated empty workspace; rely on the real home for tool detection
   // (deterministic since both invocations see the same env).
   const { root, cleanup } = makeWorkspace();
   try {
     const opts = { cwd: root, json: true, silent: false, fix: false } as const;
-    const baseline = captureStdout(() => executeDoctor({ ...opts, dryRun: false }));
-    const dryRun = captureStdout(() => executeDoctor({ ...opts, dryRun: true }));
+    const baseline = await captureStdoutAsync(() => executeDoctor({ ...opts, dryRun: false }));
+    const dryRun = await captureStdoutAsync(() => executeDoctor({ ...opts, dryRun: true }));
     assert.equal(dryRun, baseline);
   } finally {
     cleanup();

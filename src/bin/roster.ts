@@ -427,7 +427,7 @@ async function runHooks(args: readonly string[]): Promise<number> {
   });
 }
 
-function runDoctor(args: readonly string[]): number {
+async function runDoctor(args: readonly string[]): Promise<number> {
   const parsed = parseDoctorArgs(args);
   if (parsed.kind === 'err') {
     throw new RosterError({
@@ -437,7 +437,7 @@ function runDoctor(args: readonly string[]): number {
       exitCode: EXIT_ERROR,
     });
   }
-  const code = executeDoctor({ json: parsed.json, silent: parsed.silent, fix: parsed.fix, dryRun: parsed.dryRun, cwd: process.cwd() });
+  const code = await executeDoctor({ json: parsed.json, silent: parsed.silent, fix: parsed.fix, dryRun: parsed.dryRun, cwd: process.cwd() });
   if (code === EXIT_NO_TOOLS && !parsed.json) {
     throw noToolsError(toolHints(allTools()));
   }
@@ -474,7 +474,7 @@ async function main(): Promise<number> {
   if (isSubcommand(first)) {
     if (first === 'install') return runInstall(rest);
     if (first === 'init') return await runInit(rest);
-    if (first === 'doctor') return runDoctor(rest);
+    if (first === 'doctor') return await runDoctor(rest);
     if (first === 'schedule') return await runSchedule(rest);
     if (first === 'review') return await runReview(rest);
     if (first === 'hooks') return await runHooks(rest);
