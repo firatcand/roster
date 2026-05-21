@@ -33,7 +33,7 @@ When invoked without a plan, list the available plans and ask which to run.
 
 ### Out-of-scope intents
 
-Requests phrased as `create project ...` are not a v1 plan — the workspace identity lives in `config/project.yaml`. To start a fresh workspace, run `roster init` in a new directory.
+v1 is a single workspace per directory — this skill does not spin up sibling workspaces. The current workspace's identity lives in `config/project.yaml`; to start a new one, run `roster init` in a fresh directory.
 
 ## Plans
 
@@ -115,14 +115,14 @@ Continue until the uncertain bucket is empty.
 Render the full draft tree to the user. Show:
 
 - Every file path that will be written, with a one-line description.
-- The full `agent.md` content (purpose, inputs, steps, subagents, tools, outputs, approval, lessons, failure modes).
+- The full `agent.md` content (purpose, inputs, subagents, tools-and-bindings, outputs, approval, lessons, failure modes — per `templates/scaffold/conventions.md`; workflow logic lives in plans, not in `agent.md`).
 - The slash-command description that will land in `.claude/commands/<agent>.md` (replacing the stub's `TODO: fill in description` placeholder).
-- The `plans/` directory (empty `.gitkeep` + a stub for the first plan if one was named during Phase 3).
+- The `plans/` directory (`.gitkeep` only — the user writes the first plan in `plans/<plan>.yaml` as a next step after the agent tree lands).
 
 Offer three controls:
 
 - **`y`** → proceed to Phase 5 (atomic write).
-- **`revise <section>`** → re-enter Phase 3 for that section only, then re-render the preview. Valid sections: `purpose`, `inputs`, `steps`, `subagents`, `tools`, `outputs`, `approval`, `failure-modes`, `plans`, `slash-command`. After collecting the revised answers, the skill re-renders the **full** preview (not just the changed section) so the user sees the final state in one place.
+- **`revise <section>`** → re-enter Phase 3 for that section only, then re-render the preview. Valid sections: `purpose`, `inputs`, `subagents`, `tools`, `outputs`, `approval`, `failure-modes`, `slash-command` (the keyword `tools` revises the `## Tools and bindings` section). After collecting the revised answers, the skill re-renders the **full** preview (not just the changed section) so the user sees the final state in one place.
 - **`cancel`** → abort with no writes. Print: `Cancelled. No files written.`
 
 Loop on `revise` until the user types `y` or `cancel`. There is no implicit "looks good enough" — explicit acceptance is required.
@@ -145,7 +145,7 @@ Run all five invariants from § "Cross-file invariants" against `draft`. On any 
 
 Re-enter Phase 3 for the offending section. The atomic-write transaction NEVER proceeds with a tripped invariant — no partial state can leak onto disk.
 
-Invariant 2 (step ids match `plans/<plan>.yaml`) is vacuously satisfied when no starter plan was named during Phase 3 — per the Generated file contracts table, `plans/<plan>.yaml` is optional. The check applies only when at least one plan file is staged in `draft`.
+Per `templates/scaffold/conventions.md`, workflow logic lives in plan YAMLs, not in `agent.md` — and the create-agent plan does not auto-write the first plan (the user writes it as a next step). The pre-write check therefore validates only the agent tree, not any `plans/<plan>.yaml` content.
 
 #### Step 2 — Final user preview
 
@@ -198,16 +198,15 @@ Order:
 4.  `<fn>/<agent>/subagents/_template.md`
 5.  `<fn>/<agent>/subagents/<name>.md` (one per `agent.md ## Subagents` entry; zero files if none named)
 6.  `<fn>/<agent>/plans/.gitkeep`
-7.  `<fn>/<agent>/plans/<plan>.yaml` (one per plan named in Phase 3; absent in stub mode and when no plan named)
-8.  `<fn>/<agent>/config.yaml`
-9.  `<fn>/<agent>/asset-references.md`
-10. `<fn>/<agent>/playbook/.gitkeep`
-11. `<fn>/<agent>/pending/.gitkeep`
-12. `<fn>/<agent>/logs/runs/.gitkeep`
-13. `<fn>/<agent>/logs/feedback/.gitkeep`
-14. `<fn>/<agent>/.claude/skills/.gitkeep`
-15. `<fn>/<agent>/.claude/plugins/.gitkeep`
-16. `<fn>/<agent>/agent.md`  ← **LAST. Canonical contract.**
+7.  `<fn>/<agent>/config.yaml`
+8.  `<fn>/<agent>/asset-references.md`
+9.  `<fn>/<agent>/playbook/.gitkeep`
+10. `<fn>/<agent>/pending/.gitkeep`
+11. `<fn>/<agent>/logs/runs/.gitkeep`
+12. `<fn>/<agent>/logs/feedback/.gitkeep`
+13. `<fn>/<agent>/.claude/skills/.gitkeep`
+14. `<fn>/<agent>/.claude/plugins/.gitkeep`
+15. `<fn>/<agent>/agent.md`  ← **LAST. Canonical contract.**
 
 **Why `agent.md` last:** It is the canonical orchestrator contract — the file roster's commands grep for to detect an agent's existence. Writing it last guarantees that any process **keyed off the existence of `agent.md`** observes either no agent or a complete one. A mid-Step-5 crash leaves either no `agent.md` at all, or — after Step 7 rollback — an empty `<fn>/<agent>/` parent that no contract-aware reader will treat as a valid agent.
 
@@ -285,10 +284,12 @@ Every file the guided plan writes has a per-file content contract. Stub mode pro
 | File | Guided-mode contract | Stub-mode contract |
 | --- | --- | --- |
 | `agent.md` | See per-section disposition below. Populated and grounded fields filled from prose + Phase 3 answers; boilerplate fields filled from `scripts/new-agent.sh` heredocs and `conventions.md`. Zero literal `<placeholder>` strings remain (explicit `TODO: <gap>` markers allowed only where the user deferred during Phase 3). | Identical to `bash scripts/new-agent.sh` output: every grounded/uncertain field carries its `<placeholder>` text verbatim. |
-| `plans/<plan>.yaml` | Created only if the user named at least one plan during Phase 3. Step `id:` fields 1:1 with `agent.md ## Steps` — they cannot drift. Inputs / outputs schemas come from the user's plan description. | `plans/.gitkeep` only. No starter plan file. |
 | `subagents/<name>.md` | One file per name listed in `agent.md ## Subagents`. All **six** required sections present and populated: `Role`, `Inputs`, `Output`, `Tools`, `Boundaries`, `Quality bar`. **Never half-populate a subagent.** If a section cannot be populated from prose / follow-ups, either remove the subagent from `agent.md ## Subagents` entirely or Phase 3 re-asks. `subagents/_template.md` is also written byte-for-byte from the `scripts/new-agent.sh` heredoc (same as stub mode). | `subagents/_template.md` only. No per-name files. |
 | `.claude/commands/<agent>.md` | `description:` field is a real sentence: ≤ 80 chars, contains no `<` character, and contains no literal `TODO:` substring. The body matches the canonical routing-logic template emitted by `write_slash_command` in `scripts/new-agent.sh`, with `<agent>` and `<function>` substituted. | `description: <function> agent — TODO: fill in description`. Canonical body otherwise unchanged. |
-| `README.md`, `.mcp.json`, `.claude/settings.json`, `config.yaml`, `asset-references.md`, every `.gitkeep` | Identical to stub mode — byte-for-byte. These files do not vary by mode. | (canonical) |
+| `config.yaml` | Stub mode writes `tools: {}` (empty). Guided mode mirrors the `## Tools and bindings` block from the generated `agent.md` into the `tools:` map per `templates/scaffold/conventions.md` § "Tool bindings"; every named tool has an `env_var`, `required`, and `description` entry (TODO placeholders allowed only where the user deferred). | `tools: {}`. |
+| `README.md`, `.mcp.json`, `.claude/settings.json`, `asset-references.md`, every `.gitkeep` | Identical to stub mode — byte-for-byte. These files do not vary by mode. | (canonical) |
+
+> Plan YAMLs are not in this table — `create-agent` does not write `plans/<plan>.yaml`. The user authors plans as a next step after the agent tree lands.
 
 ### `agent.md` per-section disposition
 
@@ -299,9 +300,8 @@ For each section of the agent.md template (the structure emitted by `scripts/new
 | `## Purpose` | **grounded** — drafted from the Phase 1 prose. |
 | `## Inputs` — orchestrator-expected list | **grounded** — drafted from prose + Phase 3 answers about what triggers a run. |
 | `## Inputs` — "Read at runtime" list | **boilerplate** — canonical paths from `conventions.md` (agent.md, agent `config.yaml`, workspace `CLAUDE.md`, workspace `guidelines/`, playbooks, recent runs). |
-| `## Steps` | **grounded** — every step comes from prose / Phase 3. Must have matching ids in `plans/<plan>.yaml`. |
 | `## Subagents` | **uncertain → guided** — Phase 3 collects the subagent list (or empty). Each named subagent gets a fully populated `subagents/<name>.md`. |
-| `## Tools` | **uncertain → guided** — Phase 3 collects tool / MCP names. Each tool listed gets a bindings block (invariant 3). |
+| `## Tools and bindings` | **uncertain → guided** — Phase 3 collects tool / MCP names. Each named tool gets a bindings entry (invariant 2). Section is omitted entirely when the user defines no tools. |
 | `## Outputs` | **boilerplate + grounded** — canonical run-file path is boilerplate; the artifact description is grounded from prose. |
 | `## Approval` | **boilerplate** — `approval_channel: auto` line with the standard Slack / HITL routing paragraph. |
 | `## Lessons protocol` | **boilerplate** — canonical paragraph, identical in every agent. |
@@ -309,13 +309,12 @@ For each section of the agent.md template (the structure emitted by `scripts/new
 
 ### Cross-file invariants
 
-Five invariants MUST pass during the pre-write check (Phase 5). Any failure aborts the write — no partial state is committed to the workspace — and the user is shown which invariant tripped and offered the chance to revise the relevant section.
+Four invariants MUST pass during the pre-write check (Phase 5). Any failure aborts the write — no partial state is committed to the workspace — and the user is shown which invariant tripped and offered the chance to revise the relevant section.
 
 1. **Subagent files match the declared list.** Every subagent named in `agent.md ## Subagents` has a populated file at `subagents/<name>.md` with all six required sections. Conversely, every file under `subagents/` other than `_template.md` is named in `agent.md ## Subagents`. Neither side may carry an orphan.
-2. **Step ids match between agent.md and the starter plan.** Every step in `agent.md ## Steps` appears in the starter `plans/<plan>.yaml` with a matching `id:` field. Order may differ; presence and ids may not.
-3. **Every named tool has a bindings block.** Every tool listed in `agent.md ## Tools` has a corresponding entry in the `## Tools and bindings` block of `agent.md` with a non-`TODO` `required` flag and a non-empty `description`.
-4. **Slash-command description is real.** The `description:` field in `.claude/commands/<agent>.md` is ≤ 80 characters, contains no `<` character, and contains no literal `TODO:` substring.
-5. **No unfilled placeholders in agent.md.** `agent.md` contains zero literal `<placeholder>` strings (i.e., no `<...>` patterns from the stub template). Explicit `TODO: <gap>` comments are allowed only where the user deferred during Phase 3; they must include a specific gap description, not a bare `TODO:`.
+2. **Every named tool has a bindings entry.** Every tool listed in the `## Tools and bindings` block of `agent.md` has a non-`TODO` `required` flag and a non-empty `description`. The same set is mirrored into `config.yaml` under `tools:` (per `templates/scaffold/conventions.md` § "Tool bindings").
+3. **Slash-command description is real.** The `description:` field in `.claude/commands/<agent>.md` is ≤ 80 characters, contains no `<` character, and contains no literal `TODO:` substring.
+4. **No unfilled placeholders in agent.md.** `agent.md` contains zero literal `<placeholder>` strings (i.e., no `<...>` patterns from the stub template). Explicit `TODO: <gap>` comments are allowed only where the user deferred during Phase 3; they must include a specific gap description, not a bare `TODO:`.
 
 On invariant failure, the skill prints:
 
