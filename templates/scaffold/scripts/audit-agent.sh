@@ -42,7 +42,7 @@ PASSED=()
 if [ ! -f "$AGENT_DIR/agent.md" ]; then
   FAILURES+=("[$FN/$AGENT/agent.md] missing")
 else
-  REQUIRED_SECTIONS=("## Purpose" "## Inputs" "## Plans" "## Subagents" "## Tools and bindings" "## Outputs" "## Approval" "## Lessons protocol")
+  REQUIRED_SECTIONS=("## Purpose" "## Inputs" "## Plans" "## Subagents" "## Outputs" "## Approval" "## Lessons protocol")
   MISSING=()
   for section in "${REQUIRED_SECTIONS[@]}"; do
     if ! grep -qF "$section" "$AGENT_DIR/agent.md"; then
@@ -54,6 +54,14 @@ else
     FAILURES+=("  → Suggested fix: add the missing sections per conventions.md § 'Agent contract'")
   else
     PASSED+=("[$FN/$AGENT/agent.md] all required sections present")
+  fi
+
+  # ## Tools and bindings is required ONLY for agents that use external tools.
+  # Missing → warning, not failure (agents reading only workspace guidelines
+  # don't need it). The chief-of-staff create-agent guided flow adds the
+  # section when the user names tools.
+  if ! grep -qF "## Tools and bindings" "$AGENT_DIR/agent.md"; then
+    WARNINGS+=("[$FN/$AGENT/agent.md] '## Tools and bindings' not declared — fine for tool-less agents; required if this agent calls external APIs")
   fi
 
   # Steps section should NOT be present anymore — workflows live in plans/
@@ -103,6 +111,62 @@ if [ ! -f "$AGENT_DIR/README.md" ]; then
   FAILURES+=("[$FN/$AGENT/README.md] missing")
 else
   PASSED+=("[$FN/$AGENT/README.md] present")
+fi
+
+# config.yaml — agent config (guideline refs + tool bindings).
+# Schema check: single-document mapping with agent=$FN/$AGENT, plans_dir,
+# guideline_refs (mapping), tools (mapping). Drift here breaks the runtime
+# loader (Phase 2) and `chief-of-staff create-agent` reuse.
+if [ ! -f "$AGENT_DIR/config.yaml" ]; then
+  FAILURES+=("[$FN/$AGENT/config.yaml] missing")
+  FAILURES+=("  → Suggested fix: add config.yaml at agent root with at least 'agent: $FN/$AGENT' and 'plans_dir: ./plans/'")
+elif command -v python3 >/dev/null 2>&1; then
+  CFG_RC=0
+  CFG_MSG="$(AGENT_EXPECT="$FN/$AGENT" CFG_PATH="$AGENT_DIR/config.yaml" python3 - <<'PYEOF' 2>&1
+import os, sys
+try:
+    import yaml
+except ImportError:
+    sys.stderr.write("pyyaml-missing")
+    sys.exit(2)
+expect = os.environ["AGENT_EXPECT"]
+path = os.environ["CFG_PATH"]
+with open(path) as f:
+    try:
+        doc = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        sys.stderr.write(f"yaml-parse-error: {e}")
+        sys.exit(1)
+if not isinstance(doc, dict):
+    sys.stderr.write("not-a-mapping")
+    sys.exit(1)
+errs = []
+agent = doc.get("agent")
+if agent != expect:
+    errs.append(f"agent field is {agent!r}, expected {expect!r}")
+if "plans_dir" not in doc:
+    errs.append("missing plans_dir")
+gr = doc.get("guideline_refs")
+if gr is not None and not isinstance(gr, dict):
+    errs.append("guideline_refs is not a mapping")
+tools = doc.get("tools")
+if tools is not None and not isinstance(tools, dict):
+    errs.append("tools is not a mapping")
+if errs:
+    sys.stderr.write("; ".join(errs))
+    sys.exit(1)
+PYEOF
+)" || CFG_RC=$?
+  if [ $CFG_RC -eq 0 ]; then
+    PASSED+=("[$FN/$AGENT/config.yaml] valid (schema)")
+  elif [ $CFG_RC -eq 2 ]; then
+    PASSED+=("[$FN/$AGENT/config.yaml] present (schema not validated, pyyaml missing)")
+  else
+    FAILURES+=("[$FN/$AGENT/config.yaml] $CFG_MSG")
+    FAILURES+=("  → Suggested fix: open the file and ensure it is a single YAML mapping with 'agent: $FN/$AGENT', 'plans_dir', a 'guideline_refs:' mapping, and a 'tools:' mapping (may be empty)")
+  fi
+else
+  PASSED+=("[$FN/$AGENT/config.yaml] present (schema not validated, python3 missing)")
 fi
 
 # .mcp.json valid JSON
@@ -168,52 +232,17 @@ else
   PASSED+=("[$FN/$AGENT/playbook/] present")
 fi
 
-# projects/_template/ exists
-if [ ! -d "$AGENT_DIR/projects/_template" ]; then
-  FAILURES+=("[$FN/$AGENT/projects/_template/] missing — new instances cannot be created without it")
-  FAILURES+=("  → Suggested fix: rebuild via 'bash scripts/new-agent.sh $FN $AGENT' (will fail if exists; manually copy from gtm/sdr/projects/_template/ as reference)")
-else
-  PASSED+=("[$FN/$AGENT/projects/_template/] present")
-fi
-
-# === Each instance ===
-INSTANCES=()
-while IFS= read -r path; do
-  INSTANCES+=("$path")
-done < <(find "$AGENT_DIR/projects" -maxdepth 1 -mindepth 1 -type d -not -name '_template' 2>/dev/null || true)
-
-for inst in "${INSTANCES[@]}"; do
-  REL="${inst#$ROOT/}"
-  PROJECT_NAME=$(basename "$inst")
-
-  CONFIG="$inst/config/default.yaml"
-  if [ ! -f "$CONFIG" ]; then
-    FAILURES+=("[$REL/config/default.yaml] missing")
-  else
-    if command -v python3 >/dev/null 2>&1; then
-      if ! python3 -c "import yaml; list(yaml.safe_load_all(open('$CONFIG')))" 2>/dev/null; then
-        FAILURES+=("[$REL/config/default.yaml] YAML parse error")
-      else
-        DECLARED=$(python3 -c "import yaml; docs = list(yaml.safe_load_all(open('$CONFIG'))); print((docs[0] or {}).get('project', ''))" 2>/dev/null || echo "")
-        if [ "$DECLARED" != "$PROJECT_NAME" ]; then
-          FAILURES+=("[$REL/config/default.yaml] project field '$DECLARED' doesn't match folder '$PROJECT_NAME'")
-        else
-          PASSED+=("[$REL/config/default.yaml] valid")
-        fi
-      fi
-    fi
-  fi
-
-  for d in log/runs log/feedback playbook; do
-    if [ ! -d "$inst/$d" ]; then
-      WARNINGS+=("[$REL/$d/] missing")
-    fi
-  done
-
-  if [ ! -f "$inst/asset-references.md" ]; then
-    WARNINGS+=("[$REL/asset-references.md] missing")
+# Flat-shape directories
+for d in logs/runs logs/feedback pending; do
+  if [ ! -d "$AGENT_DIR/$d" ]; then
+    WARNINGS+=("[$FN/$AGENT/$d/] missing")
   fi
 done
+
+# asset-references.md at agent root
+if [ ! -f "$AGENT_DIR/asset-references.md" ]; then
+  WARNINGS+=("[$FN/$AGENT/asset-references.md] missing")
+fi
 
 # === Status ===
 if [ ${#FAILURES[@]} -gt 0 ]; then
@@ -265,7 +294,6 @@ N_PASS=${#PASSED[@]}
   echo "- $N_PASS passed"
   echo "- $N_WARN warnings"
   echo "- $N_FAIL failures"
-  echo "- ${#INSTANCES[@]} instance(s) audited"
   echo ""
   if [ $N_FAIL -gt 0 ]; then
     echo "## Failures"
@@ -291,7 +319,6 @@ N_PASS=${#PASSED[@]}
 
 echo "Audit: $FN/$AGENT — $STATUS"
 echo "  Passed: $N_PASS, Warnings: $N_WARN, Failures: $N_FAIL"
-echo "  Instances audited: ${#INSTANCES[@]}"
 [ $N_FAIL -gt 0 ] && {
   echo "Failures:"
   for line in "${FAILURES[@]}"; do echo "  $line"; done

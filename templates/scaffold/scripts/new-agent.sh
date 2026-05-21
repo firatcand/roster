@@ -62,7 +62,7 @@ description: "$fn agent — TODO: fill in description"
 
 # /$name
 
-You are operating the \`$fn/$name\` agent. Load \`$fn/$name/agent.md\` and the project's relevant context.
+You are operating the \`$fn/$name\` agent. Load \`$fn/$name/agent.md\` and the workspace's relevant context.
 
 The user request is: \$ARGUMENTS
 
@@ -70,28 +70,25 @@ The user request is: \$ARGUMENTS
 
 Parse the user request:
 
-1. **If it matches \`run <plan-name> for <project>\` or \`run <plan-name> on <project>\`**:
+1. **If it matches \`run <plan-name>\`**:
    - Load \`$fn/$name/plans/<plan-name>.yaml\`. If it doesn't exist, list available plans and ask user to pick.
-   - Load \`projects/<project>/CLAUDE.md\` and relevant guidelines.
-   - Load \`$fn/$name/projects/<project>/config/default.yaml\`.
-   - Validate that all required tool bindings are non-TODO. Abort if not.
-   - Execute the plan steps. Substitute \`\${tools.X.Y}\`, \`\${inputs.X}\`, \`\${config.X}\`.
-   - Log to \`$fn/$name/projects/<project>/log/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md\`.
-   - Surface HITL approvals per the plan's approval_channel.
+   - Load \`$fn/$name/config.yaml\` and resolve env via \`resolveAgentEnv\` (\`$fn/$name/.env\` overrides workspace \`/.env\`).
+   - Load workspace guidelines referenced under \`config.yaml\` \`guideline_refs:\` (e.g., \`/guidelines/voice.md\`, \`/guidelines/icps/\`, \`/guidelines/messaging.md\`).
+   - Validate that all required tool bindings have non-empty env vars. Abort with a clear message if not.
+   - Execute the plan steps. Substitute \`\${tools.X.env_var}\`, \`\${inputs.X}\`, \`\${config.X}\`.
+   - Log to \`$fn/$name/logs/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md\`.
+   - Surface HITL approvals per the plan's \`approval_channel\`.
 
-2. **If only a project is named (no plan)**:
+2. **If no plan is named**:
    - List available plans from \`$fn/$name/plans/\` with descriptions. Ask user to pick.
 
-3. **If neither plan nor project is named**:
-   - List available projects and plans. Ask user to specify both.
-
-4. **For ad-hoc strategic work**: suggest invoking \`$fn/EXPERT.md\` instead.
+3. **For ad-hoc strategic work**: suggest invoking \`$fn/EXPERT.md\` instead.
 
 ## Constraints
 
 - Only run plans that exist as files in \`$fn/$name/plans/\`.
 - Don't bypass approval gates.
-- File writes go to the instance's \`log/runs/\` unless the plan explicitly writes elsewhere.
+- File writes go to \`$fn/$name/logs/runs/\` unless the plan explicitly writes elsewhere.
 EOF
 }
 
@@ -137,7 +134,7 @@ fi
 
 echo "Creating agent: $FN/$NAME"
 
-mkdir -p "$TARGET"/{subagents,playbook,logs,projects/_template,.claude/skills,.claude/plugins}
+mkdir -p "$TARGET"/{subagents,playbook,pending,logs/runs,logs/feedback,.claude/skills,.claude/plugins}
 
 # agent.md stub
 cat > "$TARGET/agent.md" << EOF
@@ -149,45 +146,36 @@ cat > "$TARGET/agent.md" << EOF
 
 ## Inputs
 
-The orchestrator expects:
-
-- \`project\`: project slug
-- <other inputs>
+The orchestrator expects per-plan inputs (declared in each plan's \`inputs:\` block).
 
 Read at runtime:
 
 - \`agent.md\` (this file)
-- \`projects/<project>/<this-agent>/config/default.yaml\`
-- \`projects/<project>/CLAUDE.md\`
-- \`projects/<project>/guidelines/voice.md\`
-- <other guidelines this agent uses>
-- \`<this-agent>/projects/<project>/playbook/\` — project-scoped lessons
-- \`<this-agent>/playbook/\` — global lessons
+- \`config.yaml\` (workspace-root-relative guideline refs + tool bindings)
+- Workspace guidelines referenced under \`config.yaml\` \`guideline_refs:\` (e.g., \`/guidelines/voice.md\`, \`/guidelines/icps/\`, \`/guidelines/messaging.md\`)
+- \`playbook/\` — validated lessons (single playbook per agent)
 
-## Steps
+Env resolution: \`<this-agent>/.env\` overrides workspace \`/.env\`. Required tool env vars validated before the plan runs.
 
-1. Resolve config and context
-2. <step>
-3. <step>
+## Plans
+
+Named plans this agent runs (files in \`plans/<plan>.yaml\`). One-line description per plan.
+No default plan — invoking without a plan triggers an interactive "which plan?" prompt.
+
+- <plan-name>: <one-liner>
 
 ## Subagents
 
 - <subagent-name>.md — <one-liner>
 
-## Tools
-
-Agent-scoped MCPs at \`<this-agent>/.mcp.json\`:
-- <tool/MCP> — <purpose>
-
-Universal MCPs (Slack, Google Drive) inherited from agent-team root.
-
 ## Outputs
 
-Run file at \`projects/<project>/<this-agent>/log/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md\`. See \`conventions.md\` § "Run file format".
+Run file at \`logs/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md\`. See \`conventions.md\` § "Run file format".
+Per-plan output schemas live in each plan's \`outputs:\` block.
 
 ## Approval
 
-\`approval_channel: auto\` — in-session if interactive, Slack \`#${FN}\` if cron (resolved via \`SLACK_HITL_CHANNEL_$(echo "$FN" | tr '[:lower:]-' '[:upper:]_')\` in \`.env\`).
+\`approval_channel: auto\` — in-session if interactive, Slack \`#${FN}\` if cron (resolved via \`SLACK_HITL_CHANNEL_$(echo "$FN" | tr '[:lower:]-' '[:upper:]_')\` in workspace \`/.env\`).
 
 ## Lessons protocol
 
@@ -206,39 +194,49 @@ cat > "$TARGET/README.md" << EOF
 
 ## Files
 
-- \`agent.md\` — orchestrator contract
+- \`agent.md\` — orchestrator contract (behavioral prompt, plans list, tool bindings schema)
+- \`config.yaml\` — guideline refs + tool bindings (workspace-root paths)
+- \`.env\` — agent-scoped env overrides (gitignored, 0600 — optional, inherits from workspace \`/.env\`)
+- \`plans/\` — named workflows (\`<plan>.yaml\`)
 - \`subagents/\` — specialized roles
-- \`playbook/\` — global lessons (one file per lesson)
-- \`logs/\` — agent-level operational logs
-- \`.claude/\` — agent-scoped skills, plugins
-- \`.mcp.json\` — agent-scoped MCPs (CREATE THIS — see template comment)
-- \`projects/\` — per-project instances
+- \`playbook/\` — validated lessons (single playbook per agent)
+- \`pending/\` — HITL items awaiting approval
+- \`logs/runs/\`, \`logs/feedback/\` — run outputs + mirrored feedback
+- \`asset-references.md\` — which workspace assets this agent uses (thin pointer)
+- \`.claude/\` — agent-scoped Claude Code config (skills, plugins, settings)
+- \`.mcp.json\` — agent-scoped MCPs
 
 ## Invocation
 
-From a project instance session:
+From the workspace root:
 
 \`\`\`bash
-cd $FN/$NAME/projects/<project>/
 claude
-"Run $NAME on <inputs>"
+> /$NAME run <plan-name>
 \`\`\`
 
-From cron: see ROS-39 (Phase 2.5 scheduling primitives — wrapper layout + install script land then).
+Or via natural language:
+
+\`\`\`
+"Run $FN/$NAME using the <plan-name> plan"
+\`\`\`
+
+From cron: see ADR-0001 (subscription-billed scheduling via native local schedulers). Install via \`roster schedule install $FN/$NAME <plan> --cron "<expr>" --tool claude|codex\`.
 
 ## Configuration
 
-Per-project: \`projects/<proj>/$FN/$NAME/config/default.yaml\` (created by \`new-agent-instance.sh\`).
+\`config.yaml\` (this agent) — guideline refs + tool bindings.
+Workspace \`/.env\` (root) + optional \`<this-agent>/.env\` for agent-scoped overrides.
 
 ## Outputs
 
-\`projects/<proj>/$FN/$NAME/log/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md\`
+\`logs/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md\` — one file per invocation.
 EOF
 
 # .mcp.json stub
 cat > "$TARGET/.mcp.json" << EOF
 {
-  "_comment": "Agent-scoped MCPs for $NAME. Available when working in this agent's tree (including project instances). Add MCPs this agent specifically needs. Universal MCPs (Slack, Google Drive) are inherited from agent-team/.mcp.json.",
+  "_comment": "Agent-scoped MCPs for $NAME. Available when working in this agent's tree. Add MCPs this agent specifically needs. Universal MCPs (Slack, Google Drive) are inherited from the workspace .mcp.json.",
   "mcpServers": {}
 }
 EOF
@@ -273,41 +271,48 @@ cat > "$TARGET/subagents/_template.md" << 'EOF'
 <Specific criteria for acceptable output.>
 EOF
 
-# Project instance template
-mkdir -p "$TARGET/projects/_template/config"
-mkdir -p "$TARGET/projects/_template/playbook"
-mkdir -p "$TARGET/projects/_template/log/runs"
-mkdir -p "$TARGET/projects/_template/log/feedback"
+# config.yaml — agent config (guideline refs + tool bindings)
+# Minimal stub. Until the Phase 2 env-merge loader lands, bindings are
+# hand-edited: copy the ## Tools and bindings YAML block from agent.md
+# into the tools: mapping below, then fill the corresponding env vars
+# in workspace /.env (or this agent's .env).
+cat > "$TARGET/config.yaml" << EOF
+agent: $FN/$NAME
+plans_dir: ./plans/
 
-cat > "$TARGET/projects/_template/config/default.yaml" << EOF
----
-agent: $NAME
-project: <project-slug>
-created: <YYYY-MM-DD>
-last_modified: <YYYY-MM-DD>
----
+# Workspace-root-relative refs. Loader rejects literal absolute fs paths
+# like /Users/, /home/, /etc/, /var/, /tmp/, /opt/.
+guideline_refs:
+  voice: /guidelines/voice.md
+  icps: /guidelines/icps/
+  messaging: /guidelines/messaging.md
+  # add more as needed:
+  # brand_book: /guidelines/brand-book.md
+  # do_and_dont: /guidelines/do-and-dont.md
+  # compliance: /guidelines/compliance.md
+  # competitors: /guidelines/competitors.md
 
-# $NAME Config — <Project>
-
-# See $FN/$NAME/agent.md § "Inputs" for required fields.
-# Use prose comments to explain "why" alongside "what".
+# Tool bindings. Each tool entry names the env var, required flag, and a
+# short description. Env vars themselves live in workspace /.env (or are
+# overridden in this agent's .env).
+tools: {}
 EOF
 
-cat > "$TARGET/projects/_template/asset-references.md" << EOF
-# Asset references — $NAME / <project>
+# asset-references.md — thin pointer at agent root
+cat > "$TARGET/asset-references.md" << EOF
+# Asset references — $FN/$NAME
 
-This agent uses these assets from \`projects/<project>/guidelines/asset-links.md\`:
+This agent uses these assets from \`guidelines/asset-links.md\`:
 
 - <e.g., specific asset by name>
 EOF
 
 touch "$TARGET/playbook/.gitkeep"
-touch "$TARGET/logs/.gitkeep"
+touch "$TARGET/pending/.gitkeep"
+touch "$TARGET/logs/runs/.gitkeep"
+touch "$TARGET/logs/feedback/.gitkeep"
 touch "$TARGET/.claude/skills/.gitkeep"
 touch "$TARGET/.claude/plugins/.gitkeep"
-touch "$TARGET/projects/_template/playbook/.gitkeep"
-touch "$TARGET/projects/_template/log/runs/.gitkeep"
-touch "$TARGET/projects/_template/log/feedback/.gitkeep"
 
 # === Tool bindings prompt (added by tool-bindings workflow) ===
 # Ask the user whether to define tools now. If yes, collect tool names and scaffold
@@ -346,24 +351,25 @@ if [ -t 0 ] && [ "${AGENT_TEAM_NO_CONFIRM:-0}" != "1" ]; then
           echo ""
           echo "## Tools and bindings"
           echo ""
-          echo "Per-project tool bindings expected by this agent. Chief-of-staff prompts for these when scaffolding a new agent-instance. Values land in \`projects/<project>/config/default.yaml\` under a \`tools:\` key."
+          echo "Tool bindings expected by this agent. Until the Phase 2 env-merge loader ships, configure them by hand: mirror the YAML block below into \`<agent>/config.yaml\` under a \`tools:\` key, and put the env var values in workspace \`/.env\` (or \`<agent>/.env\` for agent-scoped overrides)."
           echo ""
-          echo "Fill in each tool's bindings below. Schema: each binding has a \`required\` flag (true/false) and a \`description\`."
+          echo "Fill in each tool's bindings below. Schema per conventions.md § \"Tool bindings\": each tool has a \`env_var\` (the env-var name the runtime reads), a \`required\` flag (true/false), and a one-line \`description\`."
           echo ""
           echo '```yaml'
           for tool in "${TOOL_NAMES[@]}"; do
+            tool_env=$(echo "$tool" | tr '[:lower:]-' '[:upper:]_')
             echo "$tool:"
-            echo "  # TODO: define bindings"
-            echo "  #   <binding_name>:"
-            echo "  #     required: true"
-            echo "  #     description: \"...\""
+            echo "  env_var: ${tool_env}_API_KEY  # TODO: confirm env var name"
+            echo "  required: true               # TODO: confirm required vs optional"
+            echo "  description: \"\"             # TODO: one-line description"
           done
           echo '```'
         } >> "$NEW_AGENT_MD"
 
         echo ""
         echo "✓ Added '## Tools and bindings' to $NEW_AGENT_MD with stubs for: ${TOOL_NAMES[*]}"
-        echo "  Edit agent.md to fill in actual bindings before adding instances."
+        echo "  Edit agent.md to fill in env_var names + descriptions, then mirror the tools: block into <agent>/config.yaml by hand."
+        echo "  (Phase 2 will add an env-merge loader + automated config.yaml/.env wiring; until then this step is manual.)"
       else
         echo "  No valid tool names provided. Skipping section."
       fi
@@ -399,12 +405,12 @@ echo ""
 echo "✓ Agent '$FN/$NAME' created at $TARGET"
 echo ""
 echo "Next steps:"
-echo "  1. Fill in $TARGET/agent.md (purpose, inputs, steps, subagents, tools, outputs)"
-echo "  2. Add subagents: cp $TARGET/subagents/_template.md $TARGET/subagents/<name>.md and fill in"
-echo "  3. Add agent-scoped MCPs to $TARGET/.mcp.json if needed (HeyReach, Apollo, etc.)"
-echo "  4. Update $TARGET/README.md with a real description"
-echo "  5. Add at least one plan to $TARGET/plans/ (e.g., $TARGET/plans/<plan-name>.yaml)"
-echo "  6. Edit .claude/commands/$NAME.md to fill in the description"
-echo "  7. Add an instance to a project: bash scripts/new-agent-instance.sh <project> $FN $NAME"
+echo "  1. Fill in $TARGET/agent.md (purpose, inputs, plans, subagents, tools, outputs)"
+echo "  2. Fill in $TARGET/config.yaml (guideline_refs, tools)"
+echo "  3. Add subagents: cp $TARGET/subagents/_template.md $TARGET/subagents/<name>.md and fill in"
+echo "  4. Add agent-scoped MCPs to $TARGET/.mcp.json if needed (HeyReach, Apollo, etc.)"
+echo "  5. Update $TARGET/README.md with a real description"
+echo "  6. Add at least one plan to $TARGET/plans/ (e.g., $TARGET/plans/<plan-name>.yaml)"
+echo "  7. Edit .claude/commands/$NAME.md to fill in the description"
 echo ""
 echo "Reference: see gtm/sdr/ for a complete example."

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# audit-repo.sh — full repo audit; runs project + agent audits, plus repo-level checks
+# audit-repo.sh — full workspace audit; runs agent audits and repo-level checks
 # Usage: bash scripts/audit-repo.sh
 
 set -euo pipefail
@@ -51,30 +51,34 @@ for f in CLAUDE.md conventions.md README.md; do
   fi
 done
 
+# config/project.yaml — workspace identity (v1 shape)
+if [ ! -f "$ROOT/config/project.yaml" ]; then
+  REPO_FAILURES+=("[config/project.yaml] missing — workspace identity required")
+elif command -v python3 >/dev/null 2>&1; then
+  if ! python3 -c "import yaml; yaml.safe_load(open('$ROOT/config/project.yaml'))" 2>/dev/null; then
+    REPO_FAILURES+=("[config/project.yaml] YAML parse error")
+  else
+    REPO_PASSED+=("[config/project.yaml] valid")
+  fi
+fi
+
+# guidelines/ — cross-agent substrate
+if [ ! -d "$ROOT/guidelines" ]; then
+  REPO_FAILURES+=("[guidelines/] missing — workspace substrate dir required")
+else
+  REPO_PASSED+=("[guidelines/] present")
+  for f in voice.md messaging.md brand-book.md asset-links.md; do
+    if [ ! -f "$ROOT/guidelines/$f" ]; then
+      REPO_WARNINGS+=("[guidelines/$f] missing — required substrate file")
+    fi
+  done
+  if [ ! -d "$ROOT/guidelines/icps" ] || [ -z "$(find "$ROOT/guidelines/icps" -maxdepth 1 -name '*.md' -type f 2>/dev/null | head -1)" ]; then
+    REPO_WARNINGS+=("[guidelines/icps/] empty or missing — at least one persona file required")
+  fi
+fi
+
 # Build a regex of registered functions for matching grandparent dirs.
 REGISTERED_FNS_PIPE=$(read_functions 2>/dev/null | tr '\n' '|' | sed 's/|$//')
-
-# Find orphaned instances (instance folder exists but agent doesn't)
-ORPHANS=()
-while IFS= read -r path; do
-  ORPHANS+=("$path")
-done < <(find "$ROOT" -type d -path "*/projects/*" -not -path "*/projects/_template*" -not -path "*/_archive/*" 2>/dev/null | while read p; do
-  PARENT=$(dirname $(dirname "$p"))
-  if [ -d "$PARENT" ] && [ ! -f "$PARENT/agent.md" ]; then
-    # This is a project folder under a non-agent — that's actually projects/ root
-    # We only care about instances: <fn>/<agent>/projects/<proj>/ where agent.md is missing
-    GRANDPARENT=$(dirname "$PARENT")
-    GP_NAME=$(basename "$GRANDPARENT")
-    if [ -n "$REGISTERED_FNS_PIPE" ] && echo "$GP_NAME" | grep -qE "^($REGISTERED_FNS_PIPE)\$"; then
-      echo "$p"
-    fi
-  fi
-done)
-
-for orphan in "${ORPHANS[@]:-}"; do
-  REL="${orphan#$ROOT/}"
-  REPO_WARNINGS+=("[$REL] orphaned instance — parent agent has no agent.md")
-done
 
 # Registered function should have a folder
 while IFS= read -r fn; do
@@ -109,7 +113,7 @@ if [ -f "$ENV_EXAMPLE" ]; then
 fi
 
 # Function-shaped top-level dirs not in the registry
-KNOWN_NON_FUNCTIONS="dreamer chief-of-staff projects scripts logs _archive"
+KNOWN_NON_FUNCTIONS="dreamer chief-of-staff scripts logs _archive"
 for dir in "$ROOT"/*/; do
   basename=$(basename "$dir")
   [[ "$basename" == .* ]] && continue
@@ -121,25 +125,6 @@ for dir in "$ROOT"/*/; do
     REPO_WARNINGS+=("[$basename/] looks function-shaped but not registered in .config/functions.yaml")
     REPO_WARNINGS+=("  → Suggested fix: add to registry via 'bash scripts/create-function.sh $basename' (or remove if intended)")
   fi
-done
-
-# === Run audit-project for each project ===
-PROJECTS=()
-while IFS= read -r path; do
-  PROJECTS+=("$path")
-done < <(find "$ROOT/projects" -maxdepth 1 -mindepth 1 -type d -not -name '_template' 2>/dev/null || true)
-
-PROJECT_RESULTS=()
-for proj_path in "${PROJECTS[@]:-}"; do
-  PROJ=$(basename "$proj_path")
-  RESULT=$(bash "$ROOT/scripts/audit-project.sh" "$PROJ" 2>&1 | head -5 || echo "  (audit failed)")
-  PROJECT_RESULTS+=("### $PROJ")
-  PROJECT_RESULTS+=("\`\`\`")
-  while IFS= read -r line; do
-    PROJECT_RESULTS+=("$line")
-  done <<< "$RESULT"
-  PROJECT_RESULTS+=("\`\`\`")
-  PROJECT_RESULTS+=("")
 done
 
 # === Run audit-agent for each agent ===
@@ -187,7 +172,6 @@ fi
   echo "# Repo Audit"
   echo ""
   echo "## Summary"
-  echo "- Projects audited: ${#PROJECTS[@]}"
   echo "- Agents audited: ${#AGENTS[@]}"
   echo "- Repo-level passed: ${#REPO_PASSED[@]}"
   echo "- Repo-level warnings: ${#REPO_WARNINGS[@]}"
@@ -214,12 +198,6 @@ fi
     done
     echo ""
   fi
-  echo "## Project audits (summaries)"
-  echo ""
-  for line in "${PROJECT_RESULTS[@]:-}"; do
-    echo "$line"
-  done
-  echo ""
   echo "## Agent audits (summaries)"
   echo ""
   for line in "${AGENT_RESULTS[@]:-}"; do
@@ -231,7 +209,7 @@ fi
 
 # Print summary
 echo "Repo audit: $STATUS"
-echo "  Projects: ${#PROJECTS[@]} | Agents: ${#AGENTS[@]}"
+echo "  Agents: ${#AGENTS[@]}"
 echo "  Repo-level: ${#REPO_PASSED[@]} passed, ${#REPO_WARNINGS[@]} warnings, ${#REPO_FAILURES[@]} failures"
 [ ${#REPO_FAILURES[@]} -gt 0 ] && {
   echo "Repo failures:"

@@ -215,7 +215,7 @@ if [ "$WITH_EXPERT" = "true" ]; then
 This is a stub. Fill in the expert system prompt for this function.
 
 Experts shape SUBSTRATE (project guidelines), not artifacts. They critique
-and generate guideline files in \`projects/<project>/guidelines/\`.
+and generate guideline files in \`guidelines/\` at the workspace root.
 
 Required sections (see other EXPERT.md files for examples once they exist):
 - Identity (1 paragraph)

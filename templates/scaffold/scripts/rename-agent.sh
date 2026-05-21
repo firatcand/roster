@@ -42,17 +42,18 @@ if [[ "$(uname)" == "Darwin" ]]; then
   SED_INPLACE=(-i '')
 fi
 
-for f in "$NEW_DIR"/agent.md "$NEW_DIR"/README.md "$NEW_DIR"/CLAUDE.md; do
+# Broad replace on prose files only — these are markdown stubs where the
+# old slug appears in headings / paths and we want every reference updated.
+for f in "$NEW_DIR"/agent.md "$NEW_DIR"/README.md "$NEW_DIR"/asset-references.md; do
   [ -f "$f" ] && sed "${SED_INPLACE[@]}" "s|$OLD|$NEW|g" "$f"
 done
 
-for inst in "$NEW_DIR"/projects/*/; do
-  [ -d "$inst" ] || continue
-  CONFIG="$inst/config/default.yaml"
-  ASSETS="$inst/asset-references.md"
-  [ -f "$CONFIG" ] && sed "${SED_INPLACE[@]}" "s|^agent: $OLD$|agent: $NEW|" "$CONFIG"
-  [ -f "$ASSETS" ] && sed "${SED_INPLACE[@]}" "s|$OLD|$NEW|g" "$ASSETS"
-done
+# config.yaml: only the identity field. A broad replace would corrupt env-var
+# names, comments, and any value that legitimately contains $OLD.
+CFG="$NEW_DIR/config.yaml"
+if [ -f "$CFG" ]; then
+  sed "${SED_INPLACE[@]}" "s|^agent: $FN/$OLD$|agent: $FN/$NEW|" "$CFG"
+fi
 
 while IFS= read -r f; do
   case "$f" in
