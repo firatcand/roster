@@ -498,6 +498,26 @@ test('.gitignore has Roster defaults block appended exactly once on repeated run
   }
 });
 
+test('.gitignore contains anchored /.env and recursive **/.env after init', async () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    const { logger } = silentLogger();
+    await executeInit({ cwd, name: 'x', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
+
+    const gi = readFileSync(join(cwd, '.gitignore'), 'utf8');
+    const markerIdx = gi.indexOf(GITIGNORE_MARKER_START);
+    assert.ok(markerIdx >= 0, 'roster marker present');
+    const block = gi.slice(markerIdx);
+
+    assert.match(block, /^\/\.env$/m, 'workspace-anchored /.env present in Roster block');
+    assert.match(block, /^\*\*\/\.env$/m, 'recursive **/.env present in Roster block');
+    assert.match(block, /^\.env$/m, 'pre-v1 .env rule preserved');
+    assert.match(block, /^\.env\.local$/m, 'pre-v1 .env.local rule preserved');
+  } finally {
+    cleanup();
+  }
+});
+
 test('appendGitignoreBlock preserves existing .gitignore content', () => {
   const { cwd, cleanup } = makeTmp();
   try {
