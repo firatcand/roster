@@ -225,8 +225,8 @@ function extractVarRefs(content: string): Map<string, number[]> {
 }
 
 // Top-level dirs we explicitly skip: roster registry, conventional scaffold
-// buckets, and any dotdir. Anything else under cwd is treated as a function/
-// dir per the ADR's workspace layout.
+// buckets, v1 workspace marker/runtime dirs, and any dotdir. Anything else
+// under cwd is treated as a function or top-level agent dir per the v1 layout.
 const SKIP_TOP = new Set([
   'roster',
   'node_modules',
@@ -240,6 +240,10 @@ const SKIP_TOP = new Set([
   'templates',
   'test',
   'src',
+  'config',
+  'guidelines',
+  'logs',
+  'scripts',
 ]);
 
 function collectConfigYamls(cwd: string): string[] {
@@ -501,7 +505,14 @@ export type AgentEnvRefsResult = {
 
 const AGENT_SEGMENT_RE = /^[a-z][a-z0-9-]*$/;
 
-function listV1AgentPaths(cwd: string): string[] {
+// @internal — exported for tests.
+// Yields v1 agent identifiers: depth-1 bare segment (`dreamer`) when
+// `<top>/config.yaml` exists, OR depth-2 `<fn>/<agent>` when no top config
+// exists — never both, since top-level agents are leaves. Single-segment
+// paths flow into loadAgentConfig, which currently rejects them via AGENT_RE;
+// auditAgentEnvRefs then silently skips. Schema loosening is a deliberate
+// follow-up.
+export function listV1AgentPaths(cwd: string): string[] {
   const out: string[] = [];
   let topEntries: string[];
   try {
@@ -521,6 +532,18 @@ function listV1AgentPaths(cwd: string): string[] {
       continue;
     }
     if (!st.isDirectory()) continue;
+
+    const topCfg = join(fnDir, 'config.yaml');
+    let topIsLeafAgent = false;
+    try {
+      if (statSync(topCfg).isFile()) {
+        out.push(top);
+        topIsLeafAgent = true;
+      }
+    } catch {
+      // absent at depth 1 — continue to depth-2 walk
+    }
+    if (topIsLeafAgent) continue;
 
     let children: string[];
     try {

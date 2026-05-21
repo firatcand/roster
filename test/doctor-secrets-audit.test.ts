@@ -170,6 +170,7 @@ test('runSecretsAudit: agent-env warn does NOT flip ok; fail does', () => {
 // The writeConfigYaml helper + the v1-layout regression test below stay here —
 // ROS-99 added this regression in main while ROS-88 was in flight.
 
+// v1 flat layout: <fn>/<agent>/config.yaml
 function writeConfigYaml(cwd: string, fn: string, agent: string, content: string): void {
   const dir = join(cwd, fn, agent);
   mkdirSync(dir, { recursive: true });
@@ -381,3 +382,4 @@ test('runSecretsAudit: prompt-leak warning does NOT flip ok', () => {
     cleanupRoot();
   }
 });
+
