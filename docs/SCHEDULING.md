@@ -42,7 +42,7 @@ Roster ships these guardrails:
 
    ```cron
    # roster-generated; do not edit by hand
-   0 9 * * MON-FRI /usr/bin/env -i HOME="$HOME" PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" CODEX_HOME="$HOME/.codex" /opt/homebrew/bin/codex exec -C "$HOME/my-roster" -c shell_environment_policy.inherit=core "Use the sdr skill to run plan cold-outreach for project _demo" >> "$HOME/my-roster/logs/cron/sdr-cold-outreach.log" 2>&1
+   0 9 * * MON-FRI /usr/bin/env -i HOME="$HOME" PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" CODEX_HOME="$HOME/.codex" /opt/homebrew/bin/codex exec -C "$HOME/my-roster" -c shell_environment_policy.inherit=core "Use the roster-orchestrator skill to run plan cold-outreach for agent sdr" >> "$HOME/my-roster/logs/cron/sdr-cold-outreach.log" 2>&1
    ```
 
 2. **`roster doctor` checks** — see [doctor checks](#doctor-checks-for-scheduling) below. Static greps for the banned strings; env-blocklist enforcement; `~/.codex/auth.json` `auth_mode` verification; `config.toml` audit for non-default `model_provider` blocks.

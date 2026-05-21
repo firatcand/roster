@@ -9,20 +9,17 @@ Take a candidate pattern and draft a lesson file in the schema defined in `conve
 - `pattern` (object): output from pattern-detector
 - `existing_lesson` (object, optional): if extending an existing lesson, the current version
 - `agent` (string): which agent
-- `project` (string): which project sourced it
 
 ## Output
 
 ```yaml
 suggested_filename: L-2026-04-26-001.md
-suggested_path: <function>/<agent>/projects/<project>/playbook/   # or <function>/<agent>/playbook/
+suggested_path: <function>/<agent>/playbook/
 status: candidate
 lesson_markdown: |
   ---
   id: L-2026-04-26-001
   source: dreamer
-  scope: project                # or global
-  project: _demo              # or "—" if scope=global
   agent: sdr
   ...full frontmatter per conventions...
   ---
@@ -31,7 +28,6 @@ lesson_markdown: |
 
   ## Pattern observed
   ## Recommendation
-  ## Why this might be project-specific
   ## Retirement criteria
 ```
 
@@ -43,9 +39,8 @@ None.
 
 - Use the exact schema in `conventions.md`. Don't invent fields.
 - Always set `source: dreamer`.
-- Default to `scope: project` unless explicitly handling a promotion case.
 - Cite evidence in body, not just frontmatter.
-- Body has 4 sections: pattern, recommendation, scope reasoning, retirement criteria. That's it.
+- Body has 3 sections: pattern, recommendation, retirement criteria. That's it.
 
 ## Quality bar
 

@@ -15,9 +15,8 @@ Roster ships only the framework slash commands listed below (`/chief-of-staff`, 
 After `/chief-of-staff create-agent gtm sdr` you'd have a `/sdr` command at `.claude/commands/sdr.md` that routes to `gtm/sdr/agent.md`. The invocation shape is the same for any agent you scaffold.
 
 **Usage:**
-- `/<agent> run <plan> for <project>` — execute a named plan
-- `/<agent> for <project>` — list available plans, prompt for choice
-- `/<agent>` — list projects and plans, prompt for both
+- `/<agent> run <plan>` — execute a named plan
+- `/<agent>` — list available plans, prompt for choice
 
 **Plans available:** whatever is under `<function>/<agent>/plans/`.
 

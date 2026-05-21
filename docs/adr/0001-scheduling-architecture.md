@@ -270,9 +270,9 @@ roster schedule install gtm/sdr cold-outreach --cron "0 9 * * MON-FRI" --tool cl
 Each scheduled fire produces a fresh CLI session that:
 
 1. Loads `CONTEXT.md` (via `CLAUDE.md` or `AGENTS.md` symlink) — system prompt includes the directive to invoke `roster-orchestrator` skill on every new conversation.
-2. Orchestrator skill activates, reads the fire's prompt (e.g., `Run /sdr cold-outreach for _demo`).
+2. Orchestrator skill activates, reads the fire's prompt (e.g., `Run /sdr cold-outreach`).
 3. Skill dispatches the named agent via the tool's native subagent primitive:
-   - Claude: `Task(subagent_type="sdr", prompt="run plan cold-outreach for project _demo", run_in_background=false)`
+   - Claude: `Task(subagent_type="sdr", prompt="run plan cold-outreach", run_in_background=false)`
    - Codex: natural-language invocation of the `sdr` subagent
 4. Subagent runs in fresh, isolated context. May spawn nested subagents (prospector, writer, critic). Each nested subagent has its own isolated context.
 5. Subagent writes run log to `<agent>/projects/<project>/log/runs/<ts>.md` and updates `roster/<function>/state.md`.
@@ -325,7 +325,7 @@ Three pre-decision spikes were run on a macOS dev box (`Darwin 25.3.0`, Mac mini
 
 ```cron
 # Roster: subscription-safe cron. Restrictive env to prevent CODEX_API_KEY / OPENAI_API_KEY leak.
-0 9 * * MON-FRI /usr/bin/env -i HOME="$HOME" PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" CODEX_HOME="$HOME/.codex" /opt/homebrew/bin/codex exec -C "$HOME/my-roster" -c shell_environment_policy.inherit=core "Use the sdr skill to run plan cold-outreach for project _demo" >> "$HOME/my-roster/logs/cron/sdr-cold-outreach.log" 2>&1
+0 9 * * MON-FRI /usr/bin/env -i HOME="$HOME" PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" CODEX_HOME="$HOME/.codex" /opt/homebrew/bin/codex exec -C "$HOME/my-roster" -c shell_environment_policy.inherit=core "Use the roster-orchestrator skill to run plan cold-outreach for agent sdr" >> "$HOME/my-roster/logs/cron/sdr-cold-outreach.log" 2>&1
 ```
 
 The `env -i` clears the inherited environment, allowing only `HOME`/`PATH`/`CODEX_HOME` to pass through. This prevents accidental injection of `CODEX_API_KEY` or `OPENAI_API_KEY` from the user's shell environment that would silently switch billing from ChatGPT subscription to per-token API billing.
