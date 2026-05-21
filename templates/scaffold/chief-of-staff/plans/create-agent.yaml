@@ -11,8 +11,8 @@ description: |
     Produces the same on-disk layout as stub mode, but with agent.md
     sections filled in from the dialogue answers.
 
-  Either mode optionally instances the resulting agent into existing
-  projects (or prompts the caller to pick).
+  Agents scaffold at `<function>/<agent>/` — flat shape, no per-project
+  instances.
 
 inputs:
   function:
@@ -26,13 +26,9 @@ inputs:
     description: |
       Explicit branch override: `stub` or `guided`. If omitted, `resolve_mode`
       picks based on env + TTY (see that step).
-  add-to-projects:
-    required: false
-    description: List of project slugs to instance into. If omitted, the cross-link prompt runs.
 
 outputs:
   agent_path: string
-  instance_paths: list
   mode_used: string         # "stub" or "guided" — which branch executed.
   files_written: list       # absolute paths of every file the plan created or modified.
 
@@ -42,8 +38,7 @@ steps:
       Confirm ${inputs.function} is registered. Validate ${inputs.agent} slug
       against `^[a-z][a-z0-9-]*$`. Confirm `${inputs.function}/${inputs.agent}/`
       does not already exist. If ${inputs.mode} is provided, validate it is
-      one of {stub, guided}. If ${inputs.add-to-projects} provided, validate
-      each project exists at `projects/<slug>/`. If any are missing, abort.
+      one of {stub, guided}.
 
   - id: resolve_mode
     description: |
@@ -81,34 +76,10 @@ steps:
       `TODO: fill in description` placeholder. Append every file touched
       to `${files_written}`.
 
-  - id: resolve_projects
-    description: |
-      Branch on whether ${inputs.add-to-projects} was provided.
-      - If provided: use the list directly.
-      - If omitted: discover all live projects (every dir under `projects/`
-        that is not `_template` and does not start with `_`). If empty,
-        skip instancing and report "no live projects yet."
-        Otherwise present a multi-select via AskUserQuestion with options
-        [All projects, ...each project, None — agent stays global-only]
-        and `multiSelect: true`.
-
-  - id: instance_into_projects
-    tool: bash
-    args:
-      command: |
-        for proj in ${resolved_projects}; do
-          bash scripts/new-agent-instance.sh "$proj" ${inputs.function} ${inputs.agent}
-        done
-    description: |
-      For each resolved project, run `new-agent-instance.sh` and append the
-      instance line to `projects/<project>/CLAUDE.md` under
-      `## Active agent instances`. Append every created instance path to
-      `${files_written}`.
-
   - id: report
     description: |
-      Print `${outputs.mode_used}`, the global agent path, every instance
-      path, and the full `${files_written}` list.
+      Print `${outputs.mode_used}`, the agent path, and the full
+      `${files_written}` list.
 
       In **stub** mode, surface the script's "Next steps" output verbatim
       (fill `agent.md`, add subagents, configure MCPs, add at least one

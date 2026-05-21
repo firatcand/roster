@@ -1,9 +1,9 @@
 plan: audit-agent
 description: |
-  Validate a global agent's structure and all its instances. Checks required
-  agent.md sections, README, .mcp.json, .claude/settings.json, subagents,
-  playbook, projects/_template/, plans/, slash command, and per-instance
-  config validity.
+  Validate one agent at its flat shape `<function>/<agent>/`. Checks required
+  agent.md sections, README.md, config.yaml, .env (optional, agent-scoped),
+  .mcp.json, .claude/settings.json, subagents/, playbook/, plans/, and the
+  slash command at .claude/commands/<agent>.md.
 
 inputs:
   function:

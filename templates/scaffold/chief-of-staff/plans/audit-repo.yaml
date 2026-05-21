@@ -1,9 +1,10 @@
 plan: audit-repo
 description: |
-  Full-repo audit. Runs project audits for every live project and agent
-  audits for every live agent. Aggregates into one report. Also checks
-  universal .mcp.json, universal .claude/settings.json, root CLAUDE.md /
-  conventions.md / README.md, and orphaned instances.
+  Full workspace audit. Runs agent audits for every live agent and aggregates
+  into one report. Also checks workspace completeness: root CLAUDE.md,
+  conventions.md, README.md, config/project.yaml, guidelines/,
+  .config/functions.yaml, universal .mcp.json, and universal
+  .claude/settings.json.
 
 inputs: {}
 
