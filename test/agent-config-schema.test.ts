@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { agentConfigSchema, loadAgentConfig } from '../src/lib/agent-config-schema.ts';
@@ -283,12 +283,109 @@ test('loader — rejects ref that escapes workspace via ..', () => {
     const result = loadAgentConfig(root, 'gtm/sdr');
     assert.equal(result.ok, false);
     if (!result.ok) {
-      const e = result.errors.find((x) => x.kind === 'ref-shape-mismatch');
-      assert.ok(e);
+      const e = result.errors.find((x) => x.kind === 'ref-escapes-workspace');
+      assert.ok(e, `expected ref-escapes-workspace, got ${JSON.stringify(result.errors)}`);
       assert.ok(e!.message.includes('escapes outside workspace root'));
     }
   } finally {
     cleanup();
+  }
+});
+
+test('loader — rejects agentPath with invalid shape', () => {
+  const { root, cleanup } = makeWorkspace();
+  try {
+    for (const bad of ['gtm', 'Gtm/Sdr', '../../outside', 'gtm/sdr/extra', '', 'gtm/']) {
+      const result = loadAgentConfig(root, bad);
+      assert.equal(result.ok, false, `expected rejection for agentPath '${bad}'`);
+      if (!result.ok) {
+        assert.equal(result.errors[0]?.kind, 'invalid-agent-path');
+      }
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('loader — agentPath traversal rejected before any fs read', () => {
+  const { root, cleanup } = makeWorkspace();
+  try {
+    const result = loadAgentConfig(root, '../../etc');
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.equal(result.errors[0]?.kind, 'invalid-agent-path');
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('loader — rejects symlink that resolves outside workspace', () => {
+  const cfg =
+    'agent: gtm/sdr\nplans_dir: ./plans/\nguideline_refs:\n  voice: /guidelines/voice.md\n';
+  const { root, cleanup } = makeWorkspace({ configContent: cfg });
+  try {
+    mkdirSync(join(root, 'guidelines'), { recursive: true });
+    const outside = mkdtempSync(join(tmpdir(), 'roster-outside-'));
+    try {
+      const outsideFile = join(outside, 'leaked.md');
+      writeFileSync(outsideFile, 'secret');
+      symlinkSync(outsideFile, join(root, 'guidelines', 'voice.md'));
+
+      const result = loadAgentConfig(root, 'gtm/sdr');
+      assert.equal(result.ok, false);
+      if (!result.ok) {
+        const e = result.errors.find((x) => x.kind === 'ref-escapes-workspace');
+        assert.ok(e, `expected ref-escapes-workspace from symlink, got ${JSON.stringify(result.errors)}`);
+        assert.ok(e!.message.includes('via symlink'));
+      }
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('loader — accepts symlink that resolves inside workspace', () => {
+  const cfg =
+    'agent: gtm/sdr\nplans_dir: ./plans/\nguideline_refs:\n  voice: /guidelines/voice.md\n';
+  const { root, cleanup } = makeWorkspace({
+    configContent: cfg,
+    files: ['guidelines/canonical.md'],
+  });
+  try {
+    symlinkSync(join(root, 'guidelines', 'canonical.md'), join(root, 'guidelines', 'voice.md'));
+    const result = loadAgentConfig(root, 'gtm/sdr');
+    assert.equal(result.ok, true, `expected ok for internal symlink, got ${JSON.stringify(result)}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('loader — prefix-collision: workspace at /tmp/ws does not match /tmp/ws2', () => {
+  const cfg =
+    'agent: gtm/sdr\nplans_dir: ./plans/\nguideline_refs:\n  voice: /guidelines/voice.md\n';
+  const baseTmp = mkdtempSync(join(tmpdir(), 'roster-prefix-'));
+  const ws = join(baseTmp, 'ws');
+  const ws2 = join(baseTmp, 'ws2');
+  try {
+    mkdirSync(join(ws, 'gtm', 'sdr'), { recursive: true });
+    mkdirSync(join(ws2, 'guidelines'), { recursive: true });
+    writeFileSync(join(ws, 'gtm', 'sdr', 'config.yaml'), cfg);
+    writeFileSync(join(ws2, 'guidelines', 'voice.md'), 'in-ws2');
+
+    const result = loadAgentConfig(ws, 'gtm/sdr');
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      const kinds = result.errors.map((e) => e.kind);
+      assert.ok(
+        kinds.includes('ref-not-found'),
+        `expected ref-not-found (resolution must stay inside ws, not bleed into ws2), got ${JSON.stringify(result.errors)}`,
+      );
+    }
+  } finally {
+    rmSync(baseTmp, { recursive: true, force: true });
   }
 });
 

@@ -1,5 +1,5 @@
-import { readFileSync, statSync } from 'node:fs';
-import { join, resolve, sep } from 'node:path';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import YAML from 'yaml';
 
@@ -41,12 +41,14 @@ export const agentConfigSchema = z
 export type AgentConfig = z.infer<typeof agentConfigSchema>;
 
 export type AgentConfigErrorKind =
+  | 'invalid-agent-path'
   | 'missing-file'
   | 'yaml-parse'
   | 'schema'
   | 'agent-field-mismatch'
   | 'ref-not-found'
-  | 'ref-shape-mismatch';
+  | 'ref-shape-mismatch'
+  | 'ref-escapes-workspace';
 
 export type AgentConfigError = {
   kind: AgentConfigErrorKind;
@@ -59,8 +61,41 @@ export type LoadAgentConfigResult =
   | { ok: true; config: AgentConfig; refsChecked: number }
   | { ok: false; errors: AgentConfigError[] };
 
+function isInsideRoot(root: string, p: string): boolean {
+  const rel = relative(root, p);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
 export function loadAgentConfig(workspaceRoot: string, agentPath: string): LoadAgentConfigResult {
-  const configPath = join(workspaceRoot, agentPath, 'config.yaml');
+  if (!AGENT_RE.test(agentPath)) {
+    return {
+      ok: false,
+      errors: [
+        {
+          kind: 'invalid-agent-path',
+          message: `agentPath '${agentPath}' must match '<function>/<agent>' with kebab-case segments`,
+        },
+      ],
+    };
+  }
+
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(workspaceRoot);
+  } catch (err) {
+    return {
+      ok: false,
+      errors: [
+        {
+          kind: 'missing-file',
+          message: `workspaceRoot '${workspaceRoot}' not accessible: ${(err as Error).message}`,
+          path: workspaceRoot,
+        },
+      ],
+    };
+  }
+
+  const configPath = join(realRoot, agentPath, 'config.yaml');
 
   let raw: string;
   try {
@@ -115,16 +150,15 @@ export function loadAgentConfig(workspaceRoot: string, agentPath: string): LoadA
   }
 
   const refs = config.guideline_refs ?? {};
-  const resolvedRoot = resolve(workspaceRoot) + sep;
 
   for (const [key, ref] of Object.entries(refs)) {
     const wantsDirectory = ref.endsWith('/');
     const stripped = ref.replace(/^\/+/, '');
-    const absolute = resolve(workspaceRoot, stripped);
+    const absolute = resolve(realRoot, stripped);
 
-    if (!(absolute + sep).startsWith(resolvedRoot)) {
+    if (!isInsideRoot(realRoot, absolute)) {
       errors.push({
-        kind: 'ref-shape-mismatch',
+        kind: 'ref-escapes-workspace',
         message: `guideline_refs.${key}: '${ref}' escapes outside workspace root after resolution`,
         path: `guideline_refs.${key}`,
         ref,
@@ -132,9 +166,9 @@ export function loadAgentConfig(workspaceRoot: string, agentPath: string): LoadA
       continue;
     }
 
-    let stat;
+    let realAbsolute: string;
     try {
-      stat = statSync(absolute);
+      realAbsolute = realpathSync(absolute);
     } catch (err) {
       const e = err as NodeJS.ErrnoException;
       if (e.code === 'ENOENT') {
@@ -147,7 +181,7 @@ export function loadAgentConfig(workspaceRoot: string, agentPath: string): LoadA
       } else {
         errors.push({
           kind: 'ref-not-found',
-          message: `guideline_refs.${key}: stat ${absolute} failed: ${e.message}`,
+          message: `guideline_refs.${key}: realpath ${absolute} failed: ${e.message}`,
           path: `guideline_refs.${key}`,
           ref,
         });
@@ -155,17 +189,40 @@ export function loadAgentConfig(workspaceRoot: string, agentPath: string): LoadA
       continue;
     }
 
+    if (!isInsideRoot(realRoot, realAbsolute)) {
+      errors.push({
+        kind: 'ref-escapes-workspace',
+        message: `guideline_refs.${key}: '${ref}' resolves via symlink to ${realAbsolute} outside workspace root`,
+        path: `guideline_refs.${key}`,
+        ref,
+      });
+      continue;
+    }
+
+    let stat;
+    try {
+      stat = statSync(realAbsolute);
+    } catch (err) {
+      errors.push({
+        kind: 'ref-not-found',
+        message: `guideline_refs.${key}: stat ${realAbsolute} failed: ${(err as Error).message}`,
+        path: `guideline_refs.${key}`,
+        ref,
+      });
+      continue;
+    }
+
     if (wantsDirectory && !stat.isDirectory()) {
       errors.push({
         kind: 'ref-shape-mismatch',
-        message: `guideline_refs.${key}: '${ref}' ends with '/' but ${absolute} is not a directory`,
+        message: `guideline_refs.${key}: '${ref}' ends with '/' but ${realAbsolute} is not a directory`,
         path: `guideline_refs.${key}`,
         ref,
       });
     } else if (!wantsDirectory && !stat.isFile()) {
       errors.push({
         kind: 'ref-shape-mismatch',
-        message: `guideline_refs.${key}: '${ref}' has no trailing '/' but ${absolute} is not a regular file (add '/' if you meant a directory)`,
+        message: `guideline_refs.${key}: '${ref}' has no trailing '/' but ${realAbsolute} is not a regular file (add '/' if you meant a directory)`,
         path: `guideline_refs.${key}`,
         ref,
       });
