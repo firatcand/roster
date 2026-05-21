@@ -38,6 +38,11 @@ export type AgentEnvRedundancyResult = {
   items: AgentEnvRedundancyItem[];
 };
 
+// Top-level dirs in a v1 workspace can be EITHER a function bucket
+// (gtm/<agent>/) OR an infra agent directly (dreamer/, chief-of-staff/).
+// Mirrors the depth-1 + depth-2 walk in doctor-secrets-audit.ts#listAgentDirs
+// (ROS-85). Both depths are surfaced so check 14 detects redundant keys in
+// dreamer/.env, not just in nested gtm/sdr/.env.
 function collectAgentEnvFiles(cwd: string): string[] {
   const out: string[] = [];
   let topEntries: string[];
@@ -50,24 +55,33 @@ function collectAgentEnvFiles(cwd: string): string[] {
   for (const top of topEntries) {
     if (top.startsWith('.')) continue;
     if (SKIP_TOP.has(top)) continue;
-    const fnDir = join(cwd, top);
-    let fnSt: Stats;
+    const topDir = join(cwd, top);
+    let topSt: Stats;
     try {
-      fnSt = statSync(fnDir);
+      topSt = statSync(topDir);
     } catch {
       continue;
     }
-    if (!fnSt.isDirectory()) continue;
+    if (!topSt.isDirectory()) continue;
 
+    // Depth-1: <top>/.env — top is itself an agent (dreamer, chief-of-staff).
+    const topEnv = join(topDir, '.env');
+    try {
+      if (statSync(topEnv).isFile()) out.push(topEnv);
+    } catch {
+      // No depth-1 .env — that's fine, fall through to depth-2 walk.
+    }
+
+    // Depth-2: <top>/<agent>/.env — top is a function bucket.
     let agents: string[];
     try {
-      agents = readdirSync(fnDir);
+      agents = readdirSync(topDir);
     } catch {
       continue;
     }
     for (const agent of agents) {
       if (agent.startsWith('.')) continue;
-      const agentDir = join(fnDir, agent);
+      const agentDir = join(topDir, agent);
       let aSt: Stats;
       try {
         aSt = statSync(agentDir);
