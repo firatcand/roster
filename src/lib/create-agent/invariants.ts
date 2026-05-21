@@ -19,13 +19,12 @@ import type { Document } from 'yaml';
 import type { RenderOutput } from './render.ts';
 
 // Path templates that legitimately survive the render unsubstituted.
-// agent.md references files at <plan>.yaml, <project>/..., <YYYY-MM>/...
+// agent.md references files at <plan>.yaml, <YYYY-MM>/..., etc.
 // These are NOT stub placeholders — they are documented variable parts of
 // the runtime file layout. Anything else inside angle brackets is a failed
 // substitution and trips invariant 5.
 const ALLOWED_PATH_TEMPLATES = new Set([
   'plan',
-  'project',
   'YYYY-MM',
   'YYYY-MM-DD-HHMM',
 ]);

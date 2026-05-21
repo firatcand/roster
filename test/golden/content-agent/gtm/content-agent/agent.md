@@ -18,13 +18,13 @@ Read at runtime:
 
 - `agent.md` (this file)
 - `gtm/content-agent/plans/<plan>.yaml` — workflow recipe
-- `gtm/content-agent/projects/<project>/config/default.yaml` — params and tool bindings
-- `projects/<project>/CLAUDE.md` — project session context
-- `projects/<project>/guidelines/*.md` — project substrate (voice, ICPs, do-and-don't, compliance, competitors)
-- `gtm/content-agent/projects/<project>/asset-references.md` — which assets this agent uses
-- `gtm/content-agent/projects/<project>/playbook/*.md` — project-scoped lessons
-- `gtm/content-agent/playbook/*.md` — global lessons
-- Recent ~10 runs in `gtm/content-agent/projects/<project>/log/runs/`
+- `gtm/content-agent/config.yaml` — guideline refs + tool bindings (workspace-root paths)
+- Workspace guidelines referenced under `config.yaml` `guideline_refs:` (e.g., `/guidelines/voice.md`, `/guidelines/icps/`, `/guidelines/messaging.md`)
+- `gtm/content-agent/asset-references.md` — which workspace assets this agent uses
+- `gtm/content-agent/playbook/*.md` — validated lessons (single playbook per agent)
+- Recent ~10 runs in `gtm/content-agent/logs/runs/`
+
+Env resolution: `gtm/content-agent/.env` overrides workspace `/.env`. Required tool env vars validated before the plan runs.
 
 ## Steps
 
@@ -47,7 +47,7 @@ Read at runtime:
 
 ## Tools and bindings
 
-Per-project tool bindings expected by this agent. Values land in `projects/<project>/config/default.yaml` under a `tools:` key.
+Tool bindings expected by this agent. Values land in this agent's `config.yaml` under a `tools:` key.
 
 `required: true` means the agent errors at runtime if the binding is unfilled. `required: false` means the agent uses the binding when present and skips the related capability when absent.
 
@@ -62,7 +62,7 @@ linear:
 
 ## Outputs
 
-Run file at `gtm/content-agent/projects/<project>/log/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md`. Per-plan output schemas are declared in each plan's `outputs:` block.
+Run file at `gtm/content-agent/logs/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md`. Per-plan output schemas are declared in each plan's `outputs:` block.
 
 Approved post drafts written to the run log, one entry per candidate with
 its critic score and any revision history. Drafts not surfaced to external

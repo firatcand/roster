@@ -86,8 +86,9 @@ test('byte-identical: every rendered file matches the golden bytes exactly', () 
 // bug where multi-line `description: |` block scalars were emitted with their
 // continuation lines at column 0 — invalid YAML the renderer locked in as the
 // golden because the byte-identical test only compared against itself.
-// parseAllDocuments accepts both single-doc YAML and the frontmatter-style
-// multi-doc format used by projects/_template/config/default.yaml.
+// parseAllDocuments accepts both single-doc YAML and frontmatter-style
+// multi-doc YAML (no current files use the multi-doc form post-ROS-82, but
+// the parser handles both transparently).
 test('yaml validity: every rendered *.yaml parses without error', () => {
   const output = renderForFixture();
   for (const [relPath, content] of output.files) {

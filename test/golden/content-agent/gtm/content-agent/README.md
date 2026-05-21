@@ -4,19 +4,38 @@ gtm agent. See `agent.md` for the orchestrator contract.
 
 ## Files
 
-- `agent.md` — orchestrator contract (purpose, inputs, steps, subagents, tools, outputs, approval, lessons, failure modes)
-- `subagents/` — per-subagent contracts (one file per name listed in `agent.md ## Subagents`)
-- `plans/` — workflow recipes (one yaml per plan)
-- `playbook/` — global lessons (dreamer-promoted or hand-flagged)
-- `logs/` — agent-level operational logs
-- `.claude/` — agent-scoped skills and plugins
+- `agent.md` — orchestrator contract (behavioral prompt, plans list, tool bindings schema)
+- `config.yaml` — guideline refs + tool bindings (workspace-root paths)
+- `.env` — agent-scoped env overrides (gitignored, 0600 — optional, inherits from workspace `/.env`)
+- `plans/` — named workflows (`<plan>.yaml`)
+- `subagents/` — specialized roles
+- `playbook/` — validated lessons (single playbook per agent)
+- `pending/` — HITL items awaiting approval
+- `logs/runs/`, `logs/feedback/` — run outputs + mirrored feedback
+- `asset-references.md` — which workspace assets this agent uses (thin pointer)
+- `.claude/` — agent-scoped Claude Code config (skills, plugins, settings)
 - `.mcp.json` — agent-scoped MCPs
-- `projects/` — per-project instances (config, project-scoped lessons, run/feedback logs)
 
 ## Invocation
 
-Use the `/content-agent` slash command, or invoke via natural language ("Run gtm/content-agent on <project> using <plan>").
+From the workspace root:
+
+```bash
+claude
+> /content-agent run <plan-name>
+```
+
+Or via natural language:
+
+```
+"Run gtm/content-agent using the <plan-name> plan"
+```
+
+## Configuration
+
+`config.yaml` (this agent) — guideline refs + tool bindings.
+Workspace `/.env` (root) + optional `gtm/content-agent/.env` for agent-scoped overrides.
 
 ## Outputs
 
-Per run: `projects/<project>/log/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md`.
+`logs/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md` — one file per invocation.

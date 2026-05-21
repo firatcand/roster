@@ -50,22 +50,41 @@ ${fn} agent. See \`agent.md\` for the orchestrator contract.
 
 ## Files
 
-- \`agent.md\` — orchestrator contract (purpose, inputs, steps, subagents, tools, outputs, approval, lessons, failure modes)
-- \`subagents/\` — per-subagent contracts (one file per name listed in \`agent.md ## Subagents\`)
-- \`plans/\` — workflow recipes (one yaml per plan)
-- \`playbook/\` — global lessons (dreamer-promoted or hand-flagged)
-- \`logs/\` — agent-level operational logs
-- \`.claude/\` — agent-scoped skills and plugins
+- \`agent.md\` — orchestrator contract (behavioral prompt, plans list, tool bindings schema)
+- \`config.yaml\` — guideline refs + tool bindings (workspace-root paths)
+- \`.env\` — agent-scoped env overrides (gitignored, 0600 — optional, inherits from workspace \`/.env\`)
+- \`plans/\` — named workflows (\`<plan>.yaml\`)
+- \`subagents/\` — specialized roles
+- \`playbook/\` — validated lessons (single playbook per agent)
+- \`pending/\` — HITL items awaiting approval
+- \`logs/runs/\`, \`logs/feedback/\` — run outputs + mirrored feedback
+- \`asset-references.md\` — which workspace assets this agent uses (thin pointer)
+- \`.claude/\` — agent-scoped Claude Code config (skills, plugins, settings)
 - \`.mcp.json\` — agent-scoped MCPs
-- \`projects/\` — per-project instances (config, project-scoped lessons, run/feedback logs)
 
 ## Invocation
 
-Use the \`/${agent}\` slash command, or invoke via natural language ("Run ${fn}/${agent} on <project> using <plan>").
+From the workspace root:
+
+\`\`\`bash
+claude
+> /${agent} run <plan-name>
+\`\`\`
+
+Or via natural language:
+
+\`\`\`
+"Run ${fn}/${agent} using the <plan-name> plan"
+\`\`\`
+
+## Configuration
+
+\`config.yaml\` (this agent) — guideline refs + tool bindings.
+Workspace \`/.env\` (root) + optional \`${fn}/${agent}/.env\` for agent-scoped overrides.
 
 ## Outputs
 
-Per run: \`projects/<project>/log/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md\`.
+\`logs/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md\` — one file per invocation.
 `;
 }
 
@@ -160,30 +179,38 @@ ${s.quality_bar.trimEnd()}
 `;
 }
 
-export function renderProjectConfig(agent: string): string {
-  return `---
-agent: ${agent}
-project: <project-slug>
-created: ${STUB_DATE}
-last_modified: ${STUB_DATE}
----
+// v1 config.yaml at agent root. Validated by src/lib/agent-config-schema.ts
+// (ROS-83). Stub-style defaults: guideline_refs map to /guidelines/*; tools
+// is empty (users add bindings as they wire up MCPs).
+export function renderConfigYaml(fn: string, agent: string): string {
+  return `agent: ${fn}/${agent}
+plans_dir: ./plans/
 
-# ${agent} config — <project-name>
+# Workspace-root-relative refs. Loader rejects literal absolute fs paths
+# like /Users/, /home/, /etc/, /var/, /tmp/, /opt/.
+guideline_refs:
+  voice: /guidelines/voice.md
+  icps: /guidelines/icps/
+  messaging: /guidelines/messaging.md
+  # add more as needed:
+  # brand_book: /guidelines/brand-book.md
+  # do_and_dont: /guidelines/do-and-dont.md
+  # compliance: /guidelines/compliance.md
+  # competitors: /guidelines/competitors.md
 
-# Fill in per-project values. Required tool bindings carry TODO placeholders
-# that cause the agent to error at runtime until populated.
-
+# Tool bindings. Each tool entry names the env var, required flag, and a
+# short description. Env vars themselves live in workspace /.env (or are
+# overridden in this agent's .env).
 tools: {}
 `;
 }
 
-export function renderAssetReferences(): string {
-  return `# Asset references
+export function renderAssetReferences(fn: string, agent: string): string {
+  return `# Asset references — ${fn}/${agent}
 
-List the project assets this agent reads at runtime. One bullet per asset.
-Use relative paths from the project root (e.g., \`guidelines/voice.md\`).
+This agent uses these assets from \`guidelines/asset-links.md\`:
 
-- <relative-path>: <one-line description>
+- <e.g., specific asset by name>
 `;
 }
 
@@ -220,7 +247,7 @@ Routes to the \`${fn}/${agent}/\` agent. Looks up the named plan in \`${fn}/${ag
 ## Usage
 
 \`\`\`
-/${agent} run <plan> for <project>
+/${agent} run <plan>
 /${agent} list-plans
 /${agent} --help
 \`\`\`
@@ -229,9 +256,9 @@ Routes to the \`${fn}/${agent}/\` agent. Looks up the named plan in \`${fn}/${ag
 
 1. Reads \`${fn}/${agent}/agent.md\` to load the agent contract
 2. Loads the plan yaml from \`${fn}/${agent}/plans/<plan>.yaml\`
-3. Loads project context from \`projects/<project>/CLAUDE.md\` and \`projects/<project>/guidelines/\`
+3. Reads guideline refs and tool bindings from \`${fn}/${agent}/config.yaml\`
 4. Executes the plan steps, dispatching to subagents as declared
-5. Writes the run log to \`${fn}/${agent}/projects/<project>/log/runs/\`
+5. Writes the run log to \`${fn}/${agent}/logs/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md\`
 
 See \`${fn}/${agent}/agent.md\` for the full orchestrator contract.
 `;
@@ -277,13 +304,13 @@ Read at runtime:
 
 - \`agent.md\` (this file)
 - \`${fn}/${agent}/plans/<plan>.yaml\` — workflow recipe
-- \`${fn}/${agent}/projects/<project>/config/default.yaml\` — params and tool bindings
-- \`projects/<project>/CLAUDE.md\` — project session context
-- \`projects/<project>/guidelines/*.md\` — project substrate (voice, ICPs, do-and-don't, compliance, competitors)
-- \`${fn}/${agent}/projects/<project>/asset-references.md\` — which assets this agent uses
-- \`${fn}/${agent}/projects/<project>/playbook/*.md\` — project-scoped lessons
-- \`${fn}/${agent}/playbook/*.md\` — global lessons
-- Recent ~10 runs in \`${fn}/${agent}/projects/<project>/log/runs/\`
+- \`${fn}/${agent}/config.yaml\` — guideline refs + tool bindings (workspace-root paths)
+- Workspace guidelines referenced under \`config.yaml\` \`guideline_refs:\` (e.g., \`/guidelines/voice.md\`, \`/guidelines/icps/\`, \`/guidelines/messaging.md\`)
+- \`${fn}/${agent}/asset-references.md\` — which workspace assets this agent uses
+- \`${fn}/${agent}/playbook/*.md\` — validated lessons (single playbook per agent)
+- Recent ~10 runs in \`${fn}/${agent}/logs/runs/\`
+
+Env resolution: \`${fn}/${agent}/.env\` overrides workspace \`/.env\`. Required tool env vars validated before the plan runs.
 `;
 }
 
@@ -343,7 +370,7 @@ No external tools required. This section is intentionally empty.
   );
   return `## Tools and bindings
 
-Per-project tool bindings expected by this agent. Values land in \`projects/<project>/config/default.yaml\` under a \`tools:\` key.
+Tool bindings expected by this agent. Values land in this agent's \`config.yaml\` under a \`tools:\` key.
 
 \`required: true\` means the agent errors at runtime if the binding is unfilled. \`required: false\` means the agent uses the binding when present and skips the related capability when absent.
 
@@ -356,7 +383,7 @@ ${blocks.join('\n')}
 function sectionOutputs(fn: string, agent: string, outputsDescription: string): string {
   return `## Outputs
 
-Run file at \`${fn}/${agent}/projects/<project>/log/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md\`. Per-plan output schemas are declared in each plan's \`outputs:\` block.
+Run file at \`${fn}/${agent}/logs/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md\`. Per-plan output schemas are declared in each plan's \`outputs:\` block.
 
 ${outputsDescription.trimEnd()}
 `;

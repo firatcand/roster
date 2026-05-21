@@ -1,0 +1,19 @@
+agent: gtm/content-agent
+plans_dir: ./plans/
+
+# Workspace-root-relative refs. Loader rejects literal absolute fs paths
+# like /Users/, /home/, /etc/, /var/, /tmp/, /opt/.
+guideline_refs:
+  voice: /guidelines/voice.md
+  icps: /guidelines/icps/
+  messaging: /guidelines/messaging.md
+  # add more as needed:
+  # brand_book: /guidelines/brand-book.md
+  # do_and_dont: /guidelines/do-and-dont.md
+  # compliance: /guidelines/compliance.md
+  # competitors: /guidelines/competitors.md
+
+# Tool bindings. Each tool entry names the env var, required flag, and a
+# short description. Env vars themselves live in workspace /.env (or are
+# overridden in this agent's .env).
+tools: {}
