@@ -12,7 +12,7 @@ import { execFileSync } from 'node:child_process';
 import { basename, join, relative } from 'node:path';
 import chalk from 'chalk';
 import { ROSTER_ROOT } from '../lib/paths.ts';
-import { missingScaffoldError } from '../lib/errors.ts';
+import { missingScaffoldError, v04WorkspaceDetectedError } from '../lib/errors.ts';
 import { writeContextAndLinks } from '../lib/project-context.ts';
 
 export type ConfirmFn = (message: string) => Promise<boolean>;
@@ -52,6 +52,15 @@ export const GITIGNORE_MARKER_START = '# Roster defaults';
 
 const FORGE_MARKERS = ['BRIEF.md', 'spec/PRD.md', 'plans/phases.yaml'];
 
+const V04_SCAN_SKIP = new Set([
+  'node_modules',
+  'dist',
+  'build',
+  'coverage',
+  'lib',
+  'bin',
+]);
+
 // Matches `<basename>.template` or `<basename>.template.<ext>`. Capture group
 // is the trailing extension (or empty), so the suffix can be replaced with the
 // captured ext to drop only `.template` from the filename.
@@ -67,6 +76,46 @@ export function substitute(template: string, vars: Record<string, string>): stri
 
 export function detectForgeMarkers(cwd: string): string[] {
   return FORGE_MARKERS.filter((m) => existsSync(join(cwd, m)));
+}
+
+// SPEC §Flow 1 step 2 — v0.4 had nested `<function>/<agent>/projects/<project>/`,
+// so we scan two levels deep under every non-skiplisted top-level dir. Hidden
+// dirs (`.git`, `.forge`, `.claude`) are excluded by the `.`-prefix check.
+export function detectV04Workspace(cwd: string): string[] {
+  const hits: string[] = [];
+  if (existsSync(join(cwd, 'projects'))) hits.push('projects/');
+
+  let topEntries;
+  try {
+    topEntries = readdirSync(cwd, { withFileTypes: true });
+  } catch {
+    return hits;
+  }
+
+  for (const top of topEntries) {
+    if (!top.isDirectory()) continue;
+    if (top.name.startsWith('.')) continue;
+    if (V04_SCAN_SKIP.has(top.name)) continue;
+
+    const topPath = join(cwd, top.name);
+    if (existsSync(join(topPath, 'projects'))) hits.push(`${top.name}/projects/`);
+
+    let subEntries;
+    try {
+      subEntries = readdirSync(topPath, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const sub of subEntries) {
+      if (!sub.isDirectory()) continue;
+      if (sub.name.startsWith('.')) continue;
+      if (existsSync(join(topPath, sub.name, 'projects'))) {
+        hits.push(`${top.name}/${sub.name}/projects/`);
+      }
+    }
+  }
+
+  return hits;
 }
 
 // Destination probes use lstat (not stat) so symlinks are detected as themselves
@@ -197,6 +246,11 @@ export async function executeInit(opts: InitOptions): Promise<InitResult> {
     if (!silent) logger.log(msg);
   };
 
+  const v04Hits = detectV04Workspace(opts.cwd);
+  if (v04Hits.length > 0) {
+    throw v04WorkspaceDetectedError(v04Hits);
+  }
+
   const forgeMarkers = detectForgeMarkers(opts.cwd);
   const contextMdPath = join(opts.cwd, 'CONTEXT.md');
   const claudeMdPath = join(opts.cwd, 'CLAUDE.md');
@@ -264,7 +318,10 @@ export async function executeInit(opts: InitOptions): Promise<InitResult> {
   if (!existsSync(scaffoldSrc)) {
     throw missingScaffoldError(scaffoldSrc);
   }
-  const scaffoldFiles = walkScaffold(scaffoldSrc, opts.cwd, { PROJECT_NAME: projectName });
+  const scaffoldFiles = walkScaffold(scaffoldSrc, opts.cwd, {
+    PROJECT_NAME: projectName,
+    DISPLAY_NAME: projectName,
+  });
   filesWritten.push(...scaffoldFiles);
 
   // For --migrate: inject existing CLAUDE.md content into user region before writing

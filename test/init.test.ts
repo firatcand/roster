@@ -8,6 +8,7 @@ import {
   executeInit,
   appendGitignoreBlock,
   detectForgeMarkers,
+  detectV04Workspace,
   substitute,
   walkScaffold,
   GITIGNORE_MARKER_START,
@@ -852,6 +853,115 @@ test('contract: CLAUDE.md symlink target is the literal string "CONTEXT.md"', as
     const { logger } = silentLogger();
     await executeInit({ cwd, name: 'x', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
     assert.equal(readlinkSync(join(cwd, 'CLAUDE.md')), 'CONTEXT.md');
+  } finally {
+    cleanup();
+  }
+});
+
+test('detectV04Workspace returns [] for an empty dir', () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    assert.deepEqual(detectV04Workspace(cwd), []);
+  } finally {
+    cleanup();
+  }
+});
+
+test('detectV04Workspace flags cwd/projects', () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    mkdirSync(join(cwd, 'projects'));
+    assert.deepEqual(detectV04Workspace(cwd), ['projects/']);
+  } finally {
+    cleanup();
+  }
+});
+
+test('detectV04Workspace flags <function>/projects (one level)', () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    mkdirSync(join(cwd, 'gtm', 'projects'), { recursive: true });
+    assert.deepEqual(detectV04Workspace(cwd), ['gtm/projects/']);
+  } finally {
+    cleanup();
+  }
+});
+
+test('detectV04Workspace flags <function>/<agent>/projects (two levels)', () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    mkdirSync(join(cwd, 'gtm', 'sdr', 'projects'), { recursive: true });
+    assert.deepEqual(detectV04Workspace(cwd), ['gtm/sdr/projects/']);
+  } finally {
+    cleanup();
+  }
+});
+
+test('detectV04Workspace skips node_modules/dist/build/coverage and hidden dirs', () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    for (const skip of ['node_modules', 'dist', 'build', 'coverage', 'lib', 'bin']) {
+      mkdirSync(join(cwd, skip, 'projects'), { recursive: true });
+    }
+    mkdirSync(join(cwd, '.forge', 'projects'), { recursive: true });
+    mkdirSync(join(cwd, '.git', 'projects'), { recursive: true });
+    assert.deepEqual(detectV04Workspace(cwd), []);
+  } finally {
+    cleanup();
+  }
+});
+
+test('detectV04Workspace returns multiple hits when multiple match', () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    mkdirSync(join(cwd, 'projects'));
+    mkdirSync(join(cwd, 'gtm', 'projects'), { recursive: true });
+    mkdirSync(join(cwd, 'gtm', 'sdr', 'projects'), { recursive: true });
+    const hits = detectV04Workspace(cwd);
+    assert.ok(hits.includes('projects/'));
+    assert.ok(hits.includes('gtm/projects/'));
+    assert.ok(hits.includes('gtm/sdr/projects/'));
+    assert.equal(hits.length, 3);
+  } finally {
+    cleanup();
+  }
+});
+
+test('executeInit refuses to scaffold on a v0.4 workspace (throws v04WorkspaceDetectedError)', async () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    mkdirSync(join(cwd, 'projects'));
+    const { logger } = silentLogger();
+    await assert.rejects(
+      () => executeInit({ cwd, name: 'x', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' }),
+      (err: Error & { exitCode?: number; header?: string; body?: string }) => {
+        assert.equal(err.exitCode, 2, 'exitCode is EXIT_CANCELLED');
+        assert.match(err.header ?? err.message, /detected v0\.4 workspace/i);
+        assert.match(err.body ?? err.message, /projects\//);
+        return true;
+      },
+    );
+    // No scaffold should have been written
+    assert.ok(!existsSync(join(cwd, 'CONTEXT.md')), 'CONTEXT.md not created');
+    assert.ok(!existsSync(join(cwd, 'gtm', 'EXPERT.md')), 'scaffold not created');
+  } finally {
+    cleanup();
+  }
+});
+
+test('executeInit substitutes PROJECT_NAME and DISPLAY_NAME into config/project.yaml', async () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    const { logger } = silentLogger();
+    await executeInit({ cwd, name: 'acme-co', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
+
+    const yaml = readFileSync(join(cwd, 'config', 'project.yaml'), 'utf8');
+    assert.match(yaml, /^name: acme-co\b/m, 'name substituted');
+    assert.match(yaml, /^display_name: "acme-co"/m, 'display_name substituted (pass-through)');
+    assert.ok(!yaml.includes('{{PROJECT_NAME}}'), 'no PROJECT_NAME placeholder left');
+    assert.ok(!yaml.includes('{{DISPLAY_NAME}}'), 'no DISPLAY_NAME placeholder left');
+    // The `.template` suffix is stripped on output
+    assert.ok(!existsSync(join(cwd, 'config', 'project.yaml.template')), '.template suffix stripped');
   } finally {
     cleanup();
   }

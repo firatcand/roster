@@ -81,6 +81,20 @@ export function missingScaffoldError(scaffoldPath: string): RosterError {
   });
 }
 
+export function v04WorkspaceDetectedError(paths: ReadonlyArray<string>): RosterError {
+  const list = paths.map((p) => `    - ${p}`).join('\n');
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} detected v0.4 workspace`,
+    body: [
+      '  v1.0 is a breaking change with no automatic migration.',
+      '  Found:',
+      list,
+    ].join('\n'),
+    remedy: '  Re-scaffold in a fresh directory; see docs/CHANGELOG.md#v1.0.0.',
+    exitCode: EXIT_CANCELLED,
+  });
+}
+
 export function userCancelledInit(): RosterError {
   return new RosterError({
     header: `${chalk.dim('roster:')} cancelled`,
