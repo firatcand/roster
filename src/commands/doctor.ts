@@ -20,6 +20,10 @@ import {
   type SecretsAuditResult,
 } from '../lib/doctor-secrets-audit.ts';
 import { parseEnvKeys } from '../lib/dotenv-parse.ts';
+import {
+  confirmAndDeleteRedundantLines,
+  type FixPromptOutcome,
+} from '../lib/agent-env-fix-prompt.ts';
 import { runSafetyAudit, type SafetyAuditResult } from '../lib/doctor-safety-audit.ts';
 import {
   runSchedulingDriftAudit,
@@ -478,6 +482,7 @@ function renderSecretsSection(audit: SecretsAuditResult): string[] {
   const templates = audit.templateSecretLiterals;
   const leak = audit.promptLeak;
   const agentRefs = audit.agentEnvRefs;
+  const redundancy = audit.agentEnvRedundancy;
 
   // Skip rendering when there's nothing to show.
   const noEnv = env.status === 'absent' || env.status === 'skip-platform';
@@ -490,7 +495,8 @@ function renderSecretsSection(audit: SecretsAuditResult): string[] {
     refs.status === 'ok' &&
     templates.status === 'ok' &&
     leak.status === 'ok' &&
-    agentRefs.status === 'ok';
+    agentRefs.status === 'ok' &&
+    redundancy.status === 'ok';
   if (allClean) return [];
 
   const lines: string[] = [''];
@@ -577,6 +583,18 @@ function renderSecretsSection(audit: SecretsAuditResult): string[] {
     if (e > 0 || w > 0) {
       lines.push(`      ${chalk.dim('→ Run `roster doctor --fix` to append missing keys to /.env.')}`);
     }
+  }
+
+  if (redundancy.status === 'warn') {
+    const n = redundancy.items.length;
+    lines.push(`  ${chalk.yellow('!')} agent .env redundancy  ${chalk.yellow('WARN')} ${chalk.dim(`(${n} entr${n === 1 ? 'y' : 'ies'})`)}`);
+    for (const item of redundancy.items.slice(0, 10)) {
+      lines.push(`      ${chalk.yellow('-')} ${item.agentEnvPath}:${item.line}  ${item.key} ${chalk.dim('matches workspace .env')}`);
+    }
+    if (n > 10) {
+      lines.push(`      ${chalk.dim(`… (${n - 10} more)`)}`);
+    }
+    lines.push(`      ${chalk.dim('→ Run `roster doctor --fix` to prompt removal of redundant lines.')}`);
   }
 
   return lines;
@@ -673,6 +691,31 @@ function renderText(results: ToolAuditResult[], summary: Summary, workarounds: W
     const toolWord = results.length === 1 ? 'tool' : 'tools';
     lines.push(chalk.yellow(`Summary: ${bits.join(', ')} across ${results.length} ${toolWord}.`));
     lines.push(`${chalk.dim('Run ')}${chalk.bold('roster install')}${chalk.dim(' to repair.')}`);
+  }
+  return lines;
+}
+
+function renderInteractiveFixSection(outcome: FixPromptOutcome): string[] {
+  const anything =
+    outcome.deleted.length > 0 ||
+    outcome.failed.length > 0 ||
+    outcome.skipped.length > 0 ||
+    outcome.nonTtySkipped;
+  if (!anything) return [];
+  const lines: string[] = [''];
+  lines.push(chalk.bold('agent .env redundancy --fix'));
+  if (outcome.nonTtySkipped) {
+    lines.push(`  ${chalk.dim('-')} skipped — re-run \`roster doctor --fix\` in an interactive terminal`);
+    return lines;
+  }
+  for (const f of outcome.deleted) {
+    lines.push(`  ${chalk.green('✓')} ${f}`);
+  }
+  for (const f of outcome.skipped) {
+    lines.push(`  ${chalk.dim('-')} ${f}: kept`);
+  }
+  for (const f of outcome.failed) {
+    lines.push(`  ${chalk.red('✗')} ${f.what}: ${f.error}`);
   }
   return lines;
 }
@@ -797,6 +840,35 @@ export async function executeDoctor(opts: DoctorOptions): Promise<number> {
     secrets.ok &&
     schedulingDrift.ok;
 
+  // Render audits, then run the interactive --fix prompt for redundant agent
+  // .env lines (if any), then render the interactive fix section. This ordering
+  // lets the user see warnings before being prompted. --silent and --json
+  // suppress prompts (treated as non-TTY) so automation never blocks on stdin.
+  if (!opts.json && !opts.silent) {
+    for (const line of renderText(results, summary, workarounds)) console.log(line);
+    for (const line of renderWorkspaceSection(workspaceFinal)) console.log(line);
+    for (const line of renderSchedulingSection(scheduling)) console.log(line);
+    for (const line of renderSchedulingDriftSection(schedulingDrift)) console.log(line);
+    for (const line of renderStaleFiresSection(schedulingDrift.staleFires)) console.log(line);
+    for (const line of renderSafetySection(safety)) console.log(line);
+    for (const line of renderSecretsSection(secrets)) console.log(line);
+    for (const line of renderFixSection(fixOutcome)) console.log(line);
+  }
+
+  let interactiveOutcome: FixPromptOutcome | null = null;
+  if (opts.fix && secrets.agentEnvRedundancy.items.length > 0) {
+    const isTTY = !opts.silent && !opts.json && (process.stdin.isTTY ?? false);
+    interactiveOutcome = await confirmAndDeleteRedundantLines(
+      secrets.agentEnvRedundancy.items,
+      opts.cwd,
+      { isTTY, stdin: process.stdin, stdout: process.stdout },
+      opts.dryRun,
+    );
+    if (!opts.json && !opts.silent) {
+      for (const line of renderInteractiveFixSection(interactiveOutcome)) console.log(line);
+    }
+  }
+
   if (opts.json) {
     const payload = {
       ok: allOk,
@@ -810,22 +882,13 @@ export async function executeDoctor(opts: DoctorOptions): Promise<number> {
       secrets,
       scheduling_drift: schedulingDrift,
       fix: fixOutcome,
+      interactive_fix: interactiveOutcome,
     };
     console.log(JSON.stringify(payload, null, 2));
-  } else if (!opts.silent) {
-    for (const line of renderText(results, summary, workarounds)) console.log(line);
-    for (const line of renderWorkspaceSection(workspaceFinal)) console.log(line);
-    for (const line of renderSchedulingSection(scheduling)) console.log(line);
-    for (const line of renderSchedulingDriftSection(schedulingDrift)) console.log(line);
-    for (const line of renderStaleFiresSection(schedulingDrift.staleFires)) console.log(line);
-    for (const line of renderSafetySection(safety)) console.log(line);
-    for (const line of renderSecretsSection(secrets)) console.log(line);
-    for (const line of renderFixSection(fixOutcome)) console.log(line);
-    if (opts.dryRun) {
-      console.log(chalk.dim(opts.fix
-        ? '--dry-run: nothing applied; lines above are what `--fix` would have done.'
-        : '--dry-run: read-only audit; pass `--fix` to preview repairs.'));
-    }
+  } else if (!opts.silent && opts.dryRun) {
+    console.log(chalk.dim(opts.fix
+      ? '--dry-run: nothing applied; lines above are what `--fix` would have done.'
+      : '--dry-run: read-only audit; pass `--fix` to preview repairs.'));
   }
 
   return allOk ? EXIT_OK : EXIT_ERROR;

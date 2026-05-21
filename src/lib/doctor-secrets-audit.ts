@@ -4,6 +4,10 @@ import { parseEnvFile, parseEnvKeys } from './dotenv-parse.ts';
 import { isWindows } from './platform.ts';
 import { loadAgentConfig } from './agent-config-schema.ts';
 import { resolveAgentEnv } from './env-merge.ts';
+import {
+  auditAgentEnvRedundancy,
+  type AgentEnvRedundancyResult,
+} from './doctor-agent-env-audit.ts';
 
 // =====================================================================
 // .env file permissions (check 11)
@@ -646,6 +650,7 @@ export type SecretsAuditResult = {
   templateSecretLiterals: TemplateSecretLiteralResult;
   promptLeak: PromptLeakResult;
   agentEnvRefs: AgentEnvRefsResult;
+  agentEnvRedundancy: AgentEnvRedundancyResult;
 };
 
 export type SecretsAuditOpts = {
@@ -661,14 +666,13 @@ export function runSecretsAudit(opts: SecretsAuditOpts): SecretsAuditResult {
   const templateSecretLiterals = auditTemplateSecretLiterals(opts.rosterRoot);
   const promptLeak = auditPromptLeak(opts.cwd, opts.schedules);
   const agentEnvRefs = auditAgentEnvRefs(opts.cwd);
+  const agentEnvRedundancy = auditAgentEnvRedundancy(opts.cwd);
 
-  // Prompt-leak warnings do NOT flip ok (per acceptance: "warns; doesn't fail").
-  // Agent-env-ref warns (required:false unset) likewise do not flip ok — only
-  // the errors[] bucket (required:true unset) is fatal.
-  // skip-platform on env permissions is treated as ok (Windows mode bits are
-  // not POSIX; we can't meaningfully check 0600 there).
-  // Agent-env warn (e.g. 0o644) does NOT flip ok — only fail (world-writable)
-  // does. Mirrors prompt-leak's warn semantics.
+  // Prompt-leak, agent-env-redundancy (check 14), and agent-env-ref warns
+  // (required:false unset) do NOT flip ok — only fatal buckets do
+  // (agent-env-ref errors[] for required:true unset, agent-env-perm fail for
+  // world-writable). skip-platform on env permissions is treated as ok
+  // (Windows mode bits are not POSIX; we can't meaningfully check 0600 there).
   const envOk =
     envPermissions.status === 'ok' ||
     envPermissions.status === 'absent' ||
@@ -689,5 +693,6 @@ export function runSecretsAudit(opts: SecretsAuditOpts): SecretsAuditResult {
     templateSecretLiterals,
     promptLeak,
     agentEnvRefs,
+    agentEnvRedundancy,
   };
 }
