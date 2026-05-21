@@ -25,7 +25,6 @@ function baseOpts(cwd: string): ClaudeInstallOpts {
     functionName: 'gtm',
     agent: 'sdr',
     plan: 'cold-outreach',
-    project: '_demo',
     cron: '0 9 * * 1-5',
     name: undefined,
     dryRun: false,
@@ -58,11 +57,12 @@ test('deriveScheduleName: empty-string override is treated as no override', () =
   assert.equal(deriveScheduleName('sdr', 'cold-outreach', ''), 'sdr-cold-outreach');
 });
 
-test('buildOrchestratorPrompt: stable phrase the orchestrator parses (agent/plan/project)', () => {
-  // Contract: skills/roster-orchestrator/SKILL.md:50-65 — all three required.
+test('buildOrchestratorPrompt: stable phrase the orchestrator parses (agent/plan)', () => {
+  // Contract: skills/roster-orchestrator/SKILL.md — both agent and plan required.
+  // ROS-80 dropped `project` from the prompt; ROS-89 rewrites the skill to match.
   assert.equal(
-    buildOrchestratorPrompt('sdr', 'cold-outreach', 'acme'),
-    'Use the roster-orchestrator skill to run plan cold-outreach for agent sdr on project acme',
+    buildOrchestratorPrompt('sdr', 'cold-outreach'),
+    'Use the roster-orchestrator skill to run plan cold-outreach for agent sdr',
   );
 });
 
@@ -73,7 +73,6 @@ test('renderFieldsDoc: includes the six labeled fields and the prompt block', ()
     workspacePath: '/Users/firat/my-roster',
     agent: 'sdr',
     plan: 'cold-outreach',
-    project: 'acme',
   });
   assert.match(md, /^# Claude Desktop Scheduled Task — sdr-cold-outreach$/m);
   assert.match(md, /Task name.*sdr-cold-outreach/);
@@ -81,7 +80,8 @@ test('renderFieldsDoc: includes the six labeled fields and the prompt block', ()
   assert.match(md, /Workspace path.*\/Users\/firat\/my-roster/);
   assert.match(md, /Allowed tools.*Read, Write, Bash, Task, Edit, Glob, Grep/);
   assert.match(md, /MCP servers.*\(empty/);
-  assert.match(md, /Use the roster-orchestrator skill to run plan cold-outreach for agent sdr on project acme/);
+  assert.match(md, /Use the roster-orchestrator skill to run plan cold-outreach for agent sdr/);
+  assert.doesNotMatch(md, /on project/);
   assert.match(md, /anthropics\/claude-code#41364/);
 });
 

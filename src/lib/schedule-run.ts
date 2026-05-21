@@ -73,7 +73,6 @@ export async function executeRun(opts: ScheduleRunOpts): Promise<ScheduleRunResu
   const prompt = buildOrchestratorPrompt(
     resolved.entry.agent,
     resolved.entry.plan,
-    resolved.entry.project,
   );
 
   if (resolved.entry.tool === 'claude') {

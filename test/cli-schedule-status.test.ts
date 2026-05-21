@@ -27,7 +27,6 @@ schedules:
   - name: heartbeat
     agent: noop
     plan: noop
-    project: _demo
     cron: "*/5 * * * *"
     tool: codex
     install_mode: via-cron

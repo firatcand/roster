@@ -44,7 +44,6 @@ schedules:
   - name: nightly
     agent: sdr
     plan: cold-outreach
-    project: _demo
     cron: "0 9 * * 1-5"
     tool: claude
     install_mode: ui-handoff
@@ -56,7 +55,6 @@ schedules:
   - name: heartbeat
     agent: noop
     plan: noop
-    project: _demo
     cron: "*/5 * * * *"
     tool: codex
     install_mode: via-cron
@@ -166,7 +164,7 @@ test('executeRun (codex): spawns codex exec with workspace + prompt, uses NON-sc
     assert.equal(c.env?.SHELL, '/bin/zsh');
     assert.equal(result.tool, 'codex');
     assert.equal(result.exitCode, 0);
-    assert.match(c.args[3]!, /on project _demo/);
+    assert.doesNotMatch(c.args[3]!, /project/);
   } finally {
     cleanup();
     cleanupHome();

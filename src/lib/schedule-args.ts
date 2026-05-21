@@ -34,7 +34,6 @@ export type ParsedScheduleArgs =
       functionName: string;
       agent: string;
       plan: string;
-      project: string;
       cron: string;
       tool: ToolValue;
       via: ViaMode | undefined;
@@ -230,7 +229,6 @@ function parseInstall(rest: readonly string[]): ParsedScheduleArgs {
   let toolRaw: string | undefined;
   let viaRaw: string | undefined;
   let name: string | undefined;
-  let project: string | undefined;
   let dryRun = false;
   let cloudRoutine = false;
   let json = false;
@@ -281,14 +279,8 @@ function parseInstall(rest: readonly string[]): ParsedScheduleArgs {
     } else if (arg.startsWith('--name=')) {
       if (name !== undefined) return { kind: 'err', message: 'flag --name specified more than once' };
       name = arg.slice('--name='.length);
-    } else if (arg === '--project') {
-      const r = consumeValue('--project', project, rest[i + 1]);
-      if (!r.ok) return { kind: 'err', message: r.message };
-      project = r.value;
-      i++;
-    } else if (arg.startsWith('--project=')) {
-      if (project !== undefined) return { kind: 'err', message: 'flag --project specified more than once' };
-      project = arg.slice('--project='.length);
+    } else if (arg === '--project' || arg.startsWith('--project=')) {
+      return { kind: 'err', message: '--project removed in v1.0 — see CHANGELOG' };
     } else if (arg === '--cwd') {
       const r = consumeValue('--cwd', cwd, rest[i + 1]);
       if (!r.ok) return { kind: 'err', message: r.message };
@@ -353,18 +345,12 @@ function parseInstall(rest: readonly string[]): ParsedScheduleArgs {
     via = viaRaw;
   }
 
-  // Default project to `_demo` (matches templates/scaffold/projects/_demo/).
-  // The orchestrator requires <project> in the prompt; with no real project
-  // specified, the demo placeholder is the safe default for first-time users.
-  const resolvedProject = project ?? '_demo';
-
   return {
     kind: 'ok',
     subcommand: 'install',
     functionName,
     agent,
     plan,
-    project: resolvedProject,
     cron,
     tool: toolRaw,
     via,

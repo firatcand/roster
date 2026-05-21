@@ -41,7 +41,6 @@ schedules:
   - name: nightly
     agent: sdr
     plan: cold-outreach
-    project: _demo
     cron: "0 9 * * 1-5"
     tool: claude
     install_mode: ui-handoff
@@ -53,7 +52,6 @@ schedules:
   - name: heartbeat
     agent: noop
     plan: noop
-    project: _demo
     cron: "*/5 * * * *"
     tool: codex
     install_mode: via-cron
@@ -69,7 +67,6 @@ schedules:
   - name: weekly-report
     agent: gtm
     plan: report
-    project: _demo
     cron: "0 9 * * 1"
     tool: codex
     install_mode: ui-handoff

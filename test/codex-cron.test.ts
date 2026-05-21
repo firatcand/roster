@@ -231,7 +231,7 @@ test('renderCronLine: wrapped form parses as valid POSIX shell', () => {
     cron: '0 9 * * 1-5',
     workspacePath: '/Users/firat/my-roster',
     codexBinaryPath: '/opt/homebrew/bin/codex',
-    prompt: 'Use the roster-orchestrator skill to run plan cold for agent sdr on project _demo',
+    prompt: 'Use the roster-orchestrator skill to run plan cold for agent sdr',
     logPath: '/Users/firat/my-roster/logs/cron/sdr.log',
     exitPath: '/Users/firat/my-roster/logs/cron/sdr.exit',
   });

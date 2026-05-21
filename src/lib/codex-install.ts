@@ -35,7 +35,6 @@ export type CodexInstallOpts = {
   functionName: string;
   agent: string;
   plan: string;
-  project: string;
   cron: string;
   name: string | undefined;
   installMode: InstallModeValue;
@@ -70,9 +69,8 @@ export function renderCodexHandoffDoc(args: {
   workspacePath: string;
   agent: string;
   plan: string;
-  project: string;
 }): string {
-  const prompt = buildOrchestratorPrompt(args.agent, args.plan, args.project);
+  const prompt = buildOrchestratorPrompt(args.agent, args.plan);
   return [
     `# Codex App Automation — ${args.name}`,
     '',
@@ -187,7 +185,6 @@ export function installCodexSchedule(opts: CodexInstallOpts): CodexInstallResult
     name: resolvedName,
     agent: opts.agent,
     plan: opts.plan,
-    project: opts.project,
     cron: opts.cron,
     tool: 'codex',
     install_mode: opts.installMode,
@@ -228,7 +225,6 @@ export function installCodexSchedule(opts: CodexInstallOpts): CodexInstallResult
         workspacePath,
         agent: validatedEntry.agent,
         plan: validatedEntry.plan,
-        project: validatedEntry.project,
       })
     : null;
 
@@ -239,7 +235,7 @@ export function installCodexSchedule(opts: CodexInstallOpts): CodexInstallResult
       cron: validatedEntry.cron,
       workspacePath,
       codexBinaryPath,
-      prompt: buildOrchestratorPrompt(validatedEntry.agent, validatedEntry.plan, validatedEntry.project),
+      prompt: buildOrchestratorPrompt(validatedEntry.agent, validatedEntry.plan),
       logPath: logPath!,
       exitPath: exitPath!,
       ...(validatedEntry.capture_events === true
