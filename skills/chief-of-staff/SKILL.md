@@ -59,7 +59,7 @@ Each plan lives in `chief-of-staff/plans/<plan>.yaml` in the workspace, backed b
 
 The `create-agent` plan runs in one of two modes (see `chief-of-staff/plans/create-agent.yaml`):
 
-- **stub** — byte-identical to `bash scripts/new-agent.sh`. Drops placeholder files (`<one paragraph...>`, plan stubs, empty `## Tools and bindings`, etc.) and exits. Used in CI, headless contexts, and as the legacy escape hatch.
+- **stub** — byte-identical to `bash scripts/new-agent.sh` in its non-interactive path (`AGENT_TEAM_NO_CONFIRM=1` or no TTY). Writes an `agent.md` whose grounded/uncertain fields carry `<placeholder>` text verbatim from the script's heredocs, plus `config.yaml` with `tools: {}` and an empty `plans/.gitkeep`. The script's interactive `## Tools and bindings` prompt is skipped, so that section is absent from `agent.md` in stub mode. Used in CI, headless contexts, and as the legacy escape hatch.
 - **guided** — runs the 5-phase dialogue defined below to produce a filled-in `agent.md` from prose intake plus targeted follow-ups. Same on-disk layout as stub mode, but with real content instead of placeholders.
 
 Mode selection priority (first match wins): `${inputs.mode}` → `AGENT_TEAM_NO_CONFIRM=1` (→ `stub`) → TTY detection (TTY → `guided`, no TTY → `stub`).
