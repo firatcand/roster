@@ -2,37 +2,36 @@
 
 ## Purpose
 
-Operate on the agent-team repo itself. Scaffold empty structure for new projects/agents, archive completed projects, rename, audit completeness. This agent does not run business workflows — it manages the structure those workflows live in.
+Operate on the agent-team workspace itself. Scaffold empty structure for new agents and functions, audit completeness. This agent does not run business workflows — it manages the structure those workflows live in.
 
-In **stub mode** (`create-agent`/`create-project` invoked headlessly or with `mode=stub`), this agent is an empty-structure scaffolder: it creates folders and template files in their default placeholder state — `voice.md` will say `<3 adjectives describing...>`, ICPs are `_persona-template.md`, agent purpose reads `<one paragraph...>`, and so on. In **guided mode** (the default when invoked interactively), `create-agent` runs the Guided Agent Creation dialogue defined in `skills/chief-of-staff/SKILL.md` and produces an `agent.md` with purpose, inputs, steps, tools, and subagents filled in from the dialogue answers — see that contract for the full prompt sequence. Filling project guidelines with real content remains a separate concern handled by function-level experts (a content agent, an expert, or templated generation from existing brand assets).
+In **stub mode** (`create-agent` invoked headlessly or with `mode=stub`), this agent is an empty-structure scaffolder: it creates folders and template files in their default placeholder state — `voice.md` will say `<3 adjectives describing...>`, ICPs are `_persona-template.md`, agent purpose reads `<one paragraph...>`, and so on. In **guided mode** (the default when invoked interactively), `create-agent` runs the Guided Agent Creation dialogue defined in `skills/chief-of-staff/SKILL.md` and produces an `agent.md` with purpose, inputs, steps, tools, and subagents filled in from the dialogue answers — see that contract for the full prompt sequence. Filling guidelines with real content remains a separate concern handled by function-level experts (a content agent, an expert, or templated generation from existing brand assets).
 
 When in doubt, defer to `conventions.md` for the canonical structure schema and to the `_template/` directories for the canonical scaffold contents. This agent does not duplicate those — it tells you how to USE them.
 
 ## Working directory
 
-This agent operates from repo root only. If invoked from elsewhere, abort with: "Run chief-of-staff from agent-team repo root."
+This agent operates from workspace root only. If invoked from elsewhere, abort with: "Run chief-of-staff from agent-team workspace root."
 
 ## Inputs
 
 The orchestrator (slash command or natural-language invocation) expects:
 
-- `plan`: name of a plan in `chief-of-staff/plans/` (e.g., `archive-project`, `audit-repo`)
+- `plan`: name of a plan in `chief-of-staff/plans/` (e.g., `create-agent`, `audit-repo`)
 - Per-plan inputs (positional or named — see each plan's `inputs:` block)
 
 Inputs may arrive in natural language. Parse intent, confirm parameters, then run the operation. Examples:
 
-- "Create a new project called myproject with sdr and twitter-agent" → `create-project project=myproject agents=[gtm/sdr, gtm/twitter-agent]`
-- "Archive test-scaffold" → `archive-project project=test-scaffold`
-- "Audit Acme Corp" → `audit-project project=_demo`
-- "Add content-agent to _demo" → `add-agent-to-project project=_demo function=gtm agent=content-agent`
+- "Create a new sdr agent under gtm" → `create-agent function=gtm agent=sdr`
+- "Add a new function called ops" → `create-function function=ops`
+- "Audit the gtm/sdr agent" → `audit-agent function=gtm agent=sdr`
+- "Audit the whole repo" → `audit-repo`
 
 Read at runtime:
 
 - `agent.md` (this file)
 - `chief-of-staff/plans/<plan>.yaml` — the operation recipe
 - `conventions.md` — canonical structure schema
-- `projects/_template/` — project template
-- `<function>/<agent>/projects/_template/` — agent instance template (for the relevant agent)
+- `<function>/_template/` — agent template (for the relevant function)
 - `chief-of-staff/playbook/` — global lessons about scaffolding (naming conventions, common mistakes)
 
 ## Plans
@@ -41,43 +40,34 @@ This agent runs via plans in `chief-of-staff/plans/`. Each plan wraps a backing 
 
 | Plan | Description | Destructive? |
 |---|---|---|
-| `create-project` | Create a new project, optionally with agent instances | no |
 | `create-agent` | Create a new global agent under a function | no |
 | `create-function` | Add a new function category to the registry | no |
-| `add-agent-to-project` | Add an agent instance to an existing project | no |
-| `remove-agent-from-project` | Archive an agent instance (preserved in _archive) | yes |
-| `archive-project` | Archive a project + all its instances | yes |
-| `unarchive-project` | Restore an archived project | no |
-| `rename-project` | Rename a project everywhere it appears | yes |
-| `audit-project` | Validate a project's completeness; reports issues with suggested fixes | no |
-| `audit-agent` | Validate an agent's structure and instances | no |
-| `audit-repo` | Full repo audit aggregating project + agent reports | no |
+| `audit-agent` | Validate an agent's structure | no |
+| `audit-repo` | Full workspace audit aggregating agent reports | no |
 
 Invoke a plan via the slash command:
 
 ```
-/chief-of-staff create-project myproject with gtm/sdr
-/chief-of-staff archive-project test-scaffold
+/chief-of-staff create-agent gtm sdr
+/chief-of-staff create-function ops
 /chief-of-staff audit-repo
 ```
 
 Or in natural language:
 
 ```
-"Run chief-of-staff archive-project for test-scaffold"
+"Run chief-of-staff audit-repo"
 ```
 
 When invoked without a plan, lists available plans and asks which to run.
 
-Destructive plans (`archive-project`, `unarchive-project`, `remove-agent-from-project`, `rename-project`) always show the planned changes and ask "proceed?" before executing. The cross-link prompts in `create-project` (which agents to instance) and `create-agent` (which projects to instance into) are also session-only — they cannot be answered headlessly. Power users skip the prompt by passing `agents` or `add-to-projects` inline.
-
 ## Common preamble for every plan
 
-1. **Confirm cwd is repo root.** Check for presence of `CLAUDE.md`, `conventions.md`, `gtm/`, `projects/`. If not all present, abort.
+1. **Confirm cwd is workspace root.** Check for presence of `CLAUDE.md`, `conventions.md`. If not present, abort.
 2. **Parse the user's request.** Extract plan name + parameters. If ambiguous, ask before proceeding.
-3. **Show the plan.** For destructive plans, summarize what will happen and ask "proceed?". Always include the list of paths that will be created, modified, or moved.
+3. **Show the plan.** Always include the list of paths that will be created or modified.
 4. **Execute by invoking the plan's backing script.** All operations are backed by a script in `scripts/`. The script does the work; this agent orchestrates and parses output.
-5. **Report.** Summarize what changed (paths created/modified/moved). Note anything skipped or warnings.
+5. **Report.** Summarize what changed (paths created/modified). Note anything skipped or warnings.
 6. **Never auto-commit to git.** Leave commits for the user.
 
 ## Subagents
@@ -102,21 +92,21 @@ Per-plan output schemas are declared in each plan's `outputs:` block.
 
 `approval_channel: session` — this agent is invoked interactively, never via cron. All confirmations happen in-session.
 
-Confirmation gates are MANDATORY for: `archive-project`, `unarchive-project`, `rename-project`, `remove-agent-from-project`. They display the plan and ask "proceed?" before executing.
+None of the current plans are destructive. If a future plan mutates or removes user content, add a mandatory confirmation gate that displays the plan and asks "proceed?" before executing.
 
 ## Lessons protocol
 
-When you observe a pattern across operations — e.g., "users frequently forget to run create-agent before create-project for that agent's instance" — log it as a candidate lesson in the operation's log entry, in a `## Candidate lessons` section. The dreamer picks it up next pass and may write a `chief-of-staff/playbook/L-...md` lesson.
+When you observe a pattern across operations — e.g., "users frequently invoke create-agent before create-function and end up with orphaned slugs" — log it as a candidate lesson in the operation's log entry, in a `## Candidate lessons` section. The dreamer picks it up next pass and may write a `chief-of-staff/playbook/L-...md` lesson.
 
 Do NOT write to `chief-of-staff/playbook/` directly during operations. The user may write a lesson by hand with `source: human`.
 
 ## Failure modes
 
-- **Cwd not repo root**: abort with clear message
+- **Cwd not workspace root**: abort with clear message
 - **Invalid slug or function name**: abort with example of valid format
 - **Collision (target already exists)**: abort, tell user the existing path
-- **Missing dependency (e.g., agent doesn't exist for create-instance)**: abort, suggest the prerequisite plan
+- **Missing dependency (e.g., function doesn't exist when running `create-agent`)**: abort, suggest the prerequisite plan
 - **Script fails**: surface the script's stderr; don't attempt to recover by doing the work directly
 - **YAML/JSON parse error in audit**: report as failure with line number from the audit script
 - **Confirmation gate denied**: abort cleanly, no changes
-- **Partial failure mid-operation**: scripts handle their own rollback. If a script reports partial state, surface exactly what state the repo is in and what to do next.
+- **Partial failure mid-operation**: scripts handle their own rollback. If a script reports partial state, surface exactly what state the workspace is in and what to do next.

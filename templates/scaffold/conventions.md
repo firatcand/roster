@@ -92,7 +92,7 @@ gmail:
     description: "Gmail label applied to outbound"
 ```
 
-When chief-of-staff scaffolds a new agent-instance via `create-project` or `add-agent-to-project`, it parses this block and prompts the user for each binding. Values land in the agent-instance's `config/default.yaml` under `tools:`.
+When chief-of-staff scaffolds a new agent via `create-agent`, it parses this block and prompts the user for each binding. Values land in the agent's `config/default.yaml` under `tools:`.
 
 ### Runtime read order
 
@@ -120,7 +120,7 @@ This convention scopes bindings at the agent-instance level. Bindings genuinely 
 
 When a new agent is created via `bash scripts/new-agent.sh <fn> <agent>` (or via chief-of-staff `create-agent`), the script asks whether to define tools now. If yes, the user provides a comma-separated list of tool names. The script scaffolds a `## Tools and bindings` section with stub blocks per tool. The user then fills in actual bindings (with `required` flags and descriptions) by editing `agent.md` directly.
 
-If skipped, the section is absent and can be added manually later. Agents without a `## Tools and bindings` section don't trigger the binding prompt during instance scaffolding — `new-agent-instance.sh` checks for the section and skips silently if missing.
+If skipped, the section is absent and can be added manually later. Agents without a `## Tools and bindings` section don't trigger the binding prompt during scaffolding — `new-agent.sh` checks for the section and skips silently if missing.
 
 ## Plans and slash commands
 
