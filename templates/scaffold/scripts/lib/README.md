@@ -10,7 +10,7 @@ Conventions:
 ## Current inhabitants
 
 - `functions.sh` — read/validate the function registry at `.config/functions.yaml`. Pure bash + falls back to `python3` + `pyyaml` when available for safer YAML parsing.
-- `bindings-prompt.sh` — interactive prompts for per-tool bindings during agent scaffolding (called by `new-agent.sh`). Requires `python3` + `pyyaml` for the YAML output rendering (falls back gracefully when unavailable).
+- `bindings-prompt.sh` — **disabled in v1.0**. Phase 2 will rebuild this around the env-merge loader (config.yaml `tools:` metadata + `/.env` values). Until then, invocation aborts with manual-configuration instructions (edit agent.md `## Tools and bindings` → mirror the YAML block into `<agent>/config.yaml` → add env-var values to `/.env`). The file remains in the tarball + executable so smoke continues to assert presence; the runtime behavior is the guard message.
 
 Example future additions:
 - `lib/lesson.sh` — read/write lesson files, validate schema

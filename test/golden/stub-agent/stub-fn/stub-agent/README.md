@@ -4,30 +4,40 @@
 
 ## Files
 
-- `agent.md` — orchestrator contract
+- `agent.md` — orchestrator contract (behavioral prompt, plans list, tool bindings schema)
+- `config.yaml` — guideline refs + tool bindings (workspace-root paths)
+- `.env` — agent-scoped env overrides (gitignored, 0600 — optional, inherits from workspace `/.env`)
+- `plans/` — named workflows (`<plan>.yaml`)
 - `subagents/` — specialized roles
-- `playbook/` — global lessons (one file per lesson)
-- `logs/` — agent-level operational logs
-- `.claude/` — agent-scoped skills, plugins
-- `.mcp.json` — agent-scoped MCPs (CREATE THIS — see template comment)
-- `projects/` — per-project instances
+- `playbook/` — validated lessons (single playbook per agent)
+- `pending/` — HITL items awaiting approval
+- `logs/runs/`, `logs/feedback/` — run outputs + mirrored feedback
+- `asset-references.md` — which workspace assets this agent uses (thin pointer)
+- `.claude/` — agent-scoped Claude Code config (skills, plugins, settings)
+- `.mcp.json` — agent-scoped MCPs
 
 ## Invocation
 
-From a project instance session:
+From the workspace root:
 
 ```bash
-cd stub-fn/stub-agent/projects/<project>/
 claude
-"Run stub-agent on <inputs>"
+> /stub-agent run <plan-name>
 ```
 
-From cron: see ROS-39 (Phase 2.5 scheduling primitives — wrapper layout + install script land then).
+Or via natural language:
+
+```
+"Run stub-fn/stub-agent using the <plan-name> plan"
+```
+
+From cron: see ADR-0001 (subscription-billed scheduling via native local schedulers). Install via `roster schedule install stub-fn/stub-agent <plan> --cron "<expr>" --tool claude|codex`.
 
 ## Configuration
 
-Per-project: `projects/<proj>/stub-fn/stub-agent/config/default.yaml` (created by `new-agent-instance.sh`).
+`config.yaml` (this agent) — guideline refs + tool bindings.
+Workspace `/.env` (root) + optional `<this-agent>/.env` for agent-scoped overrides.
 
 ## Outputs
 
-`projects/<proj>/stub-fn/stub-agent/log/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md`
+`logs/runs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md` — one file per invocation.
