@@ -1,6 +1,6 @@
 ---
 name: dreamer
-description: "Off-hours reflection agent. Reads recent runs and feedback across all agents and projects, detects recurring patterns, drafts lesson candidates, routes through HITL approval, and writes approved lessons to the right playbook scope. The only agent that writes to playbook files. Triggers when the user invokes /dreamer or asks to consolidate lessons from past work."
+description: "Off-hours reflection agent. Reads recent runs and feedback across all agents, detects recurring patterns, drafts lesson candidates, routes through HITL approval, and writes approved lessons to the agent's playbook. The only agent that writes to playbook files. Triggers when the user invokes /dreamer or asks to consolidate lessons from past work."
 version: "0.1.0"
 trigger_conditions:
   - "User invokes the /dreamer slash command"
@@ -13,7 +13,7 @@ trigger_conditions:
 
 ## Purpose
 
-Reinforcement and consolidation. Reads recent runs, feedback, and post-hoc analytics across all agents and all projects. Detects patterns. Drafts lesson candidates. Routes through HITL approval. On approval, writes lessons to the right scope (project-scoped or global).
+Reinforcement and consolidation. Reads recent runs, feedback, and post-hoc analytics across all agents. Detects patterns. Drafts lesson candidates. Routes through HITL approval. On approval, the candidate file moves from `<function>/<agent>/pending/` to `<function>/<agent>/playbook/`.
 
 This is the only agent allowed to write to `playbook/` files (apart from the user writing by hand with `source: human`).
 
@@ -56,7 +56,6 @@ Typically scheduled nightly via cron or `/schedule`. When invoked without a plan
 
 - `pattern-detector.md` — finds patterns across runs+feedback
 - `lesson-drafter.md` — drafts a single lesson in schema format
-- `promotion-arbiter.md` — decides project vs global scope for validated lessons
 
 ## Tools and bindings
 
@@ -80,6 +79,8 @@ State file at `dreamer/state.md` tracking last successful run timestamp + summar
 ## Approval
 
 `approval_channel: slack` always. The dreamer typically runs nightly via cron — there's no interactive caller.
+
+On approval, the candidate file in `<agent>/pending/` moves to `<agent>/playbook/`. There is no scope decision and no arbiter — v1 has a single playbook per agent.
 
 TTL: 7 days. Unapproved candidates roll forward in `dreamer/pending/`. After 7 days, marked stale and require re-evaluation.
 
