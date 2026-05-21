@@ -139,7 +139,7 @@ Transitions from accepted Phase 4 preview (`y`) to files-on-disk. The **agent tr
 
 #### Step 1 — Pre-write invariant check
 
-Run all five invariants from § "Cross-file invariants" against `draft`. On any failure:
+Run all four invariants from § "Cross-file invariants" against `draft`. On any failure:
 
 > Invariant N failed: <specific failure>. Revise the affected section, or `cancel` to abort without writing.
 
