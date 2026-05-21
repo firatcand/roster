@@ -27,7 +27,6 @@ function writeMinimalCodexSchedule(cwd: string) {
       '  - name: sdr',
       '    agent: sdr',
       '    plan: cold',
-      '    project: _demo',
       "    cron: '0 9 * * 1-5'",
       '    tool: codex',
       '    install_mode: via-cron',

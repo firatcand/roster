@@ -238,7 +238,6 @@ schedules:
   - name: heartbeat-noop
     agent: noop
     plan: noop
-    project: _demo
     cron: "*/5 * * * *"
     tool: claude
     install_mode: ui-handoff

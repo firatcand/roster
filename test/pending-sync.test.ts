@@ -30,7 +30,6 @@ function writeSchedules(cwd: string, fn: string, entries: Array<{
   name: string;
   agent: string;
   plan: string;
-  project?: string;
   cron?: string;
   install_mode?: 'via-cron' | 'ui-handoff';
 }>) {
@@ -40,7 +39,6 @@ function writeSchedules(cwd: string, fn: string, entries: Array<{
     name: e.name,
     agent: e.agent,
     plan: e.plan,
-    project: e.project ?? '_demo',
     cron: e.cron ?? '0 9 * * 1-5',
     tool: 'codex',
     install_mode: e.install_mode ?? 'via-cron',
@@ -53,7 +51,6 @@ function writeSchedules(cwd: string, fn: string, entries: Array<{
     lines.push(`  - name: ${s.name}`);
     lines.push(`    agent: ${s.agent}`);
     lines.push(`    plan: ${s.plan}`);
-    lines.push(`    project: ${s.project}`);
     lines.push(`    cron: '${s.cron}'`);
     lines.push(`    tool: ${s.tool}`);
     lines.push(`    install_mode: ${s.install_mode}`);

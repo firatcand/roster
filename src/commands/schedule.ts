@@ -53,7 +53,6 @@ export type ScheduleInstallOptions = {
   functionName: string;
   agent: string;
   plan: string;
-  project: string;
   cron: string;
   tool: ToolValue;
   via: ViaMode | undefined;
@@ -190,7 +189,6 @@ export function executeScheduleInstall(opts: ScheduleInstallOptions): number {
       functionName: opts.functionName,
       agent: opts.agent,
       plan: opts.plan,
-      project: opts.project,
       cron: opts.cron,
       name: opts.name,
       dryRun: opts.dryRun,
@@ -228,7 +226,6 @@ export function executeScheduleInstall(opts: ScheduleInstallOptions): number {
     functionName: opts.functionName,
     agent: opts.agent,
     plan: opts.plan,
-    project: opts.project,
     cron: opts.cron,
     name: opts.name,
     installMode,

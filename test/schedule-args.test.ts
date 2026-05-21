@@ -81,3 +81,48 @@ test('schedule run --dry-run still rejects --json (run streams stdout)', () => {
   const r = parseScheduleArgs(['run', 'nightly', '--dry-run', '--json']);
   assert.equal(r.kind, 'err');
 });
+
+// ROS-80: --project flag was removed in v1.0. Both the bare form and =-form
+// must emit the documented removal hint so users who copy-paste an old
+// command get an actionable error instead of `unknown flag for 'schedule install'`.
+test('schedule install --project foo → documented removal hint', () => {
+  const r = parseScheduleArgs([
+    'install',
+    'gtm/sdr',
+    'cold-outreach',
+    '--cron', '0 9 * * 1-5',
+    '--tool', 'codex',
+    '--project', 'foo',
+  ]);
+  assert.equal(r.kind, 'err');
+  if (r.kind !== 'err') return;
+  assert.equal(r.message, '--project removed in v1.0 — see CHANGELOG');
+});
+
+test('schedule install --project=foo → documented removal hint', () => {
+  const r = parseScheduleArgs([
+    'install',
+    'gtm/sdr',
+    'cold-outreach',
+    '--cron', '0 9 * * 1-5',
+    '--tool', 'codex',
+    '--project=foo',
+  ]);
+  assert.equal(r.kind, 'err');
+  if (r.kind !== 'err') return;
+  assert.equal(r.message, '--project removed in v1.0 — see CHANGELOG');
+});
+
+test('schedule install --project= (empty value) → documented removal hint', () => {
+  const r = parseScheduleArgs([
+    'install',
+    'gtm/sdr',
+    'cold-outreach',
+    '--cron', '0 9 * * 1-5',
+    '--tool', 'codex',
+    '--project=',
+  ]);
+  assert.equal(r.kind, 'err');
+  if (r.kind !== 'err') return;
+  assert.equal(r.message, '--project removed in v1.0 — see CHANGELOG');
+});

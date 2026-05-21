@@ -107,7 +107,6 @@ schedules:
   - name: hourly-sdr
     agent: sdr
     plan: cold-outreach
-    project: _demo
     cron: '@hourly'
     tool: claude
     install_mode: ui-handoff
@@ -141,7 +140,6 @@ schedules:
   - name: daily-sdr
     agent: sdr
     plan: cold-outreach
-    project: _demo
     cron: '@daily'
     tool: claude
     install_mode: ui-handoff
@@ -177,7 +175,6 @@ schedules:
   - name: with-retry
     agent: sdr
     plan: cold-outreach
-    project: _demo
     cron: '@daily'
     tool: claude
     install_mode: ui-handoff
@@ -210,7 +207,6 @@ schedules:
   - name: light-load
     agent: sdr
     plan: cold-outreach
-    project: _demo
     cron: '@daily'
     tool: claude
     install_mode: ui-handoff
@@ -241,7 +237,6 @@ schedules:
   - name: filter-test
     agent: sdr
     plan: cold-outreach
-    project: _demo
     cron: '@daily'
     tool: claude
     install_mode: ui-handoff
@@ -295,7 +290,6 @@ schedules:
   - name: claude-only
     agent: sdr
     plan: cold-outreach
-    project: _demo
     cron: '@daily'
     tool: claude
     install_mode: ui-handoff
@@ -343,7 +337,6 @@ schedules:
   - name: heartbeat
     agent: noop
     plan: noop
-    project: _demo
     cron: "*/5 * * * *"
     tool: codex
     install_mode: via-cron
@@ -397,7 +390,6 @@ schedules:
   - name: never-fired
     agent: sdr
     plan: cold-outreach
-    project: _demo
     cron: '@daily'
     tool: claude
     install_mode: ui-handoff
@@ -433,7 +425,6 @@ schedules:
   - name: shape-test
     agent: sdr
     plan: cold-outreach
-    project: _demo
     cron: '@daily'
     tool: claude
     install_mode: ui-handoff

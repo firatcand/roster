@@ -62,7 +62,6 @@ function claudeBaseOpts(cwd: string): ClaudeInstallOpts {
     functionName: 'gtm',
     agent: 'sdr',
     plan: 'cold-outreach',
-    project: '_demo',
     cron: '0 9 * * 1-5',
     name: undefined,
     dryRun: false,
@@ -75,7 +74,6 @@ function codexBaseOpts(cwd: string, home: string): CodexInstallOpts {
     functionName: 'gtm',
     agent: 'sdr',
     plan: 'cold-outreach',
-    project: '_demo',
     cron: '0 9 * * 1-5',
     name: undefined,
     installMode: 'ui-handoff',
@@ -160,7 +158,6 @@ const sdrEntryBase = {
   name: 'sdr-cold-outreach',
   agent: 'sdr',
   plan: 'cold-outreach',
-  project: '_demo',
   cron: '0 9 * * 1-5',
   tool: 'claude' as const,
   install_mode: 'ui-handoff' as const,
@@ -372,7 +369,7 @@ test('scheduling.gate: renderCronLine wraps invocation with `/usr/bin/env -i`', 
     cron: '0 9 * * *',
     workspacePath: '/workspace',
     codexBinaryPath: '/opt/codex/bin/codex',
-    prompt: 'Use the roster-orchestrator skill to run plan p for agent a on project x',
+    prompt: 'Use the roster-orchestrator skill to run plan p for agent a',
     logPath: '/workspace/logs/cron/a-p.log',
   });
   assert.match(line, /\/usr\/bin\/env -i/);
@@ -387,7 +384,7 @@ test('scheduling.gate: renderCronLine forwards EXACTLY {HOME, PATH, CODEX_HOME} 
     cron: '0 9 * * *',
     workspacePath: '/workspace',
     codexBinaryPath: '/opt/codex/bin/codex',
-    prompt: 'Use the roster-orchestrator skill to run plan p for agent a on project x',
+    prompt: 'Use the roster-orchestrator skill to run plan p for agent a',
     logPath: '/workspace/logs/cron/a-p.log',
   });
   // Slice the env -i forward list: from after "/usr/bin/env -i " up to the
@@ -412,7 +409,7 @@ test('scheduling.gate: renderCronLine includes `shell_environment_policy.inherit
     cron: '0 9 * * *',
     workspacePath: '/workspace',
     codexBinaryPath: '/opt/codex/bin/codex',
-    prompt: 'Use the roster-orchestrator skill to run plan p for agent a on project x',
+    prompt: 'Use the roster-orchestrator skill to run plan p for agent a',
     logPath: '/workspace/logs/cron/a-p.log',
   });
   assert.match(line, /-c shell_environment_policy\.inherit=core/);

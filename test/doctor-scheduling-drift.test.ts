@@ -33,7 +33,7 @@ function fakeCrontab(content: string): CrontabIO {
 function writeSchedulesYaml(
   cwd: string,
   fnName: string,
-  entries: Array<{ name: string; agent: string; plan: string; project: string; cron: string; install_mode: 'via-cron' | 'ui-handoff'; tool?: 'codex' | 'claude' }>,
+  entries: Array<{ name: string; agent: string; plan: string; cron: string; install_mode: 'via-cron' | 'ui-handoff'; tool?: 'codex' | 'claude' }>,
 ): void {
   const fnDir = join(cwd, 'roster', fnName);
   mkdirSync(fnDir, { recursive: true });
@@ -43,7 +43,6 @@ function writeSchedulesYaml(
     lines.push(`  - name: ${e.name}`);
     lines.push(`    agent: ${e.agent}`);
     lines.push(`    plan: ${e.plan}`);
-    lines.push(`    project: ${e.project}`);
     lines.push(`    cron: "${e.cron}"`);
     lines.push(`    tool: ${tool}`);
     lines.push(`    install_mode: ${e.install_mode}`);
@@ -92,7 +91,6 @@ test('auditCronDrift: registered codex-via-cron entry, no crontab → fail (regi
       name: 'sdr-cold',
       agent: 'sdr',
       plan: 'cold-outreach',
-      project: '_demo',
       cron: '0 9 * * 1-5',
       install_mode: 'via-cron',
     }]);
@@ -121,7 +119,6 @@ test('auditCronDrift: marker block matches rendered line → ok', () => {
       name: 'sdr-cold',
       agent: 'sdr',
       plan: 'cold-outreach',
-      project: '_demo',
       cron: '0 9 * * 1-5',
       install_mode: 'via-cron',
     }]);
@@ -131,7 +128,7 @@ test('auditCronDrift: marker block matches rendered line → ok', () => {
       cron: '0 9 * * 1-5',
       workspacePath: dir,
       codexBinaryPath: FAKE_CODEX_BINARY,
-      prompt: buildOrchestratorPrompt('sdr', 'cold-outreach', '_demo'),
+      prompt: buildOrchestratorPrompt('sdr', 'cold-outreach'),
       logPath: join(dir, 'logs', 'cron', 'sdr-cold.log'),
       exitPath: join(dir, 'logs', 'cron', 'sdr-cold.exit'),
     });
@@ -156,7 +153,6 @@ test('auditCronDrift: marker block content differs from rendered → fail (cron-
       name: 'sdr-cold',
       agent: 'sdr',
       plan: 'cold-outreach',
-      project: '_demo',
       cron: '0 9 * * 1-5',
       install_mode: 'via-cron',
     }]);
@@ -186,7 +182,6 @@ test('auditCronDrift: orphan marker (marker in crontab, no registered entry) →
       name: 'sdr-cold',
       agent: 'sdr',
       plan: 'cold-outreach',
-      project: '_demo',
       cron: '0 9 * * 1-5',
       install_mode: 'via-cron',
     }]);
@@ -194,7 +189,7 @@ test('auditCronDrift: orphan marker (marker in crontab, no registered entry) →
       cron: '0 9 * * 1-5',
       workspacePath: dir,
       codexBinaryPath: FAKE_CODEX_BINARY,
-      prompt: buildOrchestratorPrompt('sdr', 'cold-outreach', '_demo'),
+      prompt: buildOrchestratorPrompt('sdr', 'cold-outreach'),
       logPath: join(dir, 'logs', 'cron', 'sdr-cold.log'),
     });
     const crontab = [
@@ -227,7 +222,6 @@ test('auditCronDrift: ui-handoff entries are ignored (only via-cron is auditable
       name: 'sdr-ui',
       agent: 'sdr',
       plan: 'cold-outreach',
-      project: '_demo',
       cron: '0 9 * * 1-5',
       install_mode: 'ui-handoff',
     }]);
@@ -314,7 +308,6 @@ test('runSchedulingDriftAudit: cron-drift fail → ok=false', () => {
       name: 'sdr-cold',
       agent: 'sdr',
       plan: 'cold-outreach',
-      project: '_demo',
       cron: '0 9 * * 1-5',
       install_mode: 'via-cron',
     }]);
@@ -390,7 +383,7 @@ test('auditStaleFires: failed last fire → status=fail, item.status=fail', () =
   const { dir, cleanup } = mkTmp('stale-failed-');
   try {
     writeSchedulesYaml(dir, 'gtm', [{
-      name: 'sdr', agent: 'sdr', plan: 'cold', project: '_demo',
+      name: 'sdr', agent: 'sdr', plan: 'cold',
       cron: '0 9 * * 1-5', install_mode: 'via-cron',
     }]);
     writeExit(dir, 'sdr', '137');
@@ -409,7 +402,7 @@ test('auditStaleFires: stale last_run → status=warn, item missed-window', () =
   const { dir, cleanup } = mkTmp('stale-warn-');
   try {
     writeSchedulesYaml(dir, 'gtm', [{
-      name: 'sdr', agent: 'sdr', plan: 'cold', project: '_demo',
+      name: 'sdr', agent: 'sdr', plan: 'cold',
       cron: '0 9 * * 1-5', install_mode: 'via-cron',
     }]);
     writeStateMd(dir, 'gtm', ['2026-05-15T09:05:00Z | gtm/sdr/cold/_demo | success']);
@@ -431,7 +424,7 @@ test('auditStaleFires: zero exit + recent state.md → ok recent-run', () => {
   const { dir, cleanup } = mkTmp('stale-ok-');
   try {
     writeSchedulesYaml(dir, 'gtm', [{
-      name: 'sdr', agent: 'sdr', plan: 'cold', project: '_demo',
+      name: 'sdr', agent: 'sdr', plan: 'cold',
       cron: '0 9 * * 1-5', install_mode: 'via-cron',
     }]);
     writeStateMd(dir, 'gtm', ['2026-05-18T09:05:00Z | gtm/sdr/cold/_demo | success']);
@@ -453,7 +446,7 @@ test('runSchedulingDriftAudit: stale fires WARN does not flip ok; FAIL does', ()
   const { dir, cleanup } = mkTmp('aggregate-stale-');
   try {
     writeSchedulesYaml(dir, 'gtm', [{
-      name: 'sdr', agent: 'sdr', plan: 'cold', project: '_demo',
+      name: 'sdr', agent: 'sdr', plan: 'cold',
       cron: '0 9 * * 1-5', install_mode: 'via-cron',
     }]);
     writeStateMd(dir, 'gtm', ['2026-05-15T09:05:00Z | gtm/sdr/cold/_demo | success']);
@@ -462,7 +455,7 @@ test('runSchedulingDriftAudit: stale fires WARN does not flip ok; FAIL does', ()
       cron: '0 9 * * 1-5',
       workspacePath: dir,
       codexBinaryPath: FAKE_CODEX_BINARY,
-      prompt: buildOrchestratorPrompt('sdr', 'cold', '_demo'),
+      prompt: buildOrchestratorPrompt('sdr', 'cold'),
       logPath: join(dir, 'logs', 'cron', 'sdr.log'),
       exitPath: join(dir, 'logs', 'cron', 'sdr.exit'),
     });
@@ -509,7 +502,6 @@ test('auditCronDrift: capture_events=true entry → events form matches installe
       '  - name: sdr-events',
       '    agent: sdr',
       '    plan: cold',
-      '    project: _demo',
       '    cron: "0 9 * * 1-5"',
       '    tool: codex',
       '    install_mode: via-cron',
@@ -526,7 +518,7 @@ test('auditCronDrift: capture_events=true entry → events form matches installe
       cron: '0 9 * * 1-5',
       workspacePath: dir,
       codexBinaryPath: FAKE_CODEX_BINARY,
-      prompt: buildOrchestratorPrompt('sdr', 'cold', '_demo'),
+      prompt: buildOrchestratorPrompt('sdr', 'cold'),
       logPath: join(dir, 'logs', 'cron', 'sdr-events.log'),
       exitPath: join(dir, 'logs', 'cron', 'sdr-events.exit'),
       eventsPath: join(dir, 'logs', 'cron', 'sdr-events.events.jsonl'),
@@ -561,7 +553,6 @@ test('auditCronDrift: capture_events=true entry vs non-events crontab line → c
       '  - name: sdr-events',
       '    agent: sdr',
       '    plan: cold',
-      '    project: _demo',
       '    cron: "0 9 * * 1-5"',
       '    tool: codex',
       '    install_mode: via-cron',
@@ -579,7 +570,7 @@ test('auditCronDrift: capture_events=true entry vs non-events crontab line → c
       cron: '0 9 * * 1-5',
       workspacePath: dir,
       codexBinaryPath: FAKE_CODEX_BINARY,
-      prompt: buildOrchestratorPrompt('sdr', 'cold', '_demo'),
+      prompt: buildOrchestratorPrompt('sdr', 'cold'),
       logPath: join(dir, 'logs', 'cron', 'sdr-events.log'),
       exitPath: join(dir, 'logs', 'cron', 'sdr-events.exit'),
     });

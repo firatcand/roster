@@ -13,7 +13,6 @@ const minimalEntry = {
   name: 'cold-outreach-daily',
   agent: 'sdr',
   plan: 'cold-outreach',
-  project: '_demo',
   cron: '0 9 * * 1-5',
   tool: 'codex',
   install_mode: 'via-cron',
@@ -41,6 +40,21 @@ test('schedule schema — minimal entry validates', () => {
 test('schedule schema — full entry with optionals validates', () => {
   const parsed = scheduleEntrySchema.safeParse(fullEntry);
   assert.equal(parsed.success, true);
+});
+
+// ROS-80: v0.4 schedules.yaml entries carry a `project` field. v1 rejects them
+// at parse time with the SPEC-documented error string so users get the
+// CHANGELOG anchor instead of Zod's generic `unrecognized_keys` message.
+test('schedule schema — v0.4 entry with project field rejects with documented message', () => {
+  const v04Entry = { ...minimalEntry, project: '_demo' };
+  const parsed = scheduleEntrySchema.safeParse(v04Entry);
+  assert.equal(parsed.success, false);
+  if (!parsed.success) {
+    const errs = flattenZodErrors(parsed.error);
+    const hit = errs.find((e) => e.path === 'project');
+    assert.ok(hit, 'expected an issue at path "project"');
+    assert.equal(hit!.message, 'v0.4 schedule entry detected — see CHANGELOG#breaking-v1');
+  }
 });
 
 test('schedule schema — version field at file root required', () => {
@@ -268,7 +282,6 @@ test('schedule schema — capture_events: true rejected when tool=claude', () =>
     name: 'cold-outreach-daily',
     agent: 'sdr',
     plan: 'cold-outreach',
-    project: '_demo',
     cron: '0 9 * * 1-5',
     tool: 'claude',
     install_mode: 'ui-handoff',

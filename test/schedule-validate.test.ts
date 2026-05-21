@@ -32,7 +32,6 @@ schedules:
   - name: cold-outreach-daily
     agent: sdr
     plan: cold-outreach
-    project: _demo
     cron: "0 9 * * 1-5"
     tool: codex
     install_mode: via-cron
@@ -44,7 +43,6 @@ schedules:
   - name: bad-tool
     agent: sdr
     plan: cold-outreach
-    project: _demo
     cron: "0 9 * * 1-5"
     tool: gemini
     install_mode: via-cron
@@ -56,7 +54,6 @@ schedules:
   - name: bad-cron
     agent: sdr
     plan: cold-outreach
-    project: _demo
     cron: "0 9 * * 8"
     tool: codex
     install_mode: via-cron
@@ -68,7 +65,6 @@ schedules:
   - name: alpha
     agent: sdr
     plan: cold-outreach
-    project: _demo
     cron: "0 9 * * 1-5"
     tool: codex
     install_mode: via-cron
@@ -76,7 +72,6 @@ schedules:
 ${codexAttestation}  - name: alpha
     agent: sdr
     plan: cold-outreach
-    project: _demo
     cron: "0 9 * * 1-5"
     tool: codex
     install_mode: via-cron
@@ -234,7 +229,6 @@ test('validate: missing version field → file-level fail', () => {
   - name: foo
     agent: sdr
     plan: x
-    project: _demo
     cron: "0 9 * * 1-5"
     tool: codex
     install_mode: via-cron
@@ -294,7 +288,6 @@ schedules:
   - name: cold-outreach-daily
     agent: sdr
     plan: cold-outreach
-    project: _demo
     cron: "0 9 * * 1-5"
     tool: codex
     install_mode: via-cron

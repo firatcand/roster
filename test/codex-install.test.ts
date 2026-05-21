@@ -49,7 +49,6 @@ function baseOpts(cwd: string, home: string): CodexInstallOpts {
     functionName: 'gtm',
     agent: 'sdr',
     plan: 'cold-outreach',
-    project: '_demo',
     cron: '0 9 * * 1-5',
     name: undefined,
     installMode: 'ui-handoff',

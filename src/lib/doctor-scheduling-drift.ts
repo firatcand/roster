@@ -180,7 +180,7 @@ export function auditCronDrift(opts: CronDriftOpts): CronDriftAudit {
       cron: entry.cron,
       workspacePath,
       codexBinaryPath,
-      prompt: buildOrchestratorPrompt(entry.agent, entry.plan, entry.project),
+      prompt: buildOrchestratorPrompt(entry.agent, entry.plan),
       logPath: logPathFor(workspacePath, entry.name),
       exitPath: exitPathFor(workspacePath, entry.name),
       ...(entry.capture_events === true

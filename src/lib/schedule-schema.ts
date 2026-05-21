@@ -99,17 +99,6 @@ const kebabString = (label: string) =>
     .min(1, { message: `${label}: required` })
     .refine((s) => KEBAB_RE.test(s), { message: `${label}: must be kebab-case (lowercase letters, digits, hyphens)` });
 
-// Project slugs match kebab plus the scaffold template convention `_demo` /
-// `_template` — a leading underscore is allowed for projects only.
-const PROJECT_SLUG_RE = /^_?[a-z0-9]+(-[a-z0-9]+)*$/;
-const projectString = (label: string) =>
-  z
-    .string()
-    .min(1, { message: `${label}: required` })
-    .refine((s) => PROJECT_SLUG_RE.test(s), {
-      message: `${label}: must be kebab-case (optionally prefixed with '_' for scaffold templates)`,
-    });
-
 const cronString = z
   .string()
   .min(1, { message: 'cron: required' })
@@ -158,12 +147,15 @@ const subscriptionAttestationSchema = z
 
 export type SubscriptionAttestation = z.infer<typeof subscriptionAttestationSchema>;
 
-export const scheduleEntrySchema = z
+// v1.0: schedule entries no longer carry a `project` field. v0.4 entries that
+// still have `project:` are caught by the preprocess guard below so the user
+// gets the documented CHANGELOG hint instead of Zod's generic
+// `unrecognized_keys` message.
+const scheduleEntryShape = z
   .object({
     name: kebabString('name'),
     agent: kebabString('agent'),
     plan: kebabString('plan'),
-    project: projectString('project'),
     cron: cronString,
     tool: z.enum(TOOL_VALUES, {
       error: (issue) => {
@@ -246,6 +238,21 @@ export const scheduleEntrySchema = z
       });
     }
   });
+
+export const scheduleEntrySchema = z.preprocess(
+  (raw, ctx) => {
+    if (raw !== null && typeof raw === 'object' && 'project' in (raw as Record<string, unknown>)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['project'],
+        message: 'v0.4 schedule entry detected — see CHANGELOG#breaking-v1',
+      });
+      return z.NEVER;
+    }
+    return raw;
+  },
+  scheduleEntryShape,
+);
 
 export type ScheduleEntry = z.infer<typeof scheduleEntrySchema>;
 export type ToolValue = (typeof TOOL_VALUES)[number];
