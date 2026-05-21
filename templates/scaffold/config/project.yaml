@@ -1,0 +1,10 @@
+# Roster project identity.
+# After roster init: name and display_name are substituted with your project.
+# Edit the remaining fields (stage, audience, motion, created) before running agents.
+
+name: {{PROJECT_NAME}}            # required — kebab-case slug (substituted by roster init)
+display_name: "{{DISPLAY_NAME}}"  # required — human-readable name (substituted by roster init)
+stage: pre-launch                 # one of: pre-launch | post-launch | scaling | mature
+audience: ""                      # one-line description of who you sell to (fill in)
+motion: outbound                  # one of: outbound | inbound | plg | hybrid
+created: ""                       # yyyy-mm-dd — your project's kickoff date (fill in)
