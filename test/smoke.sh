@@ -167,8 +167,10 @@ assert "-f .env.example" ".env.example exists"
 assert "-f .gitignore" ".gitignore exists"
 assert_contains .gitignore "# Roster defaults" ".gitignore has Roster defaults marker"
 
-# ROS-79: v1 single-project workspace shape — positive assertions after roster init
-assert "! -e projects" "no projects/ dir after init (v1 single-project shape)"
+# ROS-79: v1 single-project workspace shape — positive assertions after roster init.
+# Use a recursive find so nested legacy paths (e.g. <function>/<agent>/projects)
+# also fail the assertion, not just a top-level projects/ dir.
+assert "-z \"\$(find . -type d -name projects)\"" "no projects/ dirs anywhere after init (v1 single-project shape)"
 assert "-f config/project.yaml" "config/project.yaml ported (v1 identity)"
 assert "-d guidelines" "guidelines/ ported (v1 cross-agent substrate)"
 assert "-f guidelines/voice.md" "guidelines/voice.md ported"
@@ -176,6 +178,7 @@ assert "-f guidelines/messaging.md" "guidelines/messaging.md ported"
 assert "-f guidelines/brand-book.md" "guidelines/brand-book.md ported"
 assert "-f guidelines/asset-links.md" "guidelines/asset-links.md ported"
 assert "-d guidelines/icps" "guidelines/icps/ ported"
+assert "-f guidelines/icps/_persona-template.md" "guidelines/icps/_persona-template.md seed ported"
 
 # 5c. new-agent.sh end-to-end against the fresh workspace.
 # Script has interactive tool-bindings prompts — </dev/null + AGENT_TEAM_NO_CONFIRM=1
@@ -184,8 +187,10 @@ AGENT_TEAM_NO_CONFIRM=1 bash scripts/new-agent.sh gtm test-agent </dev/null > /d
 assert "-d gtm/test-agent" "new-agent.sh creates gtm/test-agent/ (ROS-58)"
 assert "-f gtm/test-agent/agent.md" "new-agent.sh creates agent.md (ROS-58)"
 assert "-f .claude/commands/test-agent.md" "new-agent.sh creates slash command (ROS-58)"
-# ROS-79: flat v1 agent shape — no projects/ subdir, all expected files/dirs present
-assert "! -e gtm/test-agent/projects" "new-agent.sh does NOT create projects/ subdir (v1 flat shape)"
+# ROS-79: flat v1 agent shape — no projects/ subdir anywhere under the agent,
+# all expected files/dirs present. Recursive find guards against any nested
+# projects/ regression, not just an immediate child.
+assert "-z \"\$(find gtm/test-agent -type d -name projects)\"" "new-agent.sh does NOT create any projects/ subdir (v1 flat shape)"
 assert "-f gtm/test-agent/README.md" "new-agent.sh creates README.md"
 assert "-f gtm/test-agent/config.yaml" "new-agent.sh creates config.yaml (v1 flat)"
 assert "-f gtm/test-agent/asset-references.md" "new-agent.sh creates asset-references.md"
@@ -202,8 +207,13 @@ AGENT_TEAM_NO_CONFIRM=1 bash scripts/new-agent.sh --slash-only gtm test-agent </
 assert "-f .claude/commands/test-agent.md" "--slash-only recovery (ROS-53) works via shipped script (ROS-58)"
 
 # Idempotency: re-run init with --force, marker should still appear exactly once
+# AND the v1 shape contract must still hold (no resurrected projects/, identity
+# anchor + guidelines seeds preserved).
 "$ROSTER_BIN" init my-test-workspace --silent --no-git --force
 assert_count .gitignore "# Roster defaults" 1 "Roster defaults block appended exactly once"
+assert "-z \"\$(find . -type d -name projects)\"" "no projects/ dirs after --force re-init"
+assert "-f config/project.yaml" "config/project.yaml survives --force re-init"
+assert "-f guidelines/voice.md" "guidelines/voice.md survives --force re-init"
 
 # 6. Schedule list/status/remove smoke (ROS-36).
 #
