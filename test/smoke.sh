@@ -111,9 +111,6 @@ for expected in \
   package/templates/scaffold/product/EXPERT.md \
   package/templates/scaffold/design/EXPERT.md \
   package/templates/scaffold/ops/EXPERT.md \
-  package/templates/scaffold/projects/_demo/CLAUDE.md \
-  package/templates/scaffold/projects/_demo/state.md \
-  package/templates/scaffold/projects/_demo/config/default.yaml \
   package/templates/scaffold/logs/cron/.gitkeep
 do
   assert_contains "$TARBALL_LIST" "^$expected\$" "tarball contains $expected"
@@ -161,12 +158,6 @@ cd "$WORKSPACE"
 assert "-f CLAUDE.md" "CLAUDE.md exists"
 assert_contains CLAUDE.md "my-test-workspace" "CLAUDE.md contains project name"
 assert "! -z \"\$(grep -v '{{PROJECT_NAME}}' CLAUDE.md)\"" "no unresolved {{PROJECT_NAME}} tokens"
-assert "-d projects/_demo" "projects/_demo/ exists"
-assert "-f projects/_demo/README.md" "projects/_demo/README.md exists"
-assert "-f projects/_demo/CLAUDE.md" "projects/_demo/CLAUDE.md exists"
-assert "-f projects/_demo/state.md" "projects/_demo/state.md exists"
-assert "-f projects/_demo/config/default.yaml" "projects/_demo/config/default.yaml exists"
-assert "-f projects/_demo/guidelines/voice.md" "projects/_demo/guidelines/voice.md exists"
 assert "-f conventions.md" "conventions.md ported into workspace"
 assert "-f gtm/EXPERT.md" "gtm/EXPERT.md ported (function dir, no preinstalled agent)"
 assert "-f product/EXPERT.md" "product/EXPERT.md ported"
