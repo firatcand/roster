@@ -14,9 +14,9 @@ import {
   renderAgentMd,
   renderAssetReferences,
   renderClaudeSettings,
+  renderConfigYaml,
   renderMcpJson,
   renderPlanYaml,
-  renderProjectConfig,
   renderReadme,
   renderSlashCommand,
   renderSubagent,
@@ -98,8 +98,8 @@ function renderFileAtPath(path: string, fixture: GuidedAgentFixture): string {
     return renderPlanYaml(plan);
   }
 
-  if (path === `${root}/projects/_template/config/default.yaml`) return renderProjectConfig(agent);
-  if (path === `${root}/projects/_template/asset-references.md`) return renderAssetReferences();
+  if (path === `${root}/config.yaml`) return renderConfigYaml(fn, agent);
+  if (path === `${root}/asset-references.md`) return renderAssetReferences(fn, agent);
   if (path.endsWith('/.gitkeep')) return '';
   // agent.md is written LAST per SKILL.md Step 5 — canonical contract.
   if (path === `${root}/agent.md`) return renderAgentMd(fixture);

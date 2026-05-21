@@ -277,8 +277,8 @@ test('Invariant 5: literal "<step>" in agent.md trips with "unfilled placeholder
       break;
     }
   }
-  // Inject a stub-style placeholder. Reserved templates like <plan>/<project>
-  // are allow-listed, so use a non-allowed token.
+  // Inject a stub-style placeholder. Reserved templates like <plan> are
+  // allow-listed, so use a non-allowed token.
   const tampered = agentMdContent.replace(/## Purpose\n\n/, '## Purpose\n\n<step>\n\n');
   output.files.set(agentMdPath, tampered);
   assert.throws(
