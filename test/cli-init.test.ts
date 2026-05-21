@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -52,6 +52,49 @@ test('roster init --debug on cancellation includes a stack trace', () => {
     assert.equal(r.status, 2, `stderr: ${r.stderr}\nstdout: ${r.stdout}`);
     assert.match(r.stderr, /Nothing written\./);
     assert.match(r.stderr, /\bat\s+.+:\d+:\d+\)/, 'stack frame present with --debug');
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('roster init in a v0.4 workspace (projects/ at cwd) exits 2 with documented error', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'roster-cli-init-v04-'));
+  try {
+    mkdirSync(join(cwd, 'projects'));
+    const r = runCli(['init', 'foo', '--silent', '--no-git'], cwd);
+    assert.equal(r.status, 2, `stderr: ${r.stderr}\nstdout: ${r.stdout}`);
+    assert.match(r.stderr, /detected v0\.4 workspace/i);
+    assert.match(r.stderr, /CHANGELOG\.md#v1\.0\.0/);
+    assert.match(r.stderr, /projects\//);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('roster init in a v0.4 workspace (nested <fn>/<agent>/projects) also exits 2', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'roster-cli-init-v04-nested-'));
+  try {
+    mkdirSync(join(cwd, 'gtm', 'sdr', 'projects'), { recursive: true });
+    const r = runCli(['init', 'foo', '--silent', '--no-git'], cwd);
+    assert.equal(r.status, 2, `stderr: ${r.stderr}\nstdout: ${r.stdout}`);
+    assert.match(r.stderr, /detected v0\.4 workspace/i);
+    assert.match(r.stderr, /gtm\/sdr\/projects\//);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('roster init substitutes PROJECT_NAME + DISPLAY_NAME into config/project.yaml', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'roster-cli-init-subst-'));
+  try {
+    const r = runCli(['init', 'acme-co', '--silent', '--no-git'], cwd);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}\nstdout: ${r.stdout}`);
+
+    const yaml = readFileSync(join(cwd, 'config', 'project.yaml'), 'utf8');
+    assert.match(yaml, /^name: acme-co\b/m, 'name field substituted');
+    assert.match(yaml, /^display_name: "acme-co"/m, 'display_name substituted (pass-through)');
+    assert.ok(!yaml.includes('{{PROJECT_NAME}}'), 'no PROJECT_NAME placeholder left');
+    assert.ok(!yaml.includes('{{DISPLAY_NAME}}'), 'no DISPLAY_NAME placeholder left');
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

@@ -62,8 +62,11 @@ assert_contains() {
 }
 assert_count() {
   # assert_count <file> <pattern> <expected-count> <description>
+  # Note: `grep -c` prints the count and exits 1 when count=0, so the prior
+  # `|| echo "0"` fallback double-printed and produced "0\n0". Use a true
+  # override instead.
   local actual
-  actual=$(grep -c -- "$2" "$1" 2>/dev/null || echo "0")
+  actual=$(grep -c -- "$2" "$1" 2>/dev/null) || actual=0
   if [ "$actual" -eq "$3" ]; then pass "$4 (count=$actual)"; else fail "$4 (expected $3, got $actual)"; fi
 }
 
@@ -172,6 +175,12 @@ assert_contains .gitignore "# Roster defaults" ".gitignore has Roster defaults m
 # also fail the assertion, not just a top-level projects/ dir.
 assert "-z \"\$(find . -type d -name projects)\"" "no projects/ dirs anywhere after init (v1 single-project shape)"
 assert "-f config/project.yaml" "config/project.yaml ported (v1 identity)"
+# ROS-81: config/project.yaml must have substituted {{PROJECT_NAME}} + {{DISPLAY_NAME}}
+assert_contains config/project.yaml "name: my-test-workspace" "config/project.yaml name substituted"
+assert_contains config/project.yaml 'display_name: "my-test-workspace"' "config/project.yaml display_name substituted"
+assert_count config/project.yaml "{{PROJECT_NAME}}" 0 "config/project.yaml has no PROJECT_NAME placeholder"
+assert_count config/project.yaml "{{DISPLAY_NAME}}" 0 "config/project.yaml has no DISPLAY_NAME placeholder"
+assert "! -e config/project.yaml.template" "config/project.yaml.template suffix stripped after init"
 assert "-d guidelines" "guidelines/ ported (v1 cross-agent substrate)"
 assert "-f guidelines/voice.md" "guidelines/voice.md ported"
 assert "-f guidelines/messaging.md" "guidelines/messaging.md ported"
