@@ -6,10 +6,49 @@ Per-phase retrospectives live in [`docs/retros/`](docs/retros/) and carry the lo
 
 ## [Unreleased]
 
+_(empty — staging area for post-1.0 work)_
+
+## [1.0.0] — TBD
+
+The single-project workspace refactor. v1.0.0 replaces the `projects/<slug>/` multi-tenant layout with a single root-level workspace, introduces shared brand/voice substrate under `config/` + `guidelines/`, and adds agent-level `.env` inheritance. **This is a breaking release — existing v0.4 workspaces require a re-scaffold (see Migration below).**
+
+Per-phase retros: see [docs/retros/v1.0.md](docs/retros/v1.0.md) (rolls up phases v1-1..v1-4).
+
 ### Removed
 
-- **In-repo `.dogfood/` instance removed.** The agent-team workspace fixture that lived at `.dogfood/` (102 files, ~456 KB) is gone. `templates/scaffold/scripts/` is now the single canonical source for scaffold shell scripts. Promoted from `.dogfood/scripts/`: `rename-agent.sh` and `save-state.sh`. Deliberately not promoted: the old `cron/` wrappers and `new-cron.sh` — both invoked `claude -p` (the headless flag, paid API), which the doctor's subscription-safety check correctly rejects in shipped code. Scheduling is the job of `roster schedule install` (Phase 2.5); ad-hoc cron is not a shipped pattern. Dropped: `test/scripts-parity.sh` (no second tree to drift against), the `pnpm test:dogfood-scripts` script (renamed to `pnpm test:scaffold-scripts` and now runs `new-agent-slash-only.sh` alone), and the `.dogfood/...` ignore rules in `.gitignore`. The shipped surface is unchanged. Dogfooding now happens via `roster init` in a separate workspace.
-- **SDR worked example removed from the shipped surface.** `roster install` no longer copies an `sdr` skill or its `critic` / `enricher` / `prospector` / `writer` subagents; `roster init` no longer scaffolds `gtm/sdr/`. SDR was always a worked example, not a framework primitive — users now get an empty `gtm/` function dir (matching `product/` / `design/` / `ops/`) and scaffold their own agents via `/chief-of-staff create-agent <function> <agent>`. Dropped: `pnpm e2e` script and `test/e2e-sdr.sh` (CI no longer asserts an SDR-specific contract). Cuts ~20 files / ~30 KB from the npm tarball.
+- **`projects/` directory dropped from `roster init` scaffolds.** The multi-tenant `projects/<slug>/` shape — including the `projects/_demo/` example workspace and the `project` field carried through scheduler entries and slash-command arguments — is gone. Roster is now opinionated single-project per workspace. (ROS-72, ROS-75)
+- **`promotion-arbiter` subagent removed from `dreamer`.** Single-project workspaces collapse `dreamer`'s validated vs global-promotion decision tree into a single playbook scope. (ROS-91)
+- **In-repo `.dogfood/` instance removed.** (Already on main pre-1.0.) The 102-file agent-team workspace fixture at `.dogfood/` is gone; `templates/scaffold/scripts/` is now the single canonical source for scaffold shell scripts. Promoted from `.dogfood/scripts/`: `rename-agent.sh` and `save-state.sh`. Deliberately not promoted: the old `cron/` wrappers and `new-cron.sh` — both invoked `claude -p` (the headless flag, paid API), which the doctor's subscription-safety check correctly rejects in shipped code. Scheduling is the job of `roster schedule install` (Phase 2.5); ad-hoc cron is not a shipped pattern. Dropped: `test/scripts-parity.sh` (no second tree to drift against), the `pnpm test:dogfood-scripts` script (renamed to `pnpm test:scaffold-scripts` and now runs `new-agent-slash-only.sh` alone), and the `.dogfood/...` ignore rules in `.gitignore`. The shipped surface is unchanged. Dogfooding now happens via `roster init` in a separate workspace.
+- **SDR worked example removed from the shipped surface.** (Already on main pre-1.0.) `roster install` no longer copies an `sdr` skill or its `critic` / `enricher` / `prospector` / `writer` subagents; `roster init` no longer scaffolds `gtm/sdr/`. SDR was always a worked example, not a framework primitive — users now get an empty `gtm/` function dir (matching `product/` / `design/` / `ops/`) and scaffold their own agents via `/chief-of-staff create-agent <function> <agent>`. Dropped: `pnpm e2e` script and `test/e2e-sdr.sh` (CI no longer asserts an SDR-specific contract). Cuts ~20 files / ~30 KB from the npm tarball.
+
+### Added
+
+- **`config/` + `guidelines/` cross-agent substrate.** Fresh scaffolds ship `config/project.yaml` (project identity: name, stage, audience, motion, created) and `guidelines/{voice,messaging,brand-book,asset-links}.md` + `guidelines/icps/_persona-template.md`. Single shared source of truth for every agent in the workspace. (ROS-73)
+- **Agent-level `.env` inheritance.** Each agent dir gets its own `.env` that inherits from the workspace `.env`, with agent values overriding workspace values. Empty strings remove a key inherited from the workspace. Doctor checks 13/14/15 audit the merged shape. (ROS-83, ROS-85, ROS-86, ROS-101)
+
+### Changed
+
+- **Schedule schema collapsed.** `roster/<function>/schedules.yaml` entries no longer carry a `project` field. The v0.4 3-tuple `function/agent/project` lookup is rejected with an explicit error; v1 entries use 2-tuple `function/agent` lookup. (ROS-80)
+- **Slash-command syntax dropped the `for <project>` suffix.** `/sdr run cold-outreach for _demo` becomes `/sdr run cold-outreach`. Slash-command frontmatter no longer parses or substitutes a project arg. (ROS-89, ROS-92)
+- **`chief-of-staff` plan inventory trimmed from 11 plans to 4.** The 7 project-management plans (create / archive / rename and their audits) are removed. Kept: `create-agent`, `create-function`, `audit-agent`, `audit-repo`. (ROS-90)
+- **`dreamer` skill rewritten** as a single-playbook orchestrator without the `promotion-arbiter` subagent. (ROS-91)
+
+### Migration
+
+There is no automatic migration tool. To move from v0.4 to v1.0:
+
+1. Scaffold a fresh workspace in a new directory: `roster init <name>`.
+2. Copy your `.env`, `gtm/<agent>/state.md`, and any custom plans from the old workspace into the new one. There is no `projects/` directory in v1 — drop the `projects/<slug>/` path prefix when porting files.
+3. Update any `roster/<function>/schedules.yaml` you'd written by hand: remove the `project:` field from every entry.
+4. Update any custom slash-command invocations you'd embedded in scripts or cron: drop the trailing `for <project>` argument.
+5. If you had a custom `dreamer` playbook that relied on the removed subagent, fold its logic into the single playbook (see [ROS-91](https://linear.app/firatdogan/issue/ROS-91) discussion).
+
+The v0.4 → v1.0 cut is intentional: the multi-project layout shipped before we had real users, and the conceptual savings of a single-project model dwarf the cost of a one-time re-scaffold.
+
+### Fixed
+
+- Doctor check 12 no longer walks the dead v0.4 layout — now audits v1 `<function>/<agent>/.env` references correctly. (ROS-99)
+- Doctor checks 12 + 15 no longer skip top-level infra agents (`dreamer`, `chief-of-staff`). (ROS-101)
 
 ## [0.4.0] — 2026-05-19
 
@@ -82,6 +121,7 @@ Initial public release. Phase 1 retrospective: [`docs/retros/phase-1.md`](docs/r
 - `roster --help` / `roster --version`, exit codes 0/1/2/3.
 - Tool detection limited to `~/.claude/` in this release; Codex CLI and Gemini CLI targets land in v0.2.0.
 
-[Unreleased]: https://github.com/firatcand/roster/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/firatcand/roster/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/firatcand/roster/compare/v0.4.0...v1.0.0
 [0.4.0]: https://github.com/firatcand/roster/compare/v0.1.0...v0.4.0
 [0.1.0]: https://github.com/firatcand/roster/releases/tag/v0.1.0

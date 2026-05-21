@@ -4,6 +4,20 @@ Public view of what's shipped, what's deferred, and what's next. Detailed task t
 
 ## Released
 
+### v1.0.0 — TBD
+
+The single-project workspace refactor. v1.0.0 drops `projects/<slug>/`, adds `config/` + `guidelines/` for shared brand/voice substrate, and introduces agent-level `.env` inheritance. Breaking — existing v0.4 workspaces require a re-scaffold. Full changelog: [CHANGELOG.md](../CHANGELOG.md#100--tbd).
+
+Retro: _TBD ([ROS-98](https://linear.app/firatdogan/issue/ROS-98))_.
+
+What this means for users:
+
+- **Single-project default** — `roster init <name>` produces a workspace, not a multi-tenant container. The `projects/<slug>/` shape is gone; one repo, one product.
+- **Shared substrate** — `config/project.yaml` (identity) and `guidelines/*.md` (voice, messaging, brand book, asset links, ICP personas) live at workspace root and are referenced by every agent.
+- **Env inheritance** — each agent gets its own `.env` that inherits from the workspace, with agent-level overrides and explicit removal via empty string.
+- **Slimmer skills** — `chief-of-staff` shrinks from 11 plans to 4; `dreamer` consolidates around a single playbook (no `promotion-arbiter` subagent).
+- **Migration is manual** — re-scaffold into a fresh directory and copy your `.env` + state files over. See [CHANGELOG § Migration](../CHANGELOG.md#migration).
+
 ### v0.4.0 — 2026-05-19
 
 First feature-complete release. Rolls up Phases 2, 2.5, and 4 — all of which landed on `main` after v0.1.0 but were never published as separate npm releases. Full changelog: [CHANGELOG.md](../CHANGELOG.md#040--2026-05-19).
