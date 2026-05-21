@@ -34,7 +34,7 @@ Tell the user which you found. They need at least one. If none are present, stop
 npx --yes @firatcand/roster install --all
 ```
 
-This copies the three framework skills (`chief-of-staff`, `dreamer`, `roster-orchestrator`) and three reinforcement agents (`lesson-drafter`, `pattern-detector`, `promotion-arbiter`) into every detected tool's config dir. Idempotent — safe to re-run.
+This copies the three framework skills (`chief-of-staff`, `dreamer`, `roster-orchestrator`) and two reinforcement agents (`lesson-drafter`, `pattern-detector`) into every detected tool's config dir. Idempotent — safe to re-run.
 
 ### 3. Scaffold a workspace
 

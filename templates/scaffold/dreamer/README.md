@@ -9,7 +9,7 @@ Cross-domain pattern detection matters. A lesson observed in Twitter automation 
 ## Files
 
 - `agent.md` — orchestrator contract
-- `subagents/` — pattern-detector, lesson-drafter, promotion-arbiter
+- `subagents/` — pattern-detector, lesson-drafter
 - `playbook/` — the dreamer's own lessons (lessons about how to learn)
 - `logs/` — its own runs
 - `state.md` — last processed cutoff

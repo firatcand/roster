@@ -1,11 +1,9 @@
 plan: nightly-reflection
 description: |
-  Reads runs and feedback across all agents and projects since the last
-  cutoff, detects patterns, drafts lesson candidates, surfaces them for HITL
-  approval via Slack #admin, and writes approved lessons to the relevant
-  playbook directories. Promotes project-scoped lessons to global when the
-  pattern is observed in 2+ projects. Updates dreamer/state.md with the new
-  cutoff and a summary.
+  Reads runs and feedback across all agents since the last cutoff, detects
+  patterns, drafts lesson candidates, surfaces them for HITL approval via
+  Slack #admin, and writes approved lessons to each agent's playbook.
+  Updates dreamer/state.md with the new cutoff and a summary.
 
 inputs:
   mode:
@@ -14,7 +12,7 @@ inputs:
     description: nightly | weekly | on-demand. Selects how aggressively to scan and how to weight evidence.
   scope:
     required: false
-    description: Limit to one project (slug) or one agent (function/agent) — useful for on-demand runs.
+    description: Limit to one agent (function/agent) — useful for on-demand runs.
   since:
     required: false
     description: ISO timestamp cutoff. If omitted, uses last_processed_through from dreamer/state.md.
@@ -24,7 +22,6 @@ outputs:
   candidates_drafted: integer
   candidates_approved: integer
   lessons_written: integer
-  lessons_promoted: integer
   conflicts_surfaced: integer
 
 steps:
@@ -35,9 +32,9 @@ steps:
 
   - id: identify_material
     description: |
-      Walk every agent's <function>/<agent>/projects/<project>/log/runs/<YYYY-MM>/
-      and log/feedback/<YYYY-MM>/ for files newer than the cutoff. Match runs
-      to feedback by filename. Apply ${inputs.scope} filter if provided.
+      Walk every agent's <function>/<agent>/log/runs/<YYYY-MM>/ and
+      log/feedback/<YYYY-MM>/ for files newer than the cutoff. Match runs to
+      feedback by filename. Apply ${inputs.scope} filter if provided.
 
   - id: detect_patterns
     subagent: pattern-detector
@@ -62,52 +59,41 @@ steps:
     description: |
       For each candidate that meets threshold or extends an existing lesson,
       draft a lesson in schema format with frontmatter (id, source: dreamer,
-      scope: project|global, status: candidate, agent, created). Place drafts
-      in dreamer/pending/.
+      status: candidate, agent, created). Place drafts in
+      <function>/<agent>/pending/.
     args:
       input_from: accumulate_evidence
 
-  - id: arbitrate_promotion
-    subagent: promotion-arbiter
-    description: |
-      For any project lesson validated in 2+ projects, decide whether to
-      promote to global scope. Returns project vs global designation per
-      candidate.
-    args:
-      input_from: draft_lessons
-
   - id: hitl_routing
     description: |
-      Post all candidates and promotions to Slack #admin (channel from
+      Post all candidates to Slack #admin (channel from
       SLACK_HITL_CHANNEL_ADMIN env var) as threaded messages, one per
       candidate. Format: "Candidate lesson <id>: <title>. Approve / Reject /
       Defer." TTL 7 days. If Slack unavailable, queue candidates locally in
-      dreamer/pending/ and retry next run.
+      <function>/<agent>/pending/ and retry next run.
     approval: slack
 
   - id: apply_approvals
     description: |
-      On approval, write the lesson to the correct location:
-        - Project-scoped: <function>/<agent>/projects/<project>/playbook/L-...md
-          with scope: project
-        - Promoted to global: <function>/<agent>/playbook/L-...md with
-          scope: global AND mark project lesson promoted_to_global: true
-        - Retired: update existing lesson's status: retired with reason
-      All dreamer-written lessons get source: dreamer in frontmatter.
-      Respect human-written lessons (source: human) — never modify or
-      supersede without explicit HITL approval.
+      On approval, move the candidate file from <function>/<agent>/pending/
+      to <function>/<agent>/playbook/L-...md. There is no scope decision;
+      v1 has a single playbook per agent. All dreamer-written lessons get
+      source: dreamer in frontmatter. Respect human-written lessons
+      (source: human) — never modify or supersede without explicit HITL
+      approval. Retired candidates update an existing lesson's status:
+      retired with reason.
 
   - id: update_state
     description: |
       Write timestamp + summary to dreamer/state.md:
         last_processed_through: <ISO timestamp>
-        last_run_summary: drafted N, approved M, written K, promoted P
+        last_run_summary: drafted N, approved M, written K
 
   - id: write_run_log
     description: |
       Write run details to dreamer/logs/<YYYY-MM>/<YYYY-MM-DD-HHMM>.md
-      including: material processed (counts by project and agent), patterns
-      detected, lesson candidates drafted (Slack thread links), promotion
-      candidates, approvals applied, conflicts surfaced.
+      including: material processed (counts by agent), patterns detected,
+      lesson candidates drafted (Slack thread links), approvals applied,
+      conflicts surfaced.
 
 approval_channel: slack
