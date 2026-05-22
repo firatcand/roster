@@ -8,7 +8,7 @@ Public view of what's shipped, what's deferred, and what's next. Detailed task t
 
 The single-project workspace refactor. v1.0.0 drops `projects/<slug>/`, adds `config/` + `guidelines/` for shared brand/voice substrate, and introduces agent-level `.env` inheritance. Breaking — existing v0.4 workspaces require a re-scaffold. Full changelog: [CHANGELOG.md](../CHANGELOG.md#100--tbd).
 
-Retro: _TBD ([ROS-98](https://linear.app/firatdogan/issue/ROS-98))_.
+Retro: [retros/v1.0.md](retros/v1.0.md).
 
 What this means for users:
 
