@@ -14,7 +14,7 @@
 // indentBlockScalar / indentBulletContinuation for any field that may be
 // multi-line.
 
-import type { GuidedAgentFixture, GuidedSubagent, GuidedTool, GuidedPlan, GuidedStep } from './fixture-schema.ts';
+import type { GuidedAgentFixture, GuidedSubagent, GuidedTool, GuidedPlan } from './fixture-schema.ts';
 
 // Stub date used in any boilerplate that needs a created/last_modified field.
 // Hardcoded for host-independence — the harness asserts render() output is
@@ -274,7 +274,6 @@ export function renderAgentMd(fixture: GuidedAgentFixture): string {
     `# ${titleCase(agent)} Agent\n`,
     sectionPurpose(grounded.purpose),
     sectionInputs(fn, agent, grounded.orchestrator_inputs),
-    sectionSteps(grounded.steps),
     sectionSubagents(uncertain_answers.subagents),
     sectionTools(uncertain_answers.tools),
     sectionToolsAndBindings(uncertain_answers.tools),
@@ -311,16 +310,6 @@ Read at runtime:
 - Recent ~10 runs in \`${fn}/${agent}/logs/runs/\`
 
 Env resolution: \`${fn}/${agent}/.env\` overrides workspace \`/.env\`. Required tool env vars validated before the plan runs.
-`;
-}
-
-function sectionSteps(steps: GuidedStep[]): string {
-  const stepLines = steps
-    .map((s) => `- \`${s.id}\` — **${s.title}.** ${indentBulletContinuation(s.description)}`)
-    .join('\n');
-  return `## Steps
-
-${stepLines}
 `;
 }
 

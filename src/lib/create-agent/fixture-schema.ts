@@ -24,12 +24,6 @@ const SlashCommandSchema = z.object({
     .refine((s) => !/TODO:/.test(s), 'slash command description must not contain "TODO:" (invariant 4)'),
 });
 
-const StepSchema = z.object({
-  id: SLUG,
-  title: NON_EMPTY,
-  description: NON_EMPTY,
-});
-
 const PlanStepSchema = z.object({
   id: SLUG,
   title: NON_EMPTY,
@@ -61,7 +55,6 @@ const ToolSchema = z.object({
 const GroundedSchema = z.object({
   purpose: NON_EMPTY,
   orchestrator_inputs: z.array(NON_EMPTY).min(1),
-  steps: z.array(StepSchema).min(1),
   outputs_description: NON_EMPTY,
 });
 
@@ -92,10 +85,7 @@ export const GuidedAgentFixtureSchema = z.object({
   fn: SLUG,
   agent: SLUG,
   prose: NON_EMPTY,
-  grounded: GroundedSchema.refine(
-    (g) => uniqueBy(g.steps, (s) => s.id),
-    'grounded.steps must have unique ids',
-  ),
+  grounded: GroundedSchema,
   uncertain_answers: UncertainAnswersSchema,
   slash_command: SlashCommandSchema,
 });
@@ -104,7 +94,6 @@ export type GuidedAgentFixture = z.infer<typeof GuidedAgentFixtureSchema>;
 export type GuidedSubagent = z.infer<typeof SubagentSchema>;
 export type GuidedTool = z.infer<typeof ToolSchema>;
 export type GuidedPlan = z.infer<typeof PlanSchema>;
-export type GuidedStep = z.infer<typeof StepSchema>;
 
 export class FixtureValidationError extends Error {
   readonly path: string;
