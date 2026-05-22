@@ -8,7 +8,6 @@
 // scripts/update-golden.ts regenerates the golden tree from this function.
 
 import type { GuidedAgentFixture } from './fixture-schema.ts';
-import { validateStepIdsMatch } from './fixture-schema.ts';
 import { agentDirs, agentFiles, slashCommandPath } from './paths.ts';
 import {
   renderAgentMd,
@@ -45,7 +44,6 @@ export interface RenderOutput {
 
 export function render(input: RenderInput): RenderOutput {
   const { fixture } = input;
-  validateStepIdsMatch(fixture);
 
   const { fn, agent } = fixture;
   const subagentNames = fixture.uncertain_answers.subagents.map((s) => s.name);
