@@ -10,7 +10,7 @@ import {
 } from './doctor-agent-env-audit.ts';
 
 // =====================================================================
-// .env file permissions (check 11)
+// Workspace .env file permissions
 // =====================================================================
 
 export type EnvPermissionsResult =
@@ -46,7 +46,7 @@ export function auditEnvPermissions(cwd: string): EnvPermissionsResult {
 }
 
 // =====================================================================
-// Agent .env file permissions (check 13)
+// Agent .env file permissions
 // =====================================================================
 
 export type AgentEnvPermItem =
@@ -186,7 +186,7 @@ export function auditAgentEnvPermissions(cwd: string): AgentEnvPermResult {
 }
 
 // =====================================================================
-// .env key references in workspace YAML configs (check 12)
+// .env key references in workspace YAML configs
 // =====================================================================
 
 export type EnvKeyReferenceItem = {
@@ -322,7 +322,7 @@ export function auditEnvKeyReferences(cwd: string): EnvKeyReferenceResult {
 }
 
 // =====================================================================
-// Secret-literal scan of installed templates (check 13)
+// Secret-literal scan of installed templates
 // =====================================================================
 
 export type TemplateSecretLiteralItem = {
@@ -418,7 +418,7 @@ export function auditTemplateSecretLiterals(rosterRoot: string): TemplateSecretL
 }
 
 // =====================================================================
-// Prompt-leak audit (check 14) — warn, do not fail
+// Prompt-leak audit — warn, do not fail
 // =====================================================================
 
 export type PromptLeakItem = {
@@ -478,7 +478,7 @@ export function auditPromptLeak(
 }
 
 // =====================================================================
-// Agent env-var references — referenced-but-unset across agents (check 15)
+// Agent env-var references — referenced-but-unset across agents
 // =====================================================================
 //
 // For every <function>/<agent>/config.yaml in the workspace, list the env-var
@@ -488,7 +488,7 @@ export function auditPromptLeak(
 //   - required: false → warn   (does NOT flip ok)
 //
 // Empty-string ("K=") in either .env counts as unset per resolveAgentEnv
-// semantics — mirrors check 12.
+// semantics — mirrors the workspace env-key-references audit above.
 
 export type AgentEnvRefMiss = {
   agent: string;
@@ -583,7 +583,7 @@ export function auditAgentEnvRefs(cwd: string): AgentEnvRefsResult {
   for (const agent of listV1AgentPaths(cwd)) {
     const loaded = loadAgentConfig(cwd, agent);
     // Malformed configs (parse / schema / agent-field mismatch / ref shape)
-    // are surfaced by a future config-validity check, not by check 15.
+    // are surfaced by a future config-validity check, not by auditAgentEnvRefs.
     if (!loaded.ok) continue;
     const tools = loaded.config.tools ?? {};
     const resolved = resolveAgentEnv(cwd, agent);
@@ -638,7 +638,7 @@ export function runSecretsAudit(opts: SecretsAuditOpts): SecretsAuditResult {
   const agentEnvRefs = auditAgentEnvRefs(opts.cwd);
   const agentEnvRedundancy = auditAgentEnvRedundancy(opts.cwd);
 
-  // Prompt-leak, agent-env-redundancy (check 14), and agent-env-ref warns
+  // Prompt-leak, agent-env-redundancy, and agent-env-ref warns
   // (required:false unset) do NOT flip ok — only fatal buckets do
   // (agent-env-ref errors[] for required:true unset, agent-env-perm fail for
   // world-writable). skip-platform on env permissions is treated as ok
