@@ -128,7 +128,7 @@ Required sections for any agent.md (validated by `audit-agent.sh`):
 - `## Approval` — HITL routing
 - `## Lessons protocol` — what gets logged as candidate lessons
 
-Note: `## Steps` is NOT a required section anymore — workflow logic lives in plans, not agent.md.
+Note: `## Steps` is not emitted in generated `agent.md` — workflow logic lives in plans, not agent.md.
 
 ---
 

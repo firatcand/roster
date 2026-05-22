@@ -26,15 +26,6 @@ Read at runtime:
 
 Env resolution: `gtm/content-agent/.env` overrides workspace `/.env`. Required tool env vars validated before the plan runs.
 
-## Steps
-
-- `parse-brief` — **Parse topic brief.** Extract subject, target ICP, tone, and call-to-action from the user-supplied
-  topic brief. Surface any gaps before proceeding to drafting.
-- `draft-candidates` — **Draft 2-3 candidates.** Generate variant drafts in the project's voice using brand-book.md and
-  voice.md as substrate. Each candidate differs in opening hook or angle.
-- `critique-and-revise` — **Critique and revise.** Send drafts to the critic subagent. Apply revision suggestions; emit only
-  candidates that pass the critic's quality bar.
-
 ## Subagents
 
 - `critic.md` — Reviews each candidate draft for voice fit, ICP relevance, brand safety,

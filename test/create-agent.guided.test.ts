@@ -216,10 +216,3 @@ test('schema rejects duplicate plan names', () => {
   assert.equal(GuidedAgentFixtureSchema.safeParse(bad).success, false);
 });
 
-test('schema rejects duplicate grounded.step ids', () => {
-  const fixture = loadFixture(FIXTURE_PATH);
-  const dup = fixture.grounded.steps[0];
-  const bad = { ...fixture, grounded: { ...fixture.grounded, steps: [dup, dup] } };
-  assert.equal(GuidedAgentFixtureSchema.safeParse(bad).success, false);
-});
-

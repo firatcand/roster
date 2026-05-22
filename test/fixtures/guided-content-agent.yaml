@@ -27,25 +27,6 @@ grounded:
     - "project: project slug (must match a folder in projects/)"
     - "topic: short brief of what to write about (1-2 sentences)"
 
-  steps:
-    - id: parse-brief
-      title: Parse topic brief
-      description: |
-        Extract subject, target ICP, tone, and call-to-action from the user-supplied
-        topic brief. Surface any gaps before proceeding to drafting.
-
-    - id: draft-candidates
-      title: Draft 2-3 candidates
-      description: |
-        Generate variant drafts in the project's voice using brand-book.md and
-        voice.md as substrate. Each candidate differs in opening hook or angle.
-
-    - id: critique-and-revise
-      title: Critique and revise
-      description: |
-        Send drafts to the critic subagent. Apply revision suggestions; emit only
-        candidates that pass the critic's quality bar.
-
   outputs_description: |
     Approved post drafts written to the run log, one entry per candidate with
     its critic score and any revision history. Drafts not surfaced to external
