@@ -1,23 +1,22 @@
 ---
 name: chief-of-staff
-description: "Repo maintenance for roster workspaces — create, archive, rename, audit projects, agents, and functions. Wraps shell scripts in scripts/ with mandatory confirmation gates for destructive operations. Triggers when the user asks to scaffold or restructure a roster workspace, or invokes the /chief-of-staff slash command."
-version: "0.1.0"
+description: "Workspace maintenance for a roster v1 workspace — create agents under a function, register new functions, and audit completeness. Wraps shell scripts in scripts/. Triggers when the user asks to scaffold or audit a roster workspace, or invokes the /chief-of-staff slash command."
+version: "1.0.0"
 trigger_conditions:
   - "User invokes the /chief-of-staff slash command"
-  - "User asks to create, archive, rename, or audit a project (e.g., 'archive _demo', 'create project acme with gtm/sdr')"
-  - "User asks to add or remove an agent from an existing project"
-  - "User asks for a repo or project completeness audit"
+  - "User asks to scaffold a new agent or register a new function (e.g., 'create a gtm/sdr agent', 'add a design function')"
+  - "User asks for a repo or agent completeness audit"
 ---
 
 # Chief of Staff
 
-Structural maintenance for a roster workspace. **Operate on the workspace itself**, not on the business workflows inside it. This skill scaffolds empty structure, archives completed projects, renames things, and audits completeness. Filling content into the scaffolds is a separate concern handled by function-level experts and role-level agents.
+Structural maintenance for a roster v1 workspace. **Operate on the workspace itself**, not on the business workflows inside it. This skill scaffolds empty agent and function structure and audits completeness. Filling content into the scaffolds is a separate concern handled by function-level experts and role-level agents.
 
-When in doubt, defer to `conventions.md` in the workspace root for the canonical structure schema, and to the `_template/` directories for the canonical scaffold contents.
+When in doubt, defer to `conventions.md` in the workspace root for the canonical structure schema, and to `scripts/new-agent.sh` for the canonical scaffold contents (heredocs inside the script are the source of truth for every generated file).
 
 ## Working directory
 
-This skill operates from the workspace root only — the directory that contains `CLAUDE.md`, `conventions.md`, and the function dirs (`gtm/`, `product/`, etc.). If invoked from elsewhere, abort with:
+This skill operates from the workspace root only — the directory that contains `CLAUDE.md`, `conventions.md`, `config/project.yaml`, `roster/`, and the function dirs (`gtm/`, `product/`, etc.). If invoked from elsewhere, abort with:
 
 > Run chief-of-staff from your roster workspace root.
 
@@ -25,51 +24,42 @@ This skill operates from the workspace root only — the directory that contains
 
 The user invokes via slash command or natural language. Parse intent into a plan name plus parameters. Examples:
 
-- `/chief-of-staff create-project acme with gtm/sdr` → `plan=create-project project=acme agents=[gtm/sdr]`
-- `/chief-of-staff archive-project test-scaffold` → `plan=archive-project project=test-scaffold`
+- `/chief-of-staff create-agent gtm sdr` → `plan=create-agent function=gtm agent=sdr`
+- `/chief-of-staff create-function design` → `plan=create-function function=design`
+- `/chief-of-staff audit-agent product/copy-agent` → `plan=audit-agent function=product agent=copy-agent`
 - `/chief-of-staff audit-repo` → `plan=audit-repo`
-- "Add content-agent to _demo" → `plan=add-agent-to-project project=_demo function=gtm agent=content-agent`
 
 When invoked without a plan, list the available plans and ask which to run.
 
+### Out-of-scope intents
+
+v1 is a single workspace per directory — this skill does not spin up sibling workspaces. The current workspace's identity lives in `config/project.yaml`; to start a new one, run `roster init` in a fresh directory.
+
 ## Plans
 
-| Plan | Description | Destructive? |
-|---|---|---|
-| `create-project` | Create a new project, optionally with agent instances | no |
-| `create-agent` | Create a new global agent under a function (interactive dialogue by default — see § "Guided agent creation"; `mode=stub` for headless) | no |
-| `create-function` | Add a new function category to the registry | no |
-| `add-agent-to-project` | Add an agent instance to an existing project | no |
-| `remove-agent-from-project` | Archive an agent instance (preserved in `_archive`) | yes |
-| `archive-project` | Archive a project plus all its instances | yes |
-| `unarchive-project` | Restore an archived project | no |
-| `rename-project` | Rename a project everywhere it appears | yes |
-| `audit-project` | Validate a project's completeness; reports issues with suggested fixes | no |
-| `audit-agent` | Validate an agent's structure and instances | no |
-| `audit-repo` | Full repo audit aggregating project + agent reports | no |
+| Plan | Description |
+|---|---|
+| `create-agent` | Create a new agent under a function (interactive dialogue by default — see § "Guided agent creation"; `mode=stub` for headless) |
+| `create-function` | Add a new function category to the registry |
+| `audit-agent` | Validate an agent's structure |
+| `audit-repo` | Full repo audit aggregating agent + workspace completeness reports |
 
 Each plan lives in `chief-of-staff/plans/<plan>.yaml` in the workspace, backed by a script in `scripts/`.
 
 ## Common preamble for every plan
 
-1. **Confirm cwd is repo root.** Check for `CLAUDE.md`, `conventions.md`, `gtm/`, `projects/`. If not all present, abort with the message above.
+1. **Confirm cwd is workspace root.** Check for `CLAUDE.md`, `conventions.md`, `config/project.yaml`, and `roster/`. If not all present, abort with the message above.
 2. **Parse the user's request.** Extract plan name and parameters. If ambiguous, ask before proceeding.
-3. **Show the plan.** For destructive plans, summarize exactly what will happen (paths created, moved, modified) and ask `proceed?`.
+3. **Show the plan.** Summarize exactly what will happen (paths created, modified).
 4. **Execute by invoking the plan's backing script.** Scripts in `scripts/` do the work; this skill orchestrates and parses output. Do not duplicate the script logic.
-5. **Report.** Summarize what changed (paths created, modified, moved). Note anything skipped or any warnings.
+5. **Report.** Summarize what changed (paths created, modified). Note anything skipped or any warnings.
 6. **Never auto-commit to git.** Leave commits for the user.
-
-## Mandatory confirmation gates
-
-Destructive plans (`archive-project`, `unarchive-project`, `rename-project`, `remove-agent-from-project`) MUST display the planned changes and ask `proceed?` before executing.
-
-Cross-link prompts during `create-project` (which agents to instance) and `create-agent` (which projects to instance into) are also session-only — they cannot be answered headlessly. Power users skip the prompt by passing `agents=` or `add-to-projects=` inline.
 
 ## Guided agent creation
 
 The `create-agent` plan runs in one of two modes (see `chief-of-staff/plans/create-agent.yaml`):
 
-- **stub** — byte-identical to `bash scripts/new-agent.sh`. Drops placeholder files (`<one paragraph...>`, plan stubs, empty `## Tools and bindings`, etc.) and exits. Used in CI, headless contexts, and as the legacy escape hatch.
+- **stub** — byte-identical to `bash scripts/new-agent.sh` in its non-interactive path (`AGENT_TEAM_NO_CONFIRM=1` or no TTY). Writes an `agent.md` whose grounded/uncertain fields carry `<placeholder>` text verbatim from the script's heredocs, plus `config.yaml` with `tools: {}` and an empty `plans/.gitkeep`. The script's interactive `## Tools and bindings` prompt is skipped, so that section is absent from `agent.md` in stub mode. Used in CI, headless contexts, and as the legacy escape hatch.
 - **guided** — runs the 5-phase dialogue defined below to produce a filled-in `agent.md` from prose intake plus targeted follow-ups. Same on-disk layout as stub mode, but with real content instead of placeholders.
 
 Mode selection priority (first match wins): `${inputs.mode}` → `AGENT_TEAM_NO_CONFIRM=1` (→ `stub`) → TTY detection (TTY → `guided`, no TTY → `stub`).
@@ -78,7 +68,7 @@ Mode selection priority (first match wins): `${inputs.mode}` → `AGENT_TEAM_NO_
 
 > The skill MUST NOT write a Step, Subagent, Tool, Plan body, or Failure mode unless that content was supplied by the user (in prose or follow-up) or comes from documented convention. If the skill catches itself about to invent content, it stops and asks instead.
 
-This invariant is load-bearing. Guided mode is **not a content generator** — it is a structured interviewer that organizes what the user said into the canonical `agent.md` shape. Every non-boilerplate line in the generated agent.md must be traceable to either (a) the prose intake, (b) a follow-up answer, or (c) a documented convention in `conventions.md` / `_template/`. Never fill in plausible-looking defaults to make the output feel complete — gaps stay gaps, surfaced explicitly as follow-up questions.
+This invariant is load-bearing. Guided mode is **not a content generator** — it is a structured interviewer that organizes what the user said into the canonical `agent.md` shape. Every non-boilerplate line in the generated agent.md must be traceable to either (a) the prose intake, (b) a follow-up answer, or (c) a documented convention in `conventions.md` / `scripts/new-agent.sh`. Never fill in plausible-looking defaults to make the output feel complete — gaps stay gaps, surfaced explicitly as follow-up questions.
 
 ### EXPERT.md auto-load
 
@@ -101,9 +91,9 @@ Accept the answer as-is — no structure required. Capture it verbatim; it seeds
 
 Partition every required `agent.md` field into one of three buckets:
 
-- **boilerplate** — filled silently from `conventions.md` / `_template/`. Examples: standard "Read at runtime" file paths, the lessons-protocol paragraph, the `approval_channel: auto` default, the canonical "Confirmation gate denied" failure mode wording.
+- **boilerplate** — filled silently from `conventions.md` / `scripts/new-agent.sh` heredocs. Examples: standard "Read at runtime" file paths, the lessons-protocol paragraph, the `approval_channel: auto` default, the canonical "Confirmation gate denied" failure mode wording.
 - **grounded** — drafted directly from the prose intake. Examples: the `Purpose` paragraph, the `Outputs` description, the agent's headline role.
-- **uncertain** — content the prose did not specify and convention cannot fill. Examples: which subagents exist, which tools/MCPs are needed, project-specific failure modes, plan names.
+- **uncertain** — content the prose did not specify and convention cannot fill. Examples: which subagents exist, which tools/MCPs are needed, agent-specific failure modes, plan names.
 
 Boilerplate is written without asking. Grounded is drafted but explicitly flagged in the Phase 4 preview ("drafted from your prose — review before accepting"). Uncertain becomes the queue for Phase 3.
 
@@ -125,14 +115,14 @@ Continue until the uncertain bucket is empty.
 Render the full draft tree to the user. Show:
 
 - Every file path that will be written, with a one-line description.
-- The full `agent.md` content (purpose, inputs, steps, subagents, tools, outputs, approval, lessons, failure modes).
+- The full `agent.md` content (purpose, inputs, subagents, tools-and-bindings, outputs, approval, lessons, failure modes — per `templates/scaffold/conventions.md`; workflow logic lives in plans, not in `agent.md`).
 - The slash-command description that will land in `.claude/commands/<agent>.md` (replacing the stub's `TODO: fill in description` placeholder).
-- The `plans/` directory (empty `.gitkeep` + a stub for the first plan if one was named during Phase 3).
+- The `plans/` directory (`.gitkeep` only — the user writes the first plan in `plans/<plan>.yaml` as a next step after the agent tree lands).
 
 Offer three controls:
 
 - **`y`** → proceed to Phase 5 (atomic write).
-- **`revise <section>`** → re-enter Phase 3 for that section only, then re-render the preview. Valid sections: `purpose`, `inputs`, `steps`, `subagents`, `tools`, `outputs`, `approval`, `failure-modes`, `plans`, `slash-command`. After collecting the revised answers, the skill re-renders the **full** preview (not just the changed section) so the user sees the final state in one place.
+- **`revise <section>`** → re-enter Phase 3 for that section only, then re-render the preview. Valid sections: `purpose`, `inputs`, `subagents`, `tools`, `outputs`, `approval`, `failure-modes`, `slash-command` (the keyword `tools` revises the `## Tools and bindings` section). After collecting the revised answers, the skill re-renders the **full** preview (not just the changed section) so the user sees the final state in one place.
 - **`cancel`** → abort with no writes. Print: `Cancelled. No files written.`
 
 Loop on `revise` until the user types `y` or `cancel`. There is no implicit "looks good enough" — explicit acceptance is required.
@@ -149,13 +139,13 @@ Transitions from accepted Phase 4 preview (`y`) to files-on-disk. The **agent tr
 
 #### Step 1 — Pre-write invariant check
 
-Run all five invariants from § "Cross-file invariants" against `draft`. On any failure:
+Run all four invariants from § "Cross-file invariants" against `draft`. On any failure:
 
 > Invariant N failed: <specific failure>. Revise the affected section, or `cancel` to abort without writing.
 
 Re-enter Phase 3 for the offending section. The atomic-write transaction NEVER proceeds with a tripped invariant — no partial state can leak onto disk.
 
-Invariant 2 (step ids match `plans/<plan>.yaml`) is vacuously satisfied when no starter plan was named during Phase 3 — per the Generated file contracts table, `plans/<plan>.yaml` is optional. The check applies only when at least one plan file is staged in `draft`.
+Per `templates/scaffold/conventions.md`, workflow logic lives in plan YAMLs, not in `agent.md` — and the create-agent plan does not auto-write the first plan (the user writes it as a next step). The pre-write check therefore validates only the agent tree, not any `plans/<plan>.yaml` content.
 
 #### Step 2 — Final user preview
 
@@ -183,18 +173,14 @@ Enumerate every directory the transaction creates **explicitly** (no `mkdir -p` 
 - `<fn>/<agent>/`
 - `<fn>/<agent>/subagents/`
 - `<fn>/<agent>/playbook/`
+- `<fn>/<agent>/pending/`
 - `<fn>/<agent>/logs/`
+- `<fn>/<agent>/logs/runs/`
+- `<fn>/<agent>/logs/feedback/`
 - `<fn>/<agent>/.claude/`
 - `<fn>/<agent>/.claude/skills/`
 - `<fn>/<agent>/.claude/plugins/`
 - `<fn>/<agent>/plans/`
-- `<fn>/<agent>/projects/`
-- `<fn>/<agent>/projects/_template/`
-- `<fn>/<agent>/projects/_template/config/`
-- `<fn>/<agent>/projects/_template/playbook/`
-- `<fn>/<agent>/projects/_template/log/`
-- `<fn>/<agent>/projects/_template/log/runs/`
-- `<fn>/<agent>/projects/_template/log/feedback/`
 
 If a directory already exists at the moment we try to create it (e.g., racing process, or `<fn>/` exists from a prior function), do NOT append it to `rollback` — pre-existing paths are not ours to delete. Skip and continue. The parent `<fn>/` itself is never in `rollback` for the same reason (it predates this transaction or was created as `<fn>/<agent>/`'s implicit parent — see invariant: if `<fn>/` does not exist, abort the whole transaction before Step 4 and ask the user to register the function via `create-function` first).
 
@@ -212,17 +198,15 @@ Order:
 4.  `<fn>/<agent>/subagents/_template.md`
 5.  `<fn>/<agent>/subagents/<name>.md` (one per `agent.md ## Subagents` entry; zero files if none named)
 6.  `<fn>/<agent>/plans/.gitkeep`
-7.  `<fn>/<agent>/plans/<plan>.yaml` (one per plan named in Phase 3; absent in stub mode and when no plan named)
-8.  `<fn>/<agent>/projects/_template/config/default.yaml`
-9.  `<fn>/<agent>/projects/_template/asset-references.md`
-10. `<fn>/<agent>/playbook/.gitkeep`
-11. `<fn>/<agent>/logs/.gitkeep`
-12. `<fn>/<agent>/.claude/skills/.gitkeep`
-13. `<fn>/<agent>/.claude/plugins/.gitkeep`
-14. `<fn>/<agent>/projects/_template/playbook/.gitkeep`
-15. `<fn>/<agent>/projects/_template/log/runs/.gitkeep`
-16. `<fn>/<agent>/projects/_template/log/feedback/.gitkeep`
-17. `<fn>/<agent>/agent.md`  ← **LAST. Canonical contract.**
+7.  `<fn>/<agent>/config.yaml`
+8.  `<fn>/<agent>/asset-references.md`
+9.  `<fn>/<agent>/playbook/.gitkeep`
+10. `<fn>/<agent>/pending/.gitkeep`
+11. `<fn>/<agent>/logs/runs/.gitkeep`
+12. `<fn>/<agent>/logs/feedback/.gitkeep`
+13. `<fn>/<agent>/.claude/skills/.gitkeep`
+14. `<fn>/<agent>/.claude/plugins/.gitkeep`
+15. `<fn>/<agent>/agent.md`  ← **LAST. Canonical contract.**
 
 **Why `agent.md` last:** It is the canonical orchestrator contract — the file roster's commands grep for to detect an agent's existence. Writing it last guarantees that any process **keyed off the existence of `agent.md`** observes either no agent or a complete one. A mid-Step-5 crash leaves either no `agent.md` at all, or — after Step 7 rollback — an empty `<fn>/<agent>/` parent that no contract-aware reader will treat as a valid agent.
 
@@ -299,11 +283,13 @@ Every file the guided plan writes has a per-file content contract. Stub mode pro
 
 | File | Guided-mode contract | Stub-mode contract |
 | --- | --- | --- |
-| `agent.md` | See per-section disposition below. Populated and grounded fields filled from prose + Phase 3 answers; boilerplate fields filled from `_template/` and `conventions.md`. Zero literal `<placeholder>` strings remain (explicit `TODO: <gap>` markers allowed only where the user deferred during Phase 3). | Identical to `bash scripts/new-agent.sh` output: every grounded/uncertain field carries its `<placeholder>` text verbatim. |
-| `plans/<plan>.yaml` | Created only if the user named at least one plan during Phase 3. Step `id:` fields 1:1 with `agent.md ## Steps` — they cannot drift. Inputs / outputs schemas come from the user's plan description. | `plans/.gitkeep` only. No starter plan file. |
-| `subagents/<name>.md` | One file per name listed in `agent.md ## Subagents`. All **six** required sections present and populated: `Role`, `Inputs`, `Output`, `Tools`, `Boundaries`, `Quality bar`. **Never half-populate a subagent.** If a section cannot be populated from prose / follow-ups, either remove the subagent from `agent.md ## Subagents` entirely or Phase 3 re-asks. `subagents/_template.md` is also written byte-for-byte from `_template/` (same as stub mode). | `subagents/_template.md` only. No per-name files. |
-| `.claude/commands/<agent>.md` | `description:` field is a real sentence: ≤ 80 chars, contains no `<` character, and contains no literal `TODO:` substring. The body matches the canonical routing-logic template from `_template/` with `<agent>` and `<function>` substituted. | `description: <function> agent — TODO: fill in description`. Canonical body otherwise unchanged. |
-| `README.md`, `.mcp.json`, `.claude/settings.json`, `projects/_template/**`, every `.gitkeep` | Identical to stub mode — byte-for-byte. These files do not vary by mode. | (canonical) |
+| `agent.md` | See per-section disposition below. Populated and grounded fields filled from prose + Phase 3 answers; boilerplate fields filled from `scripts/new-agent.sh` heredocs and `conventions.md`. Zero literal `<placeholder>` strings remain (explicit `TODO: <gap>` markers allowed only where the user deferred during Phase 3). | Identical to `bash scripts/new-agent.sh` output: every grounded/uncertain field carries its `<placeholder>` text verbatim. |
+| `subagents/<name>.md` | One file per name listed in `agent.md ## Subagents`. All **six** required sections present and populated: `Role`, `Inputs`, `Output`, `Tools`, `Boundaries`, `Quality bar`. **Never half-populate a subagent.** If a section cannot be populated from prose / follow-ups, either remove the subagent from `agent.md ## Subagents` entirely or Phase 3 re-asks. `subagents/_template.md` is also written byte-for-byte from the `scripts/new-agent.sh` heredoc (same as stub mode). | `subagents/_template.md` only. No per-name files. |
+| `.claude/commands/<agent>.md` | `description:` field is a real sentence: ≤ 80 chars, contains no `<` character, and contains no literal `TODO:` substring. The body matches the canonical routing-logic template emitted by `write_slash_command` in `scripts/new-agent.sh`, with `<agent>` and `<function>` substituted. | `description: <function> agent — TODO: fill in description`. Canonical body otherwise unchanged. |
+| `config.yaml` | Stub mode writes `tools: {}` (empty). Guided mode mirrors the `## Tools and bindings` block from the generated `agent.md` into the `tools:` map per `templates/scaffold/conventions.md` § "Tool bindings"; every named tool has an `env_var`, `required`, and `description` entry (TODO placeholders allowed only where the user deferred). | `tools: {}`. |
+| `README.md`, `.mcp.json`, `.claude/settings.json`, `asset-references.md`, every `.gitkeep` | Identical to stub mode — byte-for-byte. These files do not vary by mode. | (canonical) |
+
+> Plan YAMLs are not in this table — `create-agent` does not write `plans/<plan>.yaml`. The user authors plans as a next step after the agent tree lands.
 
 ### `agent.md` per-section disposition
 
@@ -313,24 +299,22 @@ For each section of the agent.md template (the structure emitted by `scripts/new
 | --- | --- |
 | `## Purpose` | **grounded** — drafted from the Phase 1 prose. |
 | `## Inputs` — orchestrator-expected list | **grounded** — drafted from prose + Phase 3 answers about what triggers a run. |
-| `## Inputs` — "Read at runtime" list | **boilerplate** — canonical paths from `conventions.md` (agent.md, instance config, project CLAUDE.md, project guidelines, playbooks, recent runs). |
-| `## Steps` | **grounded** — every step comes from prose / Phase 3. Must have matching ids in `plans/<plan>.yaml`. |
+| `## Inputs` — "Read at runtime" list | **boilerplate** — canonical paths from `conventions.md` (agent.md, agent `config.yaml`, workspace `CLAUDE.md`, workspace `guidelines/`, playbooks, recent runs). |
 | `## Subagents` | **uncertain → guided** — Phase 3 collects the subagent list (or empty). Each named subagent gets a fully populated `subagents/<name>.md`. |
-| `## Tools` | **uncertain → guided** — Phase 3 collects tool / MCP names. Each tool listed gets a bindings block (invariant 3). |
+| `## Tools and bindings` | **uncertain → guided** — Phase 3 collects tool / MCP names. Each named tool gets a bindings entry (invariant 2). Section is omitted entirely when the user defines no tools. |
 | `## Outputs` | **boilerplate + grounded** — canonical run-file path is boilerplate; the artifact description is grounded from prose. |
 | `## Approval` | **boilerplate** — `approval_channel: auto` line with the standard Slack / HITL routing paragraph. |
 | `## Lessons protocol` | **boilerplate** — canonical paragraph, identical in every agent. |
-| `## Failure modes` | **boilerplate + uncertain** — standard failures (cwd wrong, slug invalid, script fails) are boilerplate; project-specific failures come from Phase 3. |
+| `## Failure modes` | **boilerplate + uncertain** — standard failures (cwd wrong, slug invalid, script fails) are boilerplate; agent-specific failures come from Phase 3. |
 
 ### Cross-file invariants
 
-Five invariants MUST pass during the pre-write check (Phase 5). Any failure aborts the write — no partial state is committed to the workspace — and the user is shown which invariant tripped and offered the chance to revise the relevant section.
+Four invariants MUST pass during the pre-write check (Phase 5). Any failure aborts the write — no partial state is committed to the workspace — and the user is shown which invariant tripped and offered the chance to revise the relevant section.
 
 1. **Subagent files match the declared list.** Every subagent named in `agent.md ## Subagents` has a populated file at `subagents/<name>.md` with all six required sections. Conversely, every file under `subagents/` other than `_template.md` is named in `agent.md ## Subagents`. Neither side may carry an orphan.
-2. **Step ids match between agent.md and the starter plan.** Every step in `agent.md ## Steps` appears in the starter `plans/<plan>.yaml` with a matching `id:` field. Order may differ; presence and ids may not.
-3. **Every named tool has a bindings block.** Every tool listed in `agent.md ## Tools` has a corresponding entry in the `## Tools and bindings` block of `agent.md` with a non-`TODO` `required` flag and a non-empty `description`.
-4. **Slash-command description is real.** The `description:` field in `.claude/commands/<agent>.md` is ≤ 80 characters, contains no `<` character, and contains no literal `TODO:` substring.
-5. **No unfilled placeholders in agent.md.** `agent.md` contains zero literal `<placeholder>` strings (i.e., no `<...>` patterns from the stub template). Explicit `TODO: <gap>` comments are allowed only where the user deferred during Phase 3; they must include a specific gap description, not a bare `TODO:`.
+2. **Every named tool has a bindings entry.** Every tool listed in the `## Tools and bindings` block of `agent.md` has a non-`TODO` `required` flag and a non-empty `description`. The same set is mirrored into `config.yaml` under `tools:` (per `templates/scaffold/conventions.md` § "Tool bindings").
+3. **Slash-command description is real.** The `description:` field in `.claude/commands/<agent>.md` is ≤ 80 characters, contains no `<` character, and contains no literal `TODO:` substring.
+4. **No unfilled placeholders in agent.md.** `agent.md` contains zero literal `<placeholder>` strings (i.e., no `<...>` patterns from the stub template). Explicit `TODO: <gap>` comments are allowed only where the user deferred during Phase 3; they must include a specific gap description, not a bare `TODO:`.
 
 On invariant failure, the skill prints:
 
@@ -340,14 +324,14 @@ Then re-enters Phase 3 for the section that owns the tripped invariant. The atom
 
 ## Outputs
 
-- **Mutation plans:** Summary printed to chat (paths created, moved, modified). The backing script also appends to `chief-of-staff/logs/<YYYY-MM>/operations-<YYYY-MM-DD>.md` (one log file per day, append-only).
+- **Mutation plans:** Summary printed to chat (paths created, modified). The backing script also appends to `chief-of-staff/logs/<YYYY-MM>/operations-<YYYY-MM-DD>.md` (one log file per day, append-only).
 - **Audit plans:** A report file at `chief-of-staff/logs/<YYYY-MM>/audit-...-<YYYY-MM-DD-HHMM>.md`, plus a condensed stdout summary.
 
 Per-plan output schemas are declared in each plan's `outputs:` block in its YAML.
 
 ## Lessons protocol
 
-If you observe a recurring pattern during operations (e.g., users forgetting to run `create-agent` before `add-agent-to-project`), log it inline in the operation's log entry under a `## Candidate lessons` section. The dreamer picks it up on the next reflection pass.
+If you observe a recurring pattern during operations (e.g., users forgetting to fill `config/project.yaml` before running `create-agent`), log it inline in the operation's log entry under a `## Candidate lessons` section. The dreamer picks it up on the next reflection pass.
 
 Never write directly to `chief-of-staff/playbook/` during operations. The user may write a lesson by hand with `source: human`; those are respected.
 
@@ -356,7 +340,7 @@ Never write directly to `chief-of-staff/playbook/` during operations. The user m
 - **Cwd not workspace root** → abort with clear message
 - **Invalid slug or function name** → abort with an example of valid format
 - **Collision (target already exists)** → abort, tell the user the existing path
-- **Missing dependency** (e.g., agent doesn't exist for `add-agent-to-project`) → abort, suggest the prerequisite plan
+- **Missing dependency** (e.g., function not registered when running `create-agent` — run `create-function` first) → abort, suggest the prerequisite plan
 - **Script fails** → surface the script's stderr; do not attempt to recover by doing the work directly
 - **YAML/JSON parse error in audit** → report as failure with the line number from the audit script
 - **Confirmation gate denied** → abort cleanly, no changes
@@ -369,6 +353,6 @@ Never write directly to `chief-of-staff/playbook/` during operations. The user m
 ## What this skill does NOT do
 
 - Run business workflows (SDR outreach, design generation, content authoring). Those are separate role-level skills.
-- Edit guidelines, ICPs, voice, or any project substrate content. That's expert-level work.
+- Edit guidelines, ICPs, voice, or any workspace content. That's expert-level work.
 - Make git commits. Always leave commits for the user.
 - Touch files outside the workspace.

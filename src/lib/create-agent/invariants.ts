@@ -1,8 +1,8 @@
 // Cross-file invariants for guided agent creation (SKILL.md § Cross-file invariants).
 //
-// Five validators, one per invariant. Each throws on failure with a message
+// Four validators, one per invariant. Each throws on failure with a message
 // prefixed `Invariant N (<short name>): <specific failure>`. The aggregate
-// validateInvariants(RenderOutput) runs all five and is called by
+// validateInvariants(RenderOutput) runs all four and is called by
 // atomic-write.ts as Step 1 (Pre-write invariant check) per
 // skills/chief-of-staff/SKILL.md § Phase 5 Step 1.
 //
@@ -10,7 +10,7 @@
 // file map + slash command). No fs, no process — the same data the atomic
 // transaction is about to write.
 //
-// Pinned to skills/chief-of-staff/SKILL.md lines 326-339 (invariant list).
+// Pinned to skills/chief-of-staff/SKILL.md § Cross-file invariants.
 // Any change to the invariant set there MUST update this module.
 
 import { parseAllDocuments, parseDocument } from 'yaml';
@@ -22,7 +22,7 @@ import type { RenderOutput } from './render.ts';
 // agent.md references files at <plan>.yaml, <YYYY-MM>/..., etc.
 // These are NOT stub placeholders — they are documented variable parts of
 // the runtime file layout. Anything else inside angle brackets is a failed
-// substitution and trips invariant 5.
+// substitution and trips invariant 4.
 const ALLOWED_PATH_TEMPLATES = new Set([
   'plan',
   'YYYY-MM',
@@ -96,37 +96,7 @@ export function validateSubagentManifest(output: RenderOutput): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Invariant 2 — step ids match between agent.md and starter plans
-// ─────────────────────────────────────────────────────────────────────────────
-
-export function validateStepIdsMatchOutput(output: RenderOutput): void {
-  const agentMd = findAgentMd(output);
-  const groundedIds = new Set(parseStepIds(agentMd.content));
-  const planPathPrefix = `${agentMd.root}/plans/`;
-
-  for (const [path, content] of output.files) {
-    if (!path.startsWith(planPathPrefix) || !path.endsWith('.yaml')) continue;
-    const planName = path.slice(planPathPrefix.length, -5);
-    const planIds = new Set(parsePlanStepIds(content));
-    for (const id of planIds) {
-      if (!groundedIds.has(id)) {
-        throw new Error(
-          `Invariant 2 (step ids match): plan "${planName}" references step id "${id}" not in agent.md ## Steps`,
-        );
-      }
-    }
-    for (const id of groundedIds) {
-      if (!planIds.has(id)) {
-        throw new Error(
-          `Invariant 2 (step ids match): agent.md ## Steps id "${id}" not in plan "${planName}"`,
-        );
-      }
-    }
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Invariant 3 — every named tool has a non-empty bindings block
+// Invariant 2 — every named tool has a non-empty bindings block
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function validateToolBindings(output: RenderOutput): void {
@@ -139,24 +109,24 @@ export function validateToolBindings(output: RenderOutput): void {
     const block = bindings.get(name);
     if (!block) {
       throw new Error(
-        `Invariant 3 (tool bindings): tool "${name}" listed in agent.md ## Tools but no entry in ## Tools and bindings`,
+        `Invariant 2 (tool bindings): tool "${name}" listed in agent.md ## Tools but no entry in ## Tools and bindings`,
       );
     }
     if (block.required === null) {
       throw new Error(
-        `Invariant 3 (tool bindings): tool "${name}" bindings block missing or has TODO required flag`,
+        `Invariant 2 (tool bindings): tool "${name}" bindings block missing or has TODO required flag`,
       );
     }
     if (!block.description || block.description.trim() === '') {
       throw new Error(
-        `Invariant 3 (tool bindings): tool "${name}" bindings block has empty description`,
+        `Invariant 2 (tool bindings): tool "${name}" bindings block has empty description`,
       );
     }
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Invariant 4 — slash command description is real
+// Invariant 3 — slash command description is real
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface SlashFrontmatter {
@@ -166,20 +136,20 @@ interface SlashFrontmatter {
 
 // Parses the leading YAML frontmatter block (between the opening `---\n` and
 // the next `^---\s*$` line). Returns the parsed Document plus the body that
-// follows the closing fence. Throws Invariant 4 (slash description)-prefixed
+// follows the closing fence. Throws Invariant 3 (slash description)-prefixed
 // errors for any structural defect so I4 and the slash variant of I5 share
 // one parse + one consistent failure surface. ROS-59.
 function parseSlashFrontmatter(slashContent: string): SlashFrontmatter {
   if (!slashContent.startsWith('---\n')) {
     throw new Error(
-      `Invariant 4 (slash description): frontmatter missing — slash command must start with "---" fence`,
+      `Invariant 3 (slash description): frontmatter missing — slash command must start with "---" fence`,
     );
   }
   const afterOpen = slashContent.slice(4);
   const closeMatch = afterOpen.match(/^---\s*$/m);
   if (!closeMatch || closeMatch.index === undefined) {
     throw new Error(
-      `Invariant 4 (slash description): frontmatter not terminated — missing closing "---" fence`,
+      `Invariant 3 (slash description): frontmatter not terminated — missing closing "---" fence`,
     );
   }
   const yamlText = afterOpen.slice(0, closeMatch.index);
@@ -190,13 +160,13 @@ function parseSlashFrontmatter(slashContent: string): SlashFrontmatter {
   const docs = parseAllDocuments(yamlText);
   if (docs.length > 1) {
     throw new Error(
-      `Invariant 4 (slash description): frontmatter contains multiple YAML documents — expected exactly one`,
+      `Invariant 3 (slash description): frontmatter contains multiple YAML documents — expected exactly one`,
     );
   }
   const doc = parseDocument(yamlText);
   if (doc.errors.length > 0) {
     throw new Error(
-      `Invariant 4 (slash description): frontmatter yaml did not parse: ${doc.errors[0].message}`,
+      `Invariant 3 (slash description): frontmatter yaml did not parse: ${doc.errors[0].message}`,
     );
   }
   return { doc, body };
@@ -207,37 +177,37 @@ export function validateSlashDescription(slashContent: string): void {
   const raw = doc.get('description');
   if (raw === undefined || raw === null) {
     throw new Error(
-      `Invariant 4 (slash description): no "description:" line found in slash command frontmatter`,
+      `Invariant 3 (slash description): no "description:" line found in slash command frontmatter`,
     );
   }
   if (typeof raw !== 'string') {
     throw new Error(
-      `Invariant 4 (slash description): description must be a plain-string YAML scalar (got ${Array.isArray(raw) ? 'array' : typeof raw})`,
+      `Invariant 3 (slash description): description must be a plain-string YAML scalar (got ${Array.isArray(raw) ? 'array' : typeof raw})`,
     );
   }
   const desc = raw.trim();
   if (desc.length === 0) {
-    throw new Error(`Invariant 4 (slash description): description line is empty`);
+    throw new Error(`Invariant 3 (slash description): description line is empty`);
   }
   if (desc.length > 80) {
-    throw new Error(`Invariant 4 (slash description): description is ${desc.length} chars (max 80)`);
+    throw new Error(`Invariant 3 (slash description): description is ${desc.length} chars (max 80)`);
   }
   if (desc.includes('<')) {
-    throw new Error(`Invariant 4 (slash description): description contains "<" character: ${JSON.stringify(desc)}`);
+    throw new Error(`Invariant 3 (slash description): description contains "<" character: ${JSON.stringify(desc)}`);
   }
   if (/TODO:/.test(desc)) {
-    throw new Error(`Invariant 4 (slash description): description contains literal "TODO:": ${JSON.stringify(desc)}`);
+    throw new Error(`Invariant 3 (slash description): description contains literal "TODO:": ${JSON.stringify(desc)}`);
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Invariant 5 — no unfilled placeholders in agent.md (and slash body)
+// Invariant 4 — no unfilled placeholders in agent.md (and slash body)
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Code-fenced YAML / code blocks are governed by other invariants (e.g.,
-// invariant 3 owns the ```yaml bindings block). A bindings entry that
+// invariant 2 owns the ```yaml bindings block). A bindings entry that
 // legitimately contains `<example>` inside the fence would otherwise trip
-// invariant 5. Strip fenced blocks before scanning. Per pr-toolkit review.
+// invariant 4. Strip fenced blocks before scanning. Per pr-toolkit review.
 function stripCodeFences(text: string): string {
   return text.replace(/```[a-zA-Z0-9]*\n[\s\S]*?\n```/g, '');
 }
@@ -254,7 +224,7 @@ export function validateNoPlaceholders(agentMdContent: string, label = 'agent.md
   }
   if (offenders.length > 0) {
     throw new Error(
-      `Invariant 5 (no placeholders): ${label} contains ${offenders.length} unfilled placeholder(s): ` +
+      `Invariant 4 (no placeholders): ${label} contains ${offenders.length} unfilled placeholder(s): ` +
         offenders.slice(0, 3).join(', ') +
         (offenders.length > 3 ? `, ... (${offenders.length - 3} more)` : ''),
     );
@@ -265,7 +235,7 @@ export function validateNoPlaceholders(agentMdContent: string, label = 'agent.md
   for (const m of scannable.matchAll(/TODO:[ \t]*([^\n]*)/g)) {
     const gap = m[1].trim();
     if (gap.length === 0) {
-      throw new Error(`Invariant 5 (no placeholders): bare "TODO:" in ${label} without a gap description`);
+      throw new Error(`Invariant 4 (no placeholders): bare "TODO:" in ${label} without a gap description`);
     }
   }
 }
@@ -284,7 +254,6 @@ export function validateNoPlaceholdersSlash(slashContent: string): void {
 
 export function validateInvariants(output: RenderOutput): void {
   validateSubagentManifest(output);
-  validateStepIdsMatchOutput(output);
   validateToolBindings(output);
   validateSlashDescription(output.slashCommand.content);
   validateNoPlaceholders(findAgentMd(output).content);
@@ -334,17 +303,6 @@ function parseSubagentsSection(agentMd: string): string[] {
   return names.sort();
 }
 
-// `## Steps` bullet form: ` - \`<id>\` — **<title>.** <description>`
-function parseStepIds(agentMd: string): string[] {
-  const section = extractSection(agentMd, 'Steps');
-  if (section === null) return [];
-  const ids: string[] = [];
-  for (const m of section.matchAll(/^-\s+`([a-z0-9]+(?:-[a-z0-9]+)*)`\s+—/gm)) {
-    ids.push(m[1]);
-  }
-  return ids;
-}
-
 // `## Tools` bullet form: ` - \`<name>\` — <description> (required|optional)`
 // Empty form: "None." line.
 function parseToolsSection(agentMd: string): string[] {
@@ -372,7 +330,7 @@ function parseToolsAndBindings(agentMd: string): Map<string, ToolBinding> {
   const yaml = fenceMatch[1];
   const doc = parseDocument(yaml);
   if (doc.errors.length > 0) {
-    throw new Error(`Invariant 3 (tool bindings): bindings yaml block did not parse: ${doc.errors[0].message}`);
+    throw new Error(`Invariant 2 (tool bindings): bindings yaml block did not parse: ${doc.errors[0].message}`);
   }
   const root = doc.toJSON();
   if (root === null || typeof root !== 'object') return out;
@@ -390,24 +348,6 @@ function parseToolsAndBindings(agentMd: string): Map<string, ToolBinding> {
     out.set(name, { required, description });
   }
   return out;
-}
-
-function parsePlanStepIds(planYamlContent: string): string[] {
-  const doc = parseDocument(planYamlContent);
-  if (doc.errors.length > 0) {
-    throw new Error(`Invariant 2 (step ids match): plan yaml did not parse: ${doc.errors[0].message}`);
-  }
-  const root = doc.toJSON();
-  if (root === null || typeof root !== 'object') return [];
-  const steps = (root as Record<string, unknown>).steps;
-  if (!Array.isArray(steps)) return [];
-  const ids: string[] = [];
-  for (const step of steps) {
-    if (step !== null && typeof step === 'object' && typeof (step as { id?: unknown }).id === 'string') {
-      ids.push((step as { id: string }).id);
-    }
-  }
-  return ids;
 }
 
 // Extract a markdown section by H2 heading name. Returns the body text

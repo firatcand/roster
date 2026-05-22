@@ -170,7 +170,7 @@ test('host-independence: two render() calls produce byte-identical output', () =
   assert.deepEqual(a.dirs, b.dirs, 'dirs list differs');
 });
 
-// Schema-level invariants 4, plus uniqueness for subagents / tools / plans / step ids.
+// Schema-level rejections — slash description format + uniqueness for subagents / tools / plans / step ids.
 
 test('schema rejects slash command description with TODO:', () => {
   const fixture = loadFixture(FIXTURE_PATH);
@@ -223,34 +223,3 @@ test('schema rejects duplicate grounded.step ids', () => {
   assert.equal(GuidedAgentFixtureSchema.safeParse(bad).success, false);
 });
 
-// validateStepIdsMatch covers SKILL.md invariant 2 in both directions.
-
-test('render() throws when a plan references an unknown step id', () => {
-  const fixture = loadFixture(FIXTURE_PATH);
-  const bad = {
-    ...fixture,
-    uncertain_answers: {
-      ...fixture.uncertain_answers,
-      plans: fixture.uncertain_answers.plans.map((p) => ({
-        ...p,
-        steps: [...p.steps, { id: 'no-such-step', title: 'ghost' }],
-      })),
-    },
-  };
-  assert.throws(() => render({ fixture: bad, expert: null }), /Invariant 2/);
-});
-
-test('render() throws when grounded has a step no plan references', () => {
-  const fixture = loadFixture(FIXTURE_PATH);
-  const bad = {
-    ...fixture,
-    grounded: {
-      ...fixture.grounded,
-      steps: [
-        ...fixture.grounded.steps,
-        { id: 'orphan-step', title: 'Orphan', description: 'No plan references this.' },
-      ],
-    },
-  };
-  assert.throws(() => render({ fixture: bad, expert: null }), /Invariant 2/);
-});

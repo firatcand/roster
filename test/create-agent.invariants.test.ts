@@ -1,4 +1,4 @@
-// ROS-55 — unit tests for the 5 cross-file invariants from
+// ROS-55 — unit tests for the 4 cross-file invariants from
 // skills/chief-of-staff/SKILL.md § Cross-file invariants.
 //
 // Each test constructs a deliberately-broken RenderOutput in memory
@@ -16,7 +16,6 @@ import { renderSlashCommand } from '../src/lib/create-agent/templates.ts';
 import {
   validateInvariants,
   validateSubagentManifest,
-  validateStepIdsMatchOutput,
   validateToolBindings,
   validateSlashDescription,
   validateNoPlaceholders,
@@ -41,7 +40,7 @@ function cloneOutput(output: RenderOutput): RenderOutput {
 }
 
 // Happy path — every invariant passes against the golden fixture.
-test('validateInvariants: happy-path fixture passes all five', () => {
+test('validateInvariants: happy-path fixture passes all four', () => {
   const output = happyPathOutput();
   assert.doesNotThrow(() => validateInvariants(output));
 });
@@ -119,55 +118,9 @@ test('Invariant 1: orphan subagent file (not in agent.md) trips with "exists but
   );
 });
 
-// Invariant 2 — step ids match (output level)
+// Invariant 2 — tool bindings
 
-test('Invariant 2: plan step id absent from agent.md trips with "not in agent.md ## Steps"', () => {
-  const output = cloneOutput(happyPathOutput());
-  let planPath = '';
-  let planContent = '';
-  for (const [path, content] of output.files) {
-    if (path.match(/\/plans\/[^/]+\.yaml$/)) {
-      planPath = path;
-      planContent = content;
-      break;
-    }
-  }
-  assert.ok(planPath, 'fixture must include at least one plan file');
-  // Inject a ghost step id into the plan yaml that does not appear in agent.md.
-  const tampered = planContent.replace(/steps:\n/, 'steps:\n  - id: ghost-step\n    title: Ghost\n');
-  output.files.set(planPath, tampered);
-  assert.throws(
-    () => validateStepIdsMatchOutput(output),
-    /Invariant 2 \(step ids match\): plan ".+" references step id "ghost-step" not in agent\.md ## Steps/,
-  );
-});
-
-test('Invariant 2: agent.md step missing from plan trips with "not in plan"', () => {
-  const output = cloneOutput(happyPathOutput());
-  let agentMdPath = '';
-  let agentMdContent = '';
-  for (const [path, content] of output.files) {
-    if (path.endsWith('/agent.md')) {
-      agentMdPath = path;
-      agentMdContent = content;
-      break;
-    }
-  }
-  // Inject a ghost step id at the top of ## Steps that no plan file has.
-  const tampered = agentMdContent.replace(
-    /## Steps\n\n/,
-    '## Steps\n\n- `ghost-step` — **Ghost.** Not in any plan.\n',
-  );
-  output.files.set(agentMdPath, tampered);
-  assert.throws(
-    () => validateStepIdsMatchOutput(output),
-    /Invariant 2 \(step ids match\): agent\.md ## Steps id "ghost-step" not in plan/,
-  );
-});
-
-// Invariant 3 — tool bindings
-
-test('Invariant 3: tool in ## Tools without bindings entry trips with "no entry in"', () => {
+test('Invariant 2: tool in ## Tools without bindings entry trips with "no entry in"', () => {
   const output = cloneOutput(happyPathOutput());
   let agentMdPath = '';
   let agentMdContent = '';
@@ -186,11 +139,11 @@ test('Invariant 3: tool in ## Tools without bindings entry trips with "no entry 
   output.files.set(agentMdPath, tampered);
   assert.throws(
     () => validateToolBindings(output),
-    /Invariant 3 \(tool bindings\): tool "unbound" listed in agent\.md ## Tools but no entry in ## Tools and bindings/,
+    /Invariant 2 \(tool bindings\): tool "unbound" listed in agent\.md ## Tools but no entry in ## Tools and bindings/,
   );
 });
 
-test('Invariant 3: empty-description binding trips with "empty description"', () => {
+test('Invariant 2: empty-description binding trips with "empty description"', () => {
   const output = cloneOutput(happyPathOutput());
   let agentMdPath = '';
   let agentMdContent = '';
@@ -209,13 +162,13 @@ test('Invariant 3: empty-description binding trips with "empty description"', ()
   output.files.set(agentMdPath, tampered);
   assert.throws(
     () => validateToolBindings(output),
-    /Invariant 3 \(tool bindings\): tool "drive" bindings block has empty description/,
+    /Invariant 2 \(tool bindings\): tool "drive" bindings block has empty description/,
   );
 });
 
-// Invariant 4 — slash description
+// Invariant 3 — slash description
 
-test('Invariant 4: slash description containing "<" trips with "contains "<""', () => {
+test('Invariant 3: slash description containing "<" trips with "contains "<""', () => {
   const output = cloneOutput(happyPathOutput());
   output.slashCommand = {
     ...output.slashCommand,
@@ -226,11 +179,11 @@ test('Invariant 4: slash description containing "<" trips with "contains "<""', 
   };
   assert.throws(
     () => validateSlashDescription(output.slashCommand.content),
-    /Invariant 4 \(slash description\): description contains "<" character/,
+    /Invariant 3 \(slash description\): description contains "<" character/,
   );
 });
 
-test('Invariant 4: slash description > 80 chars trips with "is N chars (max 80)"', () => {
+test('Invariant 3: slash description > 80 chars trips with "is N chars (max 80)"', () => {
   const output = cloneOutput(happyPathOutput());
   output.slashCommand = {
     ...output.slashCommand,
@@ -241,11 +194,11 @@ test('Invariant 4: slash description > 80 chars trips with "is N chars (max 80)"
   };
   assert.throws(
     () => validateSlashDescription(output.slashCommand.content),
-    /Invariant 4 \(slash description\): description is 81 chars \(max 80\)/,
+    /Invariant 3 \(slash description\): description is 81 chars \(max 80\)/,
   );
 });
 
-test('Invariant 4: slash description containing "TODO:" trips with "contains literal"', () => {
+test('Invariant 3: slash description containing "TODO:" trips with "contains literal"', () => {
   const output = cloneOutput(happyPathOutput());
   // Quoted-string scalar — ROS-59 made I4 parse the frontmatter as YAML, so a
   // raw payload like `content-agent — TODO: fill in later` would now trip the
@@ -260,13 +213,13 @@ test('Invariant 4: slash description containing "TODO:" trips with "contains lit
   };
   assert.throws(
     () => validateSlashDescription(output.slashCommand.content),
-    /Invariant 4 \(slash description\): description contains literal "TODO:"/,
+    /Invariant 3 \(slash description\): description contains literal "TODO:"/,
   );
 });
 
-// Invariant 5 — no unfilled placeholders
+// Invariant 4 — no unfilled placeholders
 
-test('Invariant 5: literal "<step>" in agent.md trips with "unfilled placeholder"', () => {
+test('Invariant 4: literal "<step>" in agent.md trips with "unfilled placeholder"', () => {
   const output = cloneOutput(happyPathOutput());
   let agentMdPath = '';
   let agentMdContent = '';
@@ -283,19 +236,19 @@ test('Invariant 5: literal "<step>" in agent.md trips with "unfilled placeholder
   output.files.set(agentMdPath, tampered);
   assert.throws(
     () => validateNoPlaceholders(tampered),
-    /Invariant 5 \(no placeholders\): agent\.md contains \d+ unfilled placeholder\(s\): <step>/,
+    /Invariant 4 \(no placeholders\): agent\.md contains \d+ unfilled placeholder\(s\): <step>/,
   );
 });
 
-test('Invariant 5: bare "TODO:" without gap description trips with "bare \\"TODO:\\""', () => {
+test('Invariant 4: bare "TODO:" without gap description trips with "bare \\"TODO:\\""', () => {
   const tampered = '# Agent\n\n## Purpose\n\nReal purpose. TODO:    \n\nMore text.';
   assert.throws(
     () => validateNoPlaceholders(tampered),
-    /Invariant 5 \(no placeholders\): bare "TODO:" in agent\.md without a gap description/,
+    /Invariant 4 \(no placeholders\): bare "TODO:" in agent\.md without a gap description/,
   );
 });
 
-test('Invariant 5: <placeholder> inside a ```yaml fenced block is ignored', () => {
+test('Invariant 4: <placeholder> inside a ```yaml fenced block is ignored', () => {
   // Per pr-toolkit review: I3 owns the bindings yaml block; I5 should not
   // double-fire on tokens inside it. A future template adding `description:
   // "Optional binding for <provider>"` inside the fence must not trip I5.
@@ -303,12 +256,12 @@ test('Invariant 5: <placeholder> inside a ```yaml fenced block is ignored', () =
   assert.doesNotThrow(() => validateNoPlaceholders(md));
 });
 
-test('Invariant 5: Markdown autolink <https://...> is ignored', () => {
+test('Invariant 4: Markdown autolink <https://...> is ignored', () => {
   const md = '# Agent\n\n## Purpose\n\nSee <https://example.com/spec> for details.\n';
   assert.doesNotThrow(() => validateNoPlaceholders(md));
 });
 
-test('Invariant 5: aggregate validateInvariants trips on a placeholder in slash command body', () => {
+test('Invariant 4: aggregate validateInvariants trips on a placeholder in slash command body', () => {
   const output = cloneOutput(happyPathOutput());
   // Inject a stub-style placeholder into the slash command body. The
   // description line is left untouched so I4 still passes.
@@ -321,7 +274,7 @@ test('Invariant 5: aggregate validateInvariants trips on a placeholder in slash 
   };
   assert.throws(
     () => validateInvariants(output),
-    /Invariant 5 \(no placeholders\): slash command body contains 1 unfilled placeholder\(s\): <unfilled-token>/,
+    /Invariant 4 \(no placeholders\): slash command body contains 1 unfilled placeholder\(s\): <unfilled-token>/,
   );
 });
 
@@ -349,11 +302,11 @@ test('Invariant 4: block-scalar description containing "<foo>" trips on "<"', ()
     '---\nname: x\ndescription: |\n  see <foo>\n---\n# /x\n\nclean body.\n';
   assert.throws(
     () => validateSlashDescription(slash),
-    /Invariant 4 \(slash description\): description contains "<" character/,
+    /Invariant 3 \(slash description\): description contains "<" character/,
   );
 });
 
-test('Invariant 5: multi-line block-scalar description does not leak into body scan', () => {
+test('Invariant 4: multi-line block-scalar description does not leak into body scan', () => {
   // No `<` in the description value — pure proof that the frontmatter block
   // is fully stripped (continuation line `  multi-line ok` was previously
   // visible to the body scan under the old single-line strip).
@@ -366,7 +319,7 @@ test('Invariant 4: empty block scalar (description: |) trips empty-description e
   const slash = '---\nname: x\ndescription: |\n---\n# /x\n';
   assert.throws(
     () => validateSlashDescription(slash),
-    /Invariant 4 \(slash description\): description line is empty/,
+    /Invariant 3 \(slash description\): description line is empty/,
   );
 });
 
@@ -374,7 +327,7 @@ test('Invariant 4: missing frontmatter fence trips "frontmatter missing"', () =>
   const slash = '# /x\n\nno frontmatter here.\n';
   assert.throws(
     () => validateSlashDescription(slash),
-    /Invariant 4 \(slash description\): frontmatter missing/,
+    /Invariant 3 \(slash description\): frontmatter missing/,
   );
 });
 
@@ -382,7 +335,7 @@ test('Invariant 4: unterminated frontmatter trips "frontmatter not terminated"',
   const slash = '---\nname: x\ndescription: hello\n# /x — no closing fence\n';
   assert.throws(
     () => validateSlashDescription(slash),
-    /Invariant 4 \(slash description\): frontmatter not terminated/,
+    /Invariant 3 \(slash description\): frontmatter not terminated/,
   );
 });
 
@@ -396,7 +349,7 @@ test('Invariant 4: multi-document frontmatter trips "multiple YAML documents"', 
     '---\nname: x\ndescription: first\n...\nname: y\ndescription: second\n---\n# /x\n';
   assert.throws(
     () => validateSlashDescription(slash),
-    /Invariant 4 \(slash description\): frontmatter contains multiple YAML documents/,
+    /Invariant 3 \(slash description\): frontmatter contains multiple YAML documents/,
   );
 });
 
@@ -404,7 +357,7 @@ test('Invariant 4: non-string description scalar (number) trips "plain-string"',
   const slash = '---\nname: x\ndescription: 42\n---\n# /x\n';
   assert.throws(
     () => validateSlashDescription(slash),
-    /Invariant 4 \(slash description\): description must be a plain-string YAML scalar \(got number\)/,
+    /Invariant 3 \(slash description\): description must be a plain-string YAML scalar \(got number\)/,
   );
 });
 
@@ -416,7 +369,7 @@ test('Invariant 4: unquoted colon in description trips with yaml parse error (Co
   const slash = '---\nname: x\ndescription: Fix: improve thing\n---\n# /x\n';
   assert.throws(
     () => validateSlashDescription(slash),
-    /Invariant 4 \(slash description\): frontmatter yaml did not parse/,
+    /Invariant 3 \(slash description\): frontmatter yaml did not parse/,
   );
 });
 

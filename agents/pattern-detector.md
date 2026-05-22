@@ -23,7 +23,6 @@ Read a batch of runs and matched feedback files. Identify candidate patterns —
 patterns:
   - id: P-2026-04-26-001
     agent: sdr
-    project: _demo
     pattern_type: success | failure | mixed | structural
     description: "..."
     evidence:

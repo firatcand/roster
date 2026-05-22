@@ -118,26 +118,3 @@ export class FixtureValidationError extends Error {
   }
 }
 
-// SKILL.md invariant 2: step ids in agent.md ## Steps and the starter plan
-// match as SETS — neither side may carry an id absent from the other.
-// Enforced outside zod because the check is cross-field (grounded ⇄ plans).
-export function validateStepIdsMatch(fixture: GuidedAgentFixture): void {
-  const groundedIds = new Set(fixture.grounded.steps.map((s) => s.id));
-  for (const plan of fixture.uncertain_answers.plans) {
-    const planIds = new Set(plan.steps.map((s) => s.id));
-    for (const id of planIds) {
-      if (!groundedIds.has(id)) {
-        throw new Error(
-          `Invariant 2 (step ids match): plan "${plan.name}" references step id "${id}" not in grounded.steps`,
-        );
-      }
-    }
-    for (const id of groundedIds) {
-      if (!planIds.has(id)) {
-        throw new Error(
-          `Invariant 2 (step ids match): grounded.steps id "${id}" not in plan "${plan.name}"`,
-        );
-      }
-    }
-  }
-}
