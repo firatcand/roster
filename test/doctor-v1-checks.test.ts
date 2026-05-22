@@ -8,6 +8,7 @@ import {
   auditAgentEnvPermissions,
   auditEnvKeyReferences,
   auditEnvPermissions,
+  listV1AgentPaths,
   type AgentEnvRefMiss,
   type AgentEnvRefsResult,
 } from '../src/lib/doctor-secrets-audit.ts';
@@ -44,6 +45,13 @@ function writeAgentEnv(cwd: string, fn: string, agent: string, mode: number): st
 
 function writeConfigYaml(cwd: string, fn: string, agent: string, content: string): void {
   const dir = join(cwd, fn, agent);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'config.yaml'), content, 'utf8');
+}
+
+// v1 flat layout: <top>/config.yaml (top-level agents like dreamer, chief-of-staff)
+function writeTopConfigYaml(cwd: string, top: string, content: string): void {
+  const dir = join(cwd, top);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'config.yaml'), content, 'utf8');
 }
@@ -671,9 +679,117 @@ test('check 15 / auditEnvKeyReferences: top-level roster/ and dotdirs are skippe
   const { dir, cleanup } = makeTmpCwd();
   try {
     mkdirSync(join(dir, 'roster', 'gtm', 'sdr'), { recursive: true });
-    writeFileSync(join(dir, 'roster', 'gtm', 'sdr', 'config.yaml'), 'key: ${SHOULD_NOT_BE_FLAGGED}\n');
+    writeFileSync(join(dir, 'roster', 'gtm', 'sdr', 'config.yaml'), 'key: ${SHOULD_NOT_BE_FLAGGED_ROSTER}\n');
+    // Write a config under a dotdir — should also be ignored.
+    mkdirSync(join(dir, '.hidden'), { recursive: true });
+    writeFileSync(join(dir, '.hidden', 'config.yaml'), 'key: ${SHOULD_NOT_BE_FLAGGED_DOTDIR}\n');
     const r = auditEnvKeyReferences(dir);
     assert.equal(r.status, 'ok');
+  } finally {
+    cleanup();
+  }
+});
+
+// ROS-101: top-level infra agents (dreamer, chief-of-staff) live at depth 1
+// in the v1 scaffold. The walker must yield <top>/config.yaml.
+test('check 15 / auditEnvKeyReferences: depth-1 dreamer/config.yaml ${KEY} ref present → ok', () => {
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    writeFileSync(join(dir, '.env'), 'APOLLO_API_KEY=secret\n');
+    writeTopConfigYaml(dir, 'dreamer', 'apollo_token: ${APOLLO_API_KEY}\n');
+    const r = auditEnvKeyReferences(dir);
+    assert.equal(r.status, 'ok');
+    assert.deepEqual(r.missing, []);
+  } finally {
+    cleanup();
+  }
+});
+
+test('check 15 / auditEnvKeyReferences: depth-1 chief-of-staff/config.yaml ${KEY} ref missing → fail', () => {
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    writeFileSync(join(dir, '.env'), 'OTHER=1\n');
+    writeTopConfigYaml(dir, 'chief-of-staff', 'token: ${MISSING_KEY}\n');
+    const r = auditEnvKeyReferences(dir);
+    assert.equal(r.status, 'fail');
+    assert.equal(r.missing.length, 1);
+    assert.equal(r.missing[0]!.key, 'MISSING_KEY');
+    assert.match(r.missing[0]!.references[0]!.file, /^chief-of-staff\/config\.yaml$/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('check 15 / auditEnvKeyReferences: SKIP_TOP excludes v1 workspace dirs (config, guidelines, logs, scripts)', () => {
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    for (const top of ['config', 'guidelines', 'logs', 'scripts']) {
+      writeTopConfigYaml(dir, top, 'key: ${SHOULD_NOT_BE_FLAGGED}\n');
+    }
+    const r = auditEnvKeyReferences(dir);
+    assert.equal(r.status, 'ok', 'v1 workspace dirs must not be walked as agent dirs');
+  } finally {
+    cleanup();
+  }
+});
+
+// Top-level agents are leaves: a depth-1 config.yaml means <top> IS the agent.
+// The walker must NOT descend into <top>'s runtime subdirs (plans/, logs/, …)
+// where an unrelated config.yaml could be misread as a depth-2 agent.
+test('check 15 / auditEnvKeyReferences: depth-1 leaf agent does NOT descend into runtime subdirs', () => {
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    writeFileSync(join(dir, '.env'), 'TOP_KEY=ok\n');
+    writeTopConfigYaml(dir, 'dreamer', 'top: ${TOP_KEY}\n');
+    // Booby trap: would flag MISSING_KEY if the walker descended.
+    mkdirSync(join(dir, 'dreamer', 'plans'), { recursive: true });
+    writeFileSync(join(dir, 'dreamer', 'plans', 'config.yaml'), 'sub: ${MISSING_KEY}\n');
+    const r = auditEnvKeyReferences(dir);
+    assert.equal(r.status, 'ok', 'leaf agent must short-circuit the depth-2 walk');
+    assert.deepEqual(r.missing, []);
+  } finally {
+    cleanup();
+  }
+});
+
+// listV1AgentPaths walker — direct unit tests for the walker output the
+// audit pipeline depends on.
+test('check 15 / listV1AgentPaths: yields depth-1 top-level agent when <top>/config.yaml present', () => {
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    writeTopConfigYaml(dir, 'dreamer', 'agent: dreamer/dreamer\nplans_dir: ./plans\n');
+    const paths = listV1AgentPaths(dir);
+    assert.ok(paths.includes('dreamer'), `expected 'dreamer' in walker output; got ${JSON.stringify(paths)}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('check 15 / listV1AgentPaths: yields depth-1 AND depth-2 agents together, sorted', () => {
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    writeTopConfigYaml(dir, 'dreamer', 'agent: dreamer/dreamer\nplans_dir: ./plans\n');
+    writeConfigYaml(dir, 'gtm', 'sdr', 'agent: gtm/sdr\nplans_dir: ./plans\n');
+    writeTopConfigYaml(dir, 'chief-of-staff', 'agent: cos/cos\nplans_dir: ./plans\n');
+    const paths = listV1AgentPaths(dir);
+    assert.deepEqual(paths, ['chief-of-staff', 'dreamer', 'gtm/sdr']);
+  } finally {
+    cleanup();
+  }
+});
+
+test('check 15 / listV1AgentPaths: depth-1 leaf does NOT yield phantom depth-2 entries', () => {
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    writeTopConfigYaml(dir, 'dreamer', 'agent: dreamer/dreamer\nplans_dir: ./plans\n');
+    // Booby trap: would yield 'dreamer/subagents' if walker descended.
+    mkdirSync(join(dir, 'dreamer', 'subagents'), { recursive: true });
+    writeFileSync(
+      join(dir, 'dreamer', 'subagents', 'config.yaml'),
+      'agent: dreamer/subagents\nplans_dir: ./plans\n',
+    );
+    const paths = listV1AgentPaths(dir);
+    assert.deepEqual(paths, ['dreamer'], 'leaf agent must not yield phantom children');
   } finally {
     cleanup();
   }
