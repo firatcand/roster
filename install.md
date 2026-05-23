@@ -28,17 +28,9 @@ Check for these config dirs:
 
 Tell the user which you found. They need at least one. If none are present, stop and ask the user to install Claude Code or Codex CLI first.
 
-### 2. Install skills + agents
+### 2. Scaffold the workspace FIRST
 
-```bash
-npx --yes @firatcand/roster install --all
-```
-
-This copies the three framework skills (`chief-of-staff`, `dreamer`, `roster-orchestrator`) and two reinforcement agents (`lesson-drafter`, `pattern-detector`) into every detected tool's config dir. Idempotent — safe to re-run.
-
-### 3. Scaffold a workspace
-
-Ask the user where to scaffold. Reasonable defaults:
+`roster install` now defaults to **workspace-local** install when run inside a roster workspace — so the order is scaffold-then-install, not install-then-scaffold. Ask the user where to scaffold. Reasonable defaults:
 
 - `~/agent-team` — if they don't have a strong preference
 - `~/repos/<their-product>-agents` — if they're an existing repos user
@@ -50,7 +42,19 @@ mkdir -p <target> && cd <target>
 npx --yes @firatcand/roster init
 ```
 
-This writes `CLAUDE.md`, `conventions.md`, function dirs (`gtm/`, `product/`, `design/`, `ops/`), the `chief-of-staff` and `dreamer` workspaces, supporting scripts, and `.claude/commands/` slash commands. Non-destructive — re-running merges new files without overwriting edits.
+This writes `CLAUDE.md`, `conventions.md`, `config/project.yaml`, `guidelines/`, function dirs (`gtm/`, `product/`, `design/`, `ops/`), the `chief-of-staff` and `dreamer` workspaces, supporting scripts, and `.claude/commands/` slash commands. Non-destructive — re-running merges new files without overwriting edits.
+
+### 3. Install skills + agents (workspace-local)
+
+From inside the directory you just scaffolded:
+
+```bash
+npx --yes @firatcand/roster install --yes --scope project
+```
+
+This copies the three framework skills (`chief-of-staff`, `dreamer`, `roster-orchestrator`) and the reinforcement agent (`lesson-drafter`) into `<workspace>/.claude/`, `<workspace>/.codex/`, and/or `<workspace>/.gemini/` for every detected tool. Workspace-local — no cross-project pollution. Idempotent — safe to re-run.
+
+If the user prefers user-scope install (visible to every Claude Code project on the machine), use `--scope user` instead. **Do not** use `--scope project` from a directory that doesn't contain `config/project.yaml` — `roster install` will refuse with exit code 2.
 
 ### 4. Verify the install
 
@@ -81,7 +85,7 @@ Surface this to the user, verbatim:
 ## Don't
 
 - Don't pipe `curl ... | bash` — there's no such installer.
-- Don't hand-edit installed skill dirs (`~/.claude/skills/chief-of-staff/`, etc.). They're managed by `roster install`.
+- Don't hand-edit installed skill dirs (`<workspace>/.claude/skills/chief-of-staff/`, `~/.claude/skills/chief-of-staff/`, etc.). They're managed by `roster install`.
 - Don't run `roster init` outside the directory the user chose. Always `cd` into the target first.
 - Don't recommend `claude -p` for scheduled agent fires — it bills the API, not the subscription. Roster's `schedule install` uses the host tool's native subagent primitive on purpose.
 
