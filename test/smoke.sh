@@ -124,16 +124,16 @@ assert "\"$VER\" = '$EXPECTED_VERSION'" "roster --version → $EXPECTED_VERSION 
 # 4. roster install (Claude redirected via ROSTER_CLAUDE_HOME)
 echo ""
 echo "===> 4. roster install"
-HOME="$FAKE_HOME" ROSTER_CLAUDE_HOME="$CLAUDE_HOME" "$ROSTER_BIN" install --silent
+HOME="$FAKE_HOME" ROSTER_CLAUDE_HOME="$CLAUDE_HOME" "$ROSTER_BIN" install --yes --scope user --silent
 assert "-f \"$CLAUDE_HOME/skills/chief-of-staff/SKILL.md\"" "chief-of-staff SKILL.md installed"
 assert "-f \"$CLAUDE_HOME/agents/lesson-drafter.md\"" "lesson-drafter.md installed (claude md-copy)"
 
 # Idempotency: re-running install should not throw
-HOME="$FAKE_HOME" ROSTER_CLAUDE_HOME="$CLAUDE_HOME" "$ROSTER_BIN" install --silent
+HOME="$FAKE_HOME" ROSTER_CLAUDE_HOME="$CLAUDE_HOME" "$ROSTER_BIN" install --yes --scope user --silent
 assert "$? -eq 0" "roster install is idempotent"
 
 # 4b. Codex install — agents rendered as <name>.toml + <name>.persona.md (ROS-33)
-HOME="$FAKE_HOME" ROSTER_CODEX_HOME="$CODEX_HOME" "$ROSTER_BIN" install --tool codex --silent
+HOME="$FAKE_HOME" ROSTER_CODEX_HOME="$CODEX_HOME" "$ROSTER_BIN" install --tool codex --yes --scope user --silent
 assert "-f \"$CODEX_HOME/agents/lesson-drafter.toml\"" "codex emits lesson-drafter.toml"
 assert "-f \"$CODEX_HOME/agents/lesson-drafter.persona.md\"" "codex emits lesson-drafter.persona.md sidecar"
 assert "! -f \"$CODEX_HOME/agents/lesson-drafter.md\"" "codex does NOT copy raw .md into agents/"

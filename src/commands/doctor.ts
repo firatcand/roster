@@ -4,7 +4,13 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import YAML from 'yaml';
 import { auditTool, type ItemStatus, type ToolAuditResult } from '../lib/audit.ts';
-import { detectTools, type ToolKey } from '../lib/tools.ts';
+import { allTools, detectTools, type ToolKey } from '../lib/tools.ts';
+import {
+  detectWorkspace,
+  defaultScopeForContext,
+  toolForScope,
+  type Scope,
+} from '../lib/install-scope.ts';
 import { ROSTER_ROOT, getPackageVersion } from '../lib/paths.ts';
 import { EXIT_OK, EXIT_ERROR, EXIT_NO_TOOLS } from '../lib/errors.ts';
 import { auditWorkspace, type WorkspaceAuditResult, type SymlinkStatus } from '../lib/project-context.ts';
@@ -39,7 +45,51 @@ export type DoctorOptions = {
   fix: boolean;
   cwd: string;
   dryRun: boolean;
+  // ROS-109: scope to audit. Null = autodetect (workspace → project, else user).
+  scope?: Scope | null;
 };
+
+// ROS-109: shadow warning — same skill installed at both user and project
+// scope causes Claude Code to resolve to the user-scope copy, silently
+// shadowing the workspace skill. Detect by listing the user-skill dir and
+// the workspace-skill dir; intersect names per tool.
+export type ShadowCollision = {
+  tool: ToolKey;
+  skillName: string;
+  userPath: string;
+  projectPath: string;
+};
+
+function listSkillDirNames(target: string): string[] {
+  try {
+    return readdirSync(target, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+export function detectShadowCollisions(workspaceRoot: string): ShadowCollision[] {
+  const collisions: ShadowCollision[] = [];
+  for (const userTool of allTools()) {
+    const projectTool = toolForScope(userTool, 'project', workspaceRoot);
+    const userNames = new Set(listSkillDirNames(userTool.skillsTarget));
+    const projectNames = listSkillDirNames(projectTool.skillsTarget);
+    for (const name of projectNames) {
+      if (userNames.has(name)) {
+        collisions.push({
+          tool: userTool.key,
+          skillName: name,
+          userPath: join(userTool.skillsTarget, name),
+          projectPath: join(projectTool.skillsTarget, name),
+        });
+      }
+    }
+  }
+  return collisions;
+}
 
 type Summary = { ok: number; missing: number; stale: number };
 
@@ -664,9 +714,15 @@ function renderSchedulingDriftSection(audit: SchedulingDriftAuditResult): string
   return lines;
 }
 
-function renderText(results: ToolAuditResult[], summary: Summary, workarounds: Workaround[]): string[] {
+function renderText(
+  results: ToolAuditResult[],
+  summary: Summary,
+  workarounds: Workaround[],
+  scope: Scope,
+): string[] {
   const lines: string[] = [''];
   lines.push(chalk.bold('roster doctor'));
+  lines.push(chalk.dim(`Install scope: ${scope} (${scope === 'project' ? 'workspace-local' : 'home directory'})`));
   for (const r of results) {
     lines.push('');
     lines.push(`${chalk.bold(r.toolName)} ${chalk.dim(tildify(r.configRoot))}`);
@@ -691,6 +747,26 @@ function renderText(results: ToolAuditResult[], summary: Summary, workarounds: W
     const toolWord = results.length === 1 ? 'tool' : 'tools';
     lines.push(chalk.yellow(`Summary: ${bits.join(', ')} across ${results.length} ${toolWord}.`));
     lines.push(`${chalk.dim('Run ')}${chalk.bold('roster install')}${chalk.dim(' to repair.')}`);
+  }
+  return lines;
+}
+
+// ROS-109: shadow collision section. Emitted only when at least one user-scope
+// skill name overlaps a workspace-scope skill name — Claude Code resolves to
+// the user-scope copy, silently shadowing the workspace one. The fix is for
+// the user to delete one side.
+function renderShadowSection(shadows: ShadowCollision[]): string[] {
+  if (shadows.length === 0) return [];
+  const lines: string[] = [''];
+  lines.push(chalk.bold('Shadow collisions') + chalk.dim(` (${shadows.length})`));
+  lines.push(chalk.dim('  Same skill installed at both scopes. The user-scope copy wins;'));
+  lines.push(chalk.dim('  the workspace skill is silently ignored. Remove one.'));
+  for (const s of shadows) {
+    lines.push(
+      `  ${chalk.yellow('!')} ${chalk.bold(s.skillName)} ${chalk.dim('(')}${s.tool}${chalk.dim(')')}`,
+    );
+    lines.push(`      user:    ${tildify(s.userPath)}`);
+    lines.push(`      project: ${s.projectPath}`);
   }
   return lines;
 }
@@ -721,7 +797,30 @@ function renderInteractiveFixSection(outcome: FixPromptOutcome): string[] {
 }
 
 export async function executeDoctor(opts: DoctorOptions): Promise<number> {
-  const detected = detectTools();
+  // ROS-109: scope-aware audit. Determine effective scope first; downstream
+  // tool detection runs against the matching path family.
+  const workspaceExists = detectWorkspace(opts.cwd);
+  const effectiveScope: Scope =
+    opts.scope ?? defaultScopeForContext(workspaceExists);
+
+  // For project scope, audit workspace-relative paths; for user scope, today's
+  // home-dir paths. detectTools() filters by configRoot existence, so calling
+  // it with project-scope tool defs returns only tools the workspace has been
+  // installed into (`<ws>/.<tool>/`).
+  const userScopeTools = detectTools();
+  const detected =
+    effectiveScope === 'project'
+      ? allTools()
+          .map((t) => toolForScope(t, 'project', opts.cwd))
+          .filter((t) => existsSync(t.configRoot))
+      : userScopeTools;
+
+  // Shadow detection runs independent of which scope is primary — what
+  // matters is whether the same skill name exists in BOTH scopes for a tool.
+  // Only meaningful when a workspace exists; without one, there's no
+  // workspace-scope skills dir to shadow against.
+  const shadows = workspaceExists ? detectShadowCollisions(opts.cwd) : [];
+
   const sources = {
     skills: join(ROSTER_ROOT, 'skills'),
     agents: join(ROSTER_ROOT, 'agents'),
@@ -845,7 +944,8 @@ export async function executeDoctor(opts: DoctorOptions): Promise<number> {
   // lets the user see warnings before being prompted. --silent and --json
   // suppress prompts (treated as non-TTY) so automation never blocks on stdin.
   if (!opts.json && !opts.silent) {
-    for (const line of renderText(results, summary, workarounds)) console.log(line);
+    for (const line of renderText(results, summary, workarounds, effectiveScope)) console.log(line);
+    for (const line of renderShadowSection(shadows)) console.log(line);
     for (const line of renderWorkspaceSection(workspaceFinal)) console.log(line);
     for (const line of renderSchedulingSection(scheduling)) console.log(line);
     for (const line of renderSchedulingDriftSection(schedulingDrift)) console.log(line);
@@ -873,6 +973,8 @@ export async function executeDoctor(opts: DoctorOptions): Promise<number> {
     const payload = {
       ok: allOk,
       rosterVersion: getPackageVersion(),
+      scope: effectiveScope,
+      shadows,
       tools: results,
       summary,
       workspace: workspaceFinal,

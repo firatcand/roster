@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import fsExtra from 'fs-extra';
 import chalk from 'chalk';
 import type { Tool, ToolKey } from './tools.ts';
+import type { Scope } from './install-scope.ts';
 import { permissionError } from './errors.ts';
 import { renderSkillFrontmatterContent } from './frontmatter.ts';
 import { renderCodexAgentToml, RosterAgentRenderError } from './agent-render.ts';
@@ -23,6 +24,10 @@ export type InstallOptions = {
   silent?: boolean;
   confirm?: ConfirmFn;
   logger?: InstallLogger;
+  // Scope drives the EACCES remediation message only — project-scope errors
+  // suggest chmod (workspace-local), user-scope errors suggest sudo (home dir).
+  // See errors.ts#permissionError.
+  scope?: Scope;
 };
 
 export type InstallResult = {
@@ -117,6 +122,7 @@ async function copyOne(
   kind: 'skill' | 'agent',
   logger: InstallLogger,
   confirm: ConfirmFn,
+  scope: Scope | undefined,
 ): Promise<boolean> {
   try {
     const ok = await prepareTargetForWrite(targetPath, kind, logger, confirm);
@@ -125,7 +131,7 @@ async function copyOne(
     return true;
   } catch (err: unknown) {
     if (isEacces(err)) {
-      throw permissionError(targetPath, err);
+      throw permissionError(targetPath, err, scope);
     }
     throw err;
   }
@@ -137,6 +143,7 @@ async function writeRenderedOne(
   kind: 'agent' | 'agent persona',
   logger: InstallLogger,
   confirm: ConfirmFn,
+  scope: Scope | undefined,
 ): Promise<boolean> {
   try {
     const ok = await prepareTargetForWrite(targetPath, kind, logger, confirm);
@@ -145,7 +152,7 @@ async function writeRenderedOne(
     return true;
   } catch (err: unknown) {
     if (isEacces(err)) {
-      throw permissionError(targetPath, err);
+      throw permissionError(targetPath, err, scope);
     }
     throw err;
   }
@@ -169,7 +176,7 @@ export async function installToTool(tool: Tool, opts: InstallOptions): Promise<I
     if (tool.agentsTarget) await ensureDir(tool.agentsTarget);
   } catch (err: unknown) {
     if (isEacces(err)) {
-      throw permissionError(tool.skillsTarget, err);
+      throw permissionError(tool.skillsTarget, err, opts.scope);
     }
     throw err;
   }
@@ -193,7 +200,7 @@ export async function installToTool(tool: Tool, opts: InstallOptions): Promise<I
 
       assertWithinRoot(targetPath, tool.configRoot, 'skill targetPath');
       info(chalk.dim(`  + skill ${dirent.name} -> ${targetPath}`));
-      const written = await copyOne(srcPath, targetPath, 'skill', logger, confirm);
+      const written = await copyOne(srcPath, targetPath, 'skill', logger, confirm, opts.scope);
       if (written) {
         renderSkillFrontmatter(renderedSkillMd, tool.key);
         skillsCount++;
@@ -238,13 +245,14 @@ export async function installToTool(tool: Tool, opts: InstallOptions): Promise<I
         }
 
         info(chalk.dim(`  + agent ${dirent.name} -> ${tomlTarget}`));
-        const wroteToml = await writeRenderedOne(tomlTarget, rendered.toml, 'agent', logger, confirm);
+        const wroteToml = await writeRenderedOne(tomlTarget, rendered.toml, 'agent', logger, confirm, opts.scope);
         const wrotePersona = await writeRenderedOne(
           personaTarget,
           rendered.personaBody,
           'agent persona',
           logger,
           confirm,
+          opts.scope,
         );
         if (wroteToml && wrotePersona) agentsCount++;
         continue;
@@ -253,7 +261,7 @@ export async function installToTool(tool: Tool, opts: InstallOptions): Promise<I
       const targetPath = join(tool.agentsTarget, dirent.name);
       assertWithinRoot(targetPath, tool.configRoot, 'agent targetPath');
       info(chalk.dim(`  + agent ${dirent.name} -> ${targetPath}`));
-      const written = await copyOne(srcPath, targetPath, 'agent', logger, confirm);
+      const written = await copyOne(srcPath, targetPath, 'agent', logger, confirm, opts.scope);
       if (written) agentsCount++;
     }
   }

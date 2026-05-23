@@ -28,16 +28,29 @@ function makeHomes(present: ReadonlyArray<'claude' | 'codex' | 'gemini'>): Homes
   return { root, claude, codex, gemini, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
-function runCli(args: readonly string[], envOverrides: Record<string, string>): Run {
+function runCli(
+  args: readonly string[],
+  envOverrides: Record<string, string>,
+  cwd?: string,
+): Run {
   const out = spawnSync(
     process.execPath,
     ['--experimental-strip-types', '--no-warnings', BIN, ...args],
     {
       encoding: 'utf8',
       env: { ...process.env, ...envOverrides, FORCE_COLOR: '0', NO_COLOR: '1' },
+      ...(cwd !== undefined ? { cwd } : {}),
     },
   );
   return { status: out.status ?? -1, stdout: out.stdout, stderr: out.stderr };
+}
+
+function makeWorkspace(root: string): string {
+  // Minimal workspace fixture: config/project.yaml is the detection signal.
+  const ws = mkdtempSync(join(root, 'ws-'));
+  mkdirSync(join(ws, 'config'));
+  writeFileSync(join(ws, 'config', 'project.yaml'), 'name: test\n');
+  return ws;
 }
 
 test('install --all installs to every detected tool', () => {
@@ -230,4 +243,153 @@ test('install --tool unknown exits 1 and stderr header is structured (no stack w
   } finally {
     h.cleanup();
   }
+});
+
+// ROS-109 acceptance tests — install scope + --yes + comma-separated --tool.
+
+test('ROS-109: install --scope project from a non-workspace dir exits 2 with the documented error', () => {
+  const h = makeHomes(['claude']);
+  // CWD is the tmpdir root which has no config/project.yaml.
+  try {
+    const r = runCli(['install', '--scope', 'project', '--yes'], {
+      ROSTER_CLAUDE_HOME: h.claude,
+      ROSTER_CODEX_HOME: h.codex,
+      ROSTER_GEMINI_HOME: h.gemini,
+    }, h.root);
+    assert.equal(r.status, 2, `stderr: ${r.stderr}`);
+    assert.match(r.stderr, /project-level install requires a roster workspace/i);
+    assert.match(r.stderr, /config\/project\.yaml/);
+    assert.match(r.stderr, /--scope user/);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('ROS-109: install --tool all --scope user --yes writes to home-dir paths via ROSTER_*_HOME', () => {
+  const h = makeHomes(['claude', 'codex', 'gemini']);
+  try {
+    const r = runCli(['install', '--all', '--scope', 'user', '--yes', '--silent'], {
+      ROSTER_CLAUDE_HOME: h.claude,
+      ROSTER_CODEX_HOME: h.codex,
+      ROSTER_GEMINI_HOME: h.gemini,
+    });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(existsSync(join(h.claude, 'skills')), 'claude skills under user-scope home');
+    assert.ok(existsSync(join(h.codex, 'skills')), 'codex skills under user-scope home');
+    assert.ok(existsSync(join(h.gemini, 'extensions')), 'gemini extensions under user-scope home');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('ROS-109: install --scope project from a workspace writes to <workspace>/.tool/ paths', () => {
+  const h = makeHomes(['claude']);
+  try {
+    const ws = makeWorkspace(h.root);
+    const r = runCli(['install', '--tool', 'claude', '--scope', 'project', '--yes', '--silent'], {
+      ROSTER_CLAUDE_HOME: h.claude,
+      ROSTER_CODEX_HOME: h.codex,
+      ROSTER_GEMINI_HOME: h.gemini,
+    }, ws);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    // Project-scope install: skills land inside the workspace, NOT in claude home.
+    assert.ok(existsSync(join(ws, '.claude', 'skills')), 'workspace .claude/skills written');
+    assert.ok(existsSync(join(ws, '.claude', 'agents')), 'workspace .claude/agents written');
+    assert.ok(!existsSync(join(h.claude, 'skills')), 'user-scope claude NOT touched');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('ROS-109: install --tool claude,codex writes to both and skips gemini', () => {
+  const h = makeHomes(['claude', 'codex', 'gemini']);
+  try {
+    const r = runCli(['install', '--tool', 'claude,codex', '--yes', '--silent'], {
+      ROSTER_CLAUDE_HOME: h.claude,
+      ROSTER_CODEX_HOME: h.codex,
+      ROSTER_GEMINI_HOME: h.gemini,
+    });
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(existsSync(join(h.claude, 'skills')), 'claude written');
+    assert.ok(existsSync(join(h.codex, 'skills')), 'codex written');
+    assert.ok(!existsSync(join(h.gemini, 'extensions')), 'gemini NOT written');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('ROS-109: install --tool claude,foo (one bad key in list) exits 1 with usage error', () => {
+  const h = makeHomes(['claude']);
+  try {
+    const r = runCli(['install', '--tool', 'claude,foo'], {
+      ROSTER_CLAUDE_HOME: h.claude,
+      ROSTER_CODEX_HOME: h.codex,
+      ROSTER_GEMINI_HOME: h.gemini,
+    });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /foo/);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('ROS-109: install --scope foo exits 1 with a clear error', () => {
+  const h = makeHomes(['claude']);
+  try {
+    const r = runCli(['install', '--scope', 'foo'], {
+      ROSTER_CLAUDE_HOME: h.claude,
+      ROSTER_CODEX_HOME: h.codex,
+      ROSTER_GEMINI_HOME: h.gemini,
+    });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /scope/i);
+    assert.match(r.stderr, /project/);
+    assert.match(r.stderr, /user/);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('ROS-109: --yes from inside a workspace defaults to project scope', () => {
+  const h = makeHomes(['claude']);
+  try {
+    const ws = makeWorkspace(h.root);
+    // No --scope flag — relies on --yes safe default + workspace presence.
+    const r = runCli(['install', '--tool', 'claude', '--yes', '--silent'], {
+      ROSTER_CLAUDE_HOME: h.claude,
+      ROSTER_CODEX_HOME: h.codex,
+      ROSTER_GEMINI_HOME: h.gemini,
+    }, ws);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    // Should land under workspace, not home.
+    assert.ok(existsSync(join(ws, '.claude', 'skills')), 'workspace install under --yes default');
+    assert.ok(!existsSync(join(h.claude, 'skills')), 'user home NOT used');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('ROS-109: --yes outside a workspace defaults to user scope', () => {
+  const h = makeHomes(['claude']);
+  try {
+    // CWD has no config/project.yaml.
+    const r = runCli(['install', '--tool', 'claude', '--yes', '--silent'], {
+      ROSTER_CLAUDE_HOME: h.claude,
+      ROSTER_CODEX_HOME: h.codex,
+      ROSTER_GEMINI_HOME: h.gemini,
+    }, h.root);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(existsSync(join(h.claude, 'skills')), 'home-dir install under --yes default outside workspace');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('ROS-109: help text documents --scope and --yes', () => {
+  const r = runCli(['--help'], {});
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /--scope/);
+  assert.match(r.stdout, /--yes/);
+  assert.match(r.stdout, /-y/);
+  assert.match(r.stdout, /project\|user/);
 });

@@ -558,3 +558,99 @@ test('doctor --help mentions --fix', () => {
   assert.equal(r.status, 0);
   assert.match(r.stdout, /--fix/);
 });
+
+// ROS-109: doctor scope awareness + shadow collision detection.
+
+function makeWorkspaceDir(root: string): string {
+  // config/project.yaml is the workspace detection signal.
+  const ws = mkdtempSync(join(root, 'ws-'));
+  mkdirSync(join(ws, 'config'));
+  writeFileSync(join(ws, 'config', 'project.yaml'), 'name: test\n');
+  return ws;
+}
+
+test('ROS-109: doctor outside a workspace defaults to user scope', () => {
+  const h = makeHomes(['claude']);
+  try {
+    runCli(['install', '--all', '--scope', 'user', '--yes', '--silent'], envFor(h));
+    const doc = runCli(['doctor'], envFor(h));
+    assert.equal(doc.status, 0, `stderr: ${doc.stderr}`);
+    assert.match(doc.stdout, /Install scope: user/);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('ROS-109: doctor inside a workspace defaults to project scope', () => {
+  const h = makeHomes(['claude']);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    runCliInCwd(['install', '--tool', 'claude', '--scope', 'project', '--yes', '--silent'], envFor(h), ws);
+    const doc = runCliInCwd(['doctor'], envFor(h), ws);
+    assert.equal(doc.status, 0, `stderr: ${doc.stderr}\nstdout: ${doc.stdout}`);
+    assert.match(doc.stdout, /Install scope: project/);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('ROS-109: doctor --scope user from inside a workspace overrides autodetect', () => {
+  const h = makeHomes(['claude']);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    // Install to user scope so there's something to audit.
+    runCli(['install', '--all', '--scope', 'user', '--yes', '--silent'], envFor(h));
+    const doc = runCliInCwd(['doctor', '--scope', 'user'], envFor(h), ws);
+    assert.equal(doc.status, 0, `stderr: ${doc.stderr}`);
+    assert.match(doc.stdout, /Install scope: user/);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('ROS-109: doctor reports shadow collision when same skill exists at both scopes', () => {
+  const h = makeHomes(['claude']);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    // Install at user scope.
+    runCli(['install', '--all', '--scope', 'user', '--yes', '--silent'], envFor(h));
+    // ALSO install at project scope — same skill names land in the workspace.
+    runCliInCwd(['install', '--tool', 'claude', '--scope', 'project', '--yes', '--silent'], envFor(h), ws);
+
+    const doc = runCliInCwd(['doctor'], envFor(h), ws);
+    // Doctor still reports OK on each scope independently; shadow is a
+    // warning-level signal, not a failure (today). Verify the section renders.
+    assert.match(doc.stdout, /Shadow collisions/);
+    assert.match(doc.stdout, /chief-of-staff/);
+    assert.match(doc.stdout, /Same skill installed at both scopes/);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('ROS-109: doctor --json includes scope and shadows in payload', () => {
+  const h = makeHomes(['claude']);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    runCliInCwd(['install', '--tool', 'claude', '--scope', 'project', '--yes', '--silent'], envFor(h), ws);
+
+    const doc = runCliInCwd(['doctor', '--json'], envFor(h), ws);
+    assert.equal(doc.status, 0, `stderr: ${doc.stderr}`);
+    const payload = JSON.parse(doc.stdout) as { scope: string; shadows: unknown[] };
+    assert.equal(payload.scope, 'project');
+    assert.ok(Array.isArray(payload.shadows), 'shadows is an array');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('ROS-109: doctor --scope foo exits 1 with usage error', () => {
+  const h = makeHomes(['claude']);
+  try {
+    const r = runCli(['doctor', '--scope', 'foo'], envFor(h));
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /scope/i);
+  } finally {
+    h.cleanup();
+  }
+});

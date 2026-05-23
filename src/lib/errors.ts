@@ -32,12 +32,23 @@ function isRosterError(err: unknown): err is RosterError {
   return err instanceof RosterError;
 }
 
-export function permissionError(targetPath: string, cause: NodeJS.ErrnoException): RosterError {
+export function permissionError(
+  targetPath: string,
+  cause: NodeJS.ErrnoException,
+  scope?: 'project' | 'user',
+): RosterError {
   const syscall = cause.syscall ? ` (${cause.syscall})` : '';
+  // Project scope writes inside the workspace; sudo is the wrong remediation
+  // there (project files should never need elevated privs). Default to the
+  // user-scope remedy when scope is unspecified — matches pre-ROS-109 behavior.
+  const remedy =
+    scope === 'project'
+      ? `  Check filesystem permissions on the workspace, or run: chmod -R u+w ${targetPath}`
+      : `  Re-run with sudo, or run: sudo chown -R "$USER" ${targetPath}`;
   return new RosterError({
     header: `${chalk.red.bold('roster:')} permission denied`,
     body: `  ${cause.code ?? 'EACCES'}${syscall} writing ${targetPath}`,
-    remedy: `  Re-run with sudo, or run: sudo chown -R "$USER" ${targetPath}`,
+    remedy,
     exitCode: EXIT_ERROR,
   });
 }
@@ -110,6 +121,43 @@ export function userCancelledInstall(): RosterError {
     body: '  Nothing written.',
     remedy: `  Re-run ${chalk.bold('roster install')} when ready.`,
     exitCode: EXIT_CANCELLED,
+  });
+}
+
+export function workspaceRequiredError(cwd: string): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} project-level install requires a roster workspace`,
+    body: [
+      `  CWD: ${cwd}`,
+      `  Expected: config/project.yaml (created by ${chalk.bold('roster init')})`,
+    ].join('\n'),
+    remedy: [
+      `  Either:`,
+      `    - cd into a roster workspace, or`,
+      `    - re-run with ${chalk.bold('--scope user')} to install to your home directory.`,
+    ].join('\n'),
+    exitCode: EXIT_CANCELLED,
+  });
+}
+
+export function toolsNotDetectedError(
+  requestedKeys: ReadonlyArray<string>,
+  detectedKeys: ReadonlyArray<string>,
+): RosterError {
+  const missing = requestedKeys.filter((k) => !detectedKeys.includes(k));
+  const detectedLabel = detectedKeys.length === 0 ? '(none)' : detectedKeys.join(', ');
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} requested tool${missing.length === 1 ? '' : 's'} not detected: ${missing.join(', ')}`,
+    body: [
+      `  --tool requested: ${requestedKeys.join(', ')}`,
+      `  detected on this machine: ${detectedLabel}`,
+    ].join('\n'),
+    remedy: [
+      `  Either:`,
+      `    - install the missing tool${missing.length === 1 ? '' : 's'} first, or`,
+      `    - drop the missing key${missing.length === 1 ? '' : 's'} from ${chalk.bold('--tool')}.`,
+    ].join('\n'),
+    exitCode: EXIT_NO_TOOLS,
   });
 }
 

@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 import chalk from 'chalk';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { getPackageVersion, ROSTER_ROOT } from '../lib/paths.ts';
 import { allTools, detectTools, type Tool, type ToolKey } from '../lib/tools.ts';
 import { installToTool, type InstallResult } from '../lib/install.ts';
 import { parseInstallArgs } from '../lib/install-args.ts';
+import {
+  detectWorkspace,
+  defaultScopeForContext,
+  toolForScope,
+  type Scope,
+} from '../lib/install-scope.ts';
 import { parseDoctorArgs } from '../lib/doctor-args.ts';
 import { parseScheduleArgs } from '../lib/schedule-args.ts';
 import { parseReviewArgs } from '../lib/review-args.ts';
@@ -36,9 +42,11 @@ import {
   isRosterError,
   noToolsError,
   renderError,
+  toolsNotDetectedError,
   unexpectedError,
   userCancelledInit,
   userCancelledInstall,
+  workspaceRequiredError,
 } from '../lib/errors.ts';
 
 type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'hooks' | 'migrate' | 'pending';
@@ -56,6 +64,17 @@ const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
 function tildify(path: string): string {
   const home = homedir();
   return path.startsWith(home) ? '~' + path.slice(home.length) : path;
+}
+
+// Display a path under home as `~/foo`; otherwise if it's under cwd, show
+// as `./foo` (workspace-local installs read better that way). Falls back
+// to the absolute path for unrelated locations.
+function displayPath(path: string, cwd: string): string {
+  const home = homedir();
+  if (path.startsWith(home)) return '~' + path.slice(home.length);
+  const rel = relative(cwd, path);
+  if (!rel.startsWith('..') && !rel.startsWith('/')) return './' + rel;
+  return path;
 }
 
 function printBanner(version: string): void {
@@ -90,8 +109,10 @@ function printHelp(version: string): void {
     `  -v, --version                ${chalk.dim('Print version and exit')}`,
     `  --silent                     ${chalk.dim('Suppress non-error output (install)')}`,
     `  --verbose                    ${chalk.dim('Log each file path written (install)')}`,
-    `  --all                        ${chalk.dim('Install to every detected tool (install)')}`,
-    `  --tool <name>                ${chalk.dim('Install to a single tool: claude | codex | gemini (install)')}`,
+    `  --all                        ${chalk.dim('Install to every detected tool (alias of --tool all) (install)')}`,
+    `  --tool <name[,name...]>      ${chalk.dim('Install to one or more tools: claude | codex | gemini (install)')}`,
+    `  --scope <project|user>       ${chalk.dim('Install at workspace-local or home-dir scope (install)')}`,
+    `  --yes, -y                    ${chalk.dim('Skip prompts; use safe defaults (install)')}`,
     `  --tool <name>                ${chalk.dim('Required scheduler tool: claude | codex (schedule install)')}`,
     `  --migrate                    ${chalk.dim('Upgrade pre-CONTEXT.md workspace, preserving CLAUDE.md content (init)')}`,
     `  --json                       ${chalk.dim('Emit machine-readable JSON (doctor, schedule validate)')}`,
@@ -127,23 +148,40 @@ function toolHints(tools: ReadonlyArray<Tool>): ReadonlyArray<{ name: string; in
   return tools.map((t) => ({ name: t.name, installLink: t.installLink }));
 }
 
-function summarizeInstall(tool: Tool, result: InstallResult): string {
-  const skillsLine = `${result.skillsCount} skills → ${tildify(result.skillsTarget)}`;
+function summarizeInstall(tool: Tool, result: InstallResult, cwd: string): string {
+  const skillsLine = `${result.skillsCount} skills → ${displayPath(result.skillsTarget, cwd)}`;
   const agentsLine = result.agentsTarget
-    ? `${result.agentsCount} agents → ${tildify(result.agentsTarget)}`
+    ? `${result.agentsCount} agents → ${displayPath(result.agentsTarget, cwd)}`
     : `${result.agentsCount} agents → (n/a)`;
   return `${chalk.green('✓')} ${chalk.bold(tool.name)} — ${skillsLine}, ${agentsLine}`;
 }
 
-async function promptForTools(detected: Tool[]): Promise<Tool[] | null> {
-  if (detected.length === 1) return detected;
+async function promptForTools(detected: Tool[], undetected: Tool[]): Promise<Tool[] | null> {
+  // If only one tool is detected and there are no undetected peers worth
+  // surfacing in the menu, skip the picker — there's nothing to choose.
+  if (detected.length === 1 && undetected.length === 0) return detected;
 
   const { checkbox, confirm } = await import('@inquirer/prompts');
+  type Choice = {
+    name: string;
+    value: ToolKey;
+    checked?: boolean;
+    disabled?: string;
+  };
+  const choices: Choice[] = [
+    ...detected.map((t) => ({ name: t.name, value: t.key, checked: true })),
+    ...undetected.map((t) => ({
+      name: t.name,
+      value: t.key,
+      disabled: '(not detected)',
+    })),
+  ];
+
   let selectedKeys: ToolKey[];
   try {
     selectedKeys = await checkbox<ToolKey>({
       message: 'Install roster into which AI tools?',
-      choices: detected.map((t) => ({ name: t.name, value: t.key, checked: true })),
+      choices,
     });
   } catch {
     return null; // ESC / Ctrl-C
@@ -160,10 +198,41 @@ async function promptForTools(detected: Tool[]): Promise<Tool[] | null> {
       return null;
     }
     if (exitAnyway) return null;
-    return promptForTools(detected);
+    return promptForTools(detected, undetected);
   }
 
   return detected.filter((t) => selectedKeys.includes(t.key));
+}
+
+async function promptForScope(
+  workspaceExists: boolean,
+  cwd: string,
+): Promise<Scope | null> {
+  const { select } = await import('@inquirer/prompts');
+  const projectHint = workspaceExists
+    ? `workspace-local — skills land in ${displayPath(join(cwd, '.<tool>'), cwd)}/skills/`
+    : 'workspace-local — REQUIRES roster init (config/project.yaml not found here)';
+  try {
+    return await select<Scope>({
+      message: 'Install at which scope?',
+      choices: [
+        {
+          name: 'project',
+          value: 'project',
+          description: projectHint,
+        },
+        {
+          name: 'user',
+          value: 'user',
+          description:
+            'home directory — skills land in ~/.<tool>/, visible to every Claude Code project on this machine',
+        },
+      ],
+      default: workspaceExists ? 'project' : 'user',
+    });
+  } catch {
+    return null;
+  }
 }
 
 async function runInstall(args: readonly string[]): Promise<number> {
@@ -176,60 +245,95 @@ async function runInstall(args: readonly string[]): Promise<number> {
       exitCode: EXIT_ERROR,
     });
   }
-  const { silent, verbose, target } = parsed;
+  const { silent, verbose, yes, scope: requestedScope, target } = parsed;
   const version = getPackageVersion();
 
   if (!silent) printBanner(version);
 
+  const cwd = process.cwd();
+  const isTTY = process.stdin.isTTY === true;
+  const workspaceExists = detectWorkspace(cwd);
+  // Non-TTY contexts (CI, pipes) behave as if --yes was passed: skip prompts,
+  // pick safe defaults, decline symlink-replacement deterministically. The
+  // --yes flag opts into the same mode from an interactive shell.
+  const nonInteractive = yes || !isTTY;
+
   const detected = detectTools();
-  if (detected.length === 0) {
-    throw noToolsError(toolHints(allTools()));
-  }
 
-  let targetTools: Tool[] | null;
+  // Resolve effective tools.
+  let targetTools: Tool[];
   if (target.mode === 'all') {
+    if (detected.length === 0) throw noToolsError(toolHints(allTools()));
     targetTools = detected;
-  } else if (target.mode === 'tool') {
-    const match = detected.find((t) => t.key === target.key);
-    if (!match) {
-      throw new RosterError({
-        header: `${chalk.red.bold('roster:')} ${target.key} not detected on this machine`,
-        body: `  --tool ${target.key} was requested, but no ${target.key} install was found.`,
-        remedy: `  Install it first, or omit ${chalk.bold('--tool')} to install to all detected tools.`,
-        exitCode: EXIT_NO_TOOLS,
-      });
+  } else if (target.mode === 'tools') {
+    const detectedKeys = detected.map((t) => t.key);
+    const missing = target.keys.filter((k) => !detectedKeys.includes(k));
+    if (missing.length > 0) {
+      throw toolsNotDetectedError(target.keys, detectedKeys);
     }
-    targetTools = [match];
+    targetTools = detected.filter((t) => target.keys.includes(t.key));
   } else {
-    targetTools = await promptForTools(detected);
+    // mode: 'interactive'
+    if (detected.length === 0) throw noToolsError(toolHints(allTools()));
+    if (nonInteractive) {
+      targetTools = detected;
+    } else {
+      const undetected = allTools().filter(
+        (t) => !detected.some((d) => d.key === t.key),
+      );
+      const picked = await promptForTools(detected, undetected);
+      if (picked === null) throw userCancelledInstall();
+      targetTools = picked;
+    }
   }
 
-  if (targetTools === null) {
-    throw userCancelledInstall();
+  // Resolve effective scope.
+  let scope: Scope;
+  if (requestedScope !== null) {
+    scope = requestedScope;
+  } else if (nonInteractive) {
+    scope = defaultScopeForContext(workspaceExists);
+  } else {
+    const picked = await promptForScope(workspaceExists, cwd);
+    if (picked === null) throw userCancelledInstall();
+    scope = picked;
+  }
+
+  // Guard: project scope without a workspace is the home-dir foot-gun. Refuse.
+  if (scope === 'project' && !workspaceExists) {
+    throw workspaceRequiredError(cwd);
   }
 
   const skillsSrc = join(ROSTER_ROOT, 'skills');
   const agentsSrc = join(ROSTER_ROOT, 'agents');
 
-  // --all and --tool are non-interactive (CI / scripted use): decline the
-  // symlink-replacement prompt deterministically so install doesn't hang
-  // waiting on TTY-less stdin (ROS-16).
-  const nonInteractive = target.mode !== 'interactive';
+  // Decline symlink replacement prompts in non-interactive contexts (no TTY
+  // to ask on). Preserves ROS-16 behavior.
   const confirmFn = nonInteractive ? async (): Promise<boolean> => false : undefined;
 
   for (const tool of targetTools) {
-    const result = await installToTool(tool, {
+    const scopedTool = scope === 'project' ? toolForScope(tool, 'project', cwd) : tool;
+    const result = await installToTool(scopedTool, {
       skills: skillsSrc,
       agents: agentsSrc,
       silent: !verbose,
+      scope,
       ...(confirmFn ? { confirm: confirmFn } : {}),
     });
-    if (!silent) console.log(summarizeInstall(tool, result));
+    if (!silent) console.log(summarizeInstall(scopedTool, result, cwd));
   }
 
   if (!silent) {
     console.log();
-    console.log(`${chalk.dim('Next: ')}${chalk.bold('roster init')}${chalk.dim(' to scaffold a workspace.')}`);
+    if (scope === 'project') {
+      console.log(
+        `${chalk.dim('Next: ')}${chalk.bold('open Claude Code (or your AI tool) in this directory')}${chalk.dim(' — skills are workspace-local.')}`,
+      );
+    } else {
+      console.log(
+        `${chalk.dim('Next: ')}${chalk.bold('roster init')}${chalk.dim(' to scaffold a workspace, then re-run install at project scope.')}`,
+      );
+    }
   }
   return EXIT_OK;
 }
@@ -437,7 +541,14 @@ async function runDoctor(args: readonly string[]): Promise<number> {
       exitCode: EXIT_ERROR,
     });
   }
-  const code = await executeDoctor({ json: parsed.json, silent: parsed.silent, fix: parsed.fix, dryRun: parsed.dryRun, cwd: process.cwd() });
+  const code = await executeDoctor({
+    json: parsed.json,
+    silent: parsed.silent,
+    fix: parsed.fix,
+    dryRun: parsed.dryRun,
+    cwd: process.cwd(),
+    scope: parsed.scope,
+  });
   if (code === EXIT_NO_TOOLS && !parsed.json) {
     throw noToolsError(toolHints(allTools()));
   }

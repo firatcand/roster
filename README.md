@@ -34,7 +34,7 @@
 npx @firatcand/roster install
 ```
 
-Detects Claude Code, Codex CLI, and Gemini, then copies skills + agents into each tool's config dir. macOS, Linux, and Windows.
+Interactive — prompts for which AI tools to set up (Claude Code, Codex CLI, Gemini) and which scope (workspace-local vs. user home). Run inside a `roster init` workspace to get the project-local default; run from anywhere else for user-scope. macOS, Linux, and Windows. For non-interactive contexts (CI / scripts), add `--yes` plus `--tool <name>` and `--scope <project|user>` to skip prompts.
 
 ## Setup prompt
 
@@ -54,6 +54,7 @@ The agent reads [install.md](install.md), runs the install, scaffolds your works
 ```bash
 mkdir my-team && cd my-team
 npx @firatcand/roster init my-team   # scaffold workspace (config/, guidelines/, function dirs)
+npx @firatcand/roster install        # NOW install — defaults to project scope inside a workspace
 $EDITOR config/project.yaml          # fill workspace identity (stage, audience, motion)
 $EDITOR guidelines/voice.md          # plus messaging.md, brand-book.md, icps/<persona>.md
 cp templates/env.example .env        # then chmod 600 .env and fill secrets
@@ -61,7 +62,7 @@ claude                                # or `codex`, or open Cursor
 /chief-of-staff create-agent gtm sdr
 ```
 
-The guided dialogue reads your `config/project.yaml` + `guidelines/` and interviews you for the gaps a stub can't fill — subagents, tools, plan names, failure modes — then writes a populated `agent.md`. Worked example in [docs/HOWTO.md](docs/HOWTO.md).
+`roster install` lands skills + agents under `<workspace>/.claude/`, `<workspace>/.codex/`, and/or `<workspace>/.gemini/` — workspace-local, self-contained, no cross-project pollution. The guided dialogue then reads your `config/project.yaml` + `guidelines/` and interviews you for the gaps a stub can't fill — subagents, tools, plan names, failure modes — then writes a populated `agent.md`. Worked example in [docs/HOWTO.md](docs/HOWTO.md).
 
 ### Common commands
 
@@ -91,12 +92,14 @@ A nightly **reinforcement** pass (the `dreamer` skill) reads runs + feedback, de
 
 ## Tool support
 
-| Tool | Status | Skills → | Agents → |
+| Tool | Status | Project-scope skills | User-scope skills |
 |---|---|---|---|
-| Claude Code | Supported | `~/.claude/skills/<skill>/` | `~/.claude/agents/<agent>.md` |
-| Codex CLI | Supported | `~/.codex/skills/<skill>/` | `~/.codex/agents/<agent>.md` |
-| Gemini CLI | Supported | `~/.gemini/extensions/<skill>/` | `~/.gemini/agents/<agent>.md` |
+| Claude Code | Supported | `<workspace>/.claude/skills/<skill>/` | `~/.claude/skills/<skill>/` |
+| Codex CLI | Supported | `<workspace>/.codex/skills/<skill>/` | `~/.codex/skills/<skill>/` |
+| Gemini CLI | Supported | `<workspace>/.gemini/extensions/<skill>/` | `~/.gemini/extensions/<skill>/` |
 | Cursor | On the roadmap | — | — |
+
+Agents land in the matching `agents/` sibling of the skills dir for each tool. Project scope (default inside a roster workspace) keeps everything self-contained; user scope writes to your home directory and is visible to every project on the machine. `roster doctor` warns when the same skill name exists at both scopes — the user-scope copy wins, silently shadowing the workspace one.
 
 Detection is presence-only — roster considers a tool installed if its config root exists. Override via `ROSTER_CLAUDE_HOME` / `ROSTER_CODEX_HOME` / `ROSTER_GEMINI_HOME` (used by the test suite).
 

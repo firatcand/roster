@@ -74,3 +74,56 @@ test('--fix --dry-run → both true (ROS-45 + ROS-38 integration)', () => {
   assert.equal(r.fix, true);
   assert.equal(r.dryRun, true);
 });
+
+// ROS-109: --scope flag on doctor.
+
+test('ROS-109: no flags → scope null (autodetect from workspace)', () => {
+  const r = parseDoctorArgs([]);
+  assert.equal(r.kind, 'ok');
+  if (r.kind !== 'ok') return;
+  assert.equal(r.scope, null);
+});
+
+test('ROS-109: --scope project → scope project', () => {
+  const r = parseDoctorArgs(['--scope', 'project']);
+  assert.equal(r.kind, 'ok');
+  if (r.kind !== 'ok') return;
+  assert.equal(r.scope, 'project');
+});
+
+test('ROS-109: --scope user → scope user', () => {
+  const r = parseDoctorArgs(['--scope', 'user']);
+  assert.equal(r.kind, 'ok');
+  if (r.kind !== 'ok') return;
+  assert.equal(r.scope, 'user');
+});
+
+test('ROS-109: --scope=project (equals form) → scope project', () => {
+  const r = parseDoctorArgs(['--scope=project']);
+  assert.equal(r.kind, 'ok');
+  if (r.kind !== 'ok') return;
+  assert.equal(r.scope, 'project');
+});
+
+test('ROS-109: --scope without a value → err', () => {
+  const r = parseDoctorArgs(['--scope']);
+  assert.equal(r.kind, 'err');
+  if (r.kind !== 'err') return;
+  assert.match(r.message, /--scope/);
+});
+
+test('ROS-109: --scope foo (invalid value) → err', () => {
+  const r = parseDoctorArgs(['--scope', 'foo']);
+  assert.equal(r.kind, 'err');
+  if (r.kind !== 'err') return;
+  assert.match(r.message, /foo/);
+});
+
+test('ROS-109: --scope user --json --fix → all three set', () => {
+  const r = parseDoctorArgs(['--scope', 'user', '--json', '--fix']);
+  assert.equal(r.kind, 'ok');
+  if (r.kind !== 'ok') return;
+  assert.equal(r.scope, 'user');
+  assert.equal(r.json, true);
+  assert.equal(r.fix, true);
+});
