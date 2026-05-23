@@ -37,7 +37,11 @@ function* walk(dir: string): Generator<string> {
 }
 
 function collectMatches(): Match[] {
-  const re = /Pinned to skills\/([^/\s]+)\/SKILL\.md\s+(.+?)\s*$/;
+  // Capture the skill name eagerly, then capture the REST of the line (which may
+  // be empty). A trailing empty `rest` represents an unanchored pin like
+  // `// Pinned to skills/foo/SKILL.md` and must still be reported as an offender
+  // by the form-check test — otherwise unanchored pins slip through silently.
+  const re = /Pinned to skills\/([^/\s]+)\/SKILL\.md(.*)$/;
   const out: Match[] = [];
   for (const top of SCAN_DIRS) {
     const root = join(REPO_ROOT, top);
@@ -58,7 +62,7 @@ function collectMatches(): Match[] {
           lineNumber: i + 1,
           raw: lines[i]!,
           skill: m[1]!,
-          rest: m[2]!,
+          rest: m[2]!.trim(),
         });
       }
     }
@@ -89,6 +93,12 @@ test('pinned SKILL.md comments use § <section> form, not line numbers', () => {
 
   const offenders: string[] = [];
   for (const m of matches) {
+    if (m.rest === '') {
+      offenders.push(
+        `${m.file}:${m.lineNumber}: missing anchor — add '§ <section name>' so the pin actually points somewhere.`,
+      );
+      continue;
+    }
     if (m.rest.startsWith('§')) continue;
     if (m.rest.match(/^lines?\s+\d/i)) {
       offenders.push(
