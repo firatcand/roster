@@ -981,3 +981,43 @@ test('contract: CONTEXT.md contains roster:managed:start orchestrator blockquote
     cleanup();
   }
 });
+
+// ROS-106: `roster init` output must disambiguate workspace-name-vs-subdirectory.
+// Pin intent (the user-facing phrases), not the exact rendered line — chalk colors
+// and surrounding decoration are free to evolve.
+test('roster init output disambiguates workspace name from a subdirectory (ROS-106)', async () => {
+  const { cwd, cleanup } = makeTmp();
+  try {
+    const { logger, logs } = silentLogger();
+    await executeInit({
+      cwd,
+      name: 'demo-workspace',
+      silent: false,
+      noGit: true,
+      confirm: yes,
+      logger,
+      platform: 'linux',
+    });
+    // Strip ANSI escape codes so assertions stay stable under FORCE_COLOR / TTY runs.
+    const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, '');
+    const output = stripAnsi(logs.join('\n'));
+    assert.match(
+      output,
+      /\(current directory\)/,
+      'Initialized line must say "(current directory)" so users do not try to cd into a subdir',
+    );
+    assert.match(
+      output,
+      /already in this directory/,
+      'Next: line must reassure the user they do not need to cd',
+    );
+    // Negative: the previous ambiguous phrasing must not survive (regression guard).
+    assert.doesNotMatch(
+      output,
+      /✓ Initialized demo-workspace in /,
+      'old "Initialized <name> in <path>" phrasing must be gone (read as if subdir was created)',
+    );
+  } finally {
+    cleanup();
+  }
+});

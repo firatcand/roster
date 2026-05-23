@@ -36,7 +36,9 @@ the flat ## Tools and bindings schema documented in conventions.md
 ("Tool bindings" section). The Phase 2 reshape (env-merge loader +
 config.yaml/.env split) will rebuild this flow.
 
-Until Phase 2 lands, configure tool bindings by hand:
+Configure tool bindings by hand (the env-merge loader reads them at
+runtime — what's missing is the auto-mirroring generator this script
+was meant to provide):
 
   1. Open <function>/<agent>/agent.md and confirm the ## Tools and
      bindings YAML block lists each tool with env_var, required, and

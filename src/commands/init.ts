@@ -398,7 +398,9 @@ export async function executeInit(opts: InitOptions): Promise<InitResult> {
 
   if (!silent) {
     info('');
-    info(`${chalk.green('✓')} Initialized ${chalk.bold(projectName)} in ${opts.cwd}`);
+    info(
+      `${chalk.green('✓')} Initialized roster workspace ${chalk.bold(`'${projectName}'`)} in ${opts.cwd} ${chalk.dim('(current directory)')}`,
+    );
     if (totalChanged > 8) {
       info(chalk.dim(`Files: ${totalChanged} written/linked`));
     } else {
@@ -409,7 +411,7 @@ export async function executeInit(opts: InitOptions): Promise<InitResult> {
     if (gitInitialized) info(chalk.dim('Git: initialized .git/'));
     info('');
     info(
-      `${chalk.dim('Next: ')}${chalk.bold('open in Claude Code')}${chalk.dim(' and run ')}${chalk.bold('/chief-of-staff audit-repo')}`,
+      `${chalk.dim('Next: ')}you are already in this directory — ${chalk.bold('open Claude Code here')}${chalk.dim(' and run ')}${chalk.bold('/chief-of-staff audit-repo')}`,
     );
   }
 
