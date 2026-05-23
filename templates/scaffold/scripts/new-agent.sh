@@ -272,10 +272,12 @@ cat > "$TARGET/subagents/_template.md" << 'EOF'
 EOF
 
 # config.yaml — agent config (guideline refs + tool bindings)
-# Minimal stub. Until the Phase 2 env-merge loader lands, bindings are
-# hand-edited: copy the ## Tools and bindings YAML block from agent.md
-# into the tools: mapping below, then fill the corresponding env vars
-# in workspace /.env (or this agent's .env).
+# Minimal stub. The env-merge loader (resolveAgentEnv) reads bindings
+# from this file's tools: block, with env-var values sourced from
+# workspace /.env (or this agent's .env override). Until the dialogue-
+# driven generator that auto-mirrors agent.md → config.yaml ships,
+# copy the ## Tools and bindings YAML block from agent.md into the
+# tools: mapping below by hand.
 cat > "$TARGET/config.yaml" << EOF
 agent: $FN/$NAME
 plans_dir: ./plans/
@@ -351,7 +353,7 @@ if [ -t 0 ] && [ "${AGENT_TEAM_NO_CONFIRM:-0}" != "1" ]; then
           echo ""
           echo "## Tools and bindings"
           echo ""
-          echo "Tool bindings expected by this agent. Until the Phase 2 env-merge loader ships, configure them by hand: mirror the YAML block below into \`<agent>/config.yaml\` under a \`tools:\` key, and put the env var values in workspace \`/.env\` (or \`<agent>/.env\` for agent-scoped overrides)."
+          echo "Tool bindings expected by this agent. The env-merge loader reads these from \`<agent>/config.yaml\` (under a \`tools:\` key), with env-var values from workspace \`/.env\` (overridable in \`<agent>/.env\`). For now, mirror the YAML block below into \`config.yaml\` by hand — the auto-mirroring generator that would derive it from this section is not yet shipped."
           echo ""
           echo "Fill in each tool's bindings below. Schema per conventions.md § \"Tool bindings\": each tool has a \`env_var\` (the env-var name the runtime reads), a \`required\` flag (true/false), and a one-line \`description\`."
           echo ""
@@ -369,7 +371,7 @@ if [ -t 0 ] && [ "${AGENT_TEAM_NO_CONFIRM:-0}" != "1" ]; then
         echo ""
         echo "✓ Added '## Tools and bindings' to $NEW_AGENT_MD with stubs for: ${TOOL_NAMES[*]}"
         echo "  Edit agent.md to fill in env_var names + descriptions, then mirror the tools: block into <agent>/config.yaml by hand."
-        echo "  (Phase 2 will add an env-merge loader + automated config.yaml/.env wiring; until then this step is manual.)"
+        echo "  (The env-merge loader reads bindings from <agent>/config.yaml at runtime; the auto-mirroring generator that would copy this block for you is not yet shipped, so this step is manual.)"
       else
         echo "  No valid tool names provided. Skipping section."
       fi
