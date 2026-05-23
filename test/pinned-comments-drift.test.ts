@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(__filename), '..');
 
-const SCAN_DIRS = ['src', 'test', 'skills', 'templates', 'scripts'];
+const SCAN_DIRS = ['src', 'test', 'skills', 'agents', 'templates', 'scripts'];
 const SCAN_EXTS = new Set(['.ts', '.tsx', '.js', '.mjs', '.md', '.sh']);
 // Only skip dirs that would never contain a load-bearing pinned comment.
 // Do NOT skip `lib` or `bin` here — `src/lib/` and `src/bin/` are real source paths.

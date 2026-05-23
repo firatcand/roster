@@ -998,7 +998,9 @@ test('roster init output disambiguates workspace name from a subdirectory (ROS-1
       logger,
       platform: 'linux',
     });
-    const output = logs.join('\n');
+    // Strip ANSI escape codes so assertions stay stable under FORCE_COLOR / TTY runs.
+    const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, '');
+    const output = stripAnsi(logs.join('\n'));
     assert.match(
       output,
       /\(current directory\)/,
@@ -1009,7 +1011,7 @@ test('roster init output disambiguates workspace name from a subdirectory (ROS-1
       /already in this directory/,
       'Next: line must reassure the user they do not need to cd',
     );
-    // Negative: the previous ambiguous phrasing must not survive.
+    // Negative: the previous ambiguous phrasing must not survive (regression guard).
     assert.doesNotMatch(
       output,
       /✓ Initialized demo-workspace in /,
