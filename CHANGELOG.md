@@ -6,11 +6,44 @@ Per-phase retrospectives live in [`docs/retros/`](docs/retros/) and carry the lo
 
 ## [Unreleased]
 
-_(empty — staging area for post-1.0 work)_
+_(empty — staging area for post-1.0.1 work)_
 
-## [1.0.0] — TBD
+## [1.0.1] — 2026-05-24
+
+First patch on top of v1.0.0. Headlined by a behavior change to `roster install` (now workspace-local by default), plus four polish fixes surfaced during v1.0 dogfooding and the release retro.
+
+### Changed (behavior)
+
+- **`roster install` is now interactive and defaults to workspace-local scope.** Running `roster install` from a TTY prompts for tools (multi-select, all detected tools pre-checked) and scope (project vs user). From inside a roster workspace, project scope is the default and skills land in `<workspace>/.claude/skills/`, `<workspace>/.codex/skills/`, `<workspace>/.gemini/extensions/` — not in your home directory. Workspaces are now self-contained: clone, `roster init`, `roster install`, and slash commands work without extra global state. Non-TTY contexts (CI, pipes) and `--yes` skip prompts using safe defaults (project scope inside a workspace, user scope outside; all detected tools). New `--scope <project|user>` flag overrides; `--tool` accepts comma-separated values (`--tool claude,codex`). Strict semver would call this a major bump — keeping it as a patch because v1.0.0 was a same-day release with effectively zero users. (ROS-109)
+- **`roster doctor` autodetects install scope and warns on shadow collisions.** In a workspace, doctor audits `<workspace>/.<tool>/`; outside, it audits user-scope. New `--scope <project|user>` flag overrides. When the same skill name exists at both scopes, doctor emits a shadow-collision warning (user-scope wins; workspace skill is silently ignored) — the bug class ROS-107 originally tracked. (ROS-109)
+- **Generated `agent.md` no longer carries the stale "Until the Phase 2 env-merge loader ships" copy.** The loader shipped in v1.0 (ROS-84); the workaround paragraph it once recommended has been removed from `chief-of-staff create-agent`. New agents get current-tense tool-binding instructions. (ROS-105)
+- **`roster init` output clarifies that the scaffold lands in CWD, not a subdirectory.** The previous `✓ Initialized <name> in <cwd>` line read as if `<name>/` had been created; new copy makes the in-place install explicit. (ROS-106)
+
+### Internal
+
+- Hygiene sweep across `// Pinned to skills/.../SKILL.md lines X-Y` comments for SKILL ↔ code drift after the v1.0 SKILL rewrites. Pins now reference section headings instead of line ranges so future SKILL renumbering does not silently invalidate them. (ROS-104)
+
+### Migration
+
+If you ran v1.0.0's `roster install`, you have skills at `~/.<tool>/skills/`. They're not removed automatically — `roster install` for v1.0.1 from inside a workspace writes to `<workspace>/.<tool>/`, and `roster doctor` will warn about the shadow collision. To clean up the user-scope copy:
+
+```bash
+rm -rf ~/.claude/skills/chief-of-staff ~/.claude/skills/dreamer ~/.claude/skills/roster-orchestrator
+rm -rf ~/.codex/skills/chief-of-staff ~/.codex/skills/dreamer ~/.codex/skills/roster-orchestrator
+rm -rf ~/.gemini/extensions/chief-of-staff ~/.gemini/extensions/dreamer ~/.gemini/extensions/roster-orchestrator
+```
+
+If you prefer user-scope install (e.g., you want `/chief-of-staff` available in every Claude Code project on the machine), re-run `roster install --scope user`. Both scopes are first-class; project is just the default inside a workspace.
+
+### Resolved by ROS-109
+
+- **ROS-107** (chief-of-staff create-agent: detect global slash-command name collisions) was closed as resolved-by-ROS-109. The new doctor shadow warning catches the case at audit time; scaffold-time pre-detection is no longer load-bearing once project-scope install is the default.
+
+## [1.0.0] — 2026-05-22
 
 The single-project workspace refactor. v1.0.0 replaces the `projects/<slug>/` multi-tenant layout with a single root-level workspace, introduces shared brand/voice substrate under `config/` + `guidelines/`, and adds agent-level `.env` inheritance. **This is a breaking release — existing v0.4 workspaces require a re-scaffold (see Migration below).**
+
+> Note: v1.0.0 was published via manual `npm publish` (the `publish.yml` workflow's `NPM_TOKEN` had silently expired). As a result, **v1.0.0 has no npm provenance attestation** — this is permanent for that version (npm forbids republishing the same version). v1.0.1 ships with `--provenance` via the workflow path.
 
 Per-phase retro: [docs/retros/v1.0.md](docs/retros/v1.0.md) — rolls up phases v1-1..v1-4.
 
