@@ -4,9 +4,24 @@ Public view of what's shipped, what's deferred, and what's next. Detailed task t
 
 ## Released
 
-### v1.0.0 — TBD
+### v1.0.1 — 2026-05-24
 
-The single-project workspace refactor. v1.0.0 drops `projects/<slug>/`, adds `config/` + `guidelines/` for shared brand/voice substrate, and introduces agent-level `.env` inheritance. Breaking — existing v0.4 workspaces require a re-scaffold. Full changelog: [CHANGELOG.md](../CHANGELOG.md#100--tbd).
+First patch on top of v1.0.0. Headlined by an install-scope change: `roster install` now defaults to **workspace-local** install when run inside a roster workspace (`<workspace>/.claude/skills/`, etc.) instead of the home directory. Workspaces become self-contained; cross-project pollution and the slash-command shadow class of bug go away. Non-TTY contexts and `--yes` keep working with safe context-aware defaults. Plus four polish fixes from v1.0 dogfooding. Full changelog: [CHANGELOG.md](../CHANGELOG.md#101--2026-05-24).
+
+What this means for users:
+
+- **Workspace-local install by default** — `roster install` run from a roster workspace lands skills + agents under `<workspace>/.claude/`, `<workspace>/.codex/`, and/or `<workspace>/.gemini/`. Use `--scope user` to install to your home directory instead (e.g., to make `/chief-of-staff` available in every Claude Code project).
+- **Interactive picker** — `roster install` from a TTY prompts for tools (multi-select, all detected pre-checked) then scope (project vs user). `--yes`, `--tool <name[,name...]>`, and `--scope <project|user>` skip the prompts.
+- **Doctor catches shadows** — when the same skill name exists at both project and user scope, `roster doctor` warns. The user-scope copy wins and silently shadows the workspace one.
+- **Generated `agent.md` is current-tense** — the stale "Until the Phase 2 env-merge loader ships" workaround paragraph is gone.
+- **Clearer `roster init` output** — output text makes it explicit that the scaffold lands in CWD, not a subdirectory.
+- **First release with npm provenance attestation since v0.4.0** — the `publish.yml` workflow handles tag-pushes end-to-end after the `NPM_TOKEN` rotation under ROS-108.
+
+### v1.0.0 — 2026-05-22
+
+The single-project workspace refactor. v1.0.0 drops `projects/<slug>/`, adds `config/` + `guidelines/` for shared brand/voice substrate, and introduces agent-level `.env` inheritance. Breaking — existing v0.4 workspaces require a re-scaffold. Full changelog: [CHANGELOG.md](../CHANGELOG.md#100--2026-05-22).
+
+> Note: v1.0.0 shipped without npm provenance (manual `npm publish` due to an expired CI token). Permanent for that version. v1.0.1 ships with provenance via the `publish.yml` workflow.
 
 Retro: [retros/v1.0.md](retros/v1.0.md).
 
