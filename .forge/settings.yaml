@@ -8,7 +8,7 @@ tracker:
     team_id: b085748e-dd08-444b-9894-fb75a33f16a8
 secrets:
   manager: env_file
-  env_file_path: .env
+  env_file_path: .forge/.env
 agents:
   max_concurrent: 10
   retry_attempts: 10
