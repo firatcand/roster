@@ -1,0 +1,42 @@
+<!-- >>> forge-managed (do not edit between markers) >>> -->
+> This project uses [Forge](https://github.com/firatcand/forge). Before any work, read `.forge/CONTEXT.md`
+> for the methodology this project follows. If that file is missing, install Forge with:
+>
+> ```
+> npm install -g @firatcand/forge
+> forge upgrade
+> ```
+>
+> Note: `.forge/CONTEXT.md` is gitignored and regenerated per-developer by `forge upgrade`.
+<!-- <<< forge-managed <<< -->
+
+# roster
+
+`@firatcand/roster` — an npm CLI that installs/scaffolds the agent-team pattern
+across Claude Code, Codex CLI, and Gemini. Root `CLAUDE.md` is the full
+contributor guide; this file is the same context for Codex.
+
+## Stack
+- TypeScript, ESM, strict mode. No CommonJS.
+- Node `^22.18.0 || >=24.0.0`.
+- Build: `tsdown` → `bin/roster.js` (executable entry, gitignored).
+- Hand-rolled argv parsing (no commander/yargs) to keep the tarball small.
+
+## Commands (pnpm)
+- Build: `pnpm build`
+- Type check: `pnpm typecheck`
+- Test: `pnpm test`
+- Smoke (pack + install + init end-to-end): `pnpm smoke`
+- Scaffold-scripts regression: `pnpm test:scaffold-scripts`
+- **Phase gate before a PR:** `pnpm typecheck && pnpm build && pnpm test`
+  (add `pnpm test:scaffold-scripts` when the diff touches `templates/scaffold/scripts/`).
+
+## Conventions
+- File names: lowercase kebab-case.
+- No comments unless behavior is non-obvious. No docstrings.
+- No backwards-compat shims for removed code — delete it.
+- See root `CLAUDE.md` for the full contributor guide and `spec/` for the product spec.
+
+## Critical paths
+<!-- Files matching these patterns trigger /second-opinion auto-review on /ship -->
+See CRITICAL.md
