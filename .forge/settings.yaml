@@ -1,0 +1,22 @@
+version: 1
+project:
+  name: roster
+  description: npm CLI that installs and scaffolds the agent-team (Forge) pattern across Claude Code, Codex CLI, and Gemini
+tracker:
+  type: linear
+  config:
+    team_id: b085748e-dd08-444b-9894-fb75a33f16a8
+secrets:
+  manager: env_file
+  env_file_path: .env
+agents:
+  max_concurrent: 10
+  retry_attempts: 10
+  primary_host_cli: claude
+  review_host_cli: codex
+  enabled_root_files:
+    - claude
+    - codex
+    - gemini
+design:
+  mode: project_owned

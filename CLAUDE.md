@@ -1,10 +1,22 @@
+<!-- >>> forge-managed (do not edit between markers) >>> -->
+> This project uses [Forge](https://github.com/firatcand/forge). Before any work, read `.forge/CONTEXT.md`
+> for the methodology this project follows. If that file is missing, install Forge with:
+>
+> ```
+> npm install -g @firatcand/forge
+> forge upgrade
+> ```
+>
+> Note: `.forge/CONTEXT.md` is gitignored and regenerated per-developer by `forge upgrade`.
+<!-- <<< forge-managed <<< -->
+
 # roster — CLI Contributor Guide
 
 This repo builds and ships **`@firatcand/roster`**, an npm CLI that installs/scaffolds the agent-team pattern across Claude Code, Codex CLI, and Gemini. See `README.md` for the user-facing pitch; this file is for contributors working on the CLI itself.
 
 > **Working on Roster?** This file describes **Roster the product** — what it is, where things live, how it builds and ships.
 >
-> For the **Forge methodology** we use to build Roster (planning workflow, phase status, build conventions, Linear tracking, worktree/PR rules), see [`.forge/CLAUDE.md`](.forge/CLAUDE.md). Keep the two sets of rules separate so they do not bleed into each other.
+> For the **Forge methodology** we use to build Roster (principles, planning workflow, branch strategy, Linear-as-source-of-truth, worktree/PR rules), see [`.forge/CONTEXT.md`](.forge/CONTEXT.md). Keep the two sets of rules separate so they do not bleed into each other.
 
 ## Repo layout
 
@@ -23,8 +35,8 @@ agents/     Agent .md files shipped alongside skills (Claude Code only).
 test/       Node test runner specs + smoke.sh integration test.
 docs/       Public docs — HOWTO.md, ARCHITECTURE.md, API.md, roadmap.md, retros.
 .forge/     Forge methodology rules + worktree harness state (not shipped).
-spec/       Local-only PRD/SPEC/CONTEXT (gitignored — see .forge/CLAUDE.md).
-plans/      Local-only phases.yaml (gitignored — see .forge/CLAUDE.md).
+spec/       Local-only PRD/SPEC/CONTEXT (gitignored — see .forge/CONTEXT.md).
+plans/      Local-only phases.yaml (gitignored — see .forge/CONTEXT.md).
 ```
 
 **Shipped to npm** (verified via `npm pack --dry-run`): `bin/`, `lib/`, `skills/`, `agents/`, `templates/`, `README.md`, `LICENSE`. Allowlist is in `package.json` under `files`. `.forge/`, `spec/`, `plans/` never ship.
@@ -72,7 +84,7 @@ The Phase gate command (run before opening a PR): `pnpm typecheck && pnpm build 
 - Prefer hand-rolled argv parsing over commander/yargs to keep tarball small.
 - No comments unless behavior is non-obvious. No docstrings.
 
-(Build conventions — Linear IDs in commits, phase gates, worktree/PR rules, never auto-commit — live in [`.forge/CLAUDE.md`](.forge/CLAUDE.md). Roadmap is `docs/roadmap.md`; work items tracked in Linear under `ROS-*`.)
+(Build conventions — Linear IDs in commits, phase gates, worktree/PR rules, never auto-commit — live in [`.forge/CONTEXT.md`](.forge/CONTEXT.md). Roadmap is `docs/roadmap.md`; work items tracked in Linear under `ROS-*`.)
 
 ## Dogfooding
 
@@ -80,4 +92,4 @@ There is no in-repo agent-team workspace anymore. To exercise the workspace patt
 
 ## When in doubt
 
-Start here, then check [`.forge/CLAUDE.md`](.forge/CLAUDE.md) for build methodology and Linear/phase rules, then `README.md` and `docs/HOWTO.md`. If a CLI convention isn't clear, ask before guessing — this is going on npm and inconsistent UX propagates to everyone who installs it.
+Start here, then check [`.forge/CONTEXT.md`](.forge/CONTEXT.md) for build methodology and Linear/phase rules, then `README.md` and `docs/HOWTO.md`. If a CLI convention isn't clear, ask before guessing — this is going on npm and inconsistent UX propagates to everyone who installs it.

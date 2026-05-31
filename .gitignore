@@ -41,14 +41,10 @@ node_modules/
 /spec/
 /plans/
 
-# Forge harness state — worktrees and per-worktree task binding markers
-# (created by skills/pickup-task). Anchored to repo root so a nested
-# `templates/scaffold/.forge/` (if ever shipped) is not ignored.
-# Pattern uses `/*` (not `/`) so we can re-include `.forge/CLAUDE.md`
-# (the Forge methodology doc) below — gitignore can't re-include children
-# of a fully-ignored directory.
-/.forge/*
-!/.forge/CLAUDE.md
+# Forge harness state (worktrees, logs, regenerated CONTEXT.md/.version) is
+# ignored by the forge-managed block at the end of this file, which re-includes
+# the one tracked config file (.forge/settings.yaml). That block's `/.forge/*` is
+# anchored so a nested `templates/scaffold/.forge/` (if ever shipped) is not ignored.
 
 # Claude Code native worktrees (created by EnterWorktree). Anchored so a
 # nested `templates/scaffold/.claude/worktrees/` would not be ignored.
@@ -62,3 +58,14 @@ node_modules/
 # (users get their own docs/learnings/ when they scaffold), but our entries
 # are CLI-development specific and don't ship with the open-source repo.
 docs/learnings/
+
+# >>> forge-managed (do not edit between markers) >>>
+/.forge/*
+!/.forge/settings.yaml
+/.claude/skills/
+/.claude/agents/
+/.codex/skills/
+/.codex/agents/
+/.gemini/skills/
+/.gemini/agents/
+# <<< forge-managed <<<
