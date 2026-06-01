@@ -4,7 +4,6 @@ import chalk from 'chalk';
 import { scanPending, type PendingItem } from '../lib/pending.ts';
 import {
   EXIT_OK,
-  EXIT_ERROR,
   EXIT_CANCELLED,
   invalidFunctionError,
   notTtyForReviewError,

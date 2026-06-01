@@ -16,11 +16,6 @@
 
 import type { GuidedAgentFixture, GuidedSubagent, GuidedTool, GuidedPlan } from './fixture-schema.ts';
 
-// Stub date used in any boilerplate that needs a created/last_modified field.
-// Hardcoded for host-independence — the harness asserts render() output is
-// byte-identical across runs, so Date.now() at render time would flake CI.
-const STUB_DATE = '2026-01-01';
-
 // Indent every line of a multi-line value so it sits cleanly inside a YAML
 // block-scalar (`description: |`) or any other context that needs a stable
 // leading-whitespace prefix. Trailing whitespace is trimmed.
