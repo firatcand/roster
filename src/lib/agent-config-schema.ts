@@ -1,9 +1,12 @@
 import { readFileSync, realpathSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import YAML from 'yaml';
 
-const AGENT_RE = /^[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*$/;
+// Agent identity: a single kebab segment for top-level infra agents
+// (`dreamer`, `chief-of-staff`) OR `<function>/<agent>` for depth-2 agents
+// (`gtm/sdr`). ROS-169: top-level agents must load so doctor can audit them.
+const AGENT_RE = /^[a-z][a-z0-9-]*(\/[a-z][a-z0-9-]*)?$/;
 const ENV_VAR_RE = /^[A-Z][A-Z0-9_]*$/;
 
 // Literal absolute filesystem prefixes that must not appear in workspace-rooted
@@ -63,7 +66,9 @@ export type LoadAgentConfigResult =
 
 function isInsideRoot(root: string, p: string): boolean {
   const rel = relative(root, p);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  // Anchor on the separator: a real escape is '..' or starts with '..' + sep.
+  // A bare startsWith('..') would false-reject an in-root dir named e.g. '..foo'.
+  return rel === '' || (rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel));
 }
 
 export function loadAgentConfig(workspaceRoot: string, agentPath: string): LoadAgentConfigResult {
@@ -73,7 +78,7 @@ export function loadAgentConfig(workspaceRoot: string, agentPath: string): LoadA
       errors: [
         {
           kind: 'invalid-agent-path',
-          message: `agentPath '${agentPath}' must match '<function>/<agent>' with kebab-case segments`,
+          message: `agentPath '${agentPath}' must match '<agent>' or '<function>/<agent>' with kebab-case segments`,
         },
       ],
     };

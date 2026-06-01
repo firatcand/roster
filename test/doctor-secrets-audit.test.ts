@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  auditAgentEnvRefs,
   auditEnvKeyReferences,
   auditEnvPermissions,
   auditPromptLeak,
@@ -380,6 +381,72 @@ test('runSecretsAudit: prompt-leak warning does NOT flip ok', () => {
   } finally {
     cleanup();
     cleanupRoot();
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// auditAgentEnvRefs — tool env_var bindings vs resolved env (check 15)
+// ROS-169 follow-up: top-level infra agents (dreamer, chief-of-staff) live at
+// depth 1 and must be audited, not silently skipped.
+// ──────────────────────────────────────────────────────────────────────
+
+function writeConfig(cwd: string, agentRel: string, content: string): void {
+  const dir = join(cwd, agentRel);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'config.yaml'), content, 'utf8');
+}
+
+test('auditAgentEnvRefs: depth-2 agent missing required env_var → fail', () => {
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    writeConfig(
+      dir,
+      'gtm/sdr',
+      'agent: gtm/sdr\nplans_dir: ./plans/\ntools:\n  slack:\n    env_var: SLACK_BOT_TOKEN\n    required: true\n',
+    );
+    writeFileSync(join(dir, '.env'), '', 'utf8');
+    const r = auditAgentEnvRefs(dir);
+    assert.equal(r.status, 'fail');
+    assert.equal(r.errors[0]?.agent, 'gtm/sdr');
+    assert.equal(r.errors[0]?.key, 'SLACK_BOT_TOKEN');
+  } finally {
+    cleanup();
+  }
+});
+
+test('auditAgentEnvRefs: top-level dreamer missing required env_var → fail (ROS-169)', () => {
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    // Identical config to the gtm/sdr case but at depth 1. Before the AGENT_RE
+    // loosening this returned ok — the agent was silently skipped (fail-open).
+    writeConfig(
+      dir,
+      'dreamer',
+      'agent: dreamer\nplans_dir: ./plans/\ntools:\n  slack:\n    env_var: SLACK_BOT_TOKEN\n    required: true\n',
+    );
+    writeFileSync(join(dir, '.env'), '', 'utf8');
+    const r = auditAgentEnvRefs(dir);
+    assert.equal(r.status, 'fail', 'top-level agent must be audited, not skipped');
+    assert.equal(r.errors[0]?.agent, 'dreamer');
+    assert.equal(r.errors[0]?.key, 'SLACK_BOT_TOKEN');
+  } finally {
+    cleanup();
+  }
+});
+
+test('auditAgentEnvRefs: top-level dreamer with env_var set → ok', () => {
+  const { dir, cleanup } = makeTmpCwd();
+  try {
+    writeConfig(
+      dir,
+      'dreamer',
+      'agent: dreamer\nplans_dir: ./plans/\ntools:\n  slack:\n    env_var: SLACK_BOT_TOKEN\n    required: true\n',
+    );
+    writeFileSync(join(dir, '.env'), 'SLACK_BOT_TOKEN=xoxb-123\n', 'utf8');
+    const r = auditAgentEnvRefs(dir);
+    assert.equal(r.status, 'ok');
+  } finally {
+    cleanup();
   }
 });
 

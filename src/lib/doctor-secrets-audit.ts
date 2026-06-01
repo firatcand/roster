@@ -508,10 +508,9 @@ const AGENT_SEGMENT_RE = /^[a-z][a-z0-9-]*$/;
 // @internal — exported for tests.
 // Yields v1 agent identifiers: depth-1 bare segment (`dreamer`) when
 // `<top>/config.yaml` exists, OR depth-2 `<fn>/<agent>` when no top config
-// exists — never both, since top-level agents are leaves. Single-segment
-// paths flow into loadAgentConfig, which currently rejects them via AGENT_RE;
-// auditAgentEnvRefs then silently skips. Schema loosening is a deliberate
-// follow-up.
+// exists — never both, since top-level agents are leaves. Both shapes load
+// via loadAgentConfig (AGENT_RE accepts single- and double-segment paths since
+// ROS-169), so auditAgentEnvRefs audits top-level agents instead of skipping.
 export function listV1AgentPaths(cwd: string): string[] {
   const out: string[] = [];
   let topEntries: string[];
