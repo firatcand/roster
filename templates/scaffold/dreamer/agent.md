@@ -23,7 +23,7 @@ Read at runtime:
 - `dreamer/plans/<plan>.yaml` — the workflow recipe
 - `dreamer/state.md` — last processed cutoff and run summary
 - `dreamer/pending/` — queued candidates awaiting Slack approval
-- All `<function>/<agent>/projects/<project>/log/runs/` and `log/feedback/` for material since the cutoff
+- All `<function>/<agent>/logs/runs/` and `logs/feedback/` for material since the cutoff
 - Existing playbook lessons for evidence comparison
 
 ## Plans
