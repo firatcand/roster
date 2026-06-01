@@ -52,7 +52,7 @@ function renderClaudeHandoff(workspacePath: string, prompt: string, name: string
   return lines;
 }
 
-function renderCodexBanner(workspacePath: string, prompt: string, name: string, installMode: string, silent: boolean): string[] {
+function renderCodexBanner(workspacePath: string, name: string, installMode: string, silent: boolean): string[] {
   if (silent) return [];
   return [
     '',
@@ -130,7 +130,7 @@ export async function executeRun(opts: ScheduleRunOpts): Promise<ScheduleRunResu
   } else {
     codexPath = resolveCodexBinaryPath(env, opts.codexBinaryPathOverride);
   }
-  for (const line of renderCodexBanner(resolved.workspacePath, prompt, resolved.entry.name, resolved.entry.install_mode, opts.silent)) {
+  for (const line of renderCodexBanner(resolved.workspacePath, resolved.entry.name, resolved.entry.install_mode, opts.silent)) {
     console.log(line);
   }
 

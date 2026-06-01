@@ -61,11 +61,6 @@ const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'pending',
 ]);
 
-function tildify(path: string): string {
-  const home = homedir();
-  return path.startsWith(home) ? '~' + path.slice(home.length) : path;
-}
-
 // Display a path under home as `~/foo`; otherwise if it's under cwd, show
 // as `./foo` (workspace-local installs read better that way). Falls back
 // to the absolute path for unrelated locations.
