@@ -174,6 +174,11 @@ assert_contains .gitignore "# Roster defaults" ".gitignore has Roster defaults m
 # Use a recursive find so nested legacy paths (e.g. <function>/<agent>/projects)
 # also fail the assertion, not just a top-level projects/ dir.
 assert "-z \"\$(find . -type d -name projects)\"" "no projects/ dirs anywhere after init (v1 single-project shape)"
+# ROS-79 follow-up: also guard the prompt TEXT. v0.4 EXPERT/agent prompts pointed
+# agents at projects/<project>/... paths that do not exist in the v1 flat shape.
+# (The disabled bindings-prompt.sh historical note uses projects/<inst>/, which
+# this literal does not match — intentionally left as a migration record.)
+assert "-z \"\$(grep -rl 'projects/<project>/' . 2>/dev/null)\"" "no projects/<project>/ path residue in shipped prompts (v1 flat shape)"
 assert "-f config/project.yaml" "config/project.yaml ported (v1 identity)"
 # ROS-81: config/project.yaml must have substituted {{PROJECT_NAME}} + {{DISPLAY_NAME}}
 assert_contains config/project.yaml "name: my-test-workspace" "config/project.yaml name substituted"
