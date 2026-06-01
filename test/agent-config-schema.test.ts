@@ -90,8 +90,13 @@ test('schema — accepts empty tools mapping', () => {
   assert.equal(parsed.success, true);
 });
 
-test("schema — rejects agent missing the '/' separator", () => {
-  const parsed = agentConfigSchema.safeParse({ ...canonical, agent: 'gtm' });
+test('schema — accepts single-segment agent (top-level infra agent)', () => {
+  const parsed = agentConfigSchema.safeParse({ ...canonical, agent: 'dreamer' });
+  assert.equal(parsed.success, true);
+});
+
+test('schema — rejects agent with more than two segments', () => {
+  const parsed = agentConfigSchema.safeParse({ ...canonical, agent: 'gtm/sdr/extra' });
   assert.equal(parsed.success, false);
   if (!parsed.success) {
     assert.ok(parsed.error.issues.some((i) => i.path[0] === 'agent'));
@@ -195,7 +200,7 @@ test('loader — yaml parse error', () => {
 
 test('loader — schema reject surfaces zod issues', () => {
   const { root, cleanup } = makeWorkspace({
-    configContent: 'agent: not-a-valid-shape\nplans_dir: ./plans/\n',
+    configContent: 'agent: gtm/sdr/extra\nplans_dir: ./plans/\n',
   });
   try {
     const result = loadAgentConfig(root, 'gtm/sdr');
@@ -295,13 +300,42 @@ test('loader — rejects ref that escapes workspace via ..', () => {
 test('loader — rejects agentPath with invalid shape', () => {
   const { root, cleanup } = makeWorkspace();
   try {
-    for (const bad of ['gtm', 'Gtm/Sdr', '../../outside', 'gtm/sdr/extra', '', 'gtm/']) {
+    // 'gtm' (single segment) is NOT here — it is a valid top-level agent path
+    // since ROS-169 (see "accepts single-segment top-level agent" below).
+    for (const bad of ['Gtm/Sdr', '../../outside', 'gtm/sdr/extra', '', 'gtm/', '/gtm', 'gtm//sdr']) {
       const result = loadAgentConfig(root, bad);
       assert.equal(result.ok, false, `expected rejection for agentPath '${bad}'`);
       if (!result.ok) {
         assert.equal(result.errors[0]?.kind, 'invalid-agent-path');
       }
     }
+  } finally {
+    cleanup();
+  }
+});
+
+test('loader — accepts single-segment top-level agent (ROS-169)', () => {
+  const cfg = 'agent: dreamer\nplans_dir: ./plans/\n';
+  const { root, cleanup } = makeWorkspace({ configAt: 'dreamer', configContent: cfg });
+  try {
+    const result = loadAgentConfig(root, 'dreamer');
+    assert.equal(result.ok, true, `expected single-segment 'dreamer' to load; got ${JSON.stringify(result)}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('loader — in-root dir whose name begins with ".." is not treated as escaping', () => {
+  // path.relative(root, root/..foo/x.md) === '..foo/x.md', which a naive
+  // startsWith('..') check false-rejects even though ..foo/ is inside root.
+  const cfg = 'agent: gtm/sdr\nplans_dir: ./plans/\nguideline_refs:\n  voice: /..foo/voice.md\n';
+  const { root, cleanup } = makeWorkspace({
+    configContent: cfg,
+    files: ['..foo/voice.md'],
+  });
+  try {
+    const result = loadAgentConfig(root, 'gtm/sdr');
+    assert.equal(result.ok, true, `expected ..foo/ ref to resolve inside root; got ${JSON.stringify(result)}`);
   } finally {
     cleanup();
   }
