@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync } from 'node:fs';
-import { dirname, join, sep } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, unlinkSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
 export const MANIFEST_VERSION = 1;
@@ -119,14 +119,3 @@ export function decideFileAction(args: {
   return { kind: 'skip', reason: 'source-changed-since-last-migration', suggestForceResync: true };
 }
 
-export function isFile(p: string): boolean {
-  try {
-    return statSync(p).isFile();
-  } catch {
-    return false;
-  }
-}
-
-export function joinManifestPath(...segments: string[]): string {
-  return segments.join(sep);
-}

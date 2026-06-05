@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, chmodSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import type { MigrationPlan, ScheduleInstallCmd } from './plan.ts';
+import type { MigrationPlan } from './plan.ts';
 import {
   MANIFEST_VERSION,
   decideFileAction,
@@ -334,15 +334,4 @@ function dedupeEntries(entries: ReadonlyArray<ManifestFileEntry>): ManifestFileE
   return [...seen.values()].sort((a, b) => a.src.localeCompare(b.src));
 }
 
-// Re-export for command-level coordination
-export type ExecuteScheduleSummary = {
-  claudeReady: number;
-  codexBlocked: number;
-  unmapped: number;
-};
 
-export function summarizeSchedules(plan: MigrationPlan): ExecuteScheduleSummary {
-  const claudeReady = plan.scheduleInstalls.filter((s: ScheduleInstallCmd) => !s.blocked).length;
-  const codexBlocked = plan.scheduleInstalls.filter((s: ScheduleInstallCmd) => s.blocked).length;
-  return { claudeReady, codexBlocked, unmapped: plan.unmappedWrappers.length };
-}

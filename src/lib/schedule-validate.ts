@@ -8,9 +8,9 @@ import {
   type FieldError,
 } from './schedule-schema.ts';
 
-export type FileStatus = 'pass' | 'fail';
+type FileStatus = 'pass' | 'fail';
 
-export type FileReport = {
+type FileReport = {
   path: string;
   relativePath: string;
   status: FileStatus;

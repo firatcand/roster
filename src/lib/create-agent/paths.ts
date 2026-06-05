@@ -5,13 +5,13 @@
 
 const SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
-export function validateSlug(value: string, fieldName: string): void {
+function validateSlug(value: string, fieldName: string): void {
   if (!SLUG_RE.test(value)) {
     throw new Error(`${fieldName} must be lowercase-kebab-case, got: ${JSON.stringify(value)}`);
   }
 }
 
-export function agentRoot(fn: string, agent: string): string {
+function agentRoot(fn: string, agent: string): string {
   validateSlug(fn, 'fn');
   validateSlug(agent, 'agent');
   return `${fn}/${agent}`;

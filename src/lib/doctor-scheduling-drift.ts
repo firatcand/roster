@@ -18,7 +18,7 @@ import { detectStale, findMostRecentRun, readStateMd } from './schedule-state.ts
 // Crontab ↔ schedules.yaml drift (check 3)
 // =====================================================================
 
-export type DriftItem =
+type DriftItem =
   | { name: string; status: 'fail'; reason: 'registered-but-no-marker'; functionName: string }
   | { name: string; status: 'fail'; reason: 'cron-line-mismatch'; functionName: string; expected: string; actual: string }
   | { name: string; status: 'fail'; reason: 'orphan-marker-block' }
@@ -326,7 +326,7 @@ export function auditAltSkillPaths(opts: AltSkillPathOpts): AltSkillPathAudit {
 // Stale fires (ROS-42)
 // =====================================================================
 
-export type StaleFireItem =
+type StaleFireItem =
   | { name: string; functionName: string; status: 'ok'; reason: 'recent-run' | 'recent-fire' | 'never-fired-yet' }
   | { name: string; functionName: string; status: 'warn'; reason: 'missed-window'; expectedBeforeUtc: string }
   | { name: string; functionName: string; status: 'fail'; reason: 'failed-last-fire'; exitCode: number | null; firedAtUtc: string };

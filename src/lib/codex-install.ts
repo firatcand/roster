@@ -18,7 +18,6 @@ import { deriveScheduleName, buildOrchestratorPrompt } from './schedule-install.
 import {
   runCodexPreflight,
   type PreflightResult,
-  type PreflightFailure,
 } from './codex-preflight.ts';
 import {
   renderCronLine,
@@ -45,7 +44,7 @@ export type CodexInstallOpts = {
   codexBinaryPathOverride?: string;
 };
 
-export type CodexInstallAction = 'created' | 'updated' | 'noop-dry-run';
+type CodexInstallAction = 'created' | 'updated' | 'noop-dry-run';
 
 export type CodexInstallResult = {
   resolvedName: string;
@@ -63,7 +62,7 @@ export type CodexInstallResult = {
 
 const KEBAB_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
-export function renderCodexHandoffDoc(args: {
+function renderCodexHandoffDoc(args: {
   name: string;
   cron: string;
   workspacePath: string;
@@ -316,8 +315,3 @@ export function installCodexSchedule(opts: CodexInstallOpts): CodexInstallResult
   };
 }
 
-export function formatPreflightFailures(failures: PreflightFailure[]): string {
-  return failures
-    .map((f) => `  - [${f.check}] expected ${f.expected}, got ${f.actual}\n      → ${f.remedy}`)
-    .join('\n');
-}

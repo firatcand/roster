@@ -41,9 +41,9 @@ export const agentConfigSchema = z
   })
   .strict();
 
-export type AgentConfig = z.infer<typeof agentConfigSchema>;
+type AgentConfig = z.infer<typeof agentConfigSchema>;
 
-export type AgentConfigErrorKind =
+type AgentConfigErrorKind =
   | 'invalid-agent-path'
   | 'missing-file'
   | 'yaml-parse'
@@ -53,7 +53,7 @@ export type AgentConfigErrorKind =
   | 'ref-shape-mismatch'
   | 'ref-escapes-workspace';
 
-export type AgentConfigError = {
+type AgentConfigError = {
   kind: AgentConfigErrorKind;
   message: string;
   path?: string;

@@ -28,7 +28,7 @@ export interface AtomicFs {
   rmdir(path: string): Promise<void>;
 }
 
-export type AtomicOutcome = 'success' | 'rollback' | 'partial-slash-failure';
+type AtomicOutcome = 'success' | 'rollback' | 'partial-slash-failure';
 
 export interface AtomicWriteResult {
   outcome: AtomicOutcome;

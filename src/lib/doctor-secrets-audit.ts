@@ -49,7 +49,7 @@ export function auditEnvPermissions(cwd: string): EnvPermissionsResult {
 // Agent .env file permissions
 // =====================================================================
 
-export type AgentEnvPermItem =
+type AgentEnvPermItem =
   | { status: 'ok'; agentPath: string; envPath: string; mode: string }
   | {
       status: 'warn';
@@ -189,7 +189,7 @@ export function auditAgentEnvPermissions(cwd: string): AgentEnvPermResult {
 // .env key references in workspace YAML configs
 // =====================================================================
 
-export type EnvKeyReferenceItem = {
+type EnvKeyReferenceItem = {
   key: string;
   references: { file: string; line: number }[];
 };
@@ -325,7 +325,7 @@ export function auditEnvKeyReferences(cwd: string): EnvKeyReferenceResult {
 // Secret-literal scan of installed templates
 // =====================================================================
 
-export type TemplateSecretLiteralItem = {
+type TemplateSecretLiteralItem = {
   file: string;
   line: number;
   patternId: string;
@@ -421,7 +421,7 @@ export function auditTemplateSecretLiterals(rosterRoot: string): TemplateSecretL
 // Prompt-leak audit — warn, do not fail
 // =====================================================================
 
-export type PromptLeakItem = {
+type PromptLeakItem = {
   schedule: string;
   reference: string; // the literal $KEY form
   source: 'spec-doc';

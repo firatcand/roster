@@ -5,9 +5,9 @@ import { renderSkillFrontmatterContent } from './frontmatter.ts';
 import { renderCodexAgentToml, RosterAgentRenderError } from './agent-render.ts';
 
 export type ItemStatus = 'ok' | 'missing' | 'stale';
-export type ItemKind = 'skill' | 'agent';
+type ItemKind = 'skill' | 'agent';
 
-export type ItemAudit = {
+type ItemAudit = {
   kind: ItemKind;
   name: string;
   status: ItemStatus;

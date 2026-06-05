@@ -3,7 +3,7 @@ import { basename, join, relative, sep } from 'node:path';
 import { parseCrontab, type CrontabLine } from './crontab.ts';
 import { parseWrapperFile, type ParsedWrapper, type KnownAgentPath } from './wrapper.ts';
 
-export type SourceAgent = {
+type SourceAgent = {
   name: string;
   parentFunction: string | null;
   dirPath: string;
@@ -13,26 +13,26 @@ export type SourceAgent = {
   logsDir: string | null;
 };
 
-export type SourceProject = {
+type SourceProject = {
   name: string;
   dirPath: string;
   hasStateMd: boolean;
 };
 
-export type SourcePendingItem = {
+type SourcePendingItem = {
   agent: string;
   parentFunction: string | null;
   filePath: string;
   filename: string;
 };
 
-export type SourceLogTree = {
+type SourceLogTree = {
   agent: string;
   baseDir: string;
   monthDirs: ReadonlyArray<{ month: string; files: ReadonlyArray<string> }>;
 };
 
-export type SourceEnvInfo = {
+type SourceEnvInfo = {
   path: string;
   mode: number;
   exists: boolean;

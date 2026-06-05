@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 import chalk from 'chalk';
 import { RosterError, EXIT_ERROR } from './errors.ts';
 
-export type CrontabReadResult =
+type CrontabReadResult =
   | { ok: true; content: string }
   | { ok: false; reason: 'no-crontab'; content: '' }
   | { ok: false; reason: 'error'; message: string };

@@ -15,7 +15,7 @@ const WEEK_HOURS = 7 * 24;
 // not an invisible-in-source 0x1b byte (which makes regex-literal sources rot).
 const ANSI_SGR_RE = new RegExp('\\x1b\\[[0-9;]*m', 'g');
 
-export type EstimateRow = {
+type EstimateRow = {
   functionName: string;
   name: string;
   agent: string;

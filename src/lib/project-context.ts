@@ -301,7 +301,7 @@ export type SymlinkStatus =
   | 'is-directory'
   | 'unreadable';
 
-export type WorkspaceAuditItem = {
+type WorkspaceAuditItem = {
   name: string;
   status: SymlinkStatus;
   reason?: string;

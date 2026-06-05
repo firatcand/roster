@@ -1,8 +1,8 @@
 import { TOOL_VALUES, type ToolValue } from './schedule-schema.ts';
 
-export type ScheduleSubcommand = 'validate' | 'install' | 'list' | 'remove' | 'status' | 'run' | 'estimate-usage';
+type ScheduleSubcommand = 'validate' | 'install' | 'list' | 'remove' | 'status' | 'run' | 'estimate-usage';
 
-export const SCHEDULE_SUBCOMMANDS: ReadonlySet<ScheduleSubcommand> = new Set<ScheduleSubcommand>([
+const SCHEDULE_SUBCOMMANDS: ReadonlySet<ScheduleSubcommand> = new Set<ScheduleSubcommand>([
   'validate',
   'install',
   'list',
@@ -16,7 +16,7 @@ const SUBCOMMAND_LIST = Array.from(SCHEDULE_SUBCOMMANDS).join(' | ');
 const TOOL_LIST = TOOL_VALUES.join(' | ');
 
 export type ViaMode = 'cron';
-export const VIA_VALUES = ['cron'] as const;
+const VIA_VALUES = ['cron'] as const;
 const VIA_LIST = VIA_VALUES.join(' | ');
 
 export type ParsedScheduleArgs =

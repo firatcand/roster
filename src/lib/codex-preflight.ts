@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SubscriptionAttestation } from './schedule-schema.ts';
 
-export type PreflightCheck =
+type PreflightCheck =
   | 'auth_mode'
   | 'openai_api_key_in_auth'
   | 'env_codex_api_key'
