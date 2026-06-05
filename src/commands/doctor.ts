@@ -525,7 +525,8 @@ function renderSafetySection(audit: SafetyAuditResult): string[] {
   return lines;
 }
 
-function renderSecretsSection(audit: SecretsAuditResult): string[] {
+// @internal — exported for characterization tests (ROS-119).
+export function renderSecretsSection(audit: SecretsAuditResult): string[] {
   const env = audit.envPermissions;
   const agentEnv = audit.agentEnvPermissions;
   const refs = audit.envKeyReferences;
