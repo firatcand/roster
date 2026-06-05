@@ -4,6 +4,10 @@ Public view of what's shipped, what's deferred, and what's next. Detailed task t
 
 ## Released
 
+### v1.0.2 — 2026-06-05
+
+Second patch on the v1.0 line. Three correctness fixes from the post-1.0.1 code audit — chiefly a fail-open in the `roster doctor` secrets check (check 15 silently skipped top-level agents, so a `dreamer` with a required-but-unset secret returned green), plus removal of dead `projects/<project>/` path references from shipped agent prompts and a dead-code sweep with `noUnusedLocals`/`noUnusedParameters` now enforced. No behavior changes to install/init/schedule. Full changelog: [CHANGELOG.md](../CHANGELOG.md#102--2026-06-05).
+
 ### v1.0.1 — 2026-05-24
 
 First patch on top of v1.0.0. Headlined by an install-scope change: `roster install` now defaults to **workspace-local** install when run inside a roster workspace (`<workspace>/.claude/skills/`, etc.) instead of the home directory. Workspaces become self-contained; cross-project pollution and the slash-command shadow class of bug go away. Non-TTY contexts and `--yes` keep working with safe context-aware defaults. Plus four polish fixes from v1.0 dogfooding. Full changelog: [CHANGELOG.md](../CHANGELOG.md#101--2026-05-24).
