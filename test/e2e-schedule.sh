@@ -139,7 +139,7 @@ echo "===> 4. roster init workspace"
 cd "$WORKSPACE"
 HOME="$FAKE_HOME" PATH="$TEST_PATH" "$ROSTER_BIN" init my-e2e-workspace --silent --no-git
 assert "-f CLAUDE.md" "workspace CLAUDE.md exists"
-assert "-d gtm/sdr" "gtm/sdr/ scaffold exists"
+assert "-d gtm" "gtm/ function dir scaffolds (v1.0: empty function dir, no sdr/)"
 
 # ── 5. Install one Codex --via cron schedule ──────────────────────────────
 echo ""
@@ -159,7 +159,6 @@ HOME="$FAKE_HOME" \
   ROSTER_CODEX_PATH="$FAKE_CODEX" \
   "$ROSTER_BIN" schedule install \
     gtm/sdr cold-outreach \
-    --project _demo \
     --cron "0 9 * * 1-5" \
     --tool codex \
     --via cron \
