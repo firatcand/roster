@@ -6,7 +6,21 @@ Per-phase retrospectives live in [`docs/retros/`](docs/retros/) and carry the lo
 
 ## [Unreleased]
 
-_(empty — staging area for post-1.0.1 work)_
+_(empty — staging area for post-1.0.2 work)_
+
+## [1.0.2] — 2026-06-05
+
+Second patch on the v1.0 line. Three correctness fixes surfaced by the post-1.0.1 code audit — headlined by a fail-open in the `roster doctor` secrets check — plus a dead-code sweep. No behavior changes to the install/init/schedule surface.
+
+### Fixed
+
+- **`roster doctor` no longer passes green when a top-level agent has a required secret unbound.** Doctor check 15 (`auditAgentEnvRefs`) silently skipped top-level agents (`dreamer`, `chief-of-staff`): its path matcher required a two-segment `<function>/<agent>` shape, so a top-level `dreamer/config.yaml` declaring a **required** tool env var (e.g. `SLACK_BOT_TOKEN`) with that var unset returned **ok** — a fail-open in a secrets check. The identical config at `gtm/sdr` correctly failed. The matcher now accepts a single kebab segment **or** `<fn>/<agent>`, and the in-root path guard anchors on the path separator (an in-root dir named e.g. `..foo` is no longer false-rejected). The check had zero tests before; added top-level-fail regression + depth-2 retention + loader cases. (ROS-112)
+- **Shipped agent prompts no longer point at nonexistent `projects/<project>/` paths.** Four `EXPERT.md` files and `dreamer/agent.md` still told agents to read/write `projects/<project>/guidelines/`, `…/CLAUDE.md`, `…/state.md`, and `<fn>/<agent>/projects/<project>/log/runs/` — paths that don't exist in the v1.0 flat workspace shape. Since `templates/` ships in the tarball, agents following those prompts were sent to dead paths. Remapped to `guidelines/`, `config/project.yaml`, `state.md`, and `<fn>/<agent>/logs/runs/`; `smoke.sh` now asserts no literal `projects/<project>/` survives an init. (ROS-113)
+
+### Internal
+
+- Removed five dead symbols flagged by `tsc --noUnusedLocals --noUnusedParameters` (`tildify`, an unused `EXIT_ERROR` import, `STUB_DATE`, an unused `prompt` param + call-site arg, an unused `existsSync` import) and enabled both flags in `tsconfig.json`, so `pnpm typecheck` now fails on any new unused local/param/import — the class can't silently reaccumulate. (ROS-114)
+- Migrated the repo's own build methodology onto Forge 0.3.0: `.forge/.env`-scoped secrets, `.envrc`/direnv auto-load, canonical forge-managed CLAUDE.md banner. Internal-only — `.forge/` is not in the npm tarball, so this changes nothing for installed users. (#197–#200)
 
 ## [1.0.1] — 2026-05-24
 
