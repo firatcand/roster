@@ -134,8 +134,8 @@ const retryPolicySchema = z
   .strict();
 
 export const TOOL_VALUES = ['claude', 'codex'] as const;
-export const INSTALL_MODE_VALUES = ['ui-handoff', 'via-cron'] as const;
-export const INSTALL_STATUS_VALUES = ['pending-ui-install', 'installed'] as const;
+const INSTALL_MODE_VALUES = ['ui-handoff', 'via-cron'] as const;
+const INSTALL_STATUS_VALUES = ['pending-ui-install', 'installed'] as const;
 
 const subscriptionAttestationSchema = z
   .object({
@@ -257,8 +257,6 @@ export const scheduleEntrySchema = z.preprocess(
 export type ScheduleEntry = z.infer<typeof scheduleEntrySchema>;
 export type ToolValue = (typeof TOOL_VALUES)[number];
 export type InstallModeValue = (typeof INSTALL_MODE_VALUES)[number];
-export type InstallStatusValue = (typeof INSTALL_STATUS_VALUES)[number];
-
 export const scheduleFileSchema = z
   .object({
     version: z
@@ -270,8 +268,6 @@ export const scheduleFileSchema = z
     schedules: z.array(scheduleEntrySchema),
   })
   .strict();
-
-export type ScheduleFile = z.infer<typeof scheduleFileSchema>;
 
 export type FieldError = {
   path: string;

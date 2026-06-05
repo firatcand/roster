@@ -6,7 +6,7 @@ import { scheduleEntrySchema, type ScheduleEntry } from './schedule-schema.ts';
 import { findMostRecentRun, readStateMd, type StateLine } from './schedule-state.ts';
 import { nextFireTime } from './cron-next.ts';
 
-export type ScheduleRow = {
+type ScheduleRow = {
   functionName: string;
   entry: ScheduleEntry;
   lastRun: StateLine | undefined;

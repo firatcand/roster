@@ -20,7 +20,7 @@ export type ClaudeInstallOpts = {
   dryRun: boolean;
 };
 
-export type ClaudeInstallAction = 'created' | 'updated' | 'noop-dry-run';
+type ClaudeInstallAction = 'created' | 'updated' | 'noop-dry-run';
 
 export type ClaudeInstallResult = {
   resolvedName: string;
@@ -101,7 +101,7 @@ export function renderFieldsDoc(args: {
   ].join('\n');
 }
 
-export function renderHandoffMessage(args: {
+function renderHandoffMessage(args: {
   name: string;
   fieldsDocPath: string;
   cron: string;

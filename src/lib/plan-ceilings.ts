@@ -28,7 +28,7 @@ const planCeilingsFileSchema = z
   })
   .strict();
 
-export type PlanCeiling = z.infer<typeof planCeilingSchema> & { id: string };
+type PlanCeiling = z.infer<typeof planCeilingSchema> & { id: string };
 export type PlanCeilings = ReadonlyArray<PlanCeiling>;
 
 const DEFAULT_PATH = resolve(ROSTER_ROOT, 'data', 'plan-ceilings.yaml');

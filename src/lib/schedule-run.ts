@@ -7,7 +7,7 @@ import { resolveCodexBinaryPath } from './codex-cron.ts';
 import { runCodexPreflight } from './codex-preflight.ts';
 import { codexPreflightError } from './errors.ts';
 
-export type SpawnFn = (cmd: string, args: ReadonlyArray<string>, options?: SpawnOptions) => ChildProcess;
+type SpawnFn = (cmd: string, args: ReadonlyArray<string>, options?: SpawnOptions) => ChildProcess;
 
 export type ScheduleRunOpts = {
   cwd: string;

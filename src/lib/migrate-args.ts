@@ -1,6 +1,6 @@
-export type MigrateSubcommand = 'from-agent-team';
+type MigrateSubcommand = 'from-agent-team';
 
-export const MIGRATE_SUBCOMMANDS: ReadonlySet<MigrateSubcommand> = new Set<MigrateSubcommand>([
+const MIGRATE_SUBCOMMANDS: ReadonlySet<MigrateSubcommand> = new Set<MigrateSubcommand>([
   'from-agent-team',
 ]);
 

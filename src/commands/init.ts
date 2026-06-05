@@ -34,7 +34,7 @@ export type InitOptions = {
   platform?: string;
 };
 
-export type InitStatus = 'ok' | 'cancelled';
+type InitStatus = 'ok' | 'cancelled';
 
 export type InitResult = {
   status: InitStatus;

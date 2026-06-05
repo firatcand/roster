@@ -53,7 +53,7 @@ export type DoctorOptions = {
 // scope causes Claude Code to resolve to the user-scope copy, silently
 // shadowing the workspace skill. Detect by listing the user-skill dir and
 // the workspace-skill dir; intersect names per tool.
-export type ShadowCollision = {
+type ShadowCollision = {
   tool: ToolKey;
   skillName: string;
   userPath: string;
@@ -71,7 +71,7 @@ function listSkillDirNames(target: string): string[] {
   }
 }
 
-export function detectShadowCollisions(workspaceRoot: string): ShadowCollision[] {
+function detectShadowCollisions(workspaceRoot: string): ShadowCollision[] {
   const collisions: ShadowCollision[] = [];
   for (const userTool of allTools()) {
     const projectTool = toolForScope(userTool, 'project', workspaceRoot);
@@ -183,7 +183,7 @@ function renderWorkspaceSection(audit: WorkspaceAuditResult): string[] {
 //     config. The roster-orchestrator skill (ROS-32) injects the agent persona
 //     at runtime via `-c developer_instructions=…` reading <name>.persona.md
 //     from ~/.codex/agents/. Remove this notice when openai/codex#19399 closes.
-export type Workaround = {
+type Workaround = {
   id: string;
   toolKey: ToolKey;
   status: 'active';
@@ -224,7 +224,7 @@ export type FixOutcome = {
   failed: Array<{ what: string; error: string }>;
 };
 
-export const NO_FIX_REQUESTED: FixOutcome = Object.freeze({
+const NO_FIX_REQUESTED: FixOutcome = Object.freeze({
   applied: false,
   fixed: [],
   failed: [],

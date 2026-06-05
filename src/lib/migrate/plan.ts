@@ -1,9 +1,9 @@
-import { basename, join, relative } from 'node:path';
+import { basename, join } from 'node:path';
 import type { SourceModel, CronWrapperPair, ScanWarning } from './scan.ts';
 import { mapWrapperToAgentPlan } from './wrapper.ts';
 import { shellEscape } from '../shell-escape.ts';
 
-export type ScheduleInstallCmd = {
+type ScheduleInstallCmd = {
   function: string;
   agent: string;
   plan: string;
@@ -17,32 +17,32 @@ export type ScheduleInstallCmd = {
   rendered: string;
 };
 
-export type FileMove = {
+type FileMove = {
   srcPath: string;
   destPath: string;
   destFunction: string;
   destAgent: string;
 };
 
-export type DirCopy = {
+type DirCopy = {
   srcDir: string;
   destDir: string;
   files: ReadonlyArray<{ relSrc: string; absSrc: string }>;
 };
 
-export type PlanBlocker =
+type PlanBlocker =
   | { kind: 'env-too-open'; envPath: string; mode: number }
   | { kind: 'dest-not-initialized'; destDir: string }
   | { kind: 'source-is-roster'; sourceDir: string };
 
-export type ManualStep = { description: string; commandHint?: string };
+type ManualStep = { description: string; commandHint?: string };
 
-export type AgentMdNote = {
+type AgentMdNote = {
   agentName: string;
   agentDirRel: string;
 };
 
-export type UnmappedWrapper = {
+type UnmappedWrapper = {
   basename: string;
   wrapperPath: string;
   cron: string;
@@ -256,14 +256,3 @@ export function planMigration(model: SourceModel, opts: PlanOptions): MigrationP
   };
 }
 
-export function relativizePlanPaths(plan: MigrationPlan): {
-  pendingDestRel: ReadonlyArray<string>;
-  logDestDirsRel: ReadonlyArray<string>;
-  envDestRel: string | null;
-} {
-  return {
-    pendingDestRel: plan.pendingMoves.map((m) => relative(plan.destWorkspace, m.destPath)),
-    logDestDirsRel: plan.logCopies.map((c) => relative(plan.destWorkspace, c.destDir)),
-    envDestRel: plan.envCopy ? relative(plan.destWorkspace, plan.envCopy.dest) : null,
-  };
-}

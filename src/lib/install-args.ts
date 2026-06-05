@@ -1,9 +1,9 @@
 import type { ToolKey } from './tools.ts';
 import type { Scope } from './install-scope.ts';
 
-export const KNOWN_TOOL_KEYS: readonly ToolKey[] = ['claude', 'codex', 'gemini'];
+const KNOWN_TOOL_KEYS: readonly ToolKey[] = ['claude', 'codex', 'gemini'];
 
-export type InstallTarget =
+type InstallTarget =
   | { mode: 'all' }
   | { mode: 'tools'; keys: ToolKey[] }
   | { mode: 'interactive' };

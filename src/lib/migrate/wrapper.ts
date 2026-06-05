@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
-export type WrapperKind = 'claude' | 'codex' | 'unknown';
+type WrapperKind = 'claude' | 'codex' | 'unknown';
 
 export type ParsedWrapper = {
   wrapperPath: string;

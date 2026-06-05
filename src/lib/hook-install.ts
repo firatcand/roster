@@ -49,7 +49,7 @@ function codexHome(): string {
   return process.env['ROSTER_CODEX_HOME'] ?? join(homedir(), '.codex');
 }
 
-export function hostHomeFor(host: HookHost): string {
+function hostHomeFor(host: HookHost): string {
   return host === 'claude' ? claudeHome() : codexHome();
 }
 
