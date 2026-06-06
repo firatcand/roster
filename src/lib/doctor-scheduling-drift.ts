@@ -1,6 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync, type Stats } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
-import YAML from 'yaml';
 import {
   defaultCrontabIO,
   findMarkerBlocks,
@@ -9,7 +8,7 @@ import {
   resolveCodexBinaryPath,
   type CrontabIO,
 } from './codex-cron.ts';
-import { scheduleFileSchema, type ScheduleEntry } from './schedule-schema.ts';
+import { loadSchedules } from './schedule-read.ts';
 import { buildOrchestratorPrompt } from './schedule-install.ts';
 import { exitPathFor, eventsPathFor, logPathFor, readExitRecord } from './cron-exit-log.ts';
 import { detectStale, findMostRecentRun, readStateMd } from './schedule-state.ts';
@@ -29,54 +28,6 @@ export type CronDriftAudit = {
   items: DriftItem[];
   crontabReason?: string;
 };
-
-type LoadedEntry = {
-  entry: ScheduleEntry;
-  functionName: string;
-};
-
-function loadCodexViaCronEntries(cwd: string): LoadedEntry[] {
-  const root = join(cwd, 'roster');
-  let fns: string[];
-  try {
-    fns = readdirSync(root);
-  } catch {
-    return [];
-  }
-
-  const out: LoadedEntry[] = [];
-  for (const fn of fns) {
-    const fnDir = join(root, fn);
-    let st: Stats;
-    try {
-      st = statSync(fnDir);
-    } catch {
-      continue;
-    }
-    if (!st.isDirectory()) continue;
-    const schedulesPath = join(fnDir, 'schedules.yaml');
-    let raw: string;
-    try {
-      raw = readFileSync(schedulesPath, 'utf8');
-    } catch {
-      continue;
-    }
-    let parsed: unknown;
-    try {
-      parsed = YAML.parse(raw);
-    } catch {
-      continue;
-    }
-    const valid = scheduleFileSchema.safeParse(parsed);
-    if (!valid.success) continue;
-    for (const entry of valid.data.schedules) {
-      if (entry.tool === 'codex' && entry.install_mode === 'via-cron') {
-        out.push({ entry, functionName: fn });
-      }
-    }
-  }
-  return out;
-}
 
 // Scan crontab content for all roster-managed marker block names.
 // Mirrors the markerBegin format `# roster:schedule:<name>:begin (...)`.
@@ -129,7 +80,9 @@ export function auditCronDrift(opts: CronDriftOpts): CronDriftAudit {
     }
   })();
 
-  const entries = loadCodexViaCronEntries(opts.cwd);
+  const entries = loadSchedules(opts.cwd, {
+    filter: (e) => e.tool === 'codex' && e.install_mode === 'via-cron',
+  });
   // No codex via-cron entries registered → no drift possible; skip.
   if (entries.length === 0) {
     return { status: 'ok', items: [] };
@@ -345,46 +298,6 @@ export type StaleFireAuditOpts = {
 
 const DEFAULT_GRACE_MINUTES = 120;
 
-function loadAllSchedules(cwd: string): Array<{ entry: ScheduleEntry; functionName: string }> {
-  const rosterDir = join(cwd, 'roster');
-  let fns: string[];
-  try {
-    fns = readdirSync(rosterDir);
-  } catch {
-    return [];
-  }
-  const out: Array<{ entry: ScheduleEntry; functionName: string }> = [];
-  for (const fn of fns.sort()) {
-    const fnDir = join(rosterDir, fn);
-    let st: Stats;
-    try {
-      st = statSync(fnDir);
-    } catch {
-      continue;
-    }
-    if (!st.isDirectory()) continue;
-    const yamlPath = join(fnDir, 'schedules.yaml');
-    let raw: string;
-    try {
-      raw = readFileSync(yamlPath, 'utf8');
-    } catch {
-      continue;
-    }
-    let parsed: unknown;
-    try {
-      parsed = YAML.parse(raw);
-    } catch {
-      continue;
-    }
-    const valid = scheduleFileSchema.safeParse(parsed);
-    if (!valid.success) continue;
-    for (const entry of valid.data.schedules) {
-      out.push({ entry, functionName: fn });
-    }
-  }
-  return out;
-}
-
 export function auditStaleFires(opts: StaleFireAuditOpts): StaleFireAudit {
   const cwd = opts.cwd;
   const now = opts.now ?? new Date();
@@ -400,7 +313,7 @@ export function auditStaleFires(opts: StaleFireAuditOpts): StaleFireAudit {
   }
 
   const items: StaleFireItem[] = [];
-  for (const { entry, functionName } of loadAllSchedules(cwd)) {
+  for (const { entry, functionName } of loadSchedules(cwd, { sort: true })) {
     const state = stateFor(functionName);
     const lastRun = findMostRecentRun(state.lines, functionName, entry.agent, entry.plan);
 
