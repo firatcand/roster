@@ -1,10 +1,9 @@
-import { readdirSync, statSync, existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import YAML from 'yaml';
 import chalk from 'chalk';
-import { scheduleEntrySchema, type ScheduleEntry } from './schedule-schema.ts';
+import { type ScheduleEntry } from './schedule-schema.ts';
 import { findMostRecentRun, readStateMd, type StateLine } from './schedule-state.ts';
 import { nextFireTime } from './cron-next.ts';
+import { listFunctionDirs, readScheduleEntries } from './schedule-read.ts';
 
 type ScheduleRow = {
   functionName: string;
@@ -19,82 +18,13 @@ export type ListReport = {
   warnings: string[];
 };
 
-function listFunctionDirs(workspacePath: string): string[] {
-  const rosterDir = join(workspacePath, 'roster');
-  if (!existsSync(rosterDir)) return [];
-  let entries: string[];
-  try {
-    entries = readdirSync(rosterDir);
-  } catch {
-    return [];
-  }
-  const out: string[] = [];
-  for (const name of entries) {
-    const full = join(rosterDir, name);
-    try {
-      if (statSync(full).isDirectory()) out.push(name);
-    } catch {
-      // skip
-    }
-  }
-  return out.sort();
-}
-
-function readSchedulesFile(
-  workspacePath: string,
-  functionName: string,
-  warnings: string[],
-): ScheduleEntry[] {
-  const path = join(workspacePath, 'roster', functionName, 'schedules.yaml');
-  if (!existsSync(path)) return [];
-
-  let content: string;
-  try {
-    content = readFileSync(path, 'utf8');
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    warnings.push(`roster/${functionName}/schedules.yaml: cannot read (${e.code ?? e.message})`);
-    return [];
-  }
-
-  if (content.trim().length === 0) return [];
-
-  const doc = YAML.parseDocument(content);
-  if (doc.errors.length > 0) {
-    warnings.push(
-      `roster/${functionName}/schedules.yaml: malformed (${doc.errors[0]!.message}) — run \`roster schedule validate\``,
-    );
-    return [];
-  }
-
-  const data = doc.toJS();
-  if (typeof data !== 'object' || data === null || !Array.isArray((data as { schedules?: unknown }).schedules)) {
-    warnings.push(`roster/${functionName}/schedules.yaml: missing 'schedules:' list`);
-    return [];
-  }
-
-  const out: ScheduleEntry[] = [];
-  const entries = (data as { schedules: unknown[] }).schedules;
-  for (let i = 0; i < entries.length; i++) {
-    const parsed = scheduleEntrySchema.safeParse(entries[i]);
-    if (parsed.success) {
-      out.push(parsed.data);
-    } else {
-      warnings.push(
-        `roster/${functionName}/schedules.yaml[${i}]: invalid (${parsed.error.issues[0]?.message ?? 'schema error'}) — run \`roster schedule validate\``,
-      );
-    }
-  }
-  return out;
-}
-
 export function buildListReport(cwd: string, now: Date = new Date()): ListReport {
   const workspacePath = resolve(cwd);
   const warnings: string[] = [];
   const rows: ScheduleRow[] = [];
 
   for (const functionName of listFunctionDirs(workspacePath)) {
-    const entries = readSchedulesFile(workspacePath, functionName, warnings);
+    const entries = readScheduleEntries(workspacePath, functionName, warnings);
     if (entries.length === 0) continue;
 
     const stateMdPath = join(workspacePath, 'roster', functionName, 'state.md');
