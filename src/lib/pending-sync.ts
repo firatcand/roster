@@ -1,9 +1,8 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import YAML from 'yaml';
 import { atomicWriteFile } from './schedule-yaml.ts';
-import { scheduleFileSchema, type ScheduleEntry } from './schedule-schema.ts';
+import { loadSchedules, type LoadedSchedule } from './schedule-read.ts';
 import {
   exitPathFor,
   logPathFor,
@@ -44,11 +43,6 @@ export type PendingSyncOpts = {
   dryRun?: boolean;
 };
 
-type LoadedSchedule = {
-  entry: ScheduleEntry;
-  functionName: string;
-};
-
 function listFunctionDirs(rosterDir: string): string[] {
   try {
     return readdirSync(rosterDir, { withFileTypes: true })
@@ -58,32 +52,6 @@ function listFunctionDirs(rosterDir: string): string[] {
   } catch {
     return [];
   }
-}
-
-function loadAllSchedules(cwd: string): LoadedSchedule[] {
-  const rosterRoot = join(cwd, 'roster');
-  const out: LoadedSchedule[] = [];
-  for (const fn of listFunctionDirs(rosterRoot)) {
-    const yamlPath = join(rosterRoot, fn, 'schedules.yaml');
-    let raw: string;
-    try {
-      raw = readFileSync(yamlPath, 'utf8');
-    } catch {
-      continue;
-    }
-    let parsed: unknown;
-    try {
-      parsed = YAML.parse(raw);
-    } catch {
-      continue;
-    }
-    const valid = scheduleFileSchema.safeParse(parsed);
-    if (!valid.success) continue;
-    for (const entry of valid.data.schedules) {
-      out.push({ entry, functionName: fn });
-    }
-  }
-  return out;
 }
 
 // Deterministic short id. We don't need cryptographic strength — just enough
@@ -201,7 +169,7 @@ export function syncPending(opts: PendingSyncOpts): PendingSyncResult {
 
   const written: PendingSyncResult['written'] = [];
   const skipped: PendingSyncResult['skipped'] = [];
-  const schedules = loadAllSchedules(cwd);
+  const schedules = loadSchedules(cwd, { sort: true });
   let inspected = 0;
 
   // Cache state.md per function to avoid re-reading on every schedule.

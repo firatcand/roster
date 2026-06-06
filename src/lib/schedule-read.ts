@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import YAML from 'yaml';
-import { scheduleEntrySchema, type ScheduleEntry } from './schedule-schema.ts';
+import { scheduleEntrySchema, scheduleFileSchema, type ScheduleEntry } from './schedule-schema.ts';
 
 // Shared schedule-reading helpers (ROS-121). Consolidates copies that lived in
 // schedule-list.ts and schedule-resolve.ts.
@@ -82,6 +82,59 @@ export function readScheduleEntries(
       warnings?.push(
         `roster/${functionName}/schedules.yaml[${i}]: invalid (${parsed.error.issues[0]?.message ?? 'schema error'}) — run \`roster schedule validate\``,
       );
+    }
+  }
+  return out;
+}
+
+export type LoadedSchedule = { entry: ScheduleEntry; functionName: string };
+
+// Load + whole-file-validate (scheduleFileSchema) every schedule across
+// roster/<fn>/schedules.yaml. Distinct from readScheduleEntries (which is
+// per-entry + lenient + warning-collecting): this requires a valid file
+// (version + shape) and silently skips a function whose file is missing /
+// unreadable / malformed / schema-invalid. With `sort`, function dirs are
+// visited in sorted (deterministic) order; without it, in raw readdir order.
+// `filter` narrows which entries are kept.
+export function loadSchedules(
+  cwd: string,
+  opts: { sort?: boolean; filter?: (entry: ScheduleEntry) => boolean } = {},
+): LoadedSchedule[] {
+  const root = join(cwd, 'roster');
+  let fns: string[];
+  try {
+    fns = readdirSync(root);
+  } catch {
+    return [];
+  }
+  if (opts.sort) fns = fns.sort();
+
+  const out: LoadedSchedule[] = [];
+  for (const fn of fns) {
+    const fnDir = join(root, fn);
+    try {
+      if (!statSync(fnDir).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    let raw: string;
+    try {
+      raw = readFileSync(join(fnDir, 'schedules.yaml'), 'utf8');
+    } catch {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = YAML.parse(raw);
+    } catch {
+      continue;
+    }
+    const valid = scheduleFileSchema.safeParse(parsed);
+    if (!valid.success) continue;
+    for (const entry of valid.data.schedules) {
+      if (!opts.filter || opts.filter(entry)) {
+        out.push({ entry, functionName: fn });
+      }
     }
   }
   return out;
