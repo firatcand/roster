@@ -62,6 +62,8 @@ claude                                # or `codex`, or open Cursor
 /chief-of-staff create-agent gtm sdr
 ```
 
+Using 1Password or Infisical? Compose them with the `.env` model via the recipes in [docs/SECRETS.md](docs/SECRETS.md) — no native integration needed.
+
 `roster install` lands skills + agents under `<workspace>/.claude/`, `<workspace>/.codex/`, and/or `<workspace>/.gemini/` — workspace-local, self-contained, no cross-project pollution. The guided dialogue then reads your `config/project.yaml` + `guidelines/` and interviews you for the gaps a stub can't fill — subagents, tools, plan names, failure modes — then writes a populated `agent.md`. Worked example in [docs/HOWTO.md](docs/HOWTO.md).
 
 ### Common commands
