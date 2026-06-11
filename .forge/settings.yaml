@@ -20,3 +20,11 @@ agents:
     - gemini
 design:
   mode: project_owned
+codex:
+  auto_codex_enabled: true
+  auto_codex_token_cap: 50000
+decisions:
+  decision_dir: ./spec/decisions
+  stale_draft_threshold_days: 7
+doctor:
+  spec_code_check_enabled: true
