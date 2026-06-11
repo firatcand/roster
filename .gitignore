@@ -62,6 +62,7 @@ docs/learnings/
 # >>> forge-managed (do not edit between markers) >>>
 /.forge/*
 !/.forge/settings.yaml
+/.forge.eject-backup-*/
 /.claude/skills/
 /.claude/agents/
 /.codex/skills/
