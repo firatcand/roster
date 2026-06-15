@@ -6,7 +6,9 @@ Per-phase retrospectives live in [`docs/retros/`](docs/retros/) and carry the lo
 
 ## [Unreleased]
 
-_(empty — staging area for post-1.0.2 work)_
+### Added
+
+- **Opt-in founder-skills manifest + project-local sync.** A workspace can declare which skills from [`firatcand/founder-skills`](https://github.com/firatcand/founder-skills) it depends on in a `founder-skills.yaml` at the workspace root; with no manifest, roster installs zero founder skills (clean opt-in). `roster skills sync` (also run automatically by `roster install` at project scope) installs each declared skill **project-local** — Claude Code into `.claude/skills/`, Codex into `.agents/skills/` — never globally, by wrapping the existing `npx skills` installer. Skills are pinned to an exact git ref via a per-skill `tree/<ref>/<skill>` GitHub URL and materialized with `--copy`; a `founder-skills.lock` records the resolved ref + content hash for reproducible re-syncs. Sync is a **full reconcile**: a skill dropped from the manifest is pruned from each tool target (roster only ever deletes skills it previously installed, tracked via the lockfile). `roster skills update --latest` bumps pinned refs to the newest tags and rewrites the manifest. `roster doctor` gains a fail-loud drift check (manifest ↔ lock ↔ installed: missing, orphaned, ref/hash mismatch, malformed frontmatter, source mismatch) that exits non-zero on a real gap. Gemini is deferred for v1. (ROS-125)
 
 ## [1.0.2] — 2026-06-05
 

@@ -31,6 +31,10 @@ import {
   executeScheduleEstimateUsage,
 } from '../commands/schedule.ts';
 import { executeReview } from '../commands/review.ts';
+import { executeSkillsSync, executeSkillsUpdate, renderSyncResult } from '../commands/skills.ts';
+import { parseSkillsArgs } from '../lib/skills-args.ts';
+import { syncFounderSkills } from '../lib/founder-skills/sync.ts';
+import { realInstaller } from '../lib/founder-skills/installer.ts';
 import { executeHooksInstall } from '../commands/hooks.ts';
 import { executeMigrateFromAgentTeam } from '../commands/migrate.ts';
 import {
@@ -49,7 +53,7 @@ import {
   workspaceRequiredError,
 } from '../lib/errors.ts';
 
-type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'hooks' | 'migrate' | 'pending';
+type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'hooks' | 'migrate' | 'pending' | 'skills';
 const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'install',
   'init',
@@ -59,6 +63,7 @@ const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'hooks',
   'migrate',
   'pending',
+  'skills',
 ]);
 
 // Display a path under home as `~/foo`; otherwise if it's under cwd, show
@@ -94,6 +99,8 @@ function printHelp(version: string): void {
     `  roster schedule run NAME     ${chalk.dim('Manually fire a schedule (Claude: print prompt; Codex: spawn)')}`,
     `  roster schedule remove NAME  ${chalk.dim('Remove a schedule (strips crontab block if --via cron)')}`,
     `  roster schedule estimate-usage  ${chalk.dim('Estimate plan-message consumption per schedule')}`,
+    `  roster skills sync           ${chalk.dim('Install founder-skills declared in founder-skills.yaml (project-local)')}`,
+    `  roster skills update [--latest]  ${chalk.dim('Re-sync to the lockfile, or bump pinned refs to newest tags')}`,
     `  roster review [function]     ${chalk.dim('Walk roster/*/pending/ HITL items interactively')}`,
     `  roster pending sync          ${chalk.dim('Synthesize HITL items from failed-fire signals (.exit + STALE)')}`,
     `  roster hooks install         ${chalk.dim('Install SessionStart banner hooks for Claude + Codex')}`,
@@ -318,6 +325,17 @@ async function runInstall(args: readonly string[]): Promise<number> {
     if (!silent) console.log(summarizeInstall(scopedTool, result, cwd));
   }
 
+  // Auto-sync founder-skills when a workspace declares them. Project-scope only:
+  // founder-skills are always project-local (never global), so a user-scope
+  // install must not touch them. A hard sync failure surfaces (non-zero) rather
+  // than silently leaving the workspace half-provisioned.
+  if (scope === 'project') {
+    const syncResult = await syncFounderSkills({ cwd, installer: realInstaller });
+    if (!silent && syncResult.status !== 'no-manifest') {
+      console.log(renderSyncResult(syncResult).join('\n'));
+    }
+  }
+
   if (!silent) {
     console.log();
     if (scope === 'project') {
@@ -502,6 +520,28 @@ function runPending(args: readonly string[]): number {
   });
 }
 
+async function runSkills(args: readonly string[]): Promise<number> {
+  const parsed = parseSkillsArgs(args);
+  if (parsed.kind === 'err') {
+    throw new RosterError({
+      header: `${chalk.red.bold('roster:')} ${parsed.message}`,
+      body: '',
+      remedy: `  Run ${chalk.bold('roster --help')} for usage.`,
+      exitCode: EXIT_ERROR,
+    });
+  }
+  const cwd = parsed.cwd ?? process.cwd();
+  if (parsed.subcommand === 'sync') {
+    return await executeSkillsSync({ cwd, json: parsed.json, silent: parsed.silent });
+  }
+  return await executeSkillsUpdate({
+    cwd,
+    json: parsed.json,
+    silent: parsed.silent,
+    latest: parsed.latest,
+  });
+}
+
 async function runHooks(args: readonly string[]): Promise<number> {
   const parsed = parseHooksArgs(args);
   if (parsed.kind === 'err') {
@@ -583,6 +623,7 @@ async function main(): Promise<number> {
     if (first === 'doctor') return await runDoctor(rest);
     if (first === 'schedule') return await runSchedule(rest);
     if (first === 'review') return await runReview(rest);
+    if (first === 'skills') return await runSkills(rest);
     if (first === 'hooks') return await runHooks(rest);
     if (first === 'migrate') return runMigrate(rest);
     if (first === 'pending') return runPending(rest);

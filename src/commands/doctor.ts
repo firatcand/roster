@@ -38,6 +38,10 @@ import {
 } from '../lib/doctor-scheduling-drift.ts';
 import { scheduleFileSchema } from '../lib/schedule-schema.ts';
 import { isWindows } from '../lib/platform.ts';
+import {
+  auditFounderSkillsDrift,
+  type FounderSkillsDriftResult,
+} from '../lib/founder-skills/drift.ts';
 
 export type DoctorOptions = {
   json: boolean;
@@ -797,6 +801,19 @@ function renderInteractiveFixSection(outcome: FixPromptOutcome): string[] {
   return lines;
 }
 
+function renderFounderSkillsSection(result: FounderSkillsDriftResult): string[] {
+  if (result.status === 'not-applicable') return [];
+  const lines: string[] = ['', chalk.bold('Founder skills')];
+  if (!result.hasFailure) {
+    lines.push(`  ${chalk.green('✓')} manifest, lockfile, and installed skills agree`);
+    return lines;
+  }
+  for (const f of result.findings) {
+    lines.push(`  ${chalk.red('✗')} ${f.message}`);
+  }
+  return lines;
+}
+
 export async function executeDoctor(opts: DoctorOptions): Promise<number> {
   // ROS-109: scope-aware audit. Determine effective scope first; downstream
   // tool detection runs against the matching path family.
@@ -931,6 +948,8 @@ export async function executeDoctor(opts: DoctorOptions): Promise<number> {
     cwd: opts.cwd,
     homeDir: home,
   });
+  const founderSkills = auditFounderSkillsDrift(opts.cwd);
+  const founderSkillsOk = founderSkills.status !== 'checked' || !founderSkills.hasFailure;
 
   const allOk =
     results.every((r) => r.ok) &&
@@ -938,7 +957,8 @@ export async function executeDoctor(opts: DoctorOptions): Promise<number> {
     scheduling.ok &&
     safety.ok &&
     secrets.ok &&
-    schedulingDrift.ok;
+    schedulingDrift.ok &&
+    founderSkillsOk;
 
   // Render audits, then run the interactive --fix prompt for redundant agent
   // .env lines (if any), then render the interactive fix section. This ordering
@@ -951,6 +971,7 @@ export async function executeDoctor(opts: DoctorOptions): Promise<number> {
     for (const line of renderSchedulingSection(scheduling)) console.log(line);
     for (const line of renderSchedulingDriftSection(schedulingDrift)) console.log(line);
     for (const line of renderStaleFiresSection(schedulingDrift.staleFires)) console.log(line);
+    for (const line of renderFounderSkillsSection(founderSkills)) console.log(line);
     for (const line of renderSafetySection(safety)) console.log(line);
     for (const line of renderSecretsSection(secrets)) console.log(line);
     for (const line of renderFixSection(fixOutcome)) console.log(line);
@@ -984,6 +1005,7 @@ export async function executeDoctor(opts: DoctorOptions): Promise<number> {
       safety,
       secrets,
       scheduling_drift: schedulingDrift,
+      founder_skills: founderSkills,
       fix: fixOutcome,
       interactive_fix: interactiveOutcome,
     };
