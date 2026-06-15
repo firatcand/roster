@@ -16,6 +16,7 @@ export type ParsedSkillsArgs =
       kind: 'ok';
       subcommand: 'sync';
       json: boolean;
+      silent: boolean;
       cwd: string | undefined;
     }
   | {
@@ -23,6 +24,7 @@ export type ParsedSkillsArgs =
       subcommand: 'update';
       latest: boolean;
       json: boolean;
+      silent: boolean;
       cwd: string | undefined;
     }
   | { kind: 'err'; message: string };
@@ -44,12 +46,15 @@ export function parseSkillsArgs(args: readonly string[]): ParsedSkillsArgs {
 
   let json = false;
   let latest = false;
+  let silent = false;
   let cwd: string | undefined;
 
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i]!;
     if (arg === '--json') {
       json = true;
+    } else if (arg === '--silent') {
+      silent = true;
     } else if (arg === '--latest') {
       latest = true;
     } else if (arg === '--cwd') {
@@ -64,7 +69,7 @@ export function parseSkillsArgs(args: readonly string[]): ParsedSkillsArgs {
 
   if (first === 'sync') {
     if (latest) return { kind: 'err', message: `--latest is only valid for 'skills update'` };
-    return { kind: 'ok', subcommand: 'sync', json, cwd };
+    return { kind: 'ok', subcommand: 'sync', json, silent, cwd };
   }
-  return { kind: 'ok', subcommand: 'update', latest, json, cwd };
+  return { kind: 'ok', subcommand: 'update', latest, json, silent, cwd };
 }

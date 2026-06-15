@@ -10,6 +10,13 @@ test('parses sync with flags', () => {
   assert.equal(p.cwd, '/tmp/ws');
 });
 
+test('parses --silent on sync', () => {
+  const p = parseSkillsArgs(['sync', '--silent']);
+  assert.equal(p.kind, 'ok');
+  if (p.kind !== 'ok' || p.subcommand !== 'sync') throw new Error('bad parse');
+  assert.equal(p.silent, true);
+});
+
 test('parses update --latest', () => {
   const p = parseSkillsArgs(['update', '--latest']);
   assert.equal(p.kind, 'ok');

@@ -7,6 +7,7 @@ import { updateFounderSkills, realRefResolver } from '../lib/founder-skills/upda
 export type SkillsCommandOptions = {
   cwd: string;
   json: boolean;
+  silent: boolean;
 };
 
 export function renderSyncResult(result: SyncResult): string[] {
@@ -39,7 +40,7 @@ export async function executeSkillsSync(opts: SkillsCommandOptions): Promise<num
   const result = await syncFounderSkills({ cwd: opts.cwd, installer: realInstaller });
   if (opts.json) {
     console.log(JSON.stringify({ ok: true, ...result }, null, 2));
-  } else {
+  } else if (!opts.silent) {
     console.log(renderSyncResult(result).join('\n'));
   }
   return EXIT_OK;
@@ -56,7 +57,7 @@ export async function executeSkillsUpdate(
   });
   if (opts.json) {
     console.log(JSON.stringify({ ok: true, ...result }, null, 2));
-  } else {
+  } else if (!opts.silent) {
     console.log(renderSyncResult(result).join('\n'));
   }
   return EXIT_OK;

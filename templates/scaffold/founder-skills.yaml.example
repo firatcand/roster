@@ -1,0 +1,21 @@
+# founder-skills manifest (OPT-IN)
+#
+# Rename this file to `founder-skills.yaml` to declare which skills from
+# https://github.com/firatcand/founder-skills this workspace depends on. With no
+# `founder-skills.yaml` present, roster installs zero founder skills.
+#
+# `roster skills sync` (also run automatically by `roster install` at project
+# scope) installs each declared skill PROJECT-LOCAL into:
+#   - Claude Code → .claude/skills/<name>/
+#   - Codex       → .agents/skills/<name>/
+# It never installs globally. A `founder-skills.lock` pins resolved refs +
+# content hashes for reproducible re-syncs; `roster doctor` reports drift.
+
+source: github:firatcand/founder-skills   # GitHub only in v1
+ref: main                                 # default pinned ref for every skill
+
+skills:
+  - pricing
+  - sales-skill
+  - name: seo                             # per-skill ref override
+    ref: main

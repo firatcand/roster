@@ -73,6 +73,8 @@ Using 1Password or Infisical? Compose them with the `.env` model via the recipes
 | `roster install` | Install skills + agents into detected AI tools (idempotent) |
 | `roster init` | Scaffold an agent-team workspace in CWD |
 | `roster doctor` | Audit installation; exits non-zero on drift |
+| `roster skills sync` | Install [founder-skills](https://github.com/firatcand/founder-skills) declared in `founder-skills.yaml` (project-local, ref-pinned) |
+| `roster skills update [--latest]` | Re-sync to the lockfile, or bump pinned refs to newest tags |
 | `roster schedule validate` | Validate every `roster/<function>/schedules.yaml` |
 | `roster schedule install` | Install a schedule into your host tool's native scheduler |
 | `roster review [function]` | Walk pending HITL items interactively (approve / reject / defer) |
@@ -89,6 +91,26 @@ Roster scaffolds an opinionated **function → agent → plan** tree. Functions 
 The opinion that keeps it useful at week 12 is **substrate vs artifacts**: long-lived context (voice, ICPs, messaging, brand) lives at the workspace root in `guidelines/`. Daily tactical output (emails, posts, PR comments) lands in `<function>/<agent>/logs/runs/`; anything that needs human approval first lands in `<agent>/pending/`. Experts shape substrate. Agents produce artifacts. Don't conflate them.
 
 A nightly **reinforcement** pass (the `dreamer` skill) reads runs + feedback, detects recurring patterns, and proposes lessons to the agent that produced them. You approve before anything is written. Quality compounds.
+
+---
+
+## Founder skills
+
+A workspace can declare which skills from [`firatcand/founder-skills`](https://github.com/firatcand/founder-skills) it depends on, and roster keeps them installed **project-local** and reproducible. Drop a `founder-skills.yaml` at the workspace root (rename the scaffolded `founder-skills.yaml.example`):
+
+```yaml
+source: github:firatcand/founder-skills
+ref: v1.0.0                 # pinned ref for every skill
+skills:
+  - pricing
+  - sales-skill
+  - name: seo
+    ref: v0.9.0            # per-skill override
+```
+
+`roster skills sync` (also run automatically by `roster install` at project scope) installs each declared skill into `.claude/skills/` (Claude Code) and `.agents/skills/` (Codex) — **never globally** — pinned to its exact ref and materialized with `--copy`. A `founder-skills.lock` records the resolved ref + content hash so re-syncs are reproducible. The manifest is the source of truth: drop a skill and the next sync **prunes** it (roster only ever removes skills it installed). `roster skills update --latest` bumps refs to newest tags; `roster doctor` flags any manifest ↔ lock ↔ installed drift and exits non-zero. No manifest → roster installs zero founder skills.
+
+> roster wraps the existing `npx skills` installer — it does not fetch or vendor skills itself, and never bundles them into its own npm tarball. Gemini is deferred for v1 (Claude + Codex supported). Codex skills land in `.agents/skills/` per the `skills` CLI, distinct from roster's own `.codex/skills/`.
 
 ---
 

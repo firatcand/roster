@@ -532,9 +532,14 @@ async function runSkills(args: readonly string[]): Promise<number> {
   }
   const cwd = parsed.cwd ?? process.cwd();
   if (parsed.subcommand === 'sync') {
-    return await executeSkillsSync({ cwd, json: parsed.json });
+    return await executeSkillsSync({ cwd, json: parsed.json, silent: parsed.silent });
   }
-  return await executeSkillsUpdate({ cwd, json: parsed.json, latest: parsed.latest });
+  return await executeSkillsUpdate({
+    cwd,
+    json: parsed.json,
+    silent: parsed.silent,
+    latest: parsed.latest,
+  });
 }
 
 async function runHooks(args: readonly string[]): Promise<number> {

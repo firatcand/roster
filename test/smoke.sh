@@ -107,7 +107,8 @@ for expected in \
   package/templates/scaffold/product/EXPERT.md \
   package/templates/scaffold/design/EXPERT.md \
   package/templates/scaffold/ops/EXPERT.md \
-  package/templates/scaffold/logs/cron/.gitkeep
+  package/templates/scaffold/logs/cron/.gitkeep \
+  package/templates/scaffold/founder-skills.yaml.example
 do
   assert_contains "$TARBALL_LIST" "^$expected\$" "tarball contains $expected"
 done
@@ -291,6 +292,70 @@ fi
 # list after remove → empty again
 LIST_OUT=$("$ROSTER_BIN" schedule list 2>&1)
 echo "$LIST_OUT" | grep -q "heartbeat-noop" && fail "list (after remove): still shows entry" || pass "list (after remove): empty"
+
+# 8. founder-skills sync (ROS-125) — runs in the $WORKSPACE workspace (CWD).
+echo ""
+echo "===> 8. founder-skills sync"
+# 8a. Opt-out: the scaffold ships the .example, NOT an active manifest.
+assert "-f founder-skills.yaml.example" "scaffold ships founder-skills.yaml.example"
+assert "! -f founder-skills.yaml" "no active founder-skills.yaml after init (opt-out default)"
+# 8b. No manifest → sync is a clean no-op, exit 0, nothing installed.
+"$ROSTER_BIN" skills sync --silent > /dev/null 2>&1
+assert "$? -eq 0" "skills sync with no manifest exits 0 (opt-out)"
+assert "! -e .claude/skills/pricing" "no manifest → no founder skills installed"
+
+# 8c. With a manifest + a stubbed npx, sync installs project-local + writes a lock.
+# Stub `npx skills add <tree-url> --copy -y -a <agent>...` to materialize the
+# skill dir into the matching tool target, so smoke stays hermetic (no network).
+STUBBIN="$SMOKE_DIR/stubbin"
+mkdir -p "$STUBBIN"
+cat > "$STUBBIN/npx" <<'STUB'
+#!/usr/bin/env bash
+# Minimal `npx skills add` stub: parse the tree URL + -a agents, create dirs.
+args=("$@"); url=""; agents=()
+for ((i=0; i<${#args[@]}; i++)); do
+  case "${args[i]}" in
+    https://github.com/*) url="${args[i]}" ;;
+    -a) agents+=("${args[i+1]}") ;;
+  esac
+done
+skill="${url##*/}"
+for a in "${agents[@]}"; do
+  case "$a" in
+    claude-code) d=".claude/skills/$skill" ;;
+    codex)       d=".agents/skills/$skill" ;;
+    *) continue ;;
+  esac
+  mkdir -p "$d"
+  printf -- '---\nname: %s\ndescription: %s skill\n---\nbody\n' "$skill" "$skill" > "$d/SKILL.md"
+done
+STUB
+chmod +x "$STUBBIN/npx"
+
+cat > founder-skills.yaml <<'EOF'
+source: github:firatcand/founder-skills
+ref: v1.0.0
+skills:
+  - pricing
+EOF
+HOME="$FAKE_HOME" ROSTER_CLAUDE_HOME="$CLAUDE_HOME" ROSTER_CODEX_HOME="$CODEX_HOME" \
+  PATH="$STUBBIN:$PATH" "$ROSTER_BIN" skills sync --silent > /dev/null 2>&1
+assert "-f .claude/skills/pricing/SKILL.md" "sync installs pricing into .claude/skills/ (project-local)"
+assert "-f .agents/skills/pricing/SKILL.md" "sync installs pricing into .agents/skills/ (codex)"
+assert "-f founder-skills.lock" "sync writes founder-skills.lock"
+assert "! -e \"$FAKE_HOME/.claude/skills/pricing\"" "sync does NOT install founder skills into home dir"
+
+# 8d. Drop the skill from the manifest → re-sync prunes it (full reconcile).
+cat > founder-skills.yaml <<'EOF'
+source: github:firatcand/founder-skills
+ref: v1.0.0
+skills:
+  - sales-skill
+EOF
+HOME="$FAKE_HOME" ROSTER_CLAUDE_HOME="$CLAUDE_HOME" ROSTER_CODEX_HOME="$CODEX_HOME" \
+  PATH="$STUBBIN:$PATH" "$ROSTER_BIN" skills sync --silent > /dev/null 2>&1
+assert "! -e .claude/skills/pricing" "re-sync prunes a skill dropped from the manifest"
+assert "-f .claude/skills/sales-skill/SKILL.md" "re-sync installs the newly-declared skill"
 
 # Summary
 echo ""
