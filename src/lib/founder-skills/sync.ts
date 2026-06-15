@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, rmSync } from 'node:fs';
-import { join, resolve, sep } from 'node:path';
+import { existsSync, lstatSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { join, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { detectTools, type ToolKey } from '../tools.ts';
 import { detectWorkspace } from '../install-scope.ts';
@@ -59,6 +59,53 @@ function resolveTools(): Array<'claude' | 'codex'> {
     .filter(isSupportedFounderTool);
 }
 
+// Safely delete a founder-skill dir during prune. The lexical containment of an
+// earlier version was insufficient (Codex 2nd-pass): if the tool's skills dir is
+// itself a symlink escaping the workspace, lexical resolve()+startsWith still
+// passes and rmSync would follow it out. Resolve real paths and refuse to prune
+// (a) through a skills dir that does not physically live under the workspace, or
+// (b) a symlinked leaf. Returns true when a real dir was removed.
+function pruneSkillDir(wsRoot: string, base: string, name: string): boolean {
+  if (!existsSync(base)) return false;
+  // The skills dir must be a real directory roster created — never prune through
+  // a symlinked target dir (it could point anywhere; rmSync would follow it).
+  try {
+    if (lstatSync(base).isSymbolicLink()) return false;
+  } catch {
+    return false;
+  }
+  let realBase: string;
+  try {
+    realBase = realpathSync(base);
+  } catch {
+    return false;
+  }
+  // Belt-and-suspenders: the resolved skills dir must live under the workspace.
+  if (realBase !== wsRoot && !realBase.startsWith(wsRoot + sep)) return false;
+
+  const dir = join(base, name);
+  let st;
+  try {
+    st = lstatSync(dir);
+  } catch {
+    return false;
+  }
+  // Never recurse through a symlinked leaf — rmSync it as a link only would be
+  // safe, but skipping is the conservative choice (roster installs real dirs).
+  if (st.isSymbolicLink()) return false;
+
+  let realDir: string;
+  try {
+    realDir = realpathSync(dir);
+  } catch {
+    return false;
+  }
+  if (realDir !== realBase && !realDir.startsWith(realBase + sep)) return false;
+
+  rmSync(dir, { recursive: true, force: true });
+  return true;
+}
+
 export async function syncFounderSkills(opts: SyncOptions): Promise<SyncResult> {
   const { cwd } = opts;
   if (!existsSync(manifestPath(cwd))) {
@@ -94,19 +141,16 @@ export async function syncFounderSkills(opts: SyncOptions): Promise<SyncResult> 
   // the prior lock) that is no longer declared. The lock is the ownership
   // ledger — a user's hand-placed or roster-own skill is never in it, so it is
   // never pruned.
+  const wsRoot = realpathSync(cwd);
   const pruned: string[] = [];
   for (const locked of priorLock?.skills ?? []) {
-    // readLockfile already rejects non-kebab names, but a path-containment
-    // check before a recursive delete is cheap defense-in-depth: never rmSync
-    // anything that resolves outside the tool's skills dir.
+    // readLockfile already rejects non-kebab names; this is defense-in-depth
+    // before a recursive delete.
     if (!isSafeSkillName(locked.name)) continue;
     if (declaredNames.has(locked.name)) continue;
     for (const toolKey of locked.tools) {
       if (!isSupportedFounderTool(toolKey)) continue;
-      const base = resolve(targetDirFor(cwd, toolKey));
-      const dir = resolve(base, locked.name);
-      if (dir !== base && !dir.startsWith(base + sep)) continue;
-      if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+      pruneSkillDir(wsRoot, targetDirFor(cwd, toolKey), locked.name);
     }
     pruned.push(locked.name);
   }

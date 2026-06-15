@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
@@ -118,6 +118,28 @@ test('manifest present but not a workspace → refuses', async () => {
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
+});
+
+test('SECURITY: prune refuses to delete through a symlinked skills dir (Codex 2nd-pass)', async () => {
+  await withWorkspace(async (cwd) => {
+    // External target the symlinked skills dir points at; a sentinel skill lives there.
+    const external = join(cwd, 'external-store');
+    mkdirSync(join(external, 'pricing'), { recursive: true });
+    writeFileSync(join(external, 'pricing', 'KEEP'), 'do not delete');
+    // .claude/skills is a SYMLINK escaping into external-store.
+    mkdirSync(join(cwd, '.claude'), { recursive: true });
+    symlinkSync(external, join(cwd, '.claude', 'skills'));
+    // Prior lock claims roster installed `pricing` for claude.
+    writeFileSync(
+      join(cwd, 'founder-skills.lock'),
+      `version: 1\nsource: github:firatcand/founder-skills\nskills:\n  - name: pricing\n    ref: v1\n    contentHash: sha256:x\n    tools:\n      - claude\n`,
+    );
+    // New manifest drops pricing → prune would target it.
+    writeManifest(cwd, 'skills:\n  - sales-skill\n');
+    const { installer } = makeFakeInstaller();
+    await syncFounderSkills({ cwd, installer });
+    assert.ok(existsSync(join(external, 'pricing', 'KEEP')), 'external dir must NOT be pruned through a symlinked skills dir');
+  });
 });
 
 test('SECURITY: a hand-edited lock with a traversal name never deletes outside the target', async () => {
