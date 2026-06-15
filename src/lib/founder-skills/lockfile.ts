@@ -4,7 +4,7 @@ import { join, relative, sep } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ToolKey } from '../tools.ts';
 import { atomicWriteFile } from '../schedule-yaml.ts';
-import { FOUNDER_SKILLS_LOCK_VERSION } from './manifest-schema.ts';
+import { FOUNDER_SKILLS_LOCK_VERSION, isSafeSkillName } from './manifest-schema.ts';
 
 export const LOCKFILE_NAME = 'founder-skills.lock';
 
@@ -58,10 +58,18 @@ export function readLockfile(workspaceRoot: string): Lockfile | null {
     if (parsed === null || typeof parsed !== 'object') return null;
     const obj = parsed as Partial<Lockfile>;
     if (!Array.isArray(obj.skills)) return null;
+    // Drop any entry whose name is not a safe kebab-case skill name. The
+    // lockfile is on-disk and could be hand-edited; downstream code turns
+    // `name` into a filesystem path (incl. rmSync during prune), so a name
+    // containing `..` or `/` must never survive the read boundary.
+    const skills = (obj.skills as unknown[]).filter(
+      (s): s is LockedSkill =>
+        s !== null && typeof s === 'object' && isSafeSkillName((s as { name?: unknown }).name),
+    );
     return {
       version: typeof obj.version === 'number' ? obj.version : FOUNDER_SKILLS_LOCK_VERSION,
       source: typeof obj.source === 'string' ? obj.source : '',
-      skills: obj.skills as LockedSkill[],
+      skills,
     };
   } catch {
     return null;

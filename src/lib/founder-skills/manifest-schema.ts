@@ -9,6 +9,13 @@ export const DEFAULT_REF = 'main';
 
 const KEBAB_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
+// Single source of truth for "is this a safe skill name". Reused at every
+// trust boundary that turns a name into a filesystem path (manifest parse,
+// lockfile read, prune) so a hand-edited name can never contain `..` or `/`.
+export function isSafeSkillName(value: unknown): value is string {
+  return typeof value === 'string' && KEBAB_RE.test(value);
+}
+
 const skillNameSchema = z
   .string()
   .min(1)

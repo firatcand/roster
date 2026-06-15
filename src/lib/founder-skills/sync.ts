@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { detectTools, type ToolKey } from '../tools.ts';
 import { detectWorkspace } from '../install-scope.ts';
@@ -7,6 +7,7 @@ import { workspaceRequiredError } from '../errors.ts';
 import {
   founderManifestSchema,
   normalizeManifest,
+  isSafeSkillName,
   type NormalizedManifest,
   FOUNDER_SKILLS_LOCK_VERSION,
 } from './manifest-schema.ts';
@@ -95,10 +96,16 @@ export async function syncFounderSkills(opts: SyncOptions): Promise<SyncResult> 
   // never pruned.
   const pruned: string[] = [];
   for (const locked of priorLock?.skills ?? []) {
+    // readLockfile already rejects non-kebab names, but a path-containment
+    // check before a recursive delete is cheap defense-in-depth: never rmSync
+    // anything that resolves outside the tool's skills dir.
+    if (!isSafeSkillName(locked.name)) continue;
     if (declaredNames.has(locked.name)) continue;
     for (const toolKey of locked.tools) {
       if (!isSupportedFounderTool(toolKey)) continue;
-      const dir = join(targetDirFor(cwd, toolKey), locked.name);
+      const base = resolve(targetDirFor(cwd, toolKey));
+      const dir = resolve(base, locked.name);
+      if (dir !== base && !dir.startsWith(base + sep)) continue;
       if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
     }
     pruned.push(locked.name);
