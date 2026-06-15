@@ -357,6 +357,27 @@ HOME="$FAKE_HOME" ROSTER_CLAUDE_HOME="$CLAUDE_HOME" ROSTER_CODEX_HOME="$CODEX_HO
 assert "! -e .claude/skills/pricing" "re-sync prunes a skill dropped from the manifest"
 assert "-f .claude/skills/sales-skill/SKILL.md" "re-sync installs the newly-declared skill"
 
+# 8e. OPTIONAL real-npx sync — gated behind ROSTER_NETWORK_SMOKE=1 so CI stays
+# hermetic. Exercises the live `npx skills add <tree-url>` path against the real
+# founder-skills repo (verifies the per-skill tree-URL + --copy invocation, R1).
+if [ "${ROSTER_NETWORK_SMOKE:-}" = "1" ]; then
+  echo "  (ROSTER_NETWORK_SMOKE=1 → real npx against firatcand/founder-skills)"
+  rm -rf .claude/skills .agents/skills founder-skills.lock
+  cat > founder-skills.yaml <<'EOF'
+source: github:firatcand/founder-skills
+ref: main
+skills:
+  - pricing
+EOF
+  HOME="$FAKE_HOME" ROSTER_CLAUDE_HOME="$CLAUDE_HOME" ROSTER_CODEX_HOME="$CODEX_HOME" \
+    "$ROSTER_BIN" skills sync --silent > /dev/null 2>&1
+  assert "-f .claude/skills/pricing/SKILL.md" "real-npx: pricing installed into .claude/skills/ (R1)"
+  assert "-f .agents/skills/pricing/SKILL.md" "real-npx: pricing installed into .agents/skills/ (codex)"
+  assert "-f founder-skills.lock" "real-npx: lockfile written"
+else
+  echo "  (skipping real-npx sync — set ROSTER_NETWORK_SMOKE=1 to enable)"
+fi
+
 # Summary
 echo ""
 echo "===> $PASS_COUNT passed, $FAIL_COUNT failed"
