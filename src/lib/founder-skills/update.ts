@@ -2,8 +2,9 @@ import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import chalk from 'chalk';
 import { atomicWriteFile } from '../schedule-yaml.ts';
-import { workspaceRequiredError } from '../errors.ts';
+import { RosterError, EXIT_ERROR, workspaceRequiredError } from '../errors.ts';
 import { detectWorkspace } from '../install-scope.ts';
 import { founderManifestSchema, normalizeManifest } from './manifest-schema.ts';
 import { parseSource } from './installer.ts';
@@ -27,7 +28,14 @@ export const realRefResolver: RefResolver = {
       { encoding: 'utf8' },
     );
     const first = stdout.split('\n').find((l) => l.includes('refs/tags/'));
-    if (!first) throw new Error(`no tags found for ${source}`);
+    if (!first) {
+      throw new RosterError({
+        header: `${chalk.red.bold('roster:')} no tags to bump to`,
+        body: `  ${source} has no git tags — \`--latest\` resolves the newest tag.`,
+        remedy: `  Pin an explicit \`ref:\` (e.g. a branch or commit) in founder-skills.yaml and run \`roster skills sync\`.`,
+        exitCode: EXIT_ERROR,
+      });
+    }
     return first.replace(/^.*refs\/tags\//, '').trim();
   },
 };
