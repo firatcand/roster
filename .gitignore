@@ -3,6 +3,7 @@
 .env.local
 *.pem
 *.key
+.infisical.json
 
 # Editor / OS
 .DS_Store
