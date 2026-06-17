@@ -53,6 +53,8 @@ Skip the panel for simple factual questions or non-GTM tasks.
 
 Use proactively when a task maps to a skill. Don't substitute generic advice when a skill exists.
 
+> These route to **founder-skills** ([firatcand/founder-skills](https://github.com/firatcand/founder-skills)). Declare the ones you want in `founder-skills.yaml` at the workspace root and run `roster skills sync` to install them project-local — see `founder-skills.yaml.example`.
+
 | Task | Skill |
 |---|---|
 | Writing/reviewing commercial copy | copywriter-skill |

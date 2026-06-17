@@ -40,15 +40,16 @@ Ask only about gaps. Don't re-ask what's in substrate. If the project hasn't bee
 
 Read the matched skill file before producing detailed recommendations or deliverables. If a task spans multiple, read all applicable.
 
+> These route to **founder-skills** ([firatcand/founder-skills](https://github.com/firatcand/founder-skills)). Declare the ones you want in `founder-skills.yaml` at the workspace root and run `roster skills sync` to install them project-local — see `founder-skills.yaml.example`.
+
 | Task | Skill |
 |---|---|
-| Building or implementing a UI (React, HTML/CSS, any framework) | frontend-design |
-| Comprehensive UI/UX with stack/style/palette/font selection | ui-ux-pro-max |
-| UI audit, spacing, typography, color, design-token spec | ui-design |
-| UX audit, flow critique, cognitive/perceptual review | ux-design |
-| Brand identity, palette, type scale, design-system foundations | graphic-design |
+| UI/UX audit, spacing, type scale, color tokens, flow & perceptual critique, brand foundations (palette, logo systems, type pairing) | design |
 | Motion, transitions, micro-interactions, animation specs | motion-picture |
 | Microcopy, labels, error messages, CTA text | copywriter-skill |
+| Building or implementing a UI in code (React, HTML/CSS) | frontend-design † |
+
+† `frontend-design` is a Claude Code built-in skill, **not** a founder-skill — install it from your tool's skill marketplace, not via `roster skills sync`. (The `design` skill covers the visual/UX/brand layer; `frontend-design` implements it in code.)
 
 ## Output rules
 

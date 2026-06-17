@@ -10,12 +10,31 @@
 #   - Codex       → .agents/skills/<name>/
 # It never installs globally. A `founder-skills.lock` pins resolved refs +
 # content hashes for reproducible re-syncs; `roster doctor` reports drift.
+#
+# The list below is the full set the scaffolded experts (gtm/product/design/ops
+# EXPERT.md) route to. TRIM IT to the skills you actually use — every declared
+# skill is fetched and materialized on sync.
 
 source: github:firatcand/founder-skills   # GitHub only in v1
-ref: main                                 # default pinned ref for every skill
+ref: main                                 # default pinned ref (founder-skills has no version tags yet)
 
 skills:
-  - pricing
+  # GTM
+  - prospecting
   - sales-skill
-  - name: seo                             # per-skill ref override
-    ref: main
+  - pricing
+  - seo
+  - channel-expert
+  - plg-skill              # also used by Product
+  - copywriter-skill       # also used by Design
+  - script-writer-skill
+  - data-analysis          # also used by Ops
+  # Product
+  - product-spec
+  - product-position
+  - software-architect     # also used by Ops
+  # Design
+  - design                 # visual + UX + brand (consolidates the former ui/ux/graphic skills)
+  - motion-picture
+  # Ops
+  - devops
