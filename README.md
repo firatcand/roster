@@ -72,6 +72,7 @@ Using 1Password or Infisical? Compose them with the `.env` model via the recipes
 |---|---|
 | `roster install` | Install skills + agents into detected AI tools (idempotent) |
 | `roster init` | Scaffold an agent-team workspace in CWD |
+| `roster upgrade` | Refresh scaffold files to the installed roster; edits become `<file>.new`, never clobbered |
 | `roster doctor` | Audit installation; exits non-zero on drift |
 | `roster skills sync` | Install [founder-skills](https://github.com/firatcand/founder-skills) declared in `founder-skills.yaml` (project-local, ref-pinned) |
 | `roster skills update [--latest]` | Re-sync to the lockfile, or bump pinned refs to newest tags |
@@ -81,6 +82,19 @@ Using 1Password or Infisical? Compose them with the `.env` model via the recipes
 | `roster hooks install` | Wire SessionStart banners so chat sessions surface pending counts |
 
 Full subcommand reference in [docs/HOWTO.md](docs/HOWTO.md). Scheduling rules, UI hand-off, and platform matrix in [docs/SCHEDULING.md](docs/SCHEDULING.md).
+
+### Keeping a workspace up to date
+
+A roster workspace has four layers, and they update independently:
+
+| Layer | What it is | How to update |
+|---|---|---|
+| The CLI | the `@firatcand/roster` npm package | `npm i -g @firatcand/roster@latest` |
+| roster's skills + agents | `chief-of-staff`, `dreamer`, `sdr`… in `.claude/skills/`, `.agents/` | re-run `roster install` (idempotent) |
+| founder-skills | `pricing`/`design`/… from [founder-skills](https://github.com/firatcand/founder-skills) | `roster skills sync` / `roster skills update` |
+| Scaffold files | `EXPERT.md`, `conventions.md`, `founder-skills.yaml.example`, function dirs | **`roster upgrade`** |
+
+`roster init` is intentionally skip-if-exists (your scaffold is yours to customize), so it never overwrites an existing `EXPERT.md`. **`roster upgrade`** is how scaffold improvements reach an existing workspace: it auto-updates files you haven't touched, and for files you've edited it writes a `<file>.new` beside yours to review and merge — your file is never clobbered. Run `roster upgrade --dry-run` first to preview.
 
 ---
 

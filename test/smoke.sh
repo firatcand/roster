@@ -239,6 +239,22 @@ assert "-f guidelines/voice.md" "guidelines/voice.md survives --force re-init"
 # Install is exercised in its own unit tests + the macOS Mac mini gate
 # (ROS-40). What's being smoked here is the four NEW commands.
 echo ""
+echo "===> 5e. roster upgrade (ROS-130) — runs in the $WORKSPACE workspace (CWD)"
+assert "-f .roster/scaffold-manifest.json" "init wrote the scaffold manifest"
+# Fresh workspace → upgrade is a clean no-op.
+UPGRADE_OUT=$("$ROSTER_BIN" upgrade 2>&1)
+assert "$? -eq 0" "roster upgrade exits 0 on a fresh workspace"
+echo "$UPGRADE_OUT" | grep -q "already matches" && pass "upgrade: fresh workspace reports no changes" || fail "upgrade: expected no-change report"
+# Delete a scaffold file → upgrade recreates it (create path, end-to-end).
+rm -f gtm/EXPERT.md
+"$ROSTER_BIN" upgrade > /dev/null 2>&1
+assert "-f gtm/EXPERT.md" "upgrade recreates a deleted scaffold file"
+# Edit a file → --dry-run must not write a .new.
+printf '\nMY EDIT\n' >> conventions.md
+"$ROSTER_BIN" upgrade --dry-run > /dev/null 2>&1
+assert "! -f conventions.md.new" "upgrade --dry-run writes nothing"
+
+echo ""
 echo "===> 6. Schedule list/status/remove (ROS-36)"
 
 # list on a fresh workspace → no schedules registered
