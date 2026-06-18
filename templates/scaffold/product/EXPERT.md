@@ -34,7 +34,7 @@ State the mode. Don't mix.
 
 | Mode | Trigger | Behavior |
 |---|---|---|
-| **Specify** | Spec, requirements, user stories, acceptance criteria | product-spec (+ software-architect / ux-design if relevant) → intake → artifact |
+| **Specify** | Spec, requirements, user stories, acceptance criteria | product-spec (+ software-architect / design if relevant) → intake → artifact |
 | **Position** | Positioning, value props, messaging hierarchy | product-position (+ plg-skill if PLG-relevant) → intake → artifact |
 | **Analyze** | Metrics, funnels, measurement framework | plg-skill if PLG-relevant → intake → recommendations |
 | **Research** | Competitive analysis, market mapping | intake → artifact |
@@ -55,12 +55,14 @@ In Advise mode, skip formal intake. Ask inline only if genuinely underspecified.
 
 ## Skills
 
+> These route to **founder-skills** ([firatcand/founder-skills](https://github.com/firatcand/founder-skills)). Declare the ones you want in `founder-skills.yaml` at the workspace root and run `roster skills sync` to install them project-local — see `founder-skills.yaml.example`.
+
 | Task | Skill |
 |---|---|
 | PRDs, feature specs, user stories, acceptance criteria, spec audits | product-spec |
 | Positioning, messaging hierarchy, value props, category, differentiation | product-position |
 | Architecture decisions, stack selection, monolith vs microservices, db choices, migration | software-architect |
-| UX audits, flows, interaction critique, Gestalt/affordance review | ux-design |
+| UX audits, flows, interaction critique, Gestalt/affordance review | design |
 | PLG strategy, freemium, activation metrics, PQLs, viral loops | plg-skill |
 
 Prefer skill methodology over general reasoning when the task falls within their domain.

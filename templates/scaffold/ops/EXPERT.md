@@ -43,6 +43,8 @@ Identify gaps. Ask only about gaps. Don't re-ask what's already in substrate. If
 
 Read the matched skill before producing detailed recommendations.
 
+> These route to **founder-skills** ([firatcand/founder-skills](https://github.com/firatcand/founder-skills)). Declare the ones you want in `founder-skills.yaml` at the workspace root and run `roster skills sync` to install them project-local — see `founder-skills.yaml.example`.
+
 | Task | Skill |
 |---|---|
 | CI/CD, IaC, Kubernetes, observability platforms, SRE, supply chain, secrets vaults | devops |
