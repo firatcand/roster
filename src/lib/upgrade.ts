@@ -5,9 +5,10 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { ROSTER_ROOT, getPackageVersion } from './paths.ts';
 import { detectWorkspace } from './install-scope.ts';
@@ -160,50 +161,78 @@ export function executeUpgrade(opts: { cwd: string; dryRun: boolean }): UpgradeR
     dryRun,
   };
 
+  const realCwd = safeRealpath(cwd) ?? cwd;
   const currentTemplatePaths = new Set<string>();
+  // Built entry-by-entry: a file's baseline only advances to the new template
+  // hash when its on-disk copy actually reflects that template (create/update/
+  // noop). A conflict keeps its OLD baseline so the next run still detects the
+  // unresolved edit and re-offers the `.new` (else the conflict silently
+  // vanishes and the CLI falsely reports "already matches").
+  const newEntries: ScaffoldFileEntry[] = [];
+  const advance = (destRel: string, newSha: string): void => {
+    newEntries.push({ path: destRel, sha256: newSha });
+  };
+  const preserve = (destRel: string): void => {
+    const old = entries.get(destRel);
+    if (old) newEntries.push(old);
+  };
 
   for (const { srcPath, destRel } of collectScaffoldFiles(scaffoldSrc)) {
     currentTemplatePaths.add(destRel);
     const newContent = renderScaffoldFile(srcPath, basename(srcPath), vars);
     const newSha = sha256(newContent);
     const destPath = join(cwd, destRel);
-    const disk = probeDest(destPath);
-    const action = decideUpgradeAction({ disk, newSha, manifestEntry: entries.get(destRel) });
 
+    // Refuse to write through a symlinked parent dir that escapes the workspace
+    // (a symlinked leaf is caught by probeDest below).
+    if (!isDestWriteSafe(realCwd, cwd, destRel)) {
+      result.symlinkSkipped.push(destRel);
+      preserve(destRel);
+      continue;
+    }
+
+    const disk = probeDest(destPath);
     if (disk.kind === 'symlink') {
       result.symlinkSkipped.push(destRel);
+      preserve(destRel);
       continue;
     }
 
+    const action = decideUpgradeAction({ disk, newSha, manifestEntry: entries.get(destRel) });
     if (action === 'noop') {
       result.unchanged.push(destRel);
-      continue;
-    }
-    if (action === 'create') {
+      advance(destRel, newSha);
+    } else if (action === 'create') {
       if (!dryRun) writeFile(destPath, newContent);
       result.created.push(destRel);
+      advance(destRel, newSha);
     } else if (action === 'update') {
       if (!dryRun) writeFile(destPath, newContent);
       result.updated.push(destRel);
+      advance(destRel, newSha);
     } else {
-      // conflict — never touch the user's file; offer the new version alongside.
+      // conflict — never touch the user's file; offer the new version alongside,
+      // and keep the old baseline so it stays flagged until reconciled.
       if (!dryRun) writeFile(`${destPath}.new`, newContent);
       result.conflicts.push(destRel);
+      preserve(destRel);
     }
-    if (destRel === FOUNDER_EXAMPLE) result.founderExampleChanged = true;
+    if (destRel === FOUNDER_EXAMPLE && action !== 'noop') result.founderExampleChanged = true;
   }
 
   // Files roster previously produced that are no longer templates: keep the
-  // user's copy (never delete), just report.
+  // user's copy (never delete), just report. They drop out of the manifest.
   for (const e of oldManifest?.files ?? []) {
     if (!currentTemplatePaths.has(e.path)) result.droppedKept.push(e.path);
   }
 
-  // Refresh the manifest to the current template baseline (entry = newSha per
-  // file). Uniform across create/update/noop/conflict: a conflict's dest still
-  // differs from the recorded baseline, so it keeps flagging until reconciled.
   if (!dryRun) {
-    writeScaffoldManifest(cwd, buildScaffoldManifestFromTemplates(scaffoldSrc, vars));
+    writeScaffoldManifest(cwd, {
+      version: SCAFFOLD_MANIFEST_VERSION,
+      rosterVersion: getPackageVersion(),
+      generatedAtUtc: new Date().toISOString(),
+      files: newEntries.sort((a, b) => a.path.localeCompare(b.path)),
+    });
   }
 
   return result;
@@ -212,4 +241,36 @@ export function executeUpgrade(opts: { cwd: string; dryRun: boolean }): UpgradeR
 function writeFile(destPath: string, content: string): void {
   mkdirSync(dirname(destPath), { recursive: true });
   writeFileSync(destPath, content, 'utf8');
+}
+
+function safeRealpath(p: string): string | null {
+  try {
+    return realpathSync(p);
+  } catch {
+    return null;
+  }
+}
+
+// True unless an already-existing parent component of destRel is a symlink that
+// resolves outside the workspace. destRel is workspace-relative and trusted
+// (it comes from walking the shipped templates), so the only escape vector is a
+// symlinked dir the user planted; refuse to write/`.new` through it.
+function isDestWriteSafe(realCwd: string, cwd: string, destRel: string): boolean {
+  const parts = destRel.split(sep);
+  let cur = cwd;
+  for (let i = 0; i < parts.length - 1; i++) {
+    cur = join(cur, parts[i]!);
+    let st;
+    try {
+      st = lstatSync(cur);
+    } catch {
+      return true; // doesn't exist yet → mkdir creates it inside cwd → safe
+    }
+    if (st.isSymbolicLink()) {
+      const real = safeRealpath(cur);
+      if (real === null) return false;
+      if (real !== realCwd && !real.startsWith(realCwd + sep)) return false;
+    }
+  }
+  return true;
 }

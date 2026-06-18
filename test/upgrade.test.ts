@@ -155,6 +155,41 @@ test('no manifest → degraded safe mode + re-seeds a baseline', async () => {
   });
 });
 
+test('Codex 2nd-pass: an unresolved conflict persists across consecutive upgrades', async () => {
+  await withWorkspace(async (cwd) => {
+    const f = join(cwd, 'gtm', 'EXPERT.md');
+    writeFileSync(f, 'MY EDITS\n');
+    setBaseline(cwd, 'gtm/EXPERT.md', 'old-divergent-baseline'); // edited + template changed
+    const r1 = executeUpgrade({ cwd, dryRun: false });
+    assert.ok(r1.conflicts.includes('gtm/EXPERT.md'));
+    rmSync(`${f}.new`); // user deletes the .new without merging
+    // Second run, nothing else changed: the conflict must NOT silently become a noop.
+    const r2 = executeUpgrade({ cwd, dryRun: false });
+    assert.ok(r2.conflicts.includes('gtm/EXPERT.md'), 'conflict still flagged on re-run');
+    assert.ok(existsSync(`${f}.new`), '.new regenerated');
+    assert.equal(readFileSync(f, 'utf8'), 'MY EDITS\n'); // never auto-clobbered
+  });
+});
+
+test('Codex 2nd-pass: refuses to write through a symlinked parent dir (escape)', async () => {
+  await withWorkspace(async (cwd) => {
+    const escapeTarget = mkdtempSync(join(tmpdir(), 'roster-escape-'));
+    try {
+      // Replace gtm/ with a symlink pointing outside the workspace.
+      rmSync(join(cwd, 'gtm'), { recursive: true, force: true });
+      symlinkSync(escapeTarget, join(cwd, 'gtm'));
+      setBaseline(cwd, 'gtm/EXPERT.md', 'old'); // would-be change
+      const r = executeUpgrade({ cwd, dryRun: false });
+      assert.ok(r.symlinkSkipped.includes('gtm/EXPERT.md'));
+      // Nothing written into the escape target.
+      assert.ok(!existsSync(join(escapeTarget, 'EXPERT.md')));
+      assert.ok(!existsSync(join(escapeTarget, 'EXPERT.md.new')));
+    } finally {
+      rmSync(escapeTarget, { recursive: true, force: true });
+    }
+  });
+});
+
 test('--dry-run reports but writes nothing', async () => {
   await withWorkspace(async (cwd) => {
     const f = join(cwd, 'gtm', 'EXPERT.md');
