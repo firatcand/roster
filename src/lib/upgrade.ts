@@ -132,6 +132,7 @@ export type UpgradeResult = {
   conflicts: string[]; // wrote <path>.new (or would, under dry-run)
   unchanged: string[];
   symlinkSkipped: string[];
+  excluded: string[]; // skipped by an exclude pattern (default or --exclude)
   droppedKept: string[]; // in old manifest, no longer a template file — left in place
   founderExampleChanged: boolean;
   hadManifest: boolean;
@@ -140,9 +141,53 @@ export type UpgradeResult = {
 
 const FOUNDER_EXAMPLE = 'founder-skills.yaml.example';
 
-export function executeUpgrade(opts: { cwd: string; dryRun: boolean }): UpgradeResult {
+// `guidelines/` is user-authored substrate (voice, messaging, brand, ICPs) —
+// roster ships starter content there meant to be replaced, not refreshed. So
+// upgrade never manages it by default. Callers add more via --exclude.
+export const DEFAULT_UPGRADE_EXCLUDES: readonly string[] = ['guidelines'];
+
+function globToRegExp(glob: string): RegExp {
+  let re = '';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]!;
+    if (c === '*') {
+      if (glob[i + 1] === '*') {
+        re += '.*';
+        i++;
+      } else {
+        re += '[^/]*';
+      }
+    } else if ('\\^$.|?+()[]{}'.includes(c)) {
+      re += `\\${c}`;
+    } else {
+      re += c;
+    }
+  }
+  return new RegExp(`^${re}$`);
+}
+
+// True if destRel (workspace-relative) is excluded by any pattern: exact match,
+// directory subtree (`guidelines` matches `guidelines/voice.md`), or a `*`/`**`
+// glob. destRel is normalized to forward slashes so patterns are cross-platform.
+export function isPathExcluded(destRel: string, patterns: readonly string[]): boolean {
+  const norm = destRel.split(sep).join('/');
+  for (const raw of patterns) {
+    const p = raw.replace(/\/+$/, '');
+    if (!p) continue;
+    if (norm === p || norm.startsWith(`${p}/`)) return true;
+    if (p.includes('*') && globToRegExp(p).test(norm)) return true;
+  }
+  return false;
+}
+
+export function executeUpgrade(opts: {
+  cwd: string;
+  dryRun: boolean;
+  excludes?: readonly string[];
+}): UpgradeResult {
   const { cwd, dryRun } = opts;
   if (!detectWorkspace(cwd)) throw workspaceRequiredError(cwd);
+  const excludePatterns = [...DEFAULT_UPGRADE_EXCLUDES, ...(opts.excludes ?? [])];
 
   const scaffoldSrc = scaffoldSrcRoot();
   const vars = varsFromWorkspace(cwd);
@@ -155,6 +200,7 @@ export function executeUpgrade(opts: { cwd: string; dryRun: boolean }): UpgradeR
     conflicts: [],
     unchanged: [],
     symlinkSkipped: [],
+    excluded: [],
     droppedKept: [],
     founderExampleChanged: false,
     hadManifest: oldManifest !== null,
@@ -179,6 +225,13 @@ export function executeUpgrade(opts: { cwd: string; dryRun: boolean }): UpgradeR
 
   for (const { srcPath, destRel } of collectScaffoldFiles(scaffoldSrc)) {
     currentTemplatePaths.add(destRel);
+    // Excluded paths are never created/updated/`.new`'d. Preserve their manifest
+    // entry so nothing is lost if a user later drops the exclude.
+    if (isPathExcluded(destRel, excludePatterns)) {
+      result.excluded.push(destRel);
+      preserve(destRel);
+      continue;
+    }
     const newContent = renderScaffoldFile(srcPath, basename(srcPath), vars);
     const newSha = sha256(newContent);
     const destPath = join(cwd, destRel);
