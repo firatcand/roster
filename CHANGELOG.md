@@ -6,6 +6,10 @@ Per-phase retrospectives live in [`docs/retros/`](docs/retros/) and carry the lo
 
 ## [Unreleased]
 
+### Added
+
+- **`roster upgrade` — refresh a scaffolded workspace to the installed roster's templates.** Closes the gap where `roster init` is skip-if-exists, so scaffold improvements (e.g. the ROS-128 expert-route fixes) never reached existing workspaces. `init` now records a baseline at `.roster/scaffold-manifest.json` (a per-file hash of the rendered template content); `roster upgrade` compares the installed templates against it: files you haven't touched are **auto-updated**, files you've **edited** get a `<file>.new` sibling (like `.dpkg-dist`) and are never clobbered, missing files are recreated, and templates that were dropped upstream are left in place. Workspaces with no manifest (anything scaffolded before this release) run a **degraded safe mode** — every changed file becomes a `.new` and a baseline is seeded for next time. `--dry-run` previews; `--json` for scripts. Whole-file only (no line merge); does not touch roster's own skills/agents (`roster install`) or founder-skills (`roster skills sync`). (ROS-130)
+
 ### Changed
 
 - **Scaffolded experts route to the current founder-skills catalog.** After founder-skills consolidated `ui-design` + `ux-design` + `graphic-design` into a single `design` skill (and dropped `prompt-architect`/`prompt-engineering-patterns`), the scaffolded `EXPERT.md` files routed to skill names that no longer resolve. Updated `templates/scaffold/{design,product}/EXPERT.md` to route to `design`, removed a phantom `ui-ux-pro-max` route, and labeled `frontend-design` as a Claude built-in (not a founder-skill). Each expert now notes its skill routes resolve to founder-skills declared in `founder-skills.yaml` + synced via `roster skills sync`, and `founder-skills.yaml.example` was expanded to the full set the experts route to (trim to taste). (ROS-128)
