@@ -14,6 +14,11 @@ import chalk from 'chalk';
 import { ROSTER_ROOT } from '../lib/paths.ts';
 import { missingScaffoldError, v04WorkspaceDetectedError } from '../lib/errors.ts';
 import { writeContextAndLinks } from '../lib/project-context.ts';
+import { TEMPLATE_SUFFIX_RE, substitute } from '../lib/scaffold-render.ts';
+import { buildScaffoldManifestFromTemplates } from '../lib/upgrade.ts';
+import { writeScaffoldManifest, scaffoldManifestPath } from '../lib/scaffold-manifest.ts';
+
+export { substitute } from '../lib/scaffold-render.ts';
 
 export type ConfirmFn = (message: string) => Promise<boolean>;
 
@@ -61,17 +66,8 @@ const V04_SCAN_SKIP = new Set([
   'bin',
 ]);
 
-// Matches `<basename>.template` or `<basename>.template.<ext>`. Capture group
-// is the trailing extension (or empty), so the suffix can be replaced with the
-// captured ext to drop only `.template` from the filename.
-const TEMPLATE_SUFFIX_RE = /\.template(\.[^.]+)?$/;
-
 function readTemplate(name: string): string {
   return readFileSync(join(ROSTER_ROOT, 'templates', name), 'utf8');
-}
-
-export function substitute(template: string, vars: Record<string, string>): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (_, key: string) => vars[key] ?? `{{${key}}}`);
 }
 
 export function detectForgeMarkers(cwd: string): string[] {
@@ -318,11 +314,18 @@ export async function executeInit(opts: InitOptions): Promise<InitResult> {
   if (!existsSync(scaffoldSrc)) {
     throw missingScaffoldError(scaffoldSrc);
   }
-  const scaffoldFiles = walkScaffold(scaffoldSrc, opts.cwd, {
+  const scaffoldVars = {
     PROJECT_NAME: projectName,
     DISPLAY_NAME: projectName,
-  });
+  };
+  const scaffoldFiles = walkScaffold(scaffoldSrc, opts.cwd, scaffoldVars);
   filesWritten.push(...scaffoldFiles);
+
+  // Record the scaffold baseline so `roster upgrade` can tell pristine files
+  // (safe to auto-update) from user-edited ones. Entries hash the rendered
+  // template content — the exact bytes walkScaffold just wrote.
+  writeScaffoldManifest(opts.cwd, buildScaffoldManifestFromTemplates(scaffoldSrc, scaffoldVars));
+  filesWritten.push(relative(opts.cwd, scaffoldManifestPath(opts.cwd)));
 
   // For --migrate: inject existing CLAUDE.md content into user region before writing
   if (isMigration && migrate) {

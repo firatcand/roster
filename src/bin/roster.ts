@@ -33,6 +33,8 @@ import {
 import { executeReview } from '../commands/review.ts';
 import { executeSkillsSync, executeSkillsUpdate, renderSyncResult } from '../commands/skills.ts';
 import { parseSkillsArgs } from '../lib/skills-args.ts';
+import { executeUpgradeCommand } from '../commands/upgrade.ts';
+import { parseUpgradeArgs } from '../lib/upgrade-args.ts';
 import { syncFounderSkills } from '../lib/founder-skills/sync.ts';
 import { realInstaller } from '../lib/founder-skills/installer.ts';
 import { executeHooksInstall } from '../commands/hooks.ts';
@@ -53,7 +55,7 @@ import {
   workspaceRequiredError,
 } from '../lib/errors.ts';
 
-type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'hooks' | 'migrate' | 'pending' | 'skills';
+type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'hooks' | 'migrate' | 'pending' | 'skills' | 'upgrade';
 const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'install',
   'init',
@@ -62,6 +64,7 @@ const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'review',
   'hooks',
   'migrate',
+  'upgrade',
   'pending',
   'skills',
 ]);
@@ -91,6 +94,7 @@ function printHelp(version: string): void {
     `  roster                       ${chalk.dim('Interactive install (alias of `roster install`)')}`,
     `  roster install               ${chalk.dim('Copy skills + agents into detected AI tool config dirs')}`,
     `  roster init [name]           ${chalk.dim('Scaffold a multi-agent workspace in the current dir')}`,
+    `  roster upgrade [--dry-run]   ${chalk.dim('Refresh scaffold files to the installed roster (.new on edits)')}`,
     `  roster doctor                ${chalk.dim('Audit installed skills + agents per AI tool')}`,
     `  roster schedule validate     ${chalk.dim('Validate roster/<function>/schedules.yaml files')}`,
     `  roster schedule install      ${chalk.dim('Register a schedule (Claude: UI hand-off; Codex: ROS-35)')}`,
@@ -520,6 +524,23 @@ function runPending(args: readonly string[]): number {
   });
 }
 
+function runUpgrade(args: readonly string[]): number {
+  const parsed = parseUpgradeArgs(args);
+  if (parsed.kind === 'err') {
+    throw new RosterError({
+      header: `${chalk.red.bold('roster:')} ${parsed.message}`,
+      body: '',
+      remedy: `  Run ${chalk.bold('roster --help')} for usage.`,
+      exitCode: EXIT_ERROR,
+    });
+  }
+  return executeUpgradeCommand({
+    cwd: parsed.cwd ?? process.cwd(),
+    dryRun: parsed.dryRun,
+    json: parsed.json,
+  });
+}
+
 async function runSkills(args: readonly string[]): Promise<number> {
   const parsed = parseSkillsArgs(args);
   if (parsed.kind === 'err') {
@@ -624,6 +645,7 @@ async function main(): Promise<number> {
     if (first === 'schedule') return await runSchedule(rest);
     if (first === 'review') return await runReview(rest);
     if (first === 'skills') return await runSkills(rest);
+    if (first === 'upgrade') return runUpgrade(rest);
     if (first === 'hooks') return await runHooks(rest);
     if (first === 'migrate') return runMigrate(rest);
     if (first === 'pending') return runPending(rest);
