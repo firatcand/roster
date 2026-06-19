@@ -127,6 +127,7 @@ echo ""
 echo "===> 4. roster install"
 HOME="$FAKE_HOME" ROSTER_CLAUDE_HOME="$CLAUDE_HOME" "$ROSTER_BIN" install --yes --scope user --silent
 assert "-f \"$CLAUDE_HOME/skills/chief-of-staff/SKILL.md\"" "chief-of-staff SKILL.md installed"
+assert "-f \"$CLAUDE_HOME/skills/inbox/SKILL.md\"" "inbox SKILL.md installed (ROS-132 — /inbox)"
 assert "-f \"$CLAUDE_HOME/agents/lesson-drafter.md\"" "lesson-drafter.md installed (claude md-copy)"
 
 # Idempotency: re-running install should not throw
@@ -261,6 +262,24 @@ assert "! -f guidelines/voice.md.new" "upgrade excludes guidelines/ by default (
 rm -f gtm/EXPERT.md.new; printf '\nEDIT\n' >> gtm/EXPERT.md
 "$ROSTER_BIN" upgrade --exclude gtm > /dev/null 2>&1
 assert "! -f gtm/EXPERT.md.new" "upgrade --exclude skips the named path"
+
+echo ""
+echo "===> 5f. inbox / headless review apply (ROS-132) — in $WORKSPACE"
+# Shipped banner reworded to "unread decisions … /inbox" (rebrand only).
+assert_contains "$REPO_ROOT/templates/hooks/banner.sh" "unread %s awaiting — run /inbox" "banner.sh reworded to /inbox"
+if grep -q "pending HITL items — run" "$REPO_ROOT/templates/hooks/banner.sh"; then
+  fail "old banner literal still present in banner.sh"
+else
+  pass "old banner literal gone from banner.sh"
+fi
+# Plant a decision, list it (with id), approve it headlessly → moves to target.
+mkdir -p roster/gtm/pending
+printf -- '---\ntarget_on_approve: gtm/sdr/logs/runs/resolved.md\n---\nbody\n' > roster/gtm/pending/error-smoke.md
+INBOX_ID=$("$ROSTER_BIN" review --json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const a=JSON.parse(s);process.stdout.write(a[0]?a[0].id:'')})" 2>/dev/null)
+assert "-n \"$INBOX_ID\"" "review --json yields a decision id"
+"$ROSTER_BIN" review --approve "$INBOX_ID" --json > /dev/null 2>&1
+assert "-f gtm/sdr/logs/runs/resolved.md" "review --approve <id> moves the decision to its target"
+assert "! -f roster/gtm/pending/error-smoke.md" "approved decision leaves the pending queue"
 
 echo ""
 echo "===> 6. Schedule list/status/remove (ROS-36)"
