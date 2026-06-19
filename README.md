@@ -78,8 +78,8 @@ Using 1Password or Infisical? Compose them with the `.env` model via the recipes
 | `roster skills update [--latest]` | Re-sync to the lockfile, or bump pinned refs to newest tags |
 | `roster schedule validate` | Validate every `roster/<function>/schedules.yaml` |
 | `roster schedule install` | Install a schedule into your host tool's native scheduler |
-| `roster review [function]` | Walk pending HITL items interactively (approve / reject / defer) |
-| `roster hooks install` | Wire SessionStart banners so chat sessions surface pending counts |
+| `roster review [function]` | Review unread decisions (HITL): `--json` lists; `--approve`/`--reject <id\|path>` apply headlessly; bare TTY = interactive walker. `/inbox` is the chat front door. |
+| `roster hooks install` | Wire SessionStart banners so chat sessions surface unread-decision counts |
 
 Full subcommand reference in [docs/HOWTO.md](docs/HOWTO.md). Scheduling rules, UI hand-off, and platform matrix in [docs/SCHEDULING.md](docs/SCHEDULING.md).
 

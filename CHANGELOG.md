@@ -6,6 +6,10 @@ Per-phase retrospectives live in [`docs/retros/`](docs/retros/) and carry the lo
 
 ## [Unreleased]
 
+### Added
+
+- **`/inbox` — review unread decisions conversationally in chat.** Session start now reads `⚠ You have N unread decision(s) awaiting — run /inbox` (was `⚠ N pending HITL items — run roster review`). `/inbox` ships as a cross-tool skill (Claude Code + Codex) that lists your pending HITL items, shows each in chat, and applies your approve/reject/defer replies — no terminal TUI required. It's backed by new headless verbs on `roster review`: `--json` now carries a stable per-item `id` (`sha1(function/filename)`), and `roster review --approve <id|path>` / `--reject <id|path>` apply a single decision non-interactively (same path-safety as the interactive walker — a bad `target_on_approve` leaves the file untouched). "Unread" is a rebrand of the existing pending count, not a new read/seen state. Existing workspaces get `/inbox` + the new banner by re-running `roster install` (+ `roster hooks install`). (ROS-132)
+
 ### Changed
 
 - **`roster upgrade` excludes `guidelines/` by default, and gains `--exclude <glob>`.** `guidelines/` is user-authored substrate (voice, messaging, brand-book, asset-links, ICPs) — roster's starter content there is meant to be replaced, not refreshed — so `roster upgrade` no longer writes `guidelines/*.new`. The new `--exclude <glob>` flag (repeatable, comma-splittable) skips additional paths; patterns match by exact path, directory subtree (`dreamer` → `dreamer/agent.md`), or `*`/`**` glob. Excluded files are skipped entirely and keep their manifest baseline, so nothing is lost if the exclude is later dropped. (ROS-131)
