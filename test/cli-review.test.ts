@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -42,7 +42,7 @@ test('review: empty workspace → exit 0 with "no pending" message', () => {
   try {
     const r = runCli(['review'], fix.root);
     assert.equal(r.status, 0);
-    assert.match(r.stdout, /No pending HITL items/);
+    assert.match(r.stdout, /No unread decisions/);
   } finally {
     fix.cleanup();
   }
@@ -54,7 +54,7 @@ test('review <fn>: function exists but empty → exit 0 with "no pending for fn"
     mkdirSync(join(fix.root, 'roster', 'gtm'), { recursive: true });
     const r = runCli(['review', 'gtm'], fix.root);
     assert.equal(r.status, 0);
-    assert.match(r.stdout, /No pending HITL items for gtm/);
+    assert.match(r.stdout, /No unread decisions for gtm/);
   } finally {
     fix.cleanup();
   }
@@ -78,15 +78,16 @@ test('review --json: lists pending items as JSON on non-TTY', () => {
     writePending(fix.root, 'dreamer', 'b.md', '---\ntarget_on_approve: dreamer/playbook/b.md\n---\nbody b');
     const r = runCli(['review', '--json'], fix.root);
     assert.equal(r.status, 0);
-    const payload = JSON.parse(r.stdout) as Array<{ function: string; filename: string; path: string }>;
+    const payload = JSON.parse(r.stdout) as Array<{ function: string; filename: string; path: string; id: string }>;
     assert.equal(payload.length, 2);
     assert.deepEqual(
       payload.map((p) => `${p.function}/${p.filename}`).sort(),
       ['dreamer/b.md', 'gtm/a.md'],
     );
-    // Paths are workspace-relative.
+    // Paths are workspace-relative; each item carries a stable 8-hex id.
     for (const item of payload) {
       assert.ok(!item.path.startsWith('/'), `expected workspace-relative path, got: ${item.path}`);
+      assert.match(item.id, /^[a-f0-9]{8}$/);
     }
   } finally {
     fix.cleanup();
@@ -148,6 +149,99 @@ test('review: too many positional args → exit 1', () => {
     const r = runCli(['review', 'gtm', 'extra'], fix.root);
     assert.equal(r.status, 1);
     assert.match(r.stderr, /at most one function name/);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+function idOf(root: string, fn: string): string {
+  const r = runCli(['review', '--json'], root);
+  const payload = JSON.parse(r.stdout) as Array<{ function: string; id: string }>;
+  return payload.find((p) => p.function === fn)!.id;
+}
+
+test('review --approve <id>: moves item to target_on_approve, exit 0', () => {
+  const fix = makeCwd();
+  try {
+    const src = writePending(fix.root, 'gtm', 'a.md', '---\ntarget_on_approve: gtm/approved/a.md\n---\nbody');
+    const r = runCli(['review', '--approve', idOf(fix.root, 'gtm'), '--json'], fix.root);
+    assert.equal(r.status, 0);
+    assert.ok(!existsSync(src));
+    assert.ok(existsSync(join(fix.root, 'gtm', 'approved', 'a.md')));
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test('review --reject <id>: deletes item, exit 0', () => {
+  const fix = makeCwd();
+  try {
+    const src = writePending(fix.root, 'gtm', 'a.md', '---\ntarget_on_approve: gtm/x.md\n---\n');
+    const r = runCli(['review', '--reject', idOf(fix.root, 'gtm'), '--json'], fix.root);
+    assert.equal(r.status, 0);
+    assert.ok(!existsSync(src));
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test('review --approve <unknown id> → exit 1 not-found, JSON error', () => {
+  const fix = makeCwd();
+  try {
+    writePending(fix.root, 'gtm', 'a.md', '---\ntarget_on_approve: gtm/x.md\n---\n');
+    const r = runCli(['review', '--approve', 'deadbeef', '--json'], fix.root);
+    assert.equal(r.status, 1);
+    assert.match(r.stdout, /"reason": "not-found"/);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test('review --approve <id> with no target_on_approve → exit 1, file untouched', () => {
+  const fix = makeCwd();
+  try {
+    const src = writePending(fix.root, 'gtm', 'a.md', '---\ntype: note\n---\nno target');
+    const r = runCli(['review', '--approve', idOf(fix.root, 'gtm'), '--json'], fix.root);
+    assert.equal(r.status, 1);
+    assert.match(r.stdout, /missing target_on_approve/);
+    assert.ok(existsSync(src), 'file must NOT be moved or deleted on failed approve');
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test('review --approve <id> with target_on_approve escaping workspace → exit 1, file untouched', () => {
+  const fix = makeCwd();
+  try {
+    const src = writePending(fix.root, 'gtm', 'a.md', '---\ntarget_on_approve: ../escape.md\n---\n');
+    const r = runCli(['review', '--approve', idOf(fix.root, 'gtm'), '--json'], fix.root);
+    assert.equal(r.status, 1);
+    assert.match(r.stdout, /escapes workspace/);
+    assert.ok(existsSync(src));
+    assert.ok(!existsSync(join(fix.root, '..', 'escape.md')));
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test('review --approve twice: second call → exit 1 not-found (idempotent)', () => {
+  const fix = makeCwd();
+  try {
+    writePending(fix.root, 'gtm', 'a.md', '---\ntarget_on_approve: gtm/approved/a.md\n---\n');
+    const id = idOf(fix.root, 'gtm');
+    assert.equal(runCli(['review', '--approve', id, '--json'], fix.root).status, 0);
+    assert.equal(runCli(['review', '--approve', id, '--json'], fix.root).status, 1);
+  } finally {
+    fix.cleanup();
+  }
+});
+
+test('review --approve + --reject together → exit 1 arg error', () => {
+  const fix = makeCwd();
+  try {
+    const r = runCli(['review', '--approve', 'x', '--reject', 'y'], fix.root);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /mutually exclusive/);
   } finally {
     fix.cleanup();
   }

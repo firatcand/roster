@@ -135,7 +135,7 @@ export async function executeReview(opts: ReviewOptions): Promise<number> {
   if (items.length === 0) {
     if (!opts.silent) {
       const scope = opts.fn !== undefined ? `for ${chalk.cyan(opts.fn)}` : 'across all functions';
-      console.log(`${chalk.green('✓')} No pending HITL items ${scope}.`);
+      console.log(`${chalk.green('✓')} No unread decisions ${scope}.`);
     }
     return EXIT_OK;
   }
@@ -148,8 +148,8 @@ export async function executeReview(opts: ReviewOptions): Promise<number> {
   const summary: ReviewSummary = { approved: 0, rejected: 0, deferred: 0 };
 
   if (!opts.silent) {
-    const word = items.length === 1 ? 'item' : 'items';
-    console.log(`\n${chalk.bold(`${items.length} pending HITL ${word}`)} — review each below.`);
+    const word = items.length === 1 ? 'decision' : 'decisions';
+    console.log(`\n${chalk.bold(`${items.length} unread ${word}`)} — review each below.`);
   }
 
   try {
