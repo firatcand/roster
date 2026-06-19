@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PendingItem } from '../src/lib/pending.ts';
@@ -96,6 +96,25 @@ test('approveItem: target already exists → fail, no clobber', () => {
     assert.equal(readFileSync(join(root, 'gtm', 'approved', 'a.md'), 'utf8'), 'EXISTING');
     assert.ok(existsSync(a.path));
   });
+});
+
+test('Codex 2nd-pass: approve refuses a target under a symlinked dir escaping the workspace', () => {
+  const escape = mkdtempSync(join(tmpdir(), 'roster-escape-'));
+  try {
+    withRoot((root) => {
+      // gtm/approved is a symlink pointing OUTSIDE the workspace.
+      mkdirSync(join(root, 'gtm'), { recursive: true });
+      symlinkSync(escape, join(root, 'gtm', 'approved'));
+      const a = item(root, 'gtm', 'a.md', { target_on_approve: 'gtm/approved/a.md' });
+      const res = approveItem(a, root);
+      assert.ok(!res.ok, 'must refuse to move through a symlinked dir');
+      assert.ok(existsSync(a.path), 'source untouched');
+      assert.ok(!existsSync(join(escape, 'a.md')), 'nothing written into the escape target');
+      assert.equal(targetWithinWorkspace('gtm/approved/a.md', root), null);
+    });
+  } finally {
+    rmSync(escape, { recursive: true, force: true });
+  }
 });
 
 test('rejectItem: deletes the file', () => {

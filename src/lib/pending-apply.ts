@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, renameSync, unlinkSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { PendingItem } from './pending.ts';
 
@@ -16,12 +16,37 @@ export function workspaceRelative(absPath: string, cwd: string): string {
 }
 
 // Reject a target that resolves to the workspace root, an ancestor, or anywhere
-// outside the workspace. Identical contract to the interactive walker so there
-// is one source of truth for the security boundary.
+// outside the workspace. Single source of truth for the security boundary
+// (interactive walker + headless apply). Two layers:
+//   1. Lexical — no `..`, not absolute, not the root itself.
+//   2. Real-path — the deepest EXISTING ancestor of the target must resolve
+//      inside the workspace's real path, so a renameSync can never follow a
+//      symlinked directory out of the workspace (Codex 2nd-pass).
 export function targetWithinWorkspace(target: string, cwd: string): string | null {
   const absTarget = isAbsolute(target) ? resolve(target) : resolve(cwd, target);
   const rel = relative(resolve(cwd), absTarget);
   if (rel === '' || rel === '.' || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) {
+    return null;
+  }
+  let realCwd: string;
+  try {
+    realCwd = realpathSync(cwd);
+  } catch {
+    return null;
+  }
+  let probe = absTarget;
+  while (!existsSync(probe)) {
+    const parent = dirname(probe);
+    if (parent === probe) return null; // walked past root without finding an existing ancestor
+    probe = parent;
+  }
+  let realProbe: string;
+  try {
+    realProbe = realpathSync(probe);
+  } catch {
+    return null;
+  }
+  if (realProbe !== realCwd && !realProbe.startsWith(realCwd + sep)) {
     return null;
   }
   return absTarget;
