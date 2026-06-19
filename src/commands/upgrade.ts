@@ -6,6 +6,7 @@ export type UpgradeCommandOptions = {
   cwd: string;
   dryRun: boolean;
   json: boolean;
+  excludes: readonly string[];
 };
 
 export function renderUpgradeResult(result: UpgradeResult): string[] {
@@ -19,6 +20,9 @@ export function renderUpgradeResult(result: UpgradeResult): string[] {
     result.created.length + result.updated.length + result.conflicts.length;
   if (touched === 0 && result.symlinkSkipped.length === 0) {
     lines.push(`  ${chalk.dim('·')} workspace already matches the installed templates`);
+    if (result.excluded.length > 0) {
+      lines.push(`  ${chalk.dim('·')} excluded ${result.excluded.length} path${result.excluded.length === 1 ? '' : 's'} ${chalk.dim('(guidelines/ + --exclude)')}`);
+    }
     lines.push('');
     return lines;
   }
@@ -27,6 +31,7 @@ export function renderUpgradeResult(result: UpgradeResult): string[] {
   for (const p of result.updated) lines.push(`  ${chalk.green('~')} ${verb}update   ${chalk.dim('(unchanged by you) ')}${p}`);
   for (const p of result.conflicts) lines.push(`  ${chalk.yellow('!')} ${verb}write    ${p}${chalk.dim('.new')} ${chalk.dim('(you edited this — review & merge)')}`);
   for (const p of result.symlinkSkipped) lines.push(`  ${chalk.red('✗')} skipped  ${p} ${chalk.dim('(symlink — not touched)')}`);
+  for (const p of result.excluded) lines.push(`  ${chalk.dim('·')} excluded ${p} ${chalk.dim('(not managed by upgrade)')}`);
   for (const p of result.droppedKept) lines.push(`  ${chalk.dim('·')} kept     ${p} ${chalk.dim('(no longer shipped; left in place)')}`);
 
   lines.push('');
@@ -43,7 +48,7 @@ export function renderUpgradeResult(result: UpgradeResult): string[] {
 }
 
 export function executeUpgradeCommand(opts: UpgradeCommandOptions): number {
-  const result = executeUpgrade({ cwd: opts.cwd, dryRun: opts.dryRun });
+  const result = executeUpgrade({ cwd: opts.cwd, dryRun: opts.dryRun, excludes: opts.excludes });
   if (opts.json) {
     console.log(JSON.stringify({ ok: true, ...result }, null, 2));
   } else {

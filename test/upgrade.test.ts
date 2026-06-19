@@ -13,7 +13,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { executeInit } from '../src/commands/init.ts';
-import { executeUpgrade, decideUpgradeAction } from '../src/lib/upgrade.ts';
+import { executeUpgrade, decideUpgradeAction, isPathExcluded } from '../src/lib/upgrade.ts';
 import {
   readScaffoldManifest,
   writeScaffoldManifest,
@@ -200,6 +200,56 @@ test('--dry-run reports but writes nothing', async () => {
     assert.ok(r.updated.includes('gtm/EXPERT.md'));
     assert.equal(readFileSync(f, 'utf8'), 'OLD\n'); // unchanged
     assert.equal(readFileSync(scaffoldManifestPath(cwd), 'utf8'), before); // manifest untouched
+  });
+});
+
+test('isPathExcluded: exact, directory-subtree, and glob', () => {
+  assert.equal(isPathExcluded('guidelines/voice.md', ['guidelines']), true); // subtree
+  assert.equal(isPathExcluded('guidelines', ['guidelines']), true); // exact
+  assert.equal(isPathExcluded('guidelines/icps/x.md', ['guidelines']), true); // nested subtree
+  assert.equal(isPathExcluded('gtm/EXPERT.md', ['guidelines']), false);
+  assert.equal(isPathExcluded('voice.md', ['*.md']), true); // top-level glob
+  assert.equal(isPathExcluded('gtm/EXPERT.md', ['*.md']), false); // * doesn't cross /
+  assert.equal(isPathExcluded('gtm/EXPERT.md', ['**/EXPERT.md']), true); // ** crosses /
+  assert.equal(isPathExcluded('gtm/EXPERT.md', ['guidelines/']), false); // trailing slash normalized
+});
+
+test('guidelines/ is excluded by default — never gets a .new even when edited', async () => {
+  await withWorkspace(async (cwd) => {
+    const g = join(cwd, 'guidelines', 'voice.md');
+    writeFileSync(g, 'MY VOICE\n');
+    setBaseline(cwd, 'guidelines/voice.md', 'old-baseline'); // would otherwise be a conflict
+    const r = executeUpgrade({ cwd, dryRun: false });
+    assert.ok(r.excluded.includes('guidelines/voice.md'));
+    assert.ok(!r.conflicts.includes('guidelines/voice.md'));
+    assert.ok(!existsSync(`${g}.new`));
+    assert.equal(readFileSync(g, 'utf8'), 'MY VOICE\n'); // untouched
+  });
+});
+
+test('--exclude adds a custom pattern (skips an EXPERT it would otherwise .new)', async () => {
+  await withWorkspace(async (cwd) => {
+    const f = join(cwd, 'gtm', 'EXPERT.md');
+    writeFileSync(f, 'EDITS\n');
+    setBaseline(cwd, 'gtm/EXPERT.md', 'old-baseline');
+    const r = executeUpgrade({ cwd, dryRun: false, excludes: ['gtm'] });
+    assert.ok(r.excluded.includes('gtm/EXPERT.md'));
+    assert.ok(!r.conflicts.includes('gtm/EXPERT.md'));
+    assert.ok(!existsSync(`${f}.new`));
+  });
+});
+
+test('excluded files preserve their manifest entry', async () => {
+  await withWorkspace(async (cwd) => {
+    const before = readScaffoldManifest(cwd)!;
+    const voiceBefore = before.files.find((e) => e.path === 'guidelines/voice.md');
+    assert.ok(voiceBefore);
+    // Edit guidelines so an unfiltered upgrade would advance/drop it; default exclude must preserve.
+    writeFileSync(join(cwd, 'guidelines', 'voice.md'), 'CHANGED\n');
+    executeUpgrade({ cwd, dryRun: false });
+    const after = readScaffoldManifest(cwd)!;
+    const voiceAfter = after.files.find((e) => e.path === 'guidelines/voice.md');
+    assert.deepEqual(voiceAfter, voiceBefore); // entry preserved unchanged
   });
 });
 

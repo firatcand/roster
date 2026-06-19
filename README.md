@@ -96,6 +96,8 @@ A roster workspace has four layers, and they update independently:
 
 `roster init` is intentionally skip-if-exists (your scaffold is yours to customize), so it never overwrites an existing `EXPERT.md`. **`roster upgrade`** is how scaffold improvements reach an existing workspace: it auto-updates files you haven't touched, and for files you've edited it writes a `<file>.new` beside yours to review and merge — your file is never clobbered. Run `roster upgrade --dry-run` first to preview.
 
+`guidelines/` (your voice, messaging, brand, and ICPs) is **excluded by default** — it's content you author, not roster's to refresh. Skip more paths with `--exclude <glob>` (e.g. `roster upgrade --exclude dreamer --exclude '*.md'`).
+
 ---
 
 ## How it works

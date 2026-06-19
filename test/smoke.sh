@@ -253,6 +253,14 @@ assert "-f gtm/EXPERT.md" "upgrade recreates a deleted scaffold file"
 printf '\nMY EDIT\n' >> conventions.md
 "$ROSTER_BIN" upgrade --dry-run > /dev/null 2>&1
 assert "! -f conventions.md.new" "upgrade --dry-run writes nothing"
+# ROS-131: guidelines/ excluded by default — editing voice.md never yields a .new.
+printf '\nMY VOICE\n' >> guidelines/voice.md
+"$ROSTER_BIN" upgrade > /dev/null 2>&1
+assert "! -f guidelines/voice.md.new" "upgrade excludes guidelines/ by default (no .new)"
+# --exclude skips an additional path (gtm here).
+rm -f gtm/EXPERT.md.new; printf '\nEDIT\n' >> gtm/EXPERT.md
+"$ROSTER_BIN" upgrade --exclude gtm > /dev/null 2>&1
+assert "! -f gtm/EXPERT.md.new" "upgrade --exclude skips the named path"
 
 echo ""
 echo "===> 6. Schedule list/status/remove (ROS-36)"

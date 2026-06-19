@@ -6,7 +6,9 @@ Per-phase retrospectives live in [`docs/retros/`](docs/retros/) and carry the lo
 
 ## [Unreleased]
 
-_(empty — staging area for post-1.1.0 work)_
+### Changed
+
+- **`roster upgrade` excludes `guidelines/` by default, and gains `--exclude <glob>`.** `guidelines/` is user-authored substrate (voice, messaging, brand-book, asset-links, ICPs) — roster's starter content there is meant to be replaced, not refreshed — so `roster upgrade` no longer writes `guidelines/*.new`. The new `--exclude <glob>` flag (repeatable, comma-splittable) skips additional paths; patterns match by exact path, directory subtree (`dreamer` → `dreamer/agent.md`), or `*`/`**` glob. Excluded files are skipped entirely and keep their manifest baseline, so nothing is lost if the exclude is later dropped. (ROS-131)
 
 ## [1.1.0] — 2026-06-18
 

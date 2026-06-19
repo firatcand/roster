@@ -94,7 +94,7 @@ function printHelp(version: string): void {
     `  roster                       ${chalk.dim('Interactive install (alias of `roster install`)')}`,
     `  roster install               ${chalk.dim('Copy skills + agents into detected AI tool config dirs')}`,
     `  roster init [name]           ${chalk.dim('Scaffold a multi-agent workspace in the current dir')}`,
-    `  roster upgrade [--dry-run]   ${chalk.dim('Refresh scaffold files to the installed roster (.new on edits)')}`,
+    `  roster upgrade [--dry-run]   ${chalk.dim('Refresh scaffold files to the installed roster (guidelines/ excluded; --exclude <glob>)')}`,
     `  roster doctor                ${chalk.dim('Audit installed skills + agents per AI tool')}`,
     `  roster schedule validate     ${chalk.dim('Validate roster/<function>/schedules.yaml files')}`,
     `  roster schedule install      ${chalk.dim('Register a schedule (Claude: UI hand-off; Codex: ROS-35)')}`,
@@ -538,6 +538,7 @@ function runUpgrade(args: readonly string[]): number {
     cwd: parsed.cwd ?? process.cwd(),
     dryRun: parsed.dryRun,
     json: parsed.json,
+    excludes: parsed.excludes,
   });
 }
 
