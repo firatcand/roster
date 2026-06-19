@@ -105,7 +105,7 @@ function printHelp(version: string): void {
     `  roster schedule estimate-usage  ${chalk.dim('Estimate plan-message consumption per schedule')}`,
     `  roster skills sync           ${chalk.dim('Install founder-skills declared in founder-skills.yaml (project-local)')}`,
     `  roster skills update [--latest]  ${chalk.dim('Re-sync to the lockfile, or bump pinned refs to newest tags')}`,
-    `  roster review [function]     ${chalk.dim('Walk roster/*/pending/ HITL items interactively')}`,
+    `  roster review [function]     ${chalk.dim('Review unread decisions (HITL); --json to list, --approve/--reject <id|path> to apply')}`,
     `  roster pending sync          ${chalk.dim('Synthesize HITL items from failed-fire signals (.exit + STALE)')}`,
     `  roster hooks install         ${chalk.dim('Install SessionStart banner hooks for Claude + Codex')}`,
     `  roster migrate from-agent-team <dir>  ${chalk.dim('Migrate a legacy agent-team workspace into roster')}`,
@@ -478,10 +478,12 @@ async function runReview(args: readonly string[]): Promise<number> {
     });
   }
   return await executeReview({
-    cwd: process.cwd(),
+    cwd: parsed.cwd ?? process.cwd(),
     fn: parsed.fn,
     json: parsed.json,
     silent: parsed.silent,
+    ...(parsed.approve !== undefined ? { approve: parsed.approve } : {}),
+    ...(parsed.reject !== undefined ? { reject: parsed.reject } : {}),
   });
 }
 

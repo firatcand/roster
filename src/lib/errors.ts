@@ -83,6 +83,24 @@ export function notTtyForReviewError(): RosterError {
   });
 }
 
+export function itemNotFoundError(selector: string): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} no pending decision matches ${chalk.yellow(`'${selector}'`)}`,
+    body: '  It may already be approved/rejected, or the id/path is wrong.',
+    remedy: `  Run ${chalk.bold('roster review --json')} to list current decisions and their ids.`,
+    exitCode: EXIT_ERROR,
+  });
+}
+
+export function ambiguousItemError(selector: string, paths: ReadonlyArray<string>): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} ${chalk.yellow(`'${selector}'`)} matches more than one decision`,
+    body: '  Ambiguous:\n' + paths.map((p) => `    ${p}`).join('\n'),
+    remedy: '  Re-run with the exact workspace-relative path instead of the id.',
+    exitCode: EXIT_ERROR,
+  });
+}
+
 export function missingScaffoldError(scaffoldPath: string): RosterError {
   return new RosterError({
     header: `${chalk.red.bold('roster:')} scaffold templates missing`,

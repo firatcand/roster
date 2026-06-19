@@ -1,12 +1,22 @@
-import { existsSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { statSync } from 'node:fs';
+import { join } from 'node:path';
 import chalk from 'chalk';
 import { scanPending, type PendingItem } from '../lib/pending.ts';
 import {
+  approveItem,
+  rejectItem,
+  workspaceRelative,
+  computeItemId,
+  resolveItemBySelector,
+} from '../lib/pending-apply.ts';
+import {
   EXIT_OK,
+  EXIT_ERROR,
   EXIT_CANCELLED,
   invalidFunctionError,
   notTtyForReviewError,
+  itemNotFoundError,
+  ambiguousItemError,
 } from '../lib/errors.ts';
 
 export type ReviewOptions = {
@@ -14,6 +24,8 @@ export type ReviewOptions = {
   fn?: string;
   json: boolean;
   silent: boolean;
+  approve?: string;
+  reject?: string;
 };
 
 type Decision = 'approve' | 'reject' | 'defer';
@@ -29,20 +41,6 @@ function pendingItemPreview(item: PendingItem, maxLines: number): string {
   if (trimmed === '') return chalk.dim('(empty body)');
   const lines = trimmed.split('\n').slice(0, maxLines);
   return lines.join('\n');
-}
-
-function workspaceRelative(absPath: string, cwd: string): string {
-  const rel = relative(cwd, absPath);
-  return rel === '' ? '.' : rel;
-}
-
-function targetWithinWorkspace(target: string, cwd: string): string | null {
-  const absTarget = isAbsolute(target) ? resolve(target) : resolve(cwd, target);
-  const rel = relative(resolve(cwd), absTarget);
-  if (rel === '' || rel === '.' || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) {
-    return null;
-  }
-  return absTarget;
 }
 
 function functionDirExists(cwd: string, fn: string): boolean {
@@ -79,25 +77,36 @@ function summarize(s: ReviewSummary): string {
   return parts.join(', ');
 }
 
-function approveItem(item: PendingItem, cwd: string): { ok: boolean; reason?: string; target?: string } {
-  const target = item.frontMatter['target_on_approve'];
-  if (typeof target !== 'string' || target.length === 0) {
-    return { ok: false, reason: 'missing target_on_approve in front-matter' };
+// Headless apply — the non-interactive path the /inbox skill drives (no TTY).
+function applyOne(items: readonly PendingItem[], opts: ReviewOptions): number {
+  const selector = (opts.approve ?? opts.reject)!;
+  const res = resolveItemBySelector(items, selector, opts.cwd);
+  if (!res.ok) {
+    if (opts.json) {
+      console.log(JSON.stringify({ ok: false, reason: res.reason, selector, ...(res.reason === 'ambiguous' ? { paths: res.paths } : {}) }, null, 2));
+      return EXIT_ERROR;
+    }
+    throw res.reason === 'ambiguous' ? ambiguousItemError(selector, res.paths) : itemNotFoundError(selector);
   }
-  const absTarget = targetWithinWorkspace(target, cwd);
-  if (absTarget === null) {
-    return { ok: false, reason: `target_on_approve escapes workspace (got '${target}')` };
-  }
-  if (existsSync(absTarget)) {
-    return { ok: false, reason: `target already exists: ${target}` };
-  }
-  mkdirSync(dirname(absTarget), { recursive: true });
-  renameSync(item.path, absTarget);
-  return { ok: true, target: workspaceRelative(absTarget, cwd) };
-}
 
-function rejectItem(item: PendingItem): void {
-  unlinkSync(item.path);
+  const item = res.item;
+  const rel = workspaceRelative(item.path, opts.cwd);
+  if (opts.approve !== undefined) {
+    const result = approveItem(item, opts.cwd);
+    if (!result.ok) {
+      if (opts.json) console.log(JSON.stringify({ ok: false, action: 'approve', reason: result.reason, path: rel }, null, 2));
+      else console.error(`${chalk.red('✗')} cannot approve ${rel}: ${result.reason}`);
+      return EXIT_ERROR;
+    }
+    if (opts.json) console.log(JSON.stringify({ ok: true, action: 'approve', target: result.target, id: computeItemId(item), path: rel }, null, 2));
+    else if (!opts.silent) console.log(`${chalk.green('✓')} approved → ${result.target}`);
+    return EXIT_OK;
+  }
+
+  rejectItem(item);
+  if (opts.json) console.log(JSON.stringify({ ok: true, action: 'reject', path: rel, id: computeItemId(item) }, null, 2));
+  else if (!opts.silent) console.log(`${chalk.red('✗')} rejected (deleted) ${rel}`);
+  return EXIT_OK;
 }
 
 export async function executeReview(opts: ReviewOptions): Promise<number> {
@@ -107,8 +116,13 @@ export async function executeReview(opts: ReviewOptions): Promise<number> {
 
   const items = scanPending(opts.cwd, opts.fn);
 
+  if (opts.approve !== undefined || opts.reject !== undefined) {
+    return applyOne(items, opts);
+  }
+
   if (opts.json) {
     const payload = items.map((item) => ({
+      id: computeItemId(item),
       function: item.function,
       path: workspaceRelative(item.path, opts.cwd),
       filename: item.filename,
