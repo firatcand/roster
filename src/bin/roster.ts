@@ -35,6 +35,8 @@ import { executeSkillsSync, executeSkillsUpdate, renderSyncResult } from '../com
 import { parseSkillsArgs } from '../lib/skills-args.ts';
 import { executeUpgradeCommand } from '../commands/upgrade.ts';
 import { parseUpgradeArgs } from '../lib/upgrade-args.ts';
+import { executeUpdate } from '../commands/update.ts';
+import { parseUpdateArgs } from '../lib/update-args.ts';
 import { syncFounderSkills } from '../lib/founder-skills/sync.ts';
 import { realInstaller } from '../lib/founder-skills/installer.ts';
 import { executeHooksInstall } from '../commands/hooks.ts';
@@ -55,7 +57,7 @@ import {
   workspaceRequiredError,
 } from '../lib/errors.ts';
 
-type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'hooks' | 'migrate' | 'pending' | 'skills' | 'upgrade';
+type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'hooks' | 'migrate' | 'pending' | 'skills' | 'upgrade' | 'update';
 const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'install',
   'init',
@@ -65,6 +67,7 @@ const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'hooks',
   'migrate',
   'upgrade',
+  'update',
   'pending',
   'skills',
 ]);
@@ -94,6 +97,7 @@ function printHelp(version: string): void {
     `  roster                       ${chalk.dim('Interactive install (alias of `roster install`)')}`,
     `  roster install               ${chalk.dim('Copy skills + agents into detected AI tool config dirs')}`,
     `  roster init [name]           ${chalk.dim('Scaffold a multi-agent workspace in the current dir')}`,
+    `  roster update                ${chalk.dim('Bring this workspace current: install + hooks install + upgrade in one step')}`,
     `  roster upgrade [--dry-run]   ${chalk.dim('Refresh scaffold files to the installed roster (guidelines/ excluded; --exclude <glob>)')}`,
     `  roster doctor                ${chalk.dim('Audit installed skills + agents per AI tool')}`,
     `  roster schedule validate     ${chalk.dim('Validate roster/<function>/schedules.yaml files')}`,
@@ -526,6 +530,23 @@ function runPending(args: readonly string[]): number {
   });
 }
 
+async function runUpdate(args: readonly string[]): Promise<number> {
+  const parsed = parseUpdateArgs(args);
+  if (parsed.kind === 'err') {
+    throw new RosterError({
+      header: `${chalk.red.bold('roster:')} ${parsed.message}`,
+      body: '',
+      remedy: `  Run ${chalk.bold('roster --help')} for usage.`,
+      exitCode: EXIT_ERROR,
+    });
+  }
+  return await executeUpdate({
+    cwd: parsed.cwd ?? process.cwd(),
+    json: parsed.json,
+    excludes: parsed.excludes,
+  });
+}
+
 function runUpgrade(args: readonly string[]): number {
   const parsed = parseUpgradeArgs(args);
   if (parsed.kind === 'err') {
@@ -649,6 +670,7 @@ async function main(): Promise<number> {
     if (first === 'review') return await runReview(rest);
     if (first === 'skills') return await runSkills(rest);
     if (first === 'upgrade') return runUpgrade(rest);
+    if (first === 'update') return await runUpdate(rest);
     if (first === 'hooks') return await runHooks(rest);
     if (first === 'migrate') return runMigrate(rest);
     if (first === 'pending') return runPending(rest);
