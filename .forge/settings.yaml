@@ -28,3 +28,4 @@ decisions:
   stale_draft_threshold_days: 7
 doctor:
   spec_code_check_enabled: true
+methodology_version: 0.4.4

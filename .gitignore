@@ -70,4 +70,7 @@ docs/learnings/
 /.codex/agents/
 /.gemini/skills/
 /.gemini/agents/
+/.agents/skills/
+/.cursor/agents/
+/.cursor/rules/forge-context.mdc
 # <<< forge-managed <<<
