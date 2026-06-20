@@ -6,6 +6,12 @@ Per-phase retrospectives live in [`docs/retros/`](docs/retros/) and carry the lo
 
 ## [Unreleased]
 
+_(empty — staging area for post-1.2.0 work)_
+
+## [1.2.0] — 2026-06-20
+
+Second minor on the v1 line. Headlined by **`/inbox`** — a chat-native way to review HITL "decisions" — plus the `roster upgrade` exclude controls. No breaking changes.
+
 ### Added
 
 - **`/inbox` — review unread decisions conversationally in chat.** Session start now reads `⚠ You have N unread decision(s) awaiting — run /inbox` (was `⚠ N pending HITL items — run roster review`). `/inbox` ships as a cross-tool skill (Claude Code + Codex) that lists your pending HITL items, shows each in chat, and applies your approve/reject/defer replies — no terminal TUI required. It's backed by new headless verbs on `roster review`: `--json` now carries a stable per-item `id` (`sha1(function/filename)`), and `roster review --approve <id|path>` / `--reject <id|path>` apply a single decision non-interactively (same path-safety as the interactive walker — a bad `target_on_approve` leaves the file untouched). "Unread" is a rebrand of the existing pending count, not a new read/seen state. Existing workspaces get `/inbox` + the new banner by re-running `roster install` (+ `roster hooks install`). (ROS-132)
