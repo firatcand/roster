@@ -64,7 +64,8 @@ The Phase gate command (run before opening a PR): `pnpm typecheck && pnpm build 
 
 ## Where things live in the CLI
 
-- **Subcommand entry**: `src/bin/roster.ts` — hand-rolled argv parsing; subcommands `install`, `init`, `doctor`, `schedule`. `--help`, `--version`, exit codes (0/1/2/3).
+- **Subcommand entry**: `src/bin/roster.ts` — hand-rolled argv parsing; subcommands `install`, `init`, `update`, `upgrade`, `doctor`, `schedule`, `review`, `skills`, `hooks`, `pending`, `migrate`. `--help`, `--version`, exit codes (0/1/2/3).
+- **Workspace update (ROS-133)**: `src/commands/update.ts` (`roster update`) is a pure orchestrator — runs the project-scope install loop (`installToTool` + `toolForScope`) + `syncFounderSkills`, then `executeHooksInstall({target:'all'})`, then `executeUpgrade` — and prints the npm CLI-bump reminder. Changes none of those commands' behavior. `src/lib/update-args.ts` parses `--cwd`/`--json`/`--exclude` (the last passed through to upgrade).
 - **Tool detection**: `src/lib/tools.ts` — `detectTools()` checks `~/.claude/`, `~/.codex/`, `~/.gemini/`. Each `Tool` has `key`, `name`, `skillsTarget`, `agentsTarget`. Override via `ROSTER_CLAUDE_HOME` etc. for tests.
 - **Install logic**: `installToTool()` in `src/lib/tools.ts` — copies `skills/*` and `agents/*.md` into the tool's config dir. Idempotent. Handles symlinks (prompts before clobber). Handles EACCES with a sudo hint.
 - **Scaffold logic**: `src/commands/init.ts` — copies `templates/scaffold/**` into CWD, substitutes `{{PROJECT_NAME}}` in `CLAUDE.project.template.md`, appends gitignore-defaults idempotently.

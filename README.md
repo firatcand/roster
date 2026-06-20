@@ -72,6 +72,7 @@ Using 1Password or Infisical? Compose them with the `.env` model via the recipes
 |---|---|
 | `roster install` | Install skills + agents into detected AI tools (idempotent) |
 | `roster init` | Scaffold an agent-team workspace in CWD |
+| `roster update` | **One-shot workspace refresh**: install + hooks install + upgrade, in one step |
 | `roster upgrade` | Refresh scaffold files to the installed roster; edits become `<file>.new`, never clobbered |
 | `roster doctor` | Audit installation; exits non-zero on drift |
 | `roster skills sync` | Install [founder-skills](https://github.com/firatcand/founder-skills) declared in `founder-skills.yaml` (project-local, ref-pinned) |
@@ -85,14 +86,22 @@ Full subcommand reference in [docs/HOWTO.md](docs/HOWTO.md). Scheduling rules, U
 
 ### Keeping a workspace up to date
 
-A roster workspace has four layers, and they update independently:
+The fast path — bump the CLI, then refresh the workspace in one command:
 
-| Layer | What it is | How to update |
+```bash
+npm i -g @firatcand/roster@latest   # update the CLI itself (a command can't replace its own package)
+cd your-workspace && roster update   # install + hooks install + upgrade, in one step
+```
+
+`roster update` is an umbrella over the layers below. A workspace has four, and they can also be updated independently:
+
+| Layer | What it is | How `roster update` refreshes it |
 |---|---|---|
-| The CLI | the `@firatcand/roster` npm package | `npm i -g @firatcand/roster@latest` |
-| roster's skills + agents | `chief-of-staff`, `dreamer`, `sdr`… in `.claude/skills/`, `.agents/` | re-run `roster install` (idempotent) |
-| founder-skills | `pricing`/`design`/… from [founder-skills](https://github.com/firatcand/founder-skills) | `roster skills sync` / `roster skills update` |
-| Scaffold files | `EXPERT.md`, `conventions.md`, `founder-skills.yaml.example`, function dirs | **`roster upgrade`** |
+| The CLI | the `@firatcand/roster` npm package | **not** by `update` — `npm i -g @firatcand/roster@latest` |
+| roster's skills + agents | `chief-of-staff`, `dreamer`, `inbox`… in `.claude/skills/`, `.agents/` | runs `roster install` (project-local) |
+| founder-skills | `pricing`/`design`/… from [founder-skills](https://github.com/firatcand/founder-skills) | syncs if `founder-skills.yaml` present (`roster skills sync`) |
+| SessionStart banner | the `/inbox` hook | runs `roster hooks install` |
+| Scaffold files | `EXPERT.md`, `conventions.md`, function dirs | runs **`roster upgrade`** |
 
 `roster init` is intentionally skip-if-exists (your scaffold is yours to customize), so it never overwrites an existing `EXPERT.md`. **`roster upgrade`** is how scaffold improvements reach an existing workspace: it auto-updates files you haven't touched, and for files you've edited it writes a `<file>.new` beside yours to review and merge — your file is never clobbered. Run `roster upgrade --dry-run` first to preview.
 

@@ -282,6 +282,15 @@ assert "-f gtm/sdr/logs/runs/resolved.md" "review --approve <id> moves the decis
 assert "! -f roster/gtm/pending/error-smoke.md" "approved decision leaves the pending queue"
 
 echo ""
+echo "===> 5g. roster update umbrella (ROS-133) — in $WORKSPACE"
+UPDATE_OUT=$(HOME="$FAKE_HOME" ROSTER_CLAUDE_HOME="$CLAUDE_HOME" "$ROSTER_BIN" update 2>&1)
+assert "$? -eq 0" "roster update exits 0 in a workspace"
+echo "$UPDATE_OUT" | grep -q "Skills + agents" && pass "update: runs the install step" || fail "update: missing install step"
+echo "$UPDATE_OUT" | grep -q "Scaffold files" && pass "update: runs the upgrade step" || fail "update: missing upgrade step"
+echo "$UPDATE_OUT" | grep -q "npm i -g @firatcand/roster@latest" && pass "update: prints CLI-bump reminder" || fail "update: missing CLI reminder"
+assert "-f .claude/skills/inbox/SKILL.md" "update installs the inbox skill project-local"
+
+echo ""
 echo "===> 6. Schedule list/status/remove (ROS-36)"
 
 # list on a fresh workspace → no schedules registered

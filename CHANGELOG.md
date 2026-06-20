@@ -6,7 +6,9 @@ Per-phase retrospectives live in [`docs/retros/`](docs/retros/) and carry the lo
 
 ## [Unreleased]
 
-_(empty — staging area for post-1.2.0 work)_
+### Added
+
+- **`roster update` — one command to bring a workspace current.** Typing `roster update` used to error (`unknown command`); now it's the umbrella that refreshes an existing workspace to the installed roster, running three steps in order with a single aggregated report: `roster install` (roster's skills + agents, project-local, incl. `/inbox`; plus founder-skills sync if a `founder-skills.yaml` is present), `roster hooks install` (the SessionStart banner), and `roster upgrade` (scaffold files — `.new` on edits, `guidelines/` excluded). It then reminds you the CLI itself updates via npm (`npm i -g @firatcand/roster@latest`), since a running command can't replace its own global package. Requires a workspace; supports `--cwd`, `--json`, and `--exclude <glob>` (passed through to the upgrade step). Pure orchestration — it changes none of the underlying commands' behavior. (ROS-133)
 
 ## [1.2.0] — 2026-06-20
 
