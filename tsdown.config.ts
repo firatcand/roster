@@ -1,7 +1,10 @@
 import { defineConfig } from 'tsdown';
 
 export default defineConfig({
-  entry: { roster: 'src/bin/roster.ts' },
+  entry: {
+    roster: 'src/bin/roster.ts',
+    'tripwire-hook': 'src/lib/tripwire/hook-entry.ts',
+  },
   outDir: 'bin',
   format: 'esm',
   target: 'es2022',

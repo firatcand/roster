@@ -1,0 +1,17 @@
+# gitleaks config for roster.
+#
+# Keep the full default ruleset everywhere (extend.useDefault), and allowlist
+# ONLY the Tripwire injection-detection test fixtures. Those files intentionally
+# contain secret-SHAPED strings (`sk-…`, `ghp_…`) as DETECTION fixtures for the
+# scanner ported from forge — they are NOT real credentials. Scope is the two
+# tripwire test files, so real-secret detection everywhere else is unaffected.
+title = "roster gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Tripwire injection-detection test fixtures hold intentional fake secret-shaped strings"
+paths = [
+  '''test/tripwire-.*\.test\.ts''',
+]

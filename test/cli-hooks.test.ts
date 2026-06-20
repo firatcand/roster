@@ -7,6 +7,14 @@ import { spawnSync } from 'node:child_process';
 
 const BIN = resolve('src/bin/roster.ts');
 
+// The installer copies ROSTER_ROOT/bin/tripwire-hook.js into the host hooks dir,
+// so the bundled artifact must exist before these tests run. Build if missing.
+const TRIPWIRE_ARTIFACT = resolve('bin/tripwire-hook.js');
+if (!existsSync(TRIPWIRE_ARTIFACT)) {
+  const build = spawnSync('npm', ['run', 'build'], { encoding: 'utf8', stdio: 'inherit' });
+  if (build.status !== 0) throw new Error('failed to build bin/tripwire-hook.js for cli-hooks tests');
+}
+
 type Run = { status: number; stdout: string; stderr: string };
 
 function runCli(args: readonly string[], env: Record<string, string>): Run {
@@ -151,6 +159,122 @@ test('hooks: unknown subcommand → exit 1', () => {
   assert.match(r.stderr, /unknown hooks subcommand/);
 });
 
+test('hooks install --tool claude: also installs PostToolUse tripwire + copies the .mjs', () => {
+  const h = makeHomes();
+  try {
+    const r = runCli(['hooks', 'install', '--tool', 'claude'], {
+      ROSTER_CLAUDE_HOME: h.claude,
+      ROSTER_CODEX_HOME: h.codex,
+    });
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /PostToolUse Tripwire/);
+
+    assert.ok(existsSync(join(h.claude, 'hooks', 'roster-tripwire-hook.mjs')));
+
+    const settings = JSON.parse(readFileSync(join(h.claude, 'settings.json'), 'utf8')) as {
+      hooks: { PostToolUse: Array<{ matcher?: string; hooks: Array<{ command: string }> }> };
+    };
+    const group = settings.hooks.PostToolUse.find((g) =>
+      g.hooks.some((hk) => hk.command.includes('roster-tripwire-hook.mjs')),
+    );
+    assert.ok(group !== undefined, 'expected tripwire PostToolUse group');
+    assert.equal(group.matcher, '^(?:WebFetch|WebSearch|mcp__.*)$');
+    assert.match(group.hooks[0]!.command, /^node '.*roster-tripwire-hook\.mjs'$/);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('hooks install --tool claude: tripwire entry is idempotent (no dup on 2nd run)', () => {
+  const h = makeHomes();
+  try {
+    runCli(['hooks', 'install', '--tool', 'claude'], { ROSTER_CLAUDE_HOME: h.claude, ROSTER_CODEX_HOME: h.codex });
+    const r2 = runCli(['hooks', 'install', '--tool', 'claude'], {
+      ROSTER_CLAUDE_HOME: h.claude,
+      ROSTER_CODEX_HOME: h.codex,
+    });
+    assert.equal(r2.status, 0);
+
+    const settings = JSON.parse(readFileSync(join(h.claude, 'settings.json'), 'utf8')) as {
+      hooks: { PostToolUse: Array<{ hooks: Array<{ command: string }> }> };
+    };
+    const count = settings.hooks.PostToolUse.flatMap((g) => g.hooks).filter((hk) =>
+      hk.command.includes('roster-tripwire-hook.mjs'),
+    ).length;
+    assert.equal(count, 1);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('hooks install --tool claude: preserves a pre-existing user PostToolUse entry', () => {
+  const h = makeHomes();
+  try {
+    mkdirSync(h.claude, { recursive: true });
+    writeFileSync(
+      join(h.claude, 'settings.json'),
+      JSON.stringify({
+        hooks: {
+          PostToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo user-hook' }] }],
+        },
+      }),
+    );
+
+    const r = runCli(['hooks', 'install', '--tool', 'claude'], { ROSTER_CLAUDE_HOME: h.claude });
+    assert.equal(r.status, 0);
+
+    const settings = JSON.parse(readFileSync(join(h.claude, 'settings.json'), 'utf8')) as {
+      hooks: { PostToolUse: Array<{ hooks: Array<{ command: string }> }> };
+    };
+    const all = settings.hooks.PostToolUse.flatMap((g) => g.hooks);
+    assert.ok(all.some((hk) => hk.command === 'echo user-hook'), 'user PostToolUse entry preserved');
+    assert.ok(
+      all.some((hk) => hk.command.includes('roster-tripwire-hook.mjs')),
+      'tripwire entry added',
+    );
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('hooks install --tool claude: corrupted settings.json → skip not crash, file untouched', () => {
+  const h = makeHomes();
+  try {
+    mkdirSync(h.claude, { recursive: true });
+    const settingsPath = join(h.claude, 'settings.json');
+    const corrupt = '{ not valid json ';
+    writeFileSync(settingsPath, corrupt);
+
+    const r = runCli(['hooks', 'install', '--tool', 'claude'], { ROSTER_CLAUDE_HOME: h.claude });
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /skipped/);
+    // Never clobbered.
+    assert.equal(readFileSync(settingsPath, 'utf8'), corrupt);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('hooks install --tool codex: gets banner but NOT the tripwire PostToolUse entry', () => {
+  const h = makeHomes();
+  try {
+    const r = runCli(['hooks', 'install', '--tool', 'codex'], {
+      ROSTER_CLAUDE_HOME: h.claude,
+      ROSTER_CODEX_HOME: h.codex,
+    });
+    assert.equal(r.status, 0);
+    assert.ok(existsSync(join(h.codex, 'hooks', 'roster-banner.sh')));
+    assert.equal(existsSync(join(h.codex, 'hooks', 'roster-tripwire-hook.mjs')), false);
+
+    const hooksJson = JSON.parse(readFileSync(join(h.codex, 'hooks.json'), 'utf8')) as {
+      hooks: { PostToolUse?: unknown };
+    };
+    assert.equal(hooksJson.hooks.PostToolUse, undefined);
+  } finally {
+    h.cleanup();
+  }
+});
+
 test('hooks install: existing settings.json with unrelated keys preserved', () => {
   const h = makeHomes();
   try {
@@ -174,4 +298,20 @@ test('hooks install: existing settings.json with unrelated keys preserved', () =
   } finally {
     h.cleanup();
   }
+});
+
+test('bundled bin/tripwire-hook.js is self-contained (no non-node imports)', () => {
+  // The hook runs from ~/.claude/hooks/ where roster's node_modules is NOT
+  // resolvable, so the bundle must import only node: builtins (or relative).
+  const src = readFileSync(TRIPWIRE_ARTIFACT, 'utf8');
+  const bad: string[] = [];
+  const re = /(?:^|\s)(?:import|export)\b[^;]*?\bfrom\s+['"]([^'"]+)['"]|require\(\s*['"]([^'"]+)['"]\s*\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) {
+    const spec = m[1] ?? m[2] ?? '';
+    if (spec && !spec.startsWith('node:') && !spec.startsWith('.') && !spec.startsWith('/')) {
+      bad.push(spec);
+    }
+  }
+  assert.deepEqual(bad, [], `bundle has non-node imports: ${bad.join(', ')}`);
 });
