@@ -16,13 +16,14 @@ function tildify(path: string): string {
 
 function summarize(result: HookInstallResult): string {
   const hostLabel = result.host === 'claude' ? 'Claude Code' : 'Codex CLI';
+  const hookLabel = result.kind === 'tripwire' ? 'PostToolUse Tripwire scan' : 'SessionStart hook';
   if (result.status === 'installed') {
-    return `${chalk.green('✓')} ${chalk.bold(hostLabel)} — SessionStart hook → ${tildify(result.configFile)}`;
+    return `${chalk.green('✓')} ${chalk.bold(hostLabel)} — ${hookLabel} → ${tildify(result.configFile)}`;
   }
   if (result.status === 'already-present') {
-    return `${chalk.dim('·')} ${chalk.bold(hostLabel)} — SessionStart hook already installed (${tildify(result.configFile)})`;
+    return `${chalk.dim('·')} ${chalk.bold(hostLabel)} — ${hookLabel} already installed (${tildify(result.configFile)})`;
   }
-  return `${chalk.yellow('⚠')} ${chalk.bold(hostLabel)} — skipped: ${result.reason ?? 'host not detected'}`;
+  return `${chalk.yellow('⚠')} ${chalk.bold(hostLabel)} — ${hookLabel} skipped: ${result.reason ?? 'host not detected'}`;
 }
 
 function hostsForTarget(target: HooksTarget): HookHost[] {
@@ -47,7 +48,7 @@ export async function executeHooksInstall(opts: HooksInstallOptions): Promise<nu
   const hosts = hostsForTarget(opts.target);
   const results: HookInstallResult[] = [];
   for (const host of hosts) {
-    results.push(installHook(host));
+    results.push(...installHook(host));
   }
 
   if (!opts.silent) {
