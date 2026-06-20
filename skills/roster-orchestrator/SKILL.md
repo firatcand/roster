@@ -1,6 +1,6 @@
 ---
 name: roster-orchestrator
-description: "Bootstraps roster workspaces. On chat session start, surfaces pending HITL items as a single banner. On a scheduled fire, verifies the schedule is registered, resolves the agent's merged env, dispatches the named agent via the host tool's native subagent primitive, writes a run log + state.md entry, and exits. Reads roster/<function>/schedules.yaml plus pending items at both roster/<function>/pending/ (error class) and <function>/<agent>/pending/ (lesson class). Subscription-billed primitives only — never invokes claude -p, claude --prompt, claude api, or the Anthropic SDK."
+description: "Bootstraps roster workspaces. On chat session start, surfaces unread decisions (HITL) as a single banner pointing at /inbox. On a scheduled fire, verifies the schedule is registered, resolves the agent's merged env, dispatches the named agent via the host tool's native subagent primitive, writes a run log + state.md entry, and exits. Reads roster/<function>/schedules.yaml plus pending items at both roster/<function>/pending/ (error class) and <function>/<agent>/pending/ (lesson class). Subscription-billed primitives only — never invokes claude -p, claude --prompt, claude api, or the Anthropic SDK."
 version: "1.0.0"
 trigger_conditions:
   - "Session start in a roster workspace (CLAUDE.md / AGENTS.md / CONTEXT.md present at cwd)"
@@ -12,7 +12,7 @@ trigger_conditions:
 
 The bootstrap entry point for every fresh CLI session in a roster workspace. Two modes:
 
-1. **Chat-session bootstrap** — surface a single banner if any HITL surface has items.
+1. **Chat-session bootstrap** — surface a single banner if there are any unread decisions (HITL items).
 2. **Scheduled fire** — verify the fire matches a registered schedule, resolve the agent's merged env, dispatch the named agent, log the run, exit.
 
 The skill is **stateless**. It re-reads disk on every invocation so `/clear` and fresh fires both work identically.
@@ -34,16 +34,16 @@ When ambiguous, default to chat-session-bootstrap (it is the safe no-op when no 
 
 ## Mode 1 — Chat-session bootstrap
 
-1. Walk both HITL surfaces:
+1. Walk both decision surfaces:
    - **Error class** — `roster/<function>/pending/*.md` across all functions (synthesized by `roster pending sync` from non-zero cron exit codes / STALE detection).
    - **Lesson class** — `<function>/<agent>/pending/*.md` across all agents (drafted by the dreamer skill).
 2. Count files matching `*.md` in each surface. Sum the counts (no dedupe — error and lesson namespaces are disjoint).
 3. If sum == 0 → print nothing, exit silently.
-4. If sum > 0 → print one banner line and stop:
+4. If sum > 0 → print one banner line and stop (pluralize `decision`):
    ```
-   ⚠ N pending HITL items — run `roster review`
+   ⚠ You have N unread decision(s) awaiting — run /inbox
    ```
-   (Single-line surface. The full review UI lives behind the `roster review` CLI.)
+   (Single-line surface. `/inbox` reviews them conversationally; `roster review` is the CLI backend.)
 
 No other side effects. Do not read item bodies. Do not modify any file.
 

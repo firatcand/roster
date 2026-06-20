@@ -56,7 +56,7 @@ What this means for users:
 - **Install** — `npm i -g @firatcand/roster`; `roster install` writes skills + agents into Claude Code, Codex CLI, or Gemini (use `--all` or `--tool <name>`).
 - **Scaffold** — `roster init <name>` lays down the full agent-team workspace (`gtm/`, `product/`, `design/`, `ops/`, `chief-of-staff/`, `dreamer/`, `projects/_demo/`, `CONTEXT.md`, `conventions.md`). Non-destructive on re-run, forge-aware.
 - **Schedule** — `roster schedule install --tool <claude|codex>` produces a UI hand-off spec (Claude Desktop / Codex Automations) or, with `--via cron` on Codex, writes a hardened crontab line. All firing is subscription-billed — no Agent SDK, no `claude -p`. See [SCHEDULING.md](SCHEDULING.md) and [ADR-0001](adr/0001-scheduling-architecture.md).
-- **Maintain** — `roster doctor [--fix]` audits skills, scheduling, subscription-safety, and `.env` secrets; `roster review` and the SessionStart banner surface HITL items from scheduled runs.
+- **Maintain** — `roster doctor [--fix]` audits skills, scheduling, subscription-safety, and `.env` secrets; the SessionStart banner surfaces unread decisions (HITL), reviewed in chat via `/inbox` (or `roster review` in a terminal).
 - **Author** — `/chief-of-staff create-agent` runs a guided five-phase dialogue in TTY contexts (anti-fabrication, atomic write with rollback). Stub mode preserved via `AGENT_TEAM_NO_CONFIRM=1` and non-TTY contexts.
 
 ### v0.1.0 — 2026-05-17

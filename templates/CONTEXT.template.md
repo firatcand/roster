@@ -12,7 +12,7 @@ On every new conversation in this workspace — including after `/clear` — inv
 
 > **You are operating inside a roster-managed workspace.** At the start of every
 > conversation, activate the `roster-orchestrator` skill. The skill will inspect the
-> pending queue, surface any HITL items, and prepare the session context. Do not
+> decision queue, surface any unread decisions (`/inbox`), and prepare the session context. Do not
 > proceed with user requests until the orchestrator bootstrap completes.
 
 This directive applies to both scheduled fires and interactive chat sessions.

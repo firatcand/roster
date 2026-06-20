@@ -1,12 +1,13 @@
 #!/bin/sh
-# roster:hitl-banner:v2 — SessionStart hook for Claude Code and Codex CLI.
+# roster:hitl-banner:v3 — SessionStart hook for Claude Code and Codex CLI.
 #
 # 1. (ROS-42) If `roster` is on PATH, run `roster pending sync --silent` with
 #    a 5s timeout to synthesize HITL items from any failed-fire signals
 #    (.exit non-zero + STALE detections). Silent on success, silent on
 #    skip-because-no-roster, silent on timeout.
-# 2. Count pending HITL items in $PWD/roster/<function>/pending/*.md and
-#    print one banner line if count > 0. Silent when count is 0.
+# 2. Count unread decisions in $PWD/roster/<function>/pending/*.md and print
+#    one banner line if count > 0. Silent when count is 0. ("Unread" == still
+#    in the queue; there is no read/seen state — count logic unchanged from v2.)
 #
 # Self-contained POSIX shell — Step 1 is best-effort opt-in, never blocks
 # the session. Step 2 stays under the <200ms latency budget (p50 ~25ms).
@@ -43,5 +44,6 @@ fi
 count=$(find "$PWD/roster" -mindepth 3 -maxdepth 3 -type f -name '*.md' -path '*/pending/*.md' 2>/dev/null | wc -l | tr -d ' ')
 
 if [ "${count:-0}" -gt 0 ]; then
-  printf '⚠ %s pending HITL items — run `roster review`\n' "$count"
+  if [ "$count" -eq 1 ]; then word=decision; else word=decisions; fi
+  printf '⚠ You have %s unread %s awaiting — run /inbox\n' "$count" "$word"
 fi
