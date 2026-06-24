@@ -242,7 +242,7 @@ test('auditCronDrift: ui-handoff entries are ignored (only via-cron is auditable
 // auditAltSkillPaths
 // ──────────────────────────────────────────────────────────────────────
 
-test('auditAltSkillPaths: no ~/.agents/skills → ok absent', () => {
+test('auditAltSkillPaths: no legacy ~/.codex/skills → ok absent', () => {
   const { dir, cleanup } = mkTmp('alt-absent-');
   try {
     const r = auditAltSkillPaths({ homeDir: dir });
@@ -253,11 +253,11 @@ test('auditAltSkillPaths: no ~/.agents/skills → ok absent', () => {
   }
 });
 
-test('auditAltSkillPaths: alt present + canonical absent → warn (only-alt-present)', () => {
+test('auditAltSkillPaths: legacy .codex present + canonical .agents absent → warn (only-alt-present)', () => {
   const { dir, cleanup } = mkTmp('alt-only-');
   try {
-    mkdirSync(join(dir, '.agents', 'skills', 'roster-orchestrator'), { recursive: true });
-    writeFileSync(join(dir, '.agents', 'skills', 'roster-orchestrator', 'SKILL.md'), '# alt\n');
+    mkdirSync(join(dir, '.codex', 'skills', 'roster-orchestrator'), { recursive: true });
+    writeFileSync(join(dir, '.codex', 'skills', 'roster-orchestrator', 'SKILL.md'), '# legacy\n');
     const r = auditAltSkillPaths({ homeDir: dir });
     assert.equal(r.status, 'warn');
     assert.equal(r.items[0]!.presence, 'only-alt-present');
@@ -266,7 +266,7 @@ test('auditAltSkillPaths: alt present + canonical absent → warn (only-alt-pres
   }
 });
 
-test('auditAltSkillPaths: alt + canonical with identical content → ok matches-canonical', () => {
+test('auditAltSkillPaths: legacy + canonical with identical content → ok matches-canonical', () => {
   const { dir, cleanup } = mkTmp('alt-match-');
   try {
     mkdirSync(join(dir, '.agents', 'skills', 'roster-orchestrator'), { recursive: true });
@@ -282,13 +282,13 @@ test('auditAltSkillPaths: alt + canonical with identical content → ok matches-
   }
 });
 
-test('auditAltSkillPaths: alt + canonical with divergent content → warn (content-diverged)', () => {
+test('auditAltSkillPaths: legacy + canonical with divergent content → warn (content-diverged)', () => {
   const { dir, cleanup } = mkTmp('alt-diverged-');
   try {
     mkdirSync(join(dir, '.agents', 'skills', 'roster-orchestrator'), { recursive: true });
     mkdirSync(join(dir, '.codex', 'skills', 'roster-orchestrator'), { recursive: true });
-    writeFileSync(join(dir, '.agents', 'skills', 'roster-orchestrator', 'SKILL.md'), '# alt different\n');
-    writeFileSync(join(dir, '.codex', 'skills', 'roster-orchestrator', 'SKILL.md'), '# canonical\n');
+    writeFileSync(join(dir, '.agents', 'skills', 'roster-orchestrator', 'SKILL.md'), '# canonical\n');
+    writeFileSync(join(dir, '.codex', 'skills', 'roster-orchestrator', 'SKILL.md'), '# legacy different\n');
     const r = auditAltSkillPaths({ homeDir: dir });
     assert.equal(r.status, 'warn');
     assert.equal(r.items[0]!.presence, 'content-diverged');
@@ -328,8 +328,8 @@ test('runSchedulingDriftAudit: cron-drift fail → ok=false', () => {
 test('runSchedulingDriftAudit: alt-skill warn does NOT flip ok', () => {
   const { dir, cleanup } = mkTmp('aggregate-warn-only-');
   try {
-    mkdirSync(join(dir, '.agents', 'skills', 'roster-orchestrator'), { recursive: true });
-    writeFileSync(join(dir, '.agents', 'skills', 'roster-orchestrator', 'SKILL.md'), '# alt\n');
+    mkdirSync(join(dir, '.codex', 'skills', 'roster-orchestrator'), { recursive: true });
+    writeFileSync(join(dir, '.codex', 'skills', 'roster-orchestrator', 'SKILL.md'), '# legacy\n');
     const r = runSchedulingDriftAudit({
       cwd: dir,
       homeDir: dir,

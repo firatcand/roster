@@ -135,7 +135,7 @@ skills:
 
 `roster skills sync` (also run automatically by `roster install` at project scope) installs each declared skill into `.claude/skills/` (Claude Code) and `.agents/skills/` (Codex) — **never globally** — pinned to its exact ref and materialized with `--copy`. A `founder-skills.lock` records the resolved ref + content hash so re-syncs are reproducible. The manifest is the source of truth: drop a skill and the next sync **prunes** it (roster only ever removes skills it installed). `roster skills update --latest` bumps refs to newest tags; `roster doctor` flags any manifest ↔ lock ↔ installed drift and exits non-zero. No manifest → roster installs zero founder skills.
 
-> roster wraps the existing `npx skills` installer — it does not fetch or vendor skills itself, and never bundles them into its own npm tarball. Gemini is deferred for v1 (Claude + Codex supported). Codex skills land in `.agents/skills/` per the `skills` CLI, distinct from roster's own `.codex/skills/`.
+> roster wraps the existing `npx skills` installer — it does not fetch or vendor skills itself, and never bundles them into its own npm tarball. Gemini is deferred for v1 (Claude + Codex supported). Codex skills land in `.agents/skills/` per the `skills` CLI and Codex-native discovery.
 
 ---
 
@@ -144,11 +144,11 @@ skills:
 | Tool | Status | Project-scope skills | User-scope skills |
 |---|---|---|---|
 | Claude Code | Supported | `<workspace>/.claude/skills/<skill>/` | `~/.claude/skills/<skill>/` |
-| Codex CLI | Supported | `<workspace>/.codex/skills/<skill>/` | `~/.codex/skills/<skill>/` |
+| Codex CLI | Supported | `<workspace>/.agents/skills/<skill>/` | `~/.agents/skills/<skill>/` |
 | Gemini CLI | Supported | `<workspace>/.gemini/extensions/<skill>/` | `~/.gemini/extensions/<skill>/` |
 | Cursor | On the roadmap | — | — |
 
-Agents land in the matching `agents/` sibling of the skills dir for each tool. Project scope (default inside a roster workspace) keeps everything self-contained; user scope writes to your home directory and is visible to every project on the machine. `roster doctor` warns when the same skill name exists at both scopes — the user-scope copy wins, silently shadowing the workspace one.
+Agents land in the host-specific agent directory for each tool (`.claude/agents`, `.codex/agents`, `.gemini/agents`). Project scope (default inside a roster workspace) keeps everything self-contained; user scope writes to your home directory and is visible to every project on the machine. `roster doctor` warns when the same skill name exists at both scopes — the user-scope copy wins, silently shadowing the workspace one. Existing Codex installs under `.codex/skills` are legacy; run `roster migrate codex-skills` from a workspace to copy them into `.agents/skills` without deleting the legacy copy.
 
 Detection is presence-only — roster considers a tool installed if its config root exists. Override via `ROSTER_CLAUDE_HOME` / `ROSTER_CODEX_HOME` / `ROSTER_GEMINI_HOME` (used by the test suite).
 

@@ -25,6 +25,7 @@ export function defaultScopeForContext(workspaceExists: boolean): Scope {
 
 type ProjectPaths = {
   configRoot: string;
+  installRoot?: string;
   skillsTarget: string;
   agentsTarget: string | null;
 };
@@ -51,7 +52,8 @@ function projectPathsFor(
     case 'codex':
       return {
         configRoot: join(workspaceRoot, '.codex'),
-        skillsTarget: join(workspaceRoot, '.codex', 'skills'),
+        installRoot: workspaceRoot,
+        skillsTarget: join(workspaceRoot, '.agents', 'skills'),
         agentsTarget: agentsPath('.codex'),
       };
     case 'gemini':

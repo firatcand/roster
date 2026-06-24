@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 export type ToolKey = 'claude' | 'codex' | 'gemini';
 
@@ -8,6 +8,7 @@ export type Tool = {
   key: ToolKey;
   name: string;
   configRoot: string;
+  installRoot?: string;
   skillsTarget: string;
   agentsTarget: string | null;
   // "md-copy": copy source agents/<name>.md verbatim to agentsTarget (Claude, Gemini).
@@ -50,7 +51,8 @@ function defaultDefinitions(): ToolDefinition[] {
       key: 'codex',
       name: 'Codex CLI',
       configRoot: codex,
-      skillsTarget: join(codex, 'skills'),
+      installRoot: dirname(codex),
+      skillsTarget: join(dirname(codex), '.agents', 'skills'),
       agentsTarget: join(codex, 'agents'),
       agentsLayout: 'codex-toml',
       installLink: 'https://github.com/openai/codex',

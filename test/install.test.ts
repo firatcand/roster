@@ -223,7 +223,7 @@ test('EACCES is caught and rethrown as a structured RosterError with a remedy', 
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Codex CLI (ROS-32 onward) — directory-layout skills under ~/.codex/skills/<name>/
+// Codex CLI — directory-layout skills under ~/.agents/skills/<name>/
 // ──────────────────────────────────────────────────────────────────────────────
 
 test('codex: ROSTER_CODEX_HOME redirects writes to the override path', async () => {
@@ -232,7 +232,7 @@ test('codex: ROSTER_CODEX_HOME redirects writes to the override path', async () 
     process.env['ROSTER_CODEX_HOME'] = f.codexHome;
     const tool = getToolByKey('codex');
     assert.ok(tool, 'codex tool definition exists');
-    assert.equal(tool.skillsTarget, join(f.codexHome, 'skills'));
+    assert.equal(tool.skillsTarget, join(f.root, '.agents', 'skills'));
     assert.equal(tool.agentsTarget, join(f.codexHome, 'agents'));
   } finally {
     delete process.env['ROSTER_CODEX_HOME'];
@@ -240,7 +240,7 @@ test('codex: ROSTER_CODEX_HOME redirects writes to the override path', async () 
   }
 });
 
-test('codex: skills written as directories under ~/.codex/skills/<name>/', async () => {
+test('codex: skills written as directories under ~/.agents/skills/<name>/', async () => {
   const f = makeFixture();
   try {
     process.env['ROSTER_CODEX_HOME'] = f.codexHome;
@@ -255,17 +255,18 @@ test('codex: skills written as directories under ~/.codex/skills/<name>/', async
     });
 
     assert.equal(result.skillsCount, 2);
-    assert.equal(result.skillsTarget, join(f.codexHome, 'skills'));
+    assert.equal(result.skillsTarget, join(f.root, '.agents', 'skills'));
 
-    assert.ok(existsSync(join(f.codexHome, 'skills', 'sample-skill', 'SKILL.md')), 'sample-skill SKILL.md written');
-    assert.ok(existsSync(join(f.codexHome, 'skills', 'sample-skill', 'asset.txt')), 'sample-skill asset copied');
-    assert.ok(existsSync(join(f.codexHome, 'skills', 'other-skill', 'SKILL.md')), 'other-skill SKILL.md written');
+    assert.ok(existsSync(join(f.root, '.agents', 'skills', 'sample-skill', 'SKILL.md')), 'sample-skill SKILL.md written');
+    assert.ok(existsSync(join(f.root, '.agents', 'skills', 'sample-skill', 'asset.txt')), 'sample-skill asset copied');
+    assert.ok(existsSync(join(f.root, '.agents', 'skills', 'other-skill', 'SKILL.md')), 'other-skill SKILL.md written');
+    assert.ok(!existsSync(join(f.codexHome, 'skills', 'sample-skill', 'SKILL.md')), 'legacy .codex/skills target was not written');
 
     // Bodies are byte-identical to source (fixture skills have no frontmatter, so
     // no installed_for injection happens — see the frontmatter-injection test
     // in test/orchestrator.test.ts for the rendered-output assertions).
-    assert.equal(readFileSync(join(f.codexHome, 'skills', 'sample-skill', 'SKILL.md'), 'utf8'), '# sample\n');
-    assert.equal(readFileSync(join(f.codexHome, 'skills', 'other-skill', 'SKILL.md'), 'utf8'), '# other\n');
+    assert.equal(readFileSync(join(f.root, '.agents', 'skills', 'sample-skill', 'SKILL.md'), 'utf8'), '# sample\n');
+    assert.equal(readFileSync(join(f.root, '.agents', 'skills', 'other-skill', 'SKILL.md'), 'utf8'), '# other\n');
   } finally {
     delete process.env['ROSTER_CODEX_HOME'];
     f.cleanup();
@@ -364,10 +365,10 @@ test('codex: install is idempotent — re-running produces identical files', asy
     const { logger } = silentLogger();
 
     const first = await installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger });
-    const firstSnap = readFileSync(join(f.codexHome, 'skills', 'sample-skill', 'SKILL.md'), 'utf8');
+    const firstSnap = readFileSync(join(f.root, '.agents', 'skills', 'sample-skill', 'SKILL.md'), 'utf8');
 
     const second = await installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger });
-    const secondSnap = readFileSync(join(f.codexHome, 'skills', 'sample-skill', 'SKILL.md'), 'utf8');
+    const secondSnap = readFileSync(join(f.root, '.agents', 'skills', 'sample-skill', 'SKILL.md'), 'utf8');
 
     assert.deepEqual(first, second);
     assert.equal(firstSnap, secondSnap);
@@ -445,11 +446,11 @@ test('codex: symlink at skill-dir target — decline-preserve leaves symlink int
     process.env['ROSTER_CODEX_HOME'] = f.codexHome;
     const tool = getToolByKey('codex')!;
 
-    mkdirSync(join(f.codexHome, 'skills'), { recursive: true });
+    mkdirSync(join(f.root, '.agents', 'skills'), { recursive: true });
     const elsewhere = join(f.root, 'codex-elsewhere');
     mkdirSync(elsewhere, { recursive: true });
     writeFileSync(join(elsewhere, 'SKILL.md'), 'live\n');
-    symlinkSync(elsewhere, join(f.codexHome, 'skills', 'sample-skill'), 'dir');
+    symlinkSync(elsewhere, join(f.root, '.agents', 'skills', 'sample-skill'), 'dir');
 
     const { logger, warns } = silentLogger();
     const declineConfirm: ConfirmFn = async () => false;
@@ -462,7 +463,7 @@ test('codex: symlink at skill-dir target — decline-preserve leaves symlink int
       confirm: declineConfirm,
     });
 
-    assert.ok(lstatSync(join(f.codexHome, 'skills', 'sample-skill')).isSymbolicLink(), 'symlink preserved');
+    assert.ok(lstatSync(join(f.root, '.agents', 'skills', 'sample-skill')).isSymbolicLink(), 'symlink preserved');
     assert.equal(readFileSync(join(elsewhere, 'SKILL.md'), 'utf8'), 'live\n', 'symlink target untouched');
     assert.equal(result.skillsCount, 1, 'only the non-symlink skill counted');
     assert.ok(warns.some((w) => w.includes('preserved symlink')), 'warned about preservation');
@@ -574,21 +575,21 @@ test('gemini: EACCES is wrapped as RosterError with remedy', async () => {
 
 test('env overrides are re-read per call — changing ROSTER_*_HOME mid-process is honoured', async () => {
   const f = makeFixture();
-  const secondCodexHome = join(f.root, 'codex-home-2');
+  const secondCodexHome = join(f.root, 'second-parent', 'codex-home-2');
   try {
     process.env['ROSTER_CODEX_HOME'] = f.codexHome;
     const toolA = getToolByKey('codex')!;
-    assert.equal(toolA.skillsTarget, join(f.codexHome, 'skills'));
+    assert.equal(toolA.skillsTarget, join(f.root, '.agents', 'skills'));
     const { logger } = silentLogger();
     await installToTool(toolA, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger });
-    assert.ok(existsSync(join(f.codexHome, 'skills', 'sample-skill', 'SKILL.md')));
+    assert.ok(existsSync(join(f.root, '.agents', 'skills', 'sample-skill', 'SKILL.md')));
 
     process.env['ROSTER_CODEX_HOME'] = secondCodexHome;
     const toolB = getToolByKey('codex')!;
-    assert.equal(toolB.skillsTarget, join(secondCodexHome, 'skills'), 'second call re-reads env');
+    assert.equal(toolB.skillsTarget, join(f.root, 'second-parent', '.agents', 'skills'), 'second call re-reads env');
     await installToTool(toolB, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger });
-    assert.ok(existsSync(join(secondCodexHome, 'skills', 'sample-skill', 'SKILL.md')));
-    assert.ok(!existsSync(join(f.codexHome, 'skills', 'should-not-exist')));
+    assert.ok(existsSync(join(f.root, 'second-parent', '.agents', 'skills', 'sample-skill', 'SKILL.md')));
+    assert.ok(!existsSync(join(f.codexHome, 'skills', 'sample-skill', 'SKILL.md')), 'legacy .codex/skills target was not written');
   } finally {
     delete process.env['ROSTER_CODEX_HOME'];
     f.cleanup();

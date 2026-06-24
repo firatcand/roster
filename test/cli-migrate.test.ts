@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -141,4 +141,37 @@ test('roster migrate from-agent-team: appears in --help output', () => {
   const r = runCli(['--help']);
   assert.equal(r.status, 0);
   assert.match(r.stdout, /roster migrate from-agent-team/);
+});
+
+test('roster migrate codex-skills: copies missing legacy Codex skills into .agents and leaves source', () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'roster-codex-skills-'));
+  try {
+    mkdirSync(join(workspace, '.codex', 'skills', 'alpha'), { recursive: true });
+    writeFileSync(join(workspace, '.codex', 'skills', 'alpha', 'SKILL.md'), '---\nname: alpha\ndescription: "a"\n---\n\nalpha\n');
+
+    const r = runCli(['migrate', 'codex-skills', '--cwd', workspace]);
+    assert.equal(r.status, 0, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    assert.ok(existsSync(join(workspace, '.agents', 'skills', 'alpha', 'SKILL.md')), 'skill copied into .agents');
+    assert.ok(existsSync(join(workspace, '.codex', 'skills', 'alpha', 'SKILL.md')), 'legacy source left in place');
+    assert.match(r.stdout, /copied: 1/);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('roster migrate codex-skills: .agents wins when both sides differ', () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'roster-codex-skills-'));
+  try {
+    mkdirSync(join(workspace, '.codex', 'skills', 'alpha'), { recursive: true });
+    mkdirSync(join(workspace, '.agents', 'skills', 'alpha'), { recursive: true });
+    writeFileSync(join(workspace, '.codex', 'skills', 'alpha', 'SKILL.md'), '---\nname: alpha\ndescription: "legacy"\n---\n\nlegacy\n');
+    writeFileSync(join(workspace, '.agents', 'skills', 'alpha', 'SKILL.md'), '---\nname: alpha\ndescription: "canonical"\n---\n\ncanonical\n');
+
+    const r = runCli(['migrate', 'codex-skills', '--cwd', workspace]);
+    assert.equal(r.status, 0, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    assert.equal(readFileSync(join(workspace, '.agents', 'skills', 'alpha', 'SKILL.md'), 'utf8'), '---\nname: alpha\ndescription: "canonical"\n---\n\ncanonical\n');
+    assert.match(r.stdout, /conflicts: 1/);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
 });

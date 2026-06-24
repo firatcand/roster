@@ -241,8 +241,8 @@ export type AltSkillPathOpts = {
 const ALT_SKILL_NAMES = ['roster-orchestrator'] as const;
 
 export function auditAltSkillPaths(opts: AltSkillPathOpts): AltSkillPathAudit {
-  const altRoot = join(opts.homeDir, '.agents', 'skills');
-  const canonicalRoot = join(opts.homeDir, '.codex', 'skills');
+  const altRoot = join(opts.homeDir, '.codex', 'skills');
+  const canonicalRoot = join(opts.homeDir, '.agents', 'skills');
 
   const items: AltSkillPathAudit['items'] = [];
 

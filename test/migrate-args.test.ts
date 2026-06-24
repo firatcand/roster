@@ -14,6 +14,17 @@ test('parseMigrateArgs: unknown subcommand → err', () => {
   if (r.kind === 'err') assert.match(r.message, /unknown 'migrate' subcommand/);
 });
 
+test('parseMigrateArgs: codex-skills accepts cwd, dry-run, json, silent', () => {
+  const r = parseMigrateArgs(['codex-skills', '--cwd', '/workspace', '--dry-run', '--json', '--silent']);
+  assert.equal(r.kind, 'ok');
+  if (r.kind !== 'ok') return;
+  assert.equal(r.subcommand, 'codex-skills');
+  assert.equal(r.cwd, '/workspace');
+  assert.equal(r.dryRun, true);
+  assert.equal(r.json, true);
+  assert.equal(r.silent, true);
+});
+
 test('parseMigrateArgs: missing source-dir → err', () => {
   const r = parseMigrateArgs(['from-agent-team']);
   assert.equal(r.kind, 'err');
@@ -30,6 +41,8 @@ test('parseMigrateArgs: source only → ok with defaults', () => {
   const r = parseMigrateArgs(['from-agent-team', '/src']);
   assert.equal(r.kind, 'ok');
   if (r.kind !== 'ok') return;
+  assert.equal(r.subcommand, 'from-agent-team');
+  if (r.subcommand !== 'from-agent-team') return;
   assert.equal(r.sourceDir, '/src');
   assert.equal(r.dest, undefined);
   assert.equal(r.dryRun, false);
@@ -51,6 +64,8 @@ test('parseMigrateArgs: all flags', () => {
   ]);
   assert.equal(r.kind, 'ok');
   if (r.kind !== 'ok') return;
+  assert.equal(r.subcommand, 'from-agent-team');
+  if (r.subcommand !== 'from-agent-team') return;
   assert.equal(r.sourceDir, '/src');
   assert.equal(r.dest, '/dst');
   assert.equal(r.dryRun, true);
@@ -63,6 +78,8 @@ test('parseMigrateArgs: --dest=VALUE inline form', () => {
   const r = parseMigrateArgs(['from-agent-team', '/src', '--dest=/dst']);
   assert.equal(r.kind, 'ok');
   if (r.kind !== 'ok') return;
+  assert.equal(r.subcommand, 'from-agent-team');
+  if (r.subcommand !== 'from-agent-team') return;
   assert.equal(r.dest, '/dst');
 });
 
@@ -82,6 +99,8 @@ test('parseMigrateArgs: positional after flag works', () => {
   const r = parseMigrateArgs(['from-agent-team', '--dry-run', '/src']);
   assert.equal(r.kind, 'ok');
   if (r.kind !== 'ok') return;
+  assert.equal(r.subcommand, 'from-agent-team');
+  if (r.subcommand !== 'from-agent-team') return;
   assert.equal(r.sourceDir, '/src');
   assert.equal(r.dryRun, true);
 });

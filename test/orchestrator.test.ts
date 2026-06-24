@@ -3,7 +3,7 @@
 // Asserts that the canonical orchestrator skill exists with valid frontmatter,
 // that the body uses only subscription-safe primitives (both Claude `Task` and
 // Codex natural-language idioms are present), that the installer copies it into
-// both ~/.claude/skills/roster-orchestrator/ and ~/.codex/skills/roster-orchestrator/
+// both ~/.claude/skills/roster-orchestrator/ and ~/.agents/skills/roster-orchestrator/
 // with per-tool `installed_for` frontmatter injection, and that re-installs are
 // byte-stable.
 
@@ -216,7 +216,7 @@ test('orchestrator: installs into ~/.claude/skills/roster-orchestrator/ with ins
   }
 });
 
-test('orchestrator: installs into ~/.codex/skills/roster-orchestrator/ with installed_for: codex', async () => {
+test('orchestrator: installs into ~/.agents/skills/roster-orchestrator/ with installed_for: codex', async () => {
   const f = makeE2EFixture();
   const codexHome = join(f.root, 'codex-home');
   try {
@@ -229,8 +229,9 @@ test('orchestrator: installs into ~/.codex/skills/roster-orchestrator/ with inst
       logger: silentLogger,
     });
 
-    const dest = join(codexHome, 'skills', 'roster-orchestrator', 'SKILL.md');
+    const dest = join(f.root, '.agents', 'skills', 'roster-orchestrator', 'SKILL.md');
     assert.ok(existsSync(dest), 'orchestrator landed in codex target');
+    assert.ok(!existsSync(join(codexHome, 'skills', 'roster-orchestrator')), 'legacy .codex/skills target was not written');
     const content = readFileSync(dest, 'utf8');
     assert.match(content, /^---\n[\s\S]+?\n---\n/, 'frontmatter still parses');
     assert.match(content, /^installed_for: codex$/m, 'codex tag injected');
@@ -240,6 +241,33 @@ test('orchestrator: installs into ~/.codex/skills/roster-orchestrator/ with inst
     assert.match(content, /natural language/i, 'Codex idiom preserved in body');
   } finally {
     delete process.env['ROSTER_CODEX_HOME'];
+    f.cleanup();
+  }
+});
+
+test('orchestrator: project-scope Codex install lands skills in .agents/skills', async () => {
+  const f = makeE2EFixture();
+  const workspace = join(f.root, 'workspace');
+  try {
+    mkdirSync(workspace, { recursive: true });
+    const tool = {
+      ...getToolByKey('codex')!,
+      configRoot: join(workspace, '.codex'),
+      installRoot: workspace,
+      skillsTarget: join(workspace, '.agents', 'skills'),
+      agentsTarget: join(workspace, '.codex', 'agents'),
+    };
+    await installToTool(tool, {
+      skills: join(f.source, 'skills'),
+      agents: join(f.source, 'agents'),
+      silent: true,
+      logger: silentLogger,
+    });
+
+    const dest = join(workspace, '.agents', 'skills', 'roster-orchestrator', 'SKILL.md');
+    assert.ok(existsSync(dest), 'orchestrator landed in Codex-native project skill target');
+    assert.ok(!existsSync(join(workspace, '.codex', 'skills', 'roster-orchestrator')), 'legacy .codex/skills target was not written');
+  } finally {
     f.cleanup();
   }
 });

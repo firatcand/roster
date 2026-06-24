@@ -63,7 +63,7 @@ test('install --all installs to every detected tool', () => {
     });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.ok(existsSync(join(h.claude, 'skills')), 'claude skills dir written');
-    assert.ok(existsSync(join(h.codex, 'skills')), 'codex skills dir written');
+    assert.ok(existsSync(join(h.root, '.agents', 'skills')), 'codex skills dir written');
     assert.ok(existsSync(join(h.gemini, 'extensions')), 'gemini extensions dir written');
   } finally {
     h.cleanup();
@@ -80,7 +80,7 @@ test('install --tool claude writes only to Claude home', () => {
     });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.ok(existsSync(join(h.claude, 'skills')), 'claude written');
-    assert.ok(!existsSync(join(h.codex, 'skills')), 'codex NOT written');
+    assert.ok(!existsSync(join(h.root, '.agents', 'skills')), 'codex NOT written');
     assert.ok(!existsSync(join(h.gemini, 'extensions')), 'gemini NOT written');
   } finally {
     h.cleanup();
@@ -275,7 +275,7 @@ test('ROS-109: install --tool all --scope user --yes writes to home-dir paths vi
     });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.ok(existsSync(join(h.claude, 'skills')), 'claude skills under user-scope home');
-    assert.ok(existsSync(join(h.codex, 'skills')), 'codex skills under user-scope home');
+    assert.ok(existsSync(join(h.root, '.agents', 'skills')), 'codex skills under user-scope home');
     assert.ok(existsSync(join(h.gemini, 'extensions')), 'gemini extensions under user-scope home');
   } finally {
     h.cleanup();
@@ -311,7 +311,7 @@ test('ROS-109: install --tool claude,codex writes to both and skips gemini', () 
     });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.ok(existsSync(join(h.claude, 'skills')), 'claude written');
-    assert.ok(existsSync(join(h.codex, 'skills')), 'codex written');
+    assert.ok(existsSync(join(h.root, '.agents', 'skills')), 'codex written');
     assert.ok(!existsSync(join(h.gemini, 'extensions')), 'gemini NOT written');
   } finally {
     h.cleanup();

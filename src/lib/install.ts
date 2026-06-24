@@ -166,9 +166,10 @@ export async function installToTool(tool: Tool, opts: InstallOptions): Promise<I
     if (!silent) logger.log(msg);
   };
 
-  assertWithinRoot(tool.skillsTarget, tool.configRoot, 'skillsTarget');
+  const installRoot = tool.installRoot ?? tool.configRoot;
+  assertWithinRoot(tool.skillsTarget, installRoot, 'skillsTarget');
   if (tool.agentsTarget) {
-    assertWithinRoot(tool.agentsTarget, tool.configRoot, 'agentsTarget');
+    assertWithinRoot(tool.agentsTarget, installRoot, 'agentsTarget');
   }
 
   try {
@@ -198,7 +199,7 @@ export async function installToTool(tool: Tool, opts: InstallOptions): Promise<I
       const targetPath = join(tool.skillsTarget, dirent.name);
       const renderedSkillMd = join(targetPath, 'SKILL.md');
 
-      assertWithinRoot(targetPath, tool.configRoot, 'skill targetPath');
+      assertWithinRoot(targetPath, installRoot, 'skill targetPath');
       info(chalk.dim(`  + skill ${dirent.name} -> ${targetPath}`));
       const written = await copyOne(srcPath, targetPath, 'skill', logger, confirm, opts.scope);
       if (written) {
@@ -230,8 +231,8 @@ export async function installToTool(tool: Tool, opts: InstallOptions): Promise<I
         const baseName = dirent.name.replace(/\.md$/, '');
         const tomlTarget = join(tool.agentsTarget, `${baseName}.toml`);
         const personaTarget = join(tool.agentsTarget, `${baseName}.persona.md`);
-        assertWithinRoot(tomlTarget, tool.configRoot, 'agent targetPath');
-        assertWithinRoot(personaTarget, tool.configRoot, 'agent persona targetPath');
+        assertWithinRoot(tomlTarget, installRoot, 'agent targetPath');
+        assertWithinRoot(personaTarget, installRoot, 'agent persona targetPath');
 
         let rendered;
         try {
@@ -259,7 +260,7 @@ export async function installToTool(tool: Tool, opts: InstallOptions): Promise<I
       }
 
       const targetPath = join(tool.agentsTarget, dirent.name);
-      assertWithinRoot(targetPath, tool.configRoot, 'agent targetPath');
+      assertWithinRoot(targetPath, installRoot, 'agent targetPath');
       info(chalk.dim(`  + agent ${dirent.name} -> ${targetPath}`));
       const written = await copyOne(srcPath, targetPath, 'agent', logger, confirm, opts.scope);
       if (written) agentsCount++;

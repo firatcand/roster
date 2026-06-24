@@ -230,7 +230,7 @@ The benefits of delegation are large and durable:
 
 | Concern | Claude path | Codex path |
 |---|---|---|
-| Orchestrator skill | `~/.claude/skills/roster-orchestrator/` | `~/.codex/skills/roster-orchestrator/` |
+| Orchestrator skill | `~/.claude/skills/roster-orchestrator/` | `~/.agents/skills/roster-orchestrator/` |
 | Subagent definitions (global) | `~/.claude/agents/*.md` | `~/.codex/agents/*.toml` |
 | Subagent definitions (project) | `<workspace>/.claude/agents/*.md` | `<workspace>/.codex/agents/*.toml` |
 | Session-start hook | `~/.claude/settings.json` `SessionStart` block | `~/.codex/config.toml` pre-session block |
@@ -369,7 +369,7 @@ A second-opinion review of this ADR + Phase 2.5 plan was run via `codex exec` (s
 
 ### Skill install path note
 
-Both `~/.codex/skills/` (Codex-native; verified present on dev machine) and `~/.agents/skills/` (cross-tool community path referenced in some Codex docs and used by gstack-style ecosystems) coexist. Roster installs the orchestrator skill to `~/.codex/skills/roster-orchestrator/` as the canonical Codex location, and `roster doctor` warns if the alternate `~/.agents/skills/roster-orchestrator/` exists and diverges.
+Both `~/.agents/skills/` (Codex-native skill discovery) and legacy `~/.codex/skills/` installs can exist on older machines. Roster installs the orchestrator skill to `~/.agents/skills/roster-orchestrator/` as the canonical Codex location, and `roster migrate codex-skills` copies legacy `.codex/skills` entries into `.agents/skills` without deleting the legacy copy.
 
 ### New requirements added to Phase 2.5
 

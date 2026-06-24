@@ -179,7 +179,7 @@ test('audit (codex/dir): deleting SKILL.md inside a skill dir reports STALE', as
     const tool = getToolByKey('codex')!;
     await installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger: silentLogger });
 
-    rmSync(join(f.codexHome, 'skills', 'sample-skill', 'SKILL.md'));
+    rmSync(join(f.root, '.agents', 'skills', 'sample-skill', 'SKILL.md'));
 
     const result = auditTool(tool, sources(f));
     const sample = result.items.find((i) => i.name === 'sample-skill')!;
@@ -198,7 +198,7 @@ test('audit (codex/dir): modifying SKILL.md reports STALE', async () => {
     const tool = getToolByKey('codex')!;
     await installToTool(tool, { skills: skillsSrc(f), agents: agentsSrc(f), silent: true, logger: silentLogger });
 
-    writeFileSync(join(f.codexHome, 'skills', 'sample-skill', 'SKILL.md'), '# tampered\n');
+    writeFileSync(join(f.root, '.agents', 'skills', 'sample-skill', 'SKILL.md'), '# tampered\n');
 
     const result = auditTool(tool, sources(f));
     const sample = result.items.find((i) => i.name === 'sample-skill')!;

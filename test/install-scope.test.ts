@@ -97,11 +97,12 @@ test('toolForScope: project scope rewrites Claude paths under workspaceRoot/.cla
   assert.equal(out.installLink, claude.installLink);
 });
 
-test('toolForScope: project scope rewrites Codex paths under workspaceRoot/.codex/', () => {
+test('toolForScope: project scope rewrites Codex skills under workspaceRoot/.agents/', () => {
   const codex = getToolOrFail('codex');
   const out = toolForScope(codex, 'project', '/ws');
   assert.equal(out.configRoot, '/ws/.codex');
-  assert.equal(out.skillsTarget, '/ws/.codex/skills');
+  assert.equal(out.installRoot, '/ws');
+  assert.equal(out.skillsTarget, '/ws/.agents/skills');
   assert.equal(out.agentsTarget, '/ws/.codex/agents');
   // codex agents render to .toml + .persona.md per ROS-33 — layout must survive scoping.
   assert.equal(out.agentsLayout, 'codex-toml');

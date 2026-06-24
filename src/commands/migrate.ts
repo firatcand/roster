@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import chalk from 'chalk';
@@ -28,6 +28,34 @@ export type MigrateFromAgentTeamOptions = {
   clock?: () => Date;
 };
 
+export type MigrateCodexSkillsOptions = {
+  cwd: string;
+  dryRun: boolean;
+  json: boolean;
+  silent: boolean;
+};
+
+type CodexSkillMigrationItem = {
+  name: string;
+  src: string;
+  dest: string;
+  status: 'copied' | 'identical' | 'conflict' | 'skipped';
+  reason?: string;
+};
+
+export type CodexSkillsMigrationReport = {
+  workspace: string;
+  sourceDir: string;
+  destDir: string;
+  items: ReadonlyArray<CodexSkillMigrationItem>;
+  counts: {
+    copied: number;
+    identical: number;
+    conflicts: number;
+    skipped: number;
+  };
+};
+
 function atomicWrite(absPath: string, content: string, mode = 0o644): void {
   const dir = dirname(absPath);
   mkdirSync(dir, { recursive: true });
@@ -49,6 +77,133 @@ function timestampSlug(clock: MigrateFromAgentTeamOptions['clock']): string {
   const d = clock ? clock() : new Date();
   const pad = (n: number): string => String(n).padStart(2, '0');
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}-${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}`;
+}
+
+function dirExists(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function fileExists(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function listSkillNames(sourceDir: string): string[] {
+  if (!dirExists(sourceDir)) return [];
+  return readdirSync(sourceDir, { withFileTypes: true })
+    .map((d) => d.name)
+    .filter((name) => dirExists(join(sourceDir, name)))
+    .filter((name) => fileExists(join(sourceDir, name, 'SKILL.md')))
+    .sort();
+}
+
+function listRelativeFiles(root: string): string[] {
+  const out: string[] = [];
+  function recurse(dir: string, rel: string): void {
+    for (const dirent of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, dirent.name);
+      const nextRel = rel ? join(rel, dirent.name) : dirent.name;
+      const st = statSync(full);
+      if (st.isDirectory()) recurse(full, nextRel);
+      else if (st.isFile()) out.push(nextRel);
+    }
+  }
+  recurse(root, '');
+  return out.sort();
+}
+
+function treesHaveSameFileBytes(left: string, right: string): boolean {
+  try {
+    const leftFiles = listRelativeFiles(left);
+    const rightFiles = listRelativeFiles(right);
+    if (leftFiles.length !== rightFiles.length) return false;
+    for (let i = 0; i < leftFiles.length; i++) {
+      const rel = leftFiles[i]!;
+      if (rel !== rightFiles[i]) return false;
+      const leftBytes = readFileSync(join(left, rel));
+      const rightBytes = readFileSync(join(right, rel));
+      if (Buffer.compare(leftBytes, rightBytes) !== 0) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function buildCounts(items: ReadonlyArray<CodexSkillMigrationItem>): CodexSkillsMigrationReport['counts'] {
+  return {
+    copied: items.filter((i) => i.status === 'copied').length,
+    identical: items.filter((i) => i.status === 'identical').length,
+    conflicts: items.filter((i) => i.status === 'conflict').length,
+    skipped: items.filter((i) => i.status === 'skipped').length,
+  };
+}
+
+function renderCodexSkillsText(report: CodexSkillsMigrationReport, dryRun: boolean): string {
+  const lines: string[] = [
+    '',
+    `${chalk.cyan.bold('roster migrate codex-skills')}${dryRun ? ` ${chalk.dim('(dry-run)')}` : ''}`,
+    `  Source: ${report.sourceDir}`,
+    `  Destination: ${report.destDir}`,
+    '',
+    `  copied: ${report.counts.copied}  identical: ${report.counts.identical}  conflicts: ${report.counts.conflicts}  skipped: ${report.counts.skipped}`,
+  ];
+
+  const interesting = report.items.filter((i) => i.status === 'conflict' || i.status === 'skipped');
+  for (const item of interesting) {
+    const mark = item.status === 'conflict' ? chalk.yellow('!') : chalk.dim('-');
+    lines.push(`  ${mark} ${item.name}: ${item.status}${item.reason ? ` (${item.reason})` : ''}`);
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
+export function executeMigrateCodexSkills(opts: MigrateCodexSkillsOptions): number {
+  const workspace = resolve(opts.cwd);
+  const sourceDir = join(workspace, '.codex', 'skills');
+  const destDir = join(workspace, '.agents', 'skills');
+  const items: CodexSkillMigrationItem[] = [];
+
+  for (const name of listSkillNames(sourceDir)) {
+    const src = join(sourceDir, name);
+    const dest = join(destDir, name);
+    if (!existsSync(dest)) {
+      items.push({ name, src, dest, status: 'copied' });
+      if (!opts.dryRun) {
+        mkdirSync(destDir, { recursive: true });
+        cpSync(src, dest, { recursive: true, dereference: false, force: false, errorOnExist: true });
+      }
+      continue;
+    }
+    if (treesHaveSameFileBytes(src, dest)) {
+      items.push({ name, src, dest, status: 'identical' });
+      continue;
+    }
+    items.push({ name, src, dest, status: 'conflict', reason: '.agents/skills is canonical; legacy .codex/skills was left untouched' });
+  }
+
+  const report: CodexSkillsMigrationReport = {
+    workspace,
+    sourceDir,
+    destDir,
+    items,
+    counts: buildCounts(items),
+  };
+
+  if (opts.json) {
+    console.log(JSON.stringify({ ok: true, dryRun: opts.dryRun, ...report }, null, 2));
+  } else if (!opts.silent) {
+    console.log(renderCodexSkillsText(report, opts.dryRun));
+  }
+
+  return EXIT_OK;
 }
 
 export function executeMigrateFromAgentTeam(opts: MigrateFromAgentTeamOptions): number {

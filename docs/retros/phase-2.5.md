@@ -51,7 +51,7 @@ Phase 2.5 was inserted between Phase 2 (Core Features) and Phase 3 (Polish & Lau
 |---|---|---|
 | 1 | `pnpm typecheck && pnpm test && pnpm build` exit 0 | OK (820/820 tests on `main` post-merge) |
 | 2 | `roster init` writes CONTEXT.md + CLAUDE.md/AGENTS.md symlinks (macOS/Linux) or dual-write (Windows); `roster doctor` confirms integrity | OK (ROS-31; `auditWorkspace` covers all four sub-statuses) |
-| 3 | `roster install` lays down the `roster-orchestrator` skill into `~/.claude/skills/` and `~/.codex/skills/` with per-tool body | OK (ROS-32; install tests + tools.ts coverage) |
+| 3 | `roster install` lays down the `roster-orchestrator` skill into `~/.claude/skills/` and `~/.agents/skills/` with per-tool body | OK (ROS-32; install tests + tools.ts coverage) |
 | 4 | `roster schedule install --tool codex --via cron` writes a working crontab line; running it invokes `codex exec` headlessly under subscription auth | OK (ROS-35; Spike 1 in ADR-0001 verified end-to-end on macOS) |
 | 5 | `roster schedule install --tool claude` prints a valid UI-import spec + step-by-step hand-off | OK (ROS-34; markdown not JSON — Spike 2 found Claude Desktop has no JSON-import API; documented under [anthropics/claude-code#41364](https://github.com/anthropics/claude-code/issues/41364)) |
 | 6 | Scheduled fire runs end-to-end: fresh CLI → orchestrator → subagent → run log → HITL items | OK (ROS-37 + ROS-40 e2e + manual macOS gate documented in `docs/SCHEDULING.md`) |

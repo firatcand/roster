@@ -1,7 +1,8 @@
-type MigrateSubcommand = 'from-agent-team';
+type MigrateSubcommand = 'from-agent-team' | 'codex-skills';
 
 const MIGRATE_SUBCOMMANDS: ReadonlySet<MigrateSubcommand> = new Set<MigrateSubcommand>([
   'from-agent-team',
+  'codex-skills',
 ]);
 
 const SUBCOMMAND_LIST = Array.from(MIGRATE_SUBCOMMANDS).join(' | ');
@@ -14,6 +15,14 @@ export type ParsedMigrateArgs =
       dest: string | undefined;
       dryRun: boolean;
       forceResync: boolean;
+      json: boolean;
+      silent: boolean;
+    }
+  | {
+      kind: 'ok';
+      subcommand: 'codex-skills';
+      cwd: string | undefined;
+      dryRun: boolean;
       json: boolean;
       silent: boolean;
     }
@@ -35,7 +44,62 @@ export function parseMigrateArgs(args: readonly string[]): ParsedMigrateArgs {
     };
   }
 
+  if (first === 'codex-skills') return parseCodexSkills(rest);
   return parseFromAgentTeam(rest);
+}
+
+function parseCodexSkills(rest: readonly string[]): ParsedMigrateArgs {
+  let cwd: string | undefined;
+  let dryRun = false;
+  let json = false;
+  let silent = false;
+  const positionals: string[] = [];
+
+  const consumeValue = (
+    flag: string,
+    current: string | undefined,
+    next: string | undefined,
+  ): { ok: true; value: string } | { ok: false; message: string } => {
+    if (current !== undefined) return { ok: false, message: `flag ${flag} specified more than once` };
+    if (next === undefined || next.startsWith('-')) return { ok: false, message: `${flag} requires a value` };
+    return { ok: true, value: next };
+  };
+
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i]!;
+    if (arg === '--cwd') {
+      const r = consumeValue('--cwd', cwd, rest[i + 1]);
+      if (!r.ok) return { kind: 'err', message: r.message };
+      cwd = r.value;
+      i++;
+    } else if (arg.startsWith('--cwd=')) {
+      if (cwd !== undefined) return { kind: 'err', message: 'flag --cwd specified more than once' };
+      cwd = arg.slice('--cwd='.length);
+    } else if (arg === '--dry-run') {
+      dryRun = true;
+    } else if (arg === '--json') {
+      json = true;
+    } else if (arg === '--silent') {
+      silent = true;
+    } else if (arg.startsWith('-')) {
+      return { kind: 'err', message: `unknown flag for 'migrate codex-skills': ${arg}` };
+    } else {
+      positionals.push(arg);
+    }
+  }
+
+  if (positionals.length > 0) {
+    return { kind: 'err', message: `'migrate codex-skills' expected 0 positional arguments, got ${positionals.length}` };
+  }
+
+  return {
+    kind: 'ok',
+    subcommand: 'codex-skills',
+    cwd,
+    dryRun,
+    json,
+    silent,
+  };
 }
 
 function parseFromAgentTeam(rest: readonly string[]): ParsedMigrateArgs {

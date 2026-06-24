@@ -40,7 +40,7 @@ import { parseUpdateArgs } from '../lib/update-args.ts';
 import { syncFounderSkills } from '../lib/founder-skills/sync.ts';
 import { realInstaller } from '../lib/founder-skills/installer.ts';
 import { executeHooksInstall } from '../commands/hooks.ts';
-import { executeMigrateFromAgentTeam } from '../commands/migrate.ts';
+import { executeMigrateCodexSkills, executeMigrateFromAgentTeam } from '../commands/migrate.ts';
 import {
   EXIT_OK,
   EXIT_ERROR,
@@ -113,6 +113,7 @@ function printHelp(version: string): void {
     `  roster pending sync          ${chalk.dim('Synthesize HITL items from failed-fire signals (.exit + STALE)')}`,
     `  roster hooks install         ${chalk.dim('Install SessionStart banner hooks for Claude + Codex')}`,
     `  roster migrate from-agent-team <dir>  ${chalk.dim('Migrate a legacy agent-team workspace into roster')}`,
+    `  roster migrate codex-skills  ${chalk.dim('Copy legacy .codex/skills into Codex-native .agents/skills')}`,
     '',
     chalk.bold('Flags:'),
     `  -h, --help                   ${chalk.dim('Show this help')}`,
@@ -216,11 +217,10 @@ async function promptForTools(detected: Tool[], undetected: Tool[]): Promise<Too
 
 async function promptForScope(
   workspaceExists: boolean,
-  cwd: string,
 ): Promise<Scope | null> {
   const { select } = await import('@inquirer/prompts');
   const projectHint = workspaceExists
-    ? `workspace-local — skills land in ${displayPath(join(cwd, '.<tool>'), cwd)}/skills/`
+    ? 'workspace-local — skills land in the host-native project directory'
     : 'workspace-local — REQUIRES roster init (config/project.yaml not found here)';
   try {
     return await select<Scope>({
@@ -304,7 +304,7 @@ async function runInstall(args: readonly string[]): Promise<number> {
   } else if (nonInteractive) {
     scope = defaultScopeForContext(workspaceExists);
   } else {
-    const picked = await promptForScope(workspaceExists, cwd);
+    const picked = await promptForScope(workspaceExists);
     if (picked === null) throw userCancelledInstall();
     scope = picked;
   }
@@ -499,6 +499,14 @@ function runMigrate(args: readonly string[]): number {
       body: '',
       remedy: `  Run ${chalk.bold('roster --help')} for usage.`,
       exitCode: EXIT_ERROR,
+    });
+  }
+  if (parsed.subcommand === 'codex-skills') {
+    return executeMigrateCodexSkills({
+      cwd: parsed.cwd ?? process.cwd(),
+      dryRun: parsed.dryRun,
+      json: parsed.json,
+      silent: parsed.silent,
     });
   }
   return executeMigrateFromAgentTeam({
