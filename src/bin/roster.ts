@@ -41,6 +41,8 @@ import { syncFounderSkills } from '../lib/founder-skills/sync.ts';
 import { realInstaller } from '../lib/founder-skills/installer.ts';
 import { executeHooksInstall } from '../commands/hooks.ts';
 import { executeMigrateCodexSkills, executeMigrateFromAgentTeam } from '../commands/migrate.ts';
+import { parseBrainArgs } from '../lib/brain-args.ts';
+import { executeBrainInit, executeBrainDoctor } from '../commands/brain.ts';
 import {
   EXIT_OK,
   EXIT_ERROR,
@@ -57,7 +59,7 @@ import {
   workspaceRequiredError,
 } from '../lib/errors.ts';
 
-type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'hooks' | 'migrate' | 'pending' | 'skills' | 'upgrade' | 'update';
+type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'hooks' | 'migrate' | 'pending' | 'skills' | 'upgrade' | 'update' | 'brain';
 const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'install',
   'init',
@@ -70,6 +72,7 @@ const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'update',
   'pending',
   'skills',
+  'brain',
 ]);
 
 // Display a path under home as `~/foo`; otherwise if it's under cwd, show
@@ -112,6 +115,8 @@ function printHelp(version: string): void {
     `  roster review [function]     ${chalk.dim('Review unread decisions (HITL); --json to list, --approve/--reject <id|path> to apply')}`,
     `  roster pending sync          ${chalk.dim('Synthesize HITL items from failed-fire signals (.exit + STALE)')}`,
     `  roster hooks install         ${chalk.dim('Install SessionStart banner hooks for Claude + Codex')}`,
+    `  roster brain init            ${chalk.dim('Provision the Postgres knowledge brain (admin URL); prints runtime URL once')}`,
+    `  roster brain doctor          ${chalk.dim('Audit brain append-only safety + report pending migrations')}`,
     `  roster migrate from-agent-team <dir>  ${chalk.dim('Migrate a legacy agent-team workspace into roster')}`,
     `  roster migrate codex-skills  ${chalk.dim('Copy legacy .codex/skills into Codex-native .agents/skills')}`,
     '',
@@ -619,6 +624,31 @@ async function runHooks(args: readonly string[]): Promise<number> {
   });
 }
 
+async function runBrain(args: readonly string[]): Promise<number> {
+  const parsed = parseBrainArgs(args);
+  if (parsed.kind === 'err') {
+    throw new RosterError({
+      header: `${chalk.red.bold('roster:')} ${parsed.message}`,
+      body: '',
+      remedy: `  Run ${chalk.bold('roster --help')} for usage.`,
+      exitCode: EXIT_ERROR,
+    });
+  }
+  if (parsed.subcommand === 'init') {
+    return await executeBrainInit({
+      json: parsed.json,
+      silent: parsed.silent,
+      embeddings: parsed.embeddings,
+      role: parsed.role,
+    });
+  }
+  return await executeBrainDoctor({
+    json: parsed.json,
+    silent: parsed.silent,
+    role: parsed.role,
+  });
+}
+
 async function runDoctor(args: readonly string[]): Promise<number> {
   const parsed = parseDoctorArgs(args);
   if (parsed.kind === 'err') {
@@ -682,6 +712,7 @@ async function main(): Promise<number> {
     if (first === 'hooks') return await runHooks(rest);
     if (first === 'migrate') return runMigrate(rest);
     if (first === 'pending') return runPending(rest);
+    if (first === 'brain') return await runBrain(rest);
   }
 
   throw unknownCommandError(first);
