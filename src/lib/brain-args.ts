@@ -8,7 +8,8 @@ type BrainSubcommand =
   | 'link'
   | 'get'
   | 'table'
-  | 'sql';
+  | 'sql'
+  | 'mount';
 
 const BRAIN_SUBCOMMANDS: ReadonlySet<BrainSubcommand> = new Set<BrainSubcommand>([
   'init',
@@ -19,6 +20,7 @@ const BRAIN_SUBCOMMANDS: ReadonlySet<BrainSubcommand> = new Set<BrainSubcommand>
   'get',
   'table',
   'sql',
+  'mount',
 ]);
 
 const SUBCOMMAND_LIST = Array.from(BRAIN_SUBCOMMANDS).join(' | ');
@@ -65,6 +67,7 @@ export type ParsedBrainArgs =
   | { kind: 'ok'; subcommand: 'table'; json: boolean; op: 'create'; name: string; columns: { name: string; type: string }[] }
   | { kind: 'ok'; subcommand: 'table'; json: boolean; op: 'list' }
   | { kind: 'ok'; subcommand: 'sql'; json: boolean; query: string }
+  | { kind: 'ok'; subcommand: 'mount'; json: boolean; file: string }
   | { kind: 'err'; message: string };
 
 function isBrainSubcommand(value: string): value is BrainSubcommand {
@@ -122,7 +125,22 @@ export function parseBrainArgs(args: readonly string[]): ParsedBrainArgs {
   if (first === 'link') return parseLink(rest);
   if (first === 'get') return parseGet(rest);
   if (first === 'table') return parseTable(rest);
+  if (first === 'mount') return parseMount(rest);
   return parseSql(rest);
+}
+
+function parseMount(rest: readonly string[]): ParsedBrainArgs {
+  let json = false;
+  let file: string | undefined;
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i]!;
+    if (arg === '--json') json = true;
+    else if (arg.startsWith('-')) return err(`unknown flag for 'brain mount': ${arg}`);
+    else if (file === undefined) file = arg;
+    else return err(`'brain mount' takes a single file argument`);
+  }
+  if (file === undefined) return err(`'brain mount' requires a file argument`);
+  return { kind: 'ok', subcommand: 'mount', json, file };
 }
 
 function parseInitDoctor(first: 'init' | 'doctor', rest: readonly string[]): ParsedBrainArgs {

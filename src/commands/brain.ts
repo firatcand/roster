@@ -10,6 +10,7 @@ import { createLink } from '../lib/brain/link.ts';
 import { getEntity } from '../lib/brain/get.ts';
 import { createTable, listTables } from '../lib/brain/table.ts';
 import { runReadOnlyQuery } from '../lib/brain/sql.ts';
+import { mountFile } from '../lib/brain/mount.ts';
 import { EXIT_OK, EXIT_ERROR } from '../lib/errors.ts';
 
 export type BrainInitOptions = {
@@ -238,6 +239,20 @@ export async function executeBrainTable(opts: BrainTableOptions): Promise<number
     for (const t of tables) {
       console.log(`${chalk.bold(t.name)}: ${t.columns.map((c) => `${c.name} ${c.type}`).join(', ')}`);
     }
+  }
+  return EXIT_OK;
+}
+
+export type BrainMountOptions = RuntimeVerbOptions & { file: string };
+
+export async function executeBrainMount(opts: BrainMountOptions): Promise<number> {
+  const result = await withRuntimePool(opts, (client) => mountFile(client, opts.file));
+  if (opts.json) {
+    console.log(JSON.stringify({ ok: true, ...result }, null, 2));
+  } else if (result.mounted) {
+    console.log(`${chalk.green('✓')} mounted ${result.sourcePath} (+${result.chunks} chunk(s))`);
+  } else {
+    console.log(`${chalk.dim('·')} ${result.sourcePath} unchanged — no new chunks`);
   }
   return EXIT_OK;
 }

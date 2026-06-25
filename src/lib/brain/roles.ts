@@ -101,6 +101,7 @@ export async function applyGrants(
       `SELECT a.attname FROM pg_catalog.pg_attribute a
         WHERE a.attrelid = ('brain.' || quote_ident($1))::regclass
           AND a.attnum > 0 AND NOT a.attisdropped
+          AND a.attgenerated = ''
           AND a.attname NOT IN ('id', 'recorded_at')`,
       [ident(table)],
     );
