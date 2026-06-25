@@ -24,6 +24,7 @@ const CORE_TABLES = new Set([
   'events',
   'edges',
   'documents',
+  'mounts',
 ]);
 
 export async function listTables(

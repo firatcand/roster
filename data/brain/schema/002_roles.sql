@@ -72,6 +72,7 @@ BEGIN
      WHERE a.attrelid = format('brain.%I', name)::regclass
        AND a.attnum > 0
        AND NOT a.attisdropped
+       AND a.attgenerated = ''
        AND a.attname NOT IN ('id', 'recorded_at');
 
     FOR rw_role IN

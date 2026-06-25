@@ -51,6 +51,7 @@ import {
   executeBrainGet,
   executeBrainTable,
   executeBrainSql,
+  executeBrainMount,
 } from '../commands/brain.ts';
 import {
   EXIT_OK,
@@ -127,6 +128,7 @@ function printHelp(version: string): void {
     `  roster brain init            ${chalk.dim('Provision the Postgres knowledge brain (admin URL); prints runtime URL once')}`,
     `  roster brain doctor          ${chalk.dim('Audit brain append-only safety + report pending migrations')}`,
     `  roster brain save/get/event/link/table/sql  ${chalk.dim('Append-only write/read verbs (runtime role)')}`,
+    `  roster brain mount <file>    ${chalk.dim('Ingest a file as append-only document chunks + keyword index (runtime role)')}`,
     `  roster migrate from-agent-team <dir>  ${chalk.dim('Migrate a legacy agent-team workspace into roster')}`,
     `  roster migrate codex-skills  ${chalk.dim('Copy legacy .codex/skills into Codex-native .agents/skills')}`,
     '',
@@ -694,6 +696,9 @@ async function runBrain(args: readonly string[]): Promise<number> {
   }
   if (parsed.subcommand === 'get') {
     return await executeBrainGet({ json: parsed.json, kind: parsed.entKind, slug: parsed.slug });
+  }
+  if (parsed.subcommand === 'mount') {
+    return await executeBrainMount({ json: parsed.json, file: parsed.file });
   }
   if (parsed.subcommand === 'table') {
     if (parsed.op === 'create') {
