@@ -42,7 +42,16 @@ import { realInstaller } from '../lib/founder-skills/installer.ts';
 import { executeHooksInstall } from '../commands/hooks.ts';
 import { executeMigrateCodexSkills, executeMigrateFromAgentTeam } from '../commands/migrate.ts';
 import { parseBrainArgs } from '../lib/brain-args.ts';
-import { executeBrainInit, executeBrainDoctor } from '../commands/brain.ts';
+import {
+  executeBrainInit,
+  executeBrainDoctor,
+  executeBrainSave,
+  executeBrainEvent,
+  executeBrainLink,
+  executeBrainGet,
+  executeBrainTable,
+  executeBrainSql,
+} from '../commands/brain.ts';
 import {
   EXIT_OK,
   EXIT_ERROR,
@@ -117,6 +126,7 @@ function printHelp(version: string): void {
     `  roster hooks install         ${chalk.dim('Install SessionStart banner hooks for Claude + Codex')}`,
     `  roster brain init            ${chalk.dim('Provision the Postgres knowledge brain (admin URL); prints runtime URL once')}`,
     `  roster brain doctor          ${chalk.dim('Audit brain append-only safety + report pending migrations')}`,
+    `  roster brain save/get/event/link/table/sql  ${chalk.dim('Append-only write/read verbs (runtime role)')}`,
     `  roster migrate from-agent-team <dir>  ${chalk.dim('Migrate a legacy agent-team workspace into roster')}`,
     `  roster migrate codex-skills  ${chalk.dim('Copy legacy .codex/skills into Codex-native .agents/skills')}`,
     '',
@@ -642,11 +652,56 @@ async function runBrain(args: readonly string[]): Promise<number> {
       role: parsed.role,
     });
   }
-  return await executeBrainDoctor({
-    json: parsed.json,
-    silent: parsed.silent,
-    role: parsed.role,
-  });
+  if (parsed.subcommand === 'doctor') {
+    return await executeBrainDoctor({
+      json: parsed.json,
+      silent: parsed.silent,
+      role: parsed.role,
+    });
+  }
+  if (parsed.subcommand === 'save') {
+    return await executeBrainSave({
+      json: parsed.json,
+      kind: parsed.entKind,
+      slug: parsed.slug,
+      title: parsed.title,
+      fields: parsed.fields,
+      source: parsed.source,
+      confidence: parsed.confidence,
+      actor: parsed.actor,
+    });
+  }
+  if (parsed.subcommand === 'event') {
+    return await executeBrainEvent({
+      json: parsed.json,
+      kind: parsed.entKind,
+      slug: parsed.slug,
+      payload: parsed.payload,
+      actor: parsed.actor,
+    });
+  }
+  if (parsed.subcommand === 'link') {
+    return await executeBrainLink({
+      json: parsed.json,
+      srcSlug: parsed.srcSlug,
+      rel: parsed.rel,
+      dstSlug: parsed.dstSlug,
+      kindSrc: parsed.kindSrc,
+      kindDst: parsed.kindDst,
+      props: parsed.props,
+      actor: parsed.actor,
+    });
+  }
+  if (parsed.subcommand === 'get') {
+    return await executeBrainGet({ json: parsed.json, kind: parsed.entKind, slug: parsed.slug });
+  }
+  if (parsed.subcommand === 'table') {
+    if (parsed.op === 'create') {
+      return await executeBrainTable({ json: parsed.json, op: 'create', name: parsed.name, columns: parsed.columns });
+    }
+    return await executeBrainTable({ json: parsed.json, op: 'list' });
+  }
+  return await executeBrainSql({ json: parsed.json, query: parsed.query });
 }
 
 async function runDoctor(args: readonly string[]): Promise<number> {
