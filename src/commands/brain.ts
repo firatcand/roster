@@ -3,6 +3,13 @@ import { createBrainPool, resolveBrainUrl, withBrainClient } from '../lib/brain/
 import { runMigrations } from '../lib/brain/migrate.ts';
 import { ensureRuntimeRole, buildRuntimeUrl, RUNTIME_ROLE } from '../lib/brain/roles.ts';
 import { runDoctor } from '../lib/brain/doctor.ts';
+import { saveEntity } from '../lib/brain/save.ts';
+import type { FactPair } from '../lib/brain-args.ts';
+import { appendEvent } from '../lib/brain/event.ts';
+import { createLink } from '../lib/brain/link.ts';
+import { getEntity } from '../lib/brain/get.ts';
+import { createTable, listTables } from '../lib/brain/table.ts';
+import { runReadOnlyQuery } from '../lib/brain/sql.ts';
 import { EXIT_OK, EXIT_ERROR } from '../lib/errors.ts';
 
 export type BrainInitOptions = {
@@ -87,4 +94,162 @@ export async function executeBrainDoctor(opts: BrainDoctorOptions): Promise<numb
   } finally {
     await pool.end();
   }
+}
+
+type RuntimeVerbOptions = { json: boolean; runtimeUrl?: string };
+
+async function withRuntimePool<T>(
+  opts: RuntimeVerbOptions,
+  fn: (client: import('pg').PoolClient) => Promise<T>,
+): Promise<T> {
+  const url = opts.runtimeUrl ?? resolveBrainUrl('runtime');
+  const pool = createBrainPool('runtime', url);
+  try {
+    return await withBrainClient(pool, fn);
+  } finally {
+    await pool.end();
+  }
+}
+
+export type BrainSaveOptions = RuntimeVerbOptions & {
+  kind: string;
+  slug: string;
+  title?: string;
+  fields: FactPair[];
+  source?: string;
+  confidence?: number;
+  actor?: string;
+};
+
+export async function executeBrainSave(opts: BrainSaveOptions): Promise<number> {
+  const result = await withRuntimePool(opts, (client) =>
+    saveEntity(client, {
+      kind: opts.kind,
+      slug: opts.slug,
+      title: opts.title,
+      fields: opts.fields,
+      source: opts.source,
+      confidence: opts.confidence,
+      actor: opts.actor,
+    }),
+  );
+  if (opts.json) {
+    console.log(JSON.stringify({ ok: true, ...result }, null, 2));
+  } else {
+    console.log(
+      `${chalk.green('✓')} ${opts.kind}/${opts.slug} ${result.created ? 'created' : 'exists'}; +${result.factIds.length} fact(s)`,
+    );
+  }
+  return EXIT_OK;
+}
+
+export type BrainEventOptions = RuntimeVerbOptions & {
+  kind: string;
+  slug?: string;
+  payload: unknown;
+  actor?: string;
+};
+
+export async function executeBrainEvent(opts: BrainEventOptions): Promise<number> {
+  const result = await withRuntimePool(opts, (client) =>
+    appendEvent(client, { kind: opts.kind, slug: opts.slug, payload: opts.payload, actor: opts.actor }),
+  );
+  if (opts.json) {
+    console.log(JSON.stringify({ ok: true, ...result }, null, 2));
+  } else {
+    console.log(`${chalk.green('✓')} event '${opts.kind}' #${result.eventId}`);
+  }
+  return EXIT_OK;
+}
+
+export type BrainLinkOptions = RuntimeVerbOptions & {
+  srcSlug: string;
+  rel: string;
+  dstSlug: string;
+  kindSrc?: string;
+  kindDst?: string;
+  props?: unknown;
+  actor?: string;
+};
+
+export async function executeBrainLink(opts: BrainLinkOptions): Promise<number> {
+  const result = await withRuntimePool(opts, (client) =>
+    createLink(client, {
+      srcSlug: opts.srcSlug,
+      rel: opts.rel,
+      dstSlug: opts.dstSlug,
+      kindSrc: opts.kindSrc,
+      kindDst: opts.kindDst,
+      props: opts.props,
+      actor: opts.actor,
+    }),
+  );
+  if (opts.json) {
+    console.log(JSON.stringify({ ok: true, ...result }, null, 2));
+  } else {
+    console.log(`${chalk.green('✓')} ${opts.srcSlug} -[${opts.rel}]-> ${opts.dstSlug} #${result.edgeId}`);
+  }
+  return EXIT_OK;
+}
+
+export type BrainGetOptions = RuntimeVerbOptions & { kind: string; slug: string };
+
+export async function executeBrainGet(opts: BrainGetOptions): Promise<number> {
+  const truth = await withRuntimePool(opts, (client) => getEntity(client, opts.kind, opts.slug));
+  if (truth.entity === null) {
+    if (opts.json) console.log(JSON.stringify({ ok: false, found: false }, null, 2));
+    else console.log(chalk.yellow(`no entity ${opts.kind}/${opts.slug}`));
+    return EXIT_ERROR;
+  }
+  if (opts.json) {
+    console.log(JSON.stringify({ ok: true, ...truth }, null, 2));
+  } else {
+    console.log(chalk.bold(`${truth.entity.kind}/${truth.entity.slug}${truth.entity.title ? ` — ${truth.entity.title}` : ''}`));
+    for (const f of truth.facts) {
+      const attrib = f.actor || f.source ? chalk.dim(` (${[f.source, f.actor].filter(Boolean).join('/')})`) : '';
+      console.log(`  ${f.key} = ${JSON.stringify(f.value)}${attrib}`);
+    }
+    for (const ev of truth.events) console.log(`  ${chalk.dim('event')} ${ev.kind}`);
+    for (const ed of truth.edges) {
+      const arrow = ed.direction === 'out' ? '->' : '<-';
+      console.log(`  ${chalk.dim('edge')} ${arrow} ${ed.rel} ${ed.other_kind}/${ed.other_slug}`);
+    }
+  }
+  return EXIT_OK;
+}
+
+export type BrainTableOptions =
+  | (RuntimeVerbOptions & { op: 'create'; name: string; columns: { name: string; type: string }[] })
+  | (RuntimeVerbOptions & { op: 'list' });
+
+export async function executeBrainTable(opts: BrainTableOptions): Promise<number> {
+  if (opts.op === 'create') {
+    await withRuntimePool(opts, (client) => createTable(client, opts.name, opts.columns));
+    if (opts.json) console.log(JSON.stringify({ ok: true, created: opts.name }, null, 2));
+    else console.log(`${chalk.green('✓')} table brain.${opts.name} created`);
+    return EXIT_OK;
+  }
+  const tables = await withRuntimePool(opts, (client) => listTables(client));
+  if (opts.json) {
+    console.log(JSON.stringify({ ok: true, tables }, null, 2));
+  } else if (tables.length === 0) {
+    console.log(chalk.dim('(no user tables)'));
+  } else {
+    for (const t of tables) {
+      console.log(`${chalk.bold(t.name)}: ${t.columns.map((c) => `${c.name} ${c.type}`).join(', ')}`);
+    }
+  }
+  return EXIT_OK;
+}
+
+export type BrainSqlOptions = RuntimeVerbOptions & { query: string };
+
+export async function executeBrainSql(opts: BrainSqlOptions): Promise<number> {
+  const result = await withRuntimePool(opts, (client) => runReadOnlyQuery(client, opts.query));
+  if (opts.json) {
+    console.log(JSON.stringify({ ok: true, rowCount: result.rowCount, rows: result.rows }, null, 2));
+  } else {
+    console.log(JSON.stringify(result.rows, null, 2));
+  }
+  return EXIT_OK;
 }
