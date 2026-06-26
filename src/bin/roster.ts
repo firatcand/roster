@@ -48,6 +48,7 @@ import {
   executeBrainSave,
   executeBrainEvent,
   executeBrainLink,
+  executeBrainMerge,
   executeBrainGet,
   executeBrainTable,
   executeBrainSql,
@@ -127,7 +128,7 @@ function printHelp(version: string): void {
     `  roster hooks install         ${chalk.dim('Install SessionStart banner hooks for Claude + Codex')}`,
     `  roster brain init            ${chalk.dim('Provision the Postgres knowledge brain (admin URL); prints runtime URL once')}`,
     `  roster brain doctor          ${chalk.dim('Audit brain append-only safety + report pending migrations')}`,
-    `  roster brain save/get/event/link/table/sql  ${chalk.dim('Append-only write/read verbs (runtime role)')}`,
+    `  roster brain save/get/event/link/merge/table/sql  ${chalk.dim('Append-only write/read verbs (runtime role)')}`,
     `  roster brain mount <file>    ${chalk.dim('Ingest a file as append-only document chunks + keyword index (runtime role)')}`,
     `  roster migrate from-agent-team <dir>  ${chalk.dim('Migrate a legacy agent-team workspace into roster')}`,
     `  roster migrate codex-skills  ${chalk.dim('Copy legacy .codex/skills into Codex-native .agents/skills')}`,
@@ -691,6 +692,15 @@ async function runBrain(args: readonly string[]): Promise<number> {
       kindSrc: parsed.kindSrc,
       kindDst: parsed.kindDst,
       props: parsed.props,
+      actor: parsed.actor,
+    });
+  }
+  if (parsed.subcommand === 'merge') {
+    return await executeBrainMerge({
+      json: parsed.json,
+      fromSlug: parsed.fromSlug,
+      intoSlug: parsed.intoSlug,
+      kind: parsed.entKind,
       actor: parsed.actor,
     });
   }
