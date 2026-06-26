@@ -6,6 +6,7 @@ type BrainSubcommand =
   | 'save'
   | 'event'
   | 'link'
+  | 'merge'
   | 'get'
   | 'table'
   | 'sql'
@@ -17,6 +18,7 @@ const BRAIN_SUBCOMMANDS: ReadonlySet<BrainSubcommand> = new Set<BrainSubcommand>
   'save',
   'event',
   'link',
+  'merge',
   'get',
   'table',
   'sql',
@@ -61,6 +63,15 @@ export type ParsedBrainArgs =
       kindSrc?: string;
       kindDst?: string;
       props?: unknown;
+      actor?: string;
+    }
+  | {
+      kind: 'ok';
+      subcommand: 'merge';
+      json: boolean;
+      fromSlug: string;
+      intoSlug: string;
+      entKind?: string;
       actor?: string;
     }
   | { kind: 'ok'; subcommand: 'get'; json: boolean; entKind: string; slug: string }
@@ -123,6 +134,7 @@ export function parseBrainArgs(args: readonly string[]): ParsedBrainArgs {
   if (first === 'save') return parseSave(rest);
   if (first === 'event') return parseEvent(rest);
   if (first === 'link') return parseLink(rest);
+  if (first === 'merge') return parseMerge(rest);
   if (first === 'get') return parseGet(rest);
   if (first === 'table') return parseTable(rest);
   if (first === 'mount') return parseMount(rest);
@@ -281,6 +293,37 @@ function parseLink(rest: readonly string[]): ParsedBrainArgs {
     kindSrc,
     kindDst,
     props,
+    actor,
+  };
+}
+
+function parseMerge(rest: readonly string[]): ParsedBrainArgs {
+  let json = false;
+  let entKind: string | undefined;
+  let actor: string | undefined;
+  const positionals: string[] = [];
+
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i]!;
+    if (arg === '--json') json = true;
+    else if (arg === '--kind') {
+      const v = readValue(rest, i, 'merge', '--kind'); if ('kind' in v) return v; entKind = v.value; i = v.next;
+    } else if (arg === '--actor') {
+      const v = readValue(rest, i, 'merge', '--actor'); if ('kind' in v) return v; actor = v.value; i = v.next;
+    } else if (arg.startsWith('-')) return err(`unknown flag for 'brain merge': ${arg}`);
+    else positionals.push(arg);
+  }
+
+  if (positionals.length !== 2) {
+    return err(`'brain merge' takes 2 positional args: <from-slug> <into-slug>`);
+  }
+  return {
+    kind: 'ok',
+    subcommand: 'merge',
+    json,
+    fromSlug: positionals[0]!,
+    intoSlug: positionals[1]!,
+    entKind,
     actor,
   };
 }

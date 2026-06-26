@@ -93,6 +93,7 @@ export async function applyGrants(
 
   await client.query(`GRANT USAGE ON SCHEMA brain TO ${qrole}`);
   await client.query(`GRANT EXECUTE ON FUNCTION brain.create_table(text, jsonb) TO ${qrole}`);
+  await client.query(`GRANT EXECUTE ON FUNCTION brain.canonical_id(bigint) TO ${qrole}`);
 
   for (const table of await brainTableNames(client)) {
     const t = qIdent(table);

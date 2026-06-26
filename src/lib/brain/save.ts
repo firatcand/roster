@@ -1,4 +1,5 @@
 import type pg from 'pg';
+import { findCandidates, type Candidate, type CreateSafety } from './dedup.ts';
 
 export type FactInput = {
   key: string;
@@ -19,6 +20,8 @@ export type SaveResult = {
   entityId: string;
   created: boolean;
   factIds: string[];
+  create_safety: CreateSafety;
+  candidates: Candidate[];
 };
 
 export async function resolveOrCreateEntity(
@@ -68,5 +71,13 @@ export async function saveEntity(
     );
     factIds.push(r.rows[0]!.id);
   }
-  return { entityId: id, created, factIds };
+  const dedup = await findCandidates(client, input.kind, input.slug, input.title, id);
+  const create_safety = created ? dedup.create_safety : 'exists';
+  return {
+    entityId: id,
+    created,
+    factIds,
+    create_safety,
+    candidates: dedup.candidates,
+  };
 }

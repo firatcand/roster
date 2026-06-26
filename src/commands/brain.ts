@@ -7,6 +7,7 @@ import { saveEntity } from '../lib/brain/save.ts';
 import type { FactPair } from '../lib/brain-args.ts';
 import { appendEvent } from '../lib/brain/event.ts';
 import { createLink } from '../lib/brain/link.ts';
+import { mergeEntities } from '../lib/brain/merge.ts';
 import { getEntity } from '../lib/brain/get.ts';
 import { createTable, listTables } from '../lib/brain/table.ts';
 import { runReadOnlyQuery } from '../lib/brain/sql.ts';
@@ -139,6 +140,41 @@ export async function executeBrainSave(opts: BrainSaveOptions): Promise<number> 
   } else {
     console.log(
       `${chalk.green('✓')} ${opts.kind}/${opts.slug} ${result.created ? 'created' : 'exists'}; +${result.factIds.length} fact(s)`,
+    );
+    if (result.created && result.create_safety === 'probable' && result.candidates.length > 0) {
+      const top = result.candidates
+        .slice(0, 3)
+        .map((c) => `${c.kind}/${c.slug} (${c.similarity.toFixed(2)})`)
+        .join(', ');
+      console.log(
+        `  ${chalk.yellow('⚠')} possible duplicate of: ${top} — run ${chalk.bold(`roster brain merge ${opts.slug} <into-slug>`)} if so`,
+      );
+    }
+  }
+  return EXIT_OK;
+}
+
+export type BrainMergeOptions = RuntimeVerbOptions & {
+  fromSlug: string;
+  intoSlug: string;
+  kind?: string;
+  actor?: string;
+};
+
+export async function executeBrainMerge(opts: BrainMergeOptions): Promise<number> {
+  const result = await withRuntimePool(opts, (client) =>
+    mergeEntities(client, {
+      fromSlug: opts.fromSlug,
+      intoSlug: opts.intoSlug,
+      kind: opts.kind,
+      actor: opts.actor,
+    }),
+  );
+  if (opts.json) {
+    console.log(JSON.stringify({ ok: true, ...result }, null, 2));
+  } else {
+    console.log(
+      `${chalk.green('✓')} merged ${opts.fromSlug} → ${opts.intoSlug}; canonical #${result.canonicalId}; +${result.aliasesAdded} alias(es)`,
     );
   }
   return EXIT_OK;
