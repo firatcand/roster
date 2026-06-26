@@ -12,7 +12,9 @@ type BrainSubcommand =
   | 'sql'
   | 'mount'
   | 'export'
-  | 'import';
+  | 'import'
+  | 'query'
+  | 'config';
 
 const BRAIN_SUBCOMMANDS: ReadonlySet<BrainSubcommand> = new Set<BrainSubcommand>([
   'init',
@@ -27,6 +29,8 @@ const BRAIN_SUBCOMMANDS: ReadonlySet<BrainSubcommand> = new Set<BrainSubcommand>
   'mount',
   'export',
   'import',
+  'query',
+  'config',
 ]);
 
 const SUBCOMMAND_LIST = Array.from(BRAIN_SUBCOMMANDS).join(' | ');
@@ -85,6 +89,9 @@ export type ParsedBrainArgs =
   | { kind: 'ok'; subcommand: 'mount'; json: boolean; file: string }
   | { kind: 'ok'; subcommand: 'export'; json: boolean; outDir?: string; format: 'jsonl' | 'sql' }
   | { kind: 'ok'; subcommand: 'import'; json: boolean; dir: string }
+  | { kind: 'ok'; subcommand: 'query'; json: boolean; text: string; entKind?: string; limit?: number }
+  | { kind: 'ok'; subcommand: 'config'; json: boolean; op: 'get'; key?: string }
+  | { kind: 'ok'; subcommand: 'config'; json: boolean; op: 'set'; key: string; value: string }
   | { kind: 'err'; message: string };
 
 function isBrainSubcommand(value: string): value is BrainSubcommand {
@@ -146,7 +153,53 @@ export function parseBrainArgs(args: readonly string[]): ParsedBrainArgs {
   if (first === 'mount') return parseMount(rest);
   if (first === 'export') return parseExport(rest);
   if (first === 'import') return parseImport(rest);
+  if (first === 'query') return parseQuery(rest);
+  if (first === 'config') return parseConfig(rest);
   return parseSql(rest);
+}
+
+function parseQuery(rest: readonly string[]): ParsedBrainArgs {
+  let json = false;
+  let entKind: string | undefined;
+  let limit: number | undefined;
+  let text: string | undefined;
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i]!;
+    if (arg === '--json') json = true;
+    else if (arg === '--kind') {
+      const v = readValue(rest, i, 'query', '--kind'); if ('kind' in v) return v; entKind = v.value; i = v.next;
+    } else if (arg === '--limit') {
+      const v = readValue(rest, i, 'query', '--limit'); if ('kind' in v) return v;
+      const n = Number(v.value);
+      if (!Number.isInteger(n) || n < 1) return err(`'brain query': --limit must be a positive integer`);
+      limit = n; i = v.next;
+    } else if (arg.startsWith('-')) return err(`unknown flag for 'brain query': ${arg}`);
+    else if (text === undefined) text = arg;
+    else return err(`'brain query' takes a single quoted query string`);
+  }
+  if (text === undefined || text.trim().length === 0) return err(`'brain query' requires a non-empty query string`);
+  return { kind: 'ok', subcommand: 'query', json, text, entKind, limit };
+}
+
+function parseConfig(rest: readonly string[]): ParsedBrainArgs {
+  const [op, ...tail] = rest;
+  if (op !== 'get' && op !== 'set') {
+    return err(`'brain config' requires an op: get | set`);
+  }
+  let json = false;
+  const positionals: string[] = [];
+  for (let i = 0; i < tail.length; i++) {
+    const arg = tail[i]!;
+    if (arg === '--json') json = true;
+    else if (arg.startsWith('-')) return err(`unknown flag for 'brain config ${op}': ${arg}`);
+    else positionals.push(arg);
+  }
+  if (op === 'get') {
+    if (positionals.length > 1) return err(`'brain config get' takes an optional single key`);
+    return { kind: 'ok', subcommand: 'config', json, op: 'get', key: positionals[0] };
+  }
+  if (positionals.length !== 2) return err(`'brain config set' takes <key> <value>`);
+  return { kind: 'ok', subcommand: 'config', json, op: 'set', key: positionals[0]!, value: positionals[1]! };
 }
 
 function parseExport(rest: readonly string[]): ParsedBrainArgs {

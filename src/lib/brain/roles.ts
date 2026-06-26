@@ -95,6 +95,18 @@ export async function applyGrants(
   await client.query(`GRANT EXECUTE ON FUNCTION brain.create_table(text, jsonb) TO ${qrole}`);
   await client.query(`GRANT EXECUTE ON FUNCTION brain.canonical_id(bigint) TO ${qrole}`);
 
+  // Narrow brain_meta access (ROS-138): the runtime role may READ the non-secret
+  // search/embedding config and nothing else in brain_meta (no schema_migrations,
+  // no runtime_roles, no writes). The embedding API key is never stored in the DB.
+  // Guarded so pre-007 brains (no config table) keep zero brain_meta access.
+  const hasConfig = await client.query<{ t: string | null }>(
+    `SELECT to_regclass('brain_meta.config')::text AS t`,
+  );
+  if (hasConfig.rows[0]?.t) {
+    await client.query(`GRANT USAGE ON SCHEMA brain_meta TO ${qrole}`);
+    await client.query(`GRANT SELECT ON brain_meta.config TO ${qrole}`);
+  }
+
   for (const table of await brainTableNames(client)) {
     const t = qIdent(table);
     await client.query(`GRANT SELECT ON brain.${t} TO ${qrole}`);

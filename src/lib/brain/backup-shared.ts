@@ -86,6 +86,7 @@ export const ALLOWED_CASTS: ReadonlySet<string> = new Set([
   'timestamptz',
   'real',
   'double precision',
+  'vector',
 ]);
 
 export function assertCast(cast: string): string {
@@ -133,6 +134,10 @@ function mapType(formatType: string): { cast: string; brokerType: string | null 
       return { cast: 'real', brokerType: null };
     case 'double precision':
       return { cast: 'double precision', brokerType: null };
+    case 'vector':
+      // pgvector embedding column (documents.embedding). `embedding::text` -> '[..]'
+      // re-casts via '[..]'::vector; the column's own vector(1536) enforces the dim.
+      return { cast: 'vector', brokerType: null };
     default:
       return null;
   }

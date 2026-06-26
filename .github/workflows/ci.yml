@@ -12,7 +12,9 @@ jobs:
     timeout-minutes: 10
     services:
       postgres:
-        image: postgres:16
+        # pgvector image (ROS-138): includes the `vector` extension that brain
+        # migration 007 enables. Production runs on Neon, which has pgvector built in.
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
