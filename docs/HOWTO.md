@@ -366,6 +366,49 @@ Platform × tool matrix, UI hand-off flow, Codex `--via cron` envscubbing, and t
 
 ---
 
+## 11. Back up the brain
+
+The Postgres brain (`roster brain`) is durable team memory. If the Neon project is lost, there's no recovery path unless you keep portable backups.
+
+```bash
+# Dump every brain table (core + agent-created) to a portable directory.
+# Reads brain_meta, so it needs the admin URL (the same one `roster brain init` uses).
+infisical run --env dev --path /<repo> -- roster brain export --out ./backups/brain-$(date +%F)
+
+# JSONL data files (one per table + manifest.json) are always written — they are
+# what `roster brain import` restores from. --format sql ADDITIONALLY drops a
+# standalone dump.sql you can replay with psql (see below):
+roster brain export --out ./backups/brain-sql --format sql
+```
+
+Restore into a **fresh, empty brain** (import preserves row ids, so it refuses a brain that already holds data):
+
+```bash
+roster brain init                       # provision schema + runtime role on the target
+roster brain import ./backups/brain-2026-06-26
+```
+
+Import runs the schema migrations, recreates agent-created tables through the brain's table broker, reloads every row with its original id (in one transaction, verified against the manifest's row counts + content checksums), and resets the identity sequences. The backup's schema version must match the installed `roster` exactly — restore with the same roster version that produced the dump.
+
+A `--format sql` backup also contains a standalone `dump.sql`. `roster brain import` never executes it (it always restores from the verified JSONL); to replay it directly instead, run it against a freshly `roster brain init`-ed brain atomically:
+
+```bash
+psql "$ROSTER_BRAIN_ADMIN_URL" --single-transaction -f ./backups/brain-sql/dump.sql
+```
+
+### Periodic backups (cron)
+
+```cron
+# Daily 03:00 brain backup, keeping one directory per day. env -i scrubs the
+# environment; Infisical injects ROSTER_BRAIN_ADMIN_URL (never a .env file).
+0 3 * * *  cd /path/to/workspace && infisical run --env dev --path /<repo> -- \
+  roster brain export --out "backups/brain-$(date +\%F)" >> logs/brain-backup.log 2>&1
+```
+
+Or hand the same command to a managed schedule via `roster schedule` so failures surface in the HITL inbox.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |

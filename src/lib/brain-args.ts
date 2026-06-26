@@ -10,7 +10,9 @@ type BrainSubcommand =
   | 'get'
   | 'table'
   | 'sql'
-  | 'mount';
+  | 'mount'
+  | 'export'
+  | 'import';
 
 const BRAIN_SUBCOMMANDS: ReadonlySet<BrainSubcommand> = new Set<BrainSubcommand>([
   'init',
@@ -23,6 +25,8 @@ const BRAIN_SUBCOMMANDS: ReadonlySet<BrainSubcommand> = new Set<BrainSubcommand>
   'table',
   'sql',
   'mount',
+  'export',
+  'import',
 ]);
 
 const SUBCOMMAND_LIST = Array.from(BRAIN_SUBCOMMANDS).join(' | ');
@@ -79,6 +83,8 @@ export type ParsedBrainArgs =
   | { kind: 'ok'; subcommand: 'table'; json: boolean; op: 'list' }
   | { kind: 'ok'; subcommand: 'sql'; json: boolean; query: string }
   | { kind: 'ok'; subcommand: 'mount'; json: boolean; file: string }
+  | { kind: 'ok'; subcommand: 'export'; json: boolean; outDir?: string; format: 'jsonl' | 'sql' }
+  | { kind: 'ok'; subcommand: 'import'; json: boolean; dir: string }
   | { kind: 'err'; message: string };
 
 function isBrainSubcommand(value: string): value is BrainSubcommand {
@@ -138,7 +144,45 @@ export function parseBrainArgs(args: readonly string[]): ParsedBrainArgs {
   if (first === 'get') return parseGet(rest);
   if (first === 'table') return parseTable(rest);
   if (first === 'mount') return parseMount(rest);
+  if (first === 'export') return parseExport(rest);
+  if (first === 'import') return parseImport(rest);
   return parseSql(rest);
+}
+
+function parseExport(rest: readonly string[]): ParsedBrainArgs {
+  let json = false;
+  let outDir: string | undefined;
+  let format: 'jsonl' | 'sql' = 'jsonl';
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i]!;
+    if (arg === '--json') json = true;
+    else if (arg === '--out') {
+      const v = readValue(rest, i, 'export', '--out'); if ('kind' in v) return v; outDir = v.value; i = v.next;
+    } else if (arg === '--format') {
+      const v = readValue(rest, i, 'export', '--format'); if ('kind' in v) return v;
+      if (v.value !== 'jsonl' && v.value !== 'sql') {
+        return err(`'brain export': --format must be 'jsonl' or 'sql'`);
+      }
+      format = v.value;
+      i = v.next;
+    } else if (arg.startsWith('-')) return err(`unknown flag for 'brain export': ${arg}`);
+    else return err(`'brain export': unexpected positional argument '${arg}'`);
+  }
+  return { kind: 'ok', subcommand: 'export', json, outDir, format };
+}
+
+function parseImport(rest: readonly string[]): ParsedBrainArgs {
+  let json = false;
+  let dir: string | undefined;
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i]!;
+    if (arg === '--json') json = true;
+    else if (arg.startsWith('-')) return err(`unknown flag for 'brain import': ${arg}`);
+    else if (dir === undefined) dir = arg;
+    else return err(`'brain import' takes a single directory argument`);
+  }
+  if (dir === undefined) return err(`'brain import' requires a backup directory argument`);
+  return { kind: 'ok', subcommand: 'import', json, dir };
 }
 
 function parseMount(rest: readonly string[]): ParsedBrainArgs {
