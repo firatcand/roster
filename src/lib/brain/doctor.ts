@@ -127,16 +127,55 @@ async function checksForRole(client: pg.PoolClient, roleName: string): Promise<D
     ),
   );
 
-  checks.push(
-    await check(
-      client,
-      'no-brain-meta-usage',
-      'runtime role has no USAGE on brain_meta',
-      'runtime role has USAGE on brain_meta',
-      `SELECT 'brain_meta' WHERE has_schema_privilege($1, 'brain_meta', 'USAGE')`,
-      [roleName],
-    ),
+  // ROS-138: brain_meta access invariant. Before 007 there is no config table
+  // and the runtime role must have ZERO brain_meta access (the original rule).
+  // From 007 on, it must have EXACTLY usage + SELECT on config and nothing else:
+  // assert the required grant is present, and that no other brain_meta privilege
+  // exists (table- OR column-level, incl. writes on config).
+  const hasConfig = await client.query<{ t: string | null }>(
+    `SELECT to_regclass('brain_meta.config')::text AS t`,
   );
+  if (hasConfig.rows[0]?.t) {
+    checks.push(
+      await check(
+        client,
+        'brain-meta-config-read-only',
+        'runtime role brain_meta access is exactly USAGE + SELECT on config',
+        'runtime role brain_meta privileges are wrong',
+        `SELECT 'missing USAGE on brain_meta' WHERE NOT has_schema_privilege($1, 'brain_meta', 'USAGE')
+          UNION ALL
+         SELECT 'missing SELECT on brain_meta.config' WHERE NOT has_table_privilege($1, 'brain_meta.config', 'SELECT')
+          UNION ALL
+         SELECT 'CREATE on brain_meta' WHERE has_schema_privilege($1, 'brain_meta', 'CREATE')
+          UNION ALL
+         SELECT 'brain_meta.' || t.relname || ' ' || p.priv
+           FROM (VALUES ('schema_migrations'), ('runtime_roles')) AS t(relname)
+           CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')) AS p(priv)
+          WHERE has_table_privilege($1, 'brain_meta.' || t.relname, p.priv)
+          UNION ALL
+         SELECT 'brain_meta.config ' || p.priv
+           FROM (VALUES ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')) AS p(priv)
+          WHERE has_table_privilege($1, 'brain_meta.config', p.priv)
+          UNION ALL
+         SELECT cp.table_name || '.' || cp.column_name || ' ' || cp.privilege_type
+           FROM information_schema.column_privileges cp
+          WHERE cp.grantee = $1 AND cp.table_schema = 'brain_meta'
+            AND NOT (cp.table_name = 'config' AND cp.privilege_type = 'SELECT')`,
+        [roleName],
+      ),
+    );
+  } else {
+    checks.push(
+      await check(
+        client,
+        'no-brain-meta-usage',
+        'runtime role has no USAGE on brain_meta',
+        'runtime role has USAGE on brain_meta',
+        `SELECT 'brain_meta' WHERE has_schema_privilege($1, 'brain_meta', 'USAGE')`,
+        [roleName],
+      ),
+    );
+  }
 
   checks.push(
     await check(

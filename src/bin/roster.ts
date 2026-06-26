@@ -55,6 +55,8 @@ import {
   executeBrainMount,
   executeBrainExport,
   executeBrainImport,
+  executeBrainQuery,
+  executeBrainConfig,
 } from '../commands/brain.ts';
 import {
   EXIT_OK,
@@ -134,6 +136,8 @@ function printHelp(version: string): void {
     `  roster brain mount <file>    ${chalk.dim('Ingest a file as append-only document chunks + keyword index (runtime role)')}`,
     `  roster brain export          ${chalk.dim('Dump all brain tables to a portable backup dir (--out, --format jsonl|sql; admin URL)')}`,
     `  roster brain import <dir>    ${chalk.dim('Restore a backup into a fresh, empty brain (admin URL)')}`,
+    `  roster brain query "<text>"  ${chalk.dim('Hybrid semantic + keyword + graph search (--kind, --limit, --json)')}`,
+    `  roster brain config get|set  ${chalk.dim('Read/set brain settings (embeddings.enabled, provider, model, search knobs)')}`,
     `  roster migrate from-agent-team <dir>  ${chalk.dim('Migrate a legacy agent-team workspace into roster')}`,
     `  roster migrate codex-skills  ${chalk.dim('Copy legacy .codex/skills into Codex-native .agents/skills')}`,
     '',
@@ -719,6 +723,15 @@ async function runBrain(args: readonly string[]): Promise<number> {
   }
   if (parsed.subcommand === 'import') {
     return await executeBrainImport({ json: parsed.json, dir: parsed.dir });
+  }
+  if (parsed.subcommand === 'query') {
+    return await executeBrainQuery({ json: parsed.json, text: parsed.text, kind: parsed.entKind, limit: parsed.limit });
+  }
+  if (parsed.subcommand === 'config') {
+    if (parsed.op === 'set') {
+      return await executeBrainConfig({ json: parsed.json, op: 'set', key: parsed.key, value: parsed.value });
+    }
+    return await executeBrainConfig({ json: parsed.json, op: 'get', key: parsed.key });
   }
   if (parsed.subcommand === 'table') {
     if (parsed.op === 'create') {

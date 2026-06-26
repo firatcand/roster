@@ -14,6 +14,9 @@ import { runReadOnlyQuery } from '../lib/brain/sql.ts';
 import { mountFile } from '../lib/brain/mount.ts';
 import { exportBrain, type ExportFormat } from '../lib/brain/export.ts';
 import { importBrain } from '../lib/brain/import.ts';
+import { loadConfig, setConfig, getConfigRows } from '../lib/brain/config.ts';
+import { resolveEmbedder } from '../lib/brain/embed.ts';
+import { query as runQuery, type QueryHit } from '../lib/brain/search.ts';
 import { EXIT_OK, EXIT_ERROR } from '../lib/errors.ts';
 
 export type BrainInitOptions = {
@@ -65,6 +68,9 @@ export async function executeBrainInit(opts: BrainInitOptions): Promise<number> 
         console.log(chalk.yellow('  Runtime connection string (shown once — store it now):'));
         console.log(`  ${runtimeUrl}`);
       }
+      console.log('');
+      console.log(chalk.dim('  Semantic search embeddings are OFF (no paid API calls).'));
+      console.log(chalk.dim('  Enable: roster brain config set embeddings.enabled true  (needs OPENAI_API_KEY)'));
       console.log('');
     }
     return EXIT_OK;
@@ -284,13 +290,74 @@ export async function executeBrainTable(opts: BrainTableOptions): Promise<number
 export type BrainMountOptions = RuntimeVerbOptions & { file: string };
 
 export async function executeBrainMount(opts: BrainMountOptions): Promise<number> {
-  const result = await withRuntimePool(opts, (client) => mountFile(client, opts.file));
+  const result = await withRuntimePool(opts, async (client) => {
+    const cfg = await loadConfig(client);
+    const embedder = resolveEmbedder(cfg);
+    return mountFile(client, opts.file, embedder);
+  });
   if (opts.json) {
     console.log(JSON.stringify({ ok: true, ...result }, null, 2));
   } else if (result.mounted) {
-    console.log(`${chalk.green('✓')} mounted ${result.sourcePath} (+${result.chunks} chunk(s))`);
+    const emb = result.embedded ? ', embedded' : '';
+    console.log(`${chalk.green('✓')} mounted ${result.sourcePath} (+${result.chunks} chunk(s)${emb})`);
   } else {
     console.log(`${chalk.dim('·')} ${result.sourcePath} unchanged — no new chunks`);
+  }
+  return EXIT_OK;
+}
+
+export type BrainQueryOptions = RuntimeVerbOptions & { text: string; kind?: string; limit?: number };
+
+export async function executeBrainQuery(opts: BrainQueryOptions): Promise<number> {
+  const hits = await withRuntimePool(opts, async (client) => {
+    const cfg = await loadConfig(client);
+    const embedder = resolveEmbedder(cfg);
+    return runQuery(client, opts.text, { kind: opts.kind, limit: opts.limit }, embedder, cfg);
+  });
+  if (opts.json) {
+    console.log(JSON.stringify({ ok: true, hits }, null, 2));
+  } else if (hits.length === 0) {
+    console.log(chalk.dim('no hits'));
+  } else {
+    for (const h of hits) console.log(formatHit(h));
+  }
+  return EXIT_OK;
+}
+
+function formatHit(h: QueryHit): string {
+  const score = h.score.toFixed(4);
+  if (h.type === 'document') {
+    return `${chalk.dim(score)} ${chalk.bold('doc')} ${h.source_path}#${h.chunk_index} — ${h.snippet}`;
+  }
+  const via = h.via === 'graph' ? chalk.dim(' (graph)') : '';
+  return `${chalk.dim(score)} ${chalk.bold('ent')} ${h.kind}/${h.slug}${h.title ? ` — ${h.title}` : ''}${via}`;
+}
+
+export type BrainConfigOptions =
+  | (RuntimeVerbOptions & { op: 'get'; key?: string })
+  | { json: boolean; op: 'set'; key: string; value: string; adminUrl?: string };
+
+export async function executeBrainConfig(opts: BrainConfigOptions): Promise<number> {
+  if (opts.op === 'set') {
+    const adminUrl = opts.adminUrl ?? resolveBrainUrl('admin');
+    const pool = createBrainPool('admin', adminUrl);
+    try {
+      const res = await withBrainClient(pool, (client) => setConfig(client, opts.key, opts.value));
+      if (opts.json) console.log(JSON.stringify({ ok: true, ...res }, null, 2));
+      else console.log(`${chalk.green('✓')} ${res.key} = ${JSON.stringify(res.value)}`);
+      return EXIT_OK;
+    } finally {
+      await pool.end();
+    }
+  }
+  const rows = await withRuntimePool(opts, (client) => getConfigRows(client));
+  const filtered = opts.key === undefined ? rows : rows.filter((r) => r.key === opts.key);
+  if (opts.json) {
+    console.log(JSON.stringify({ ok: true, config: filtered }, null, 2));
+  } else if (filtered.length === 0) {
+    console.log(chalk.dim(opts.key ? `${opts.key} unset (using default)` : '(no overrides set; using defaults)'));
+  } else {
+    for (const r of filtered) console.log(`${r.key} = ${JSON.stringify(r.value)}`);
   }
   return EXIT_OK;
 }
