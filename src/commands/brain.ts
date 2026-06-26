@@ -12,6 +12,8 @@ import { getEntity } from '../lib/brain/get.ts';
 import { createTable, listTables } from '../lib/brain/table.ts';
 import { runReadOnlyQuery } from '../lib/brain/sql.ts';
 import { mountFile } from '../lib/brain/mount.ts';
+import { exportBrain, type ExportFormat } from '../lib/brain/export.ts';
+import { importBrain } from '../lib/brain/import.ts';
 import { EXIT_OK, EXIT_ERROR } from '../lib/errors.ts';
 
 export type BrainInitOptions = {
@@ -303,4 +305,55 @@ export async function executeBrainSql(opts: BrainSqlOptions): Promise<number> {
     console.log(JSON.stringify(result.rows, null, 2));
   }
   return EXIT_OK;
+}
+
+export type BrainExportOptions = {
+  json: boolean;
+  outDir?: string;
+  format: ExportFormat;
+  adminUrl?: string;
+};
+
+export async function executeBrainExport(opts: BrainExportOptions): Promise<number> {
+  const adminUrl = opts.adminUrl ?? resolveBrainUrl('admin');
+  const pool = createBrainPool('admin', adminUrl);
+  try {
+    const exportedAt = new Date().toISOString();
+    const outDir = opts.outDir ?? `./brain-export-${exportedAt.replace(/[:.]/g, '-')}`;
+    const result = await exportBrain(pool, { outDir, format: opts.format, exportedAt });
+    if (opts.json) {
+      console.log(JSON.stringify({ ok: true, ...result }, null, 2));
+    } else {
+      console.log(
+        `${chalk.green('✓')} exported ${result.totalRows} row(s) across ${result.tables.length} table(s) → ${result.outDir} (${result.format})`,
+      );
+    }
+    return EXIT_OK;
+  } finally {
+    await pool.end();
+  }
+}
+
+export type BrainImportOptions = {
+  json: boolean;
+  dir: string;
+  adminUrl?: string;
+};
+
+export async function executeBrainImport(opts: BrainImportOptions): Promise<number> {
+  const adminUrl = opts.adminUrl ?? resolveBrainUrl('admin');
+  const pool = createBrainPool('admin', adminUrl);
+  try {
+    const result = await importBrain(pool, opts.dir);
+    if (opts.json) {
+      console.log(JSON.stringify({ ok: true, ...result }, null, 2));
+    } else {
+      console.log(
+        `${chalk.green('✓')} restored ${result.totalRows} row(s) across ${result.tables.length} table(s) (${result.format})`,
+      );
+    }
+    return EXIT_OK;
+  } finally {
+    await pool.end();
+  }
 }

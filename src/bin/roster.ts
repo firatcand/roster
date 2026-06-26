@@ -53,6 +53,8 @@ import {
   executeBrainTable,
   executeBrainSql,
   executeBrainMount,
+  executeBrainExport,
+  executeBrainImport,
 } from '../commands/brain.ts';
 import {
   EXIT_OK,
@@ -130,6 +132,8 @@ function printHelp(version: string): void {
     `  roster brain doctor          ${chalk.dim('Audit brain append-only safety + report pending migrations')}`,
     `  roster brain save/get/event/link/merge/table/sql  ${chalk.dim('Append-only write/read verbs (runtime role)')}`,
     `  roster brain mount <file>    ${chalk.dim('Ingest a file as append-only document chunks + keyword index (runtime role)')}`,
+    `  roster brain export          ${chalk.dim('Dump all brain tables to a portable backup dir (--out, --format jsonl|sql; admin URL)')}`,
+    `  roster brain import <dir>    ${chalk.dim('Restore a backup into a fresh, empty brain (admin URL)')}`,
     `  roster migrate from-agent-team <dir>  ${chalk.dim('Migrate a legacy agent-team workspace into roster')}`,
     `  roster migrate codex-skills  ${chalk.dim('Copy legacy .codex/skills into Codex-native .agents/skills')}`,
     '',
@@ -709,6 +713,12 @@ async function runBrain(args: readonly string[]): Promise<number> {
   }
   if (parsed.subcommand === 'mount') {
     return await executeBrainMount({ json: parsed.json, file: parsed.file });
+  }
+  if (parsed.subcommand === 'export') {
+    return await executeBrainExport({ json: parsed.json, outDir: parsed.outDir, format: parsed.format });
+  }
+  if (parsed.subcommand === 'import') {
+    return await executeBrainImport({ json: parsed.json, dir: parsed.dir });
   }
   if (parsed.subcommand === 'table') {
     if (parsed.op === 'create') {
