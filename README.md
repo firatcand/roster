@@ -6,12 +6,12 @@
 
 # Roster
 
-> **A lightweight operator agent framework.** A CLI that scaffolds role-based agents — GTM, product, design, ops — into your existing AI coding tool, and runs them on schedules with human approval before anything ships.
+> **A subscription-safe operator agent framework.** Roster scaffolds role-based agents — GTM, product, design, ops — into the Claude Code or Codex CLI subscription you already pay for, then runs them on schedules with human approval before anything ships.
 
 ```
   ● 7am Monday. Three agents have already run while you slept.
   │
-  ●  gtm/sdr        last night's signups triaged · 5 personalized intros queued
+  ●  gtm/sdr        X market-watch scanned · 5 cold outbound drafts queued
   ●  product/pm     3 competitor changelogs summarized · LinkedIn post drafted
   ●  design/critic  yesterday's PR screenshots audited · 2 contrast issues flagged
   │
@@ -28,7 +28,7 @@
 
 ---
 
-## Quick Install
+## Quick install
 
 ```bash
 npx @firatcand/roster install
@@ -36,16 +36,30 @@ npx @firatcand/roster install
 
 Interactive — prompts for which AI tools to set up (Claude Code, Codex CLI, Gemini) and which scope (workspace-local vs. user home). Run inside a `roster init` workspace to get the project-local default; run from anywhere else for user-scope. macOS, Linux, and Windows. For non-interactive contexts (CI / scripts), add `--yes` plus `--tool <name>` and `--scope <project|user>` to skip prompts.
 
-## Setup prompt
+## For AI agents
 
-Want the agent to do the install for you? Paste this into Claude Code, Codex, or Cursor:
+If you are Claude Code or Codex and the user asks you to install Roster, your goal is to create a roster workspace, install the framework skills locally, verify the install, and stop before creating business agents unless the user asks for one.
+
+Use [install.md](install.md) as the canonical runbook. The default flow for a new workspace is:
+
+```bash
+node --version
+mkdir -p <target> && cd <target>
+npx --yes @firatcand/roster init
+npx --yes @firatcand/roster install --yes --scope project
+npx @firatcand/roster doctor
+```
+
+Copy-paste prompt for an agent:
 
 ```
-Set up https://github.com/firatcand/roster for me. Read install.md and follow
-the steps to install roster and scaffold a workspace in this directory.
+Set up https://github.com/firatcand/roster for me. Read README.md first, then
+read install.md and follow it exactly. Scaffold a roster workspace in this
+directory, install Roster for Claude Code or Codex, run roster doctor, and stop
+if Node is below 22.18, no supported AI tool is installed, or doctor fails.
 ```
 
-The agent reads [install.md](install.md), runs the install, scaffolds your workspace, verifies with `roster doctor`, and tells you the next command.
+Prefer project scope for the first install. It keeps skills and agents inside the workspace (`.claude/` or `.codex/`) so the setup is reproducible and does not pollute other projects. Use user scope only when the user explicitly wants Roster available across every project on the machine.
 
 ---
 

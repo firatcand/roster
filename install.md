@@ -1,6 +1,8 @@
 # Install roster
 
-This file is written for an AI agent (Claude Code, Codex, Cursor, etc.) to install `@firatcand/roster` on the user's machine and scaffold their first workspace.
+This file is written for an AI agent in Claude Code or Codex to install `@firatcand/roster` on the user's machine and scaffold their first subscription-safe operator-agent workspace.
+
+The concrete target: help the user run role-based agents on the AI coding subscription they already pay for. A typical first workflow is `gtm/sdr`: scan X for market signals every morning, draft cold outbound, and park the messages for human approval before anything is sent.
 
 For the longer human-facing pitch, see [README.md](README.md). For full usage docs, see [docs/HOWTO.md](docs/HOWTO.md).
 
@@ -20,13 +22,12 @@ Run these in order. Surface each step's output to the user before moving on.
 
 ### 1. Detect the host AI tool
 
-Check for these config dirs:
+This runbook is optimized for Claude Code and Codex. Check for these config dirs:
 
 - `~/.claude/` → Claude Code
 - `~/.codex/` → Codex CLI
-- `~/.gemini/` → Gemini CLI
 
-Tell the user which you found. They need at least one. If none are present, stop and ask the user to install Claude Code or Codex CLI first.
+Tell the user which you found. They need at least one. If neither is present, stop and ask the user to install Claude Code or Codex CLI first.
 
 ### 2. Scaffold the workspace FIRST
 
@@ -52,7 +53,7 @@ From inside the directory you just scaffolded:
 npx --yes @firatcand/roster install --yes --scope project
 ```
 
-This copies the three framework skills (`chief-of-staff`, `dreamer`, `roster-orchestrator`) and the reinforcement agent (`lesson-drafter`) into `<workspace>/.claude/`, `<workspace>/.codex/`, and/or `<workspace>/.gemini/` for every detected tool. Workspace-local — no cross-project pollution. Idempotent — safe to re-run.
+This copies the three framework skills (`chief-of-staff`, `dreamer`, `roster-orchestrator`) and the reinforcement agent (`lesson-drafter`) into `<workspace>/.claude/` and/or `<workspace>/.codex/` for every detected supported tool. Workspace-local — no cross-project pollution. Idempotent — safe to re-run.
 
 If the user prefers user-scope install (visible to every Claude Code project on the machine), use `--scope user` instead. **Do not** use `--scope project` from a directory that doesn't contain `config/project.yaml` — `roster install` will refuse with exit code 2.
 
@@ -80,7 +81,7 @@ Surface this to the user, verbatim:
 >
 > `/chief-of-staff create-agent <function> <agent-name>`
 >
-> For example: `/chief-of-staff create-agent gtm sdr`. The five-phase guided dialogue will interview you for the specifics and write a populated `agent.md` plus default plans. Walk through [docs/HOWTO.md](docs/HOWTO.md) for the full worked example.
+> For example: `/chief-of-staff create-agent gtm sdr`. Use this when the user wants an X market-watch / cold-outbound agent that drafts messages and queues them for approval. The five-phase guided dialogue will interview you for the specifics and write a populated `agent.md` plus default plans. Walk through [docs/HOWTO.md](docs/HOWTO.md) for the full worked example.
 
 ## Don't
 
