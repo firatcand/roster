@@ -1,7 +1,7 @@
 # roster brain — workspace knowledge brain (design)
 
 Date: 2026-06-23
-Status: proposed (awaiting review)
+Status: implemented (ROS-135–139). **Design-time document — the CLI surface evolved during implementation.** For the authoritative shipped verbs, flags, and types see [docs/API.md §Brain](../../API.md); some command shapes sketched below (e.g. positional `save <kind> <slug>`, `--columns`, `event --entity/--at`, `link --data`, `get <slug>`, `mount --source`) were refined and do not match the released CLI.
 Topic: a Neon-Postgres "brain" the agent team reads/writes instead of (or alongside) markdown files.
 
 ## 1. Problem

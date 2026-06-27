@@ -366,7 +366,37 @@ Platform × tool matrix, UI hand-off flow, Codex `--via cron` envscubbing, and t
 
 ---
 
-## 11. Back up the brain
+## 11. Set up the brain
+
+The **brain** is a workspace-scoped, append-only Postgres store the agent team reads and writes instead of scattering knowledge across markdown. It's bring-your-own — point it at a Neon (or any Postgres) database. Optional: a scaffolded workspace works fine without one.
+
+```bash
+# 1. Put the admin connection string in Infisical (never .env), e.g. under /<repo>:
+#      ROSTER_BRAIN_ADMIN_URL = postgresql://<user>:<pw>@<host>/<db>?sslmode=require
+#    (Neon: copy the connection string from the project dashboard.)
+
+# 2. Provision schema + a restricted, append-only runtime role. Prints a runtime
+#    connection string ONCE — store it back in Infisical as ROSTER_BRAIN_URL.
+infisical run --env dev --path /<repo> -- roster brain init
+
+# 3. Verify append-only safety + that migrations are current.
+infisical run --env dev --path /<repo> -- roster brain doctor
+```
+
+The **runtime** role (`ROSTER_BRAIN_URL`) is what agents use day-to-day — it can only SELECT and INSERT, never UPDATE/DELETE/DROP, so the brain is append-only at the database level. `roster brain init` uses the **admin** role (`ROSTER_BRAIN_ADMIN_URL`); keep that one for setup, migrations, and backups only.
+
+**Semantic search** is off by default — keyword + graph search work with no API key, no paid calls. To enable vector search:
+
+```bash
+infisical run --env dev --path /<repo> -- roster brain config set embeddings.enabled true
+# requires OPENAI_API_KEY in the injected environment (text-embedding-3-small)
+```
+
+Day-to-day use is the `/brain` skill and the `roster brain` verbs (full reference in [API.md](API.md) §Brain). Where each piece of knowledge goes is governed by `brain/RESOLVER.md` in your workspace.
+
+---
+
+## 12. Back up the brain
 
 The Postgres brain (`roster brain`) is durable team memory. If the Neon project is lost, there's no recovery path unless you keep portable backups.
 

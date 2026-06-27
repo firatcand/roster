@@ -410,3 +410,30 @@ Tool-specific (uncomment what you need): `APOLLO_API_KEY`, `HEYREACH_API_KEY`, `
 - Workspace config: `config/project.yaml`. Per-agent config: `<function>/<agent>/config.yaml`.
 - Plan files: `<plan-name>.yaml` (matches the `plan:` field inside)
 - Slash commands: `<agent>.md` (matches the `name:` field in frontmatter)
+
+---
+
+## Brain (`roster brain <verb>`)
+
+The brain is a workspace-scoped, append-only Postgres knowledge store (bring-your-own
+Neon; connection in Infisical, never `.env`). All verbs accept `--json`.
+
+| Verb | Purpose |
+|------|---------|
+| `brain init` | Provision schema + restricted runtime role (admin URL); prints the runtime connection string once. |
+| `brain doctor` | Audit append-only safety + report pending migrations. |
+| `brain save --kind <k> --slug <s> [--title t] [--field key=value …] [--data '{json}']` | Upsert an entity + append facts. |
+| `brain get --kind <k> --slug <s>` | Entity truth (latest facts) + timeline (events, edges). |
+| `brain event --kind <event-kind> [--slug <entity-slug>] --data '{json}'` | Append an event (metric snapshot, note, correction); `--slug` optionally attaches it to an entity. |
+| `brain link <src-slug> <rel> <dst-slug>` | Create a typed edge between two entities. |
+| `brain merge <from-slug> <into-slug>` | Resolve a duplicate (append-only merge; from-slug becomes an alias). |
+| `brain query "<text>" [--kind k] [--limit n]` | Hybrid search: vector (pgvector) + keyword (tsvector) + 1-hop graph, RRF-fused. |
+| `brain table list` · `brain table create <name> --col name:type …` | List / create a custom table via the brokered DDL path (types: text, int, bigint, numeric, boolean, timestamptz, jsonb, uuid). |
+| `brain sql "SELECT …"` | Read-only SQL (SELECT only; rejects mutations). |
+| `brain mount <file>` | Ingest a file as append-only, searchable document chunks. |
+| `brain config get [key]` · `brain config set <key> <value>` | Read/write non-secret settings (`embeddings.enabled\|provider\|model`, `search.rrf_k\|graph_hops`). |
+| `brain export [--out <dir>] [--format jsonl\|sql]` · `brain import <dir>` | Portable backup / restore into a fresh brain. |
+
+Semantic-search embeddings are **off** by default (no paid API calls); enable with
+`roster brain config set embeddings.enabled true` (requires `OPENAI_API_KEY`). Exit
+codes: `0` ok, `1` error. See [HOWTO.md](HOWTO.md) §11 to set one up.

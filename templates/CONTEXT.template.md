@@ -49,3 +49,24 @@ This directive applies to both scheduled fires and interactive chat sessions.
 
 Read `conventions.md`. An inconsistent convention is worse than a missing one.
 <!-- roster:managed:end agent-layout -->
+
+<!-- roster:managed:start brain -->
+## The brain (shared team memory)
+
+If this workspace has a brain configured (the runtime connection `ROSTER_BRAIN_URL` is
+set in the environment), it is the team's **source of truth** for persistent
+knowledge: competitors, posts, metrics, accounts, people, and strategy. Treat it that
+way:
+
+- **Consult it** before answering from memory or the open web on those topics —
+  `roster brain query "<question>"`. The team may already know.
+- **Write back** durable facts you learn (`roster brain save` / `event` / `link`) so the
+  next session benefits. `brain/RESOLVER.md` says where each thing goes.
+- **Correct** the brain the moment you find it wrong — a new write supersedes; the brain
+  is append-only and nothing is deleted.
+- **Check `roster brain table list` + `brain/RESOLVER.md`** before creating a new table;
+  prefer entities + facts.
+
+The `brain` skill (`/brain`) is the front door. If no brain is configured, ignore this
+section and use normal files.
+<!-- roster:managed:end brain -->
