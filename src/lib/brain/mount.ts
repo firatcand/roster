@@ -190,7 +190,7 @@ export async function mountFile(
         embedded = true;
       } catch (e) {
         process.stderr.write(
-          `roster brain mount: embedding failed (${(e as Error).message}); stored chunks without vectors — run \`roster brain reindex\` later\n`,
+          `roster brain mount: embedding failed (${(e as Error).message}); stored chunks without vectors (they can be backfilled later)\n`,
         );
       }
     }

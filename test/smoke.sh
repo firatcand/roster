@@ -108,7 +108,9 @@ for expected in \
   package/templates/scaffold/design/EXPERT.md \
   package/templates/scaffold/ops/EXPERT.md \
   package/templates/scaffold/logs/cron/.gitkeep \
-  package/templates/scaffold/founder-skills.yaml.example
+  package/templates/scaffold/founder-skills.yaml.example \
+  package/templates/scaffold/brain/RESOLVER.md \
+  package/skills/brain/SKILL.md
 do
   assert_contains "$TARBALL_LIST" "^$expected\$" "tarball contains $expected"
 done
@@ -128,6 +130,7 @@ echo "===> 4. roster install"
 HOME="$FAKE_HOME" ROSTER_CLAUDE_HOME="$CLAUDE_HOME" "$ROSTER_BIN" install --yes --scope user --silent
 assert "-f \"$CLAUDE_HOME/skills/chief-of-staff/SKILL.md\"" "chief-of-staff SKILL.md installed"
 assert "-f \"$CLAUDE_HOME/skills/inbox/SKILL.md\"" "inbox SKILL.md installed (ROS-132 — /inbox)"
+assert "-f \"$CLAUDE_HOME/skills/brain/SKILL.md\"" "brain SKILL.md installed (ROS-139 — /brain)"
 assert "-f \"$CLAUDE_HOME/agents/lesson-drafter.md\"" "lesson-drafter.md installed (claude md-copy)"
 
 # Idempotency: re-running install should not throw
@@ -157,6 +160,8 @@ assert "-f CLAUDE.md" "CLAUDE.md exists"
 assert_contains CLAUDE.md "my-test-workspace" "CLAUDE.md contains project name"
 assert "! -z \"\$(grep -v '{{PROJECT_NAME}}' CLAUDE.md)\"" "no unresolved {{PROJECT_NAME}} tokens"
 assert "-f conventions.md" "conventions.md ported into workspace"
+assert "-f brain/RESOLVER.md" "brain/RESOLVER.md ported (ROS-139 brain scaffold)"
+assert_contains CLAUDE.md "roster:managed:start brain" "CONTEXT/CLAUDE.md carries the brain managed region"
 assert "-f gtm/EXPERT.md" "gtm/EXPERT.md ported (function dir, no preinstalled agent)"
 assert "-f product/EXPERT.md" "product/EXPERT.md ported"
 assert "-f design/EXPERT.md" "design/EXPERT.md ported"
