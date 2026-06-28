@@ -57,6 +57,7 @@ import {
   executeBrainImport,
   executeBrainQuery,
   executeBrainConfig,
+  executeBrainReindex,
 } from '../commands/brain.ts';
 import {
   EXIT_OK,
@@ -138,6 +139,7 @@ function printHelp(version: string): void {
     `  roster brain import <dir>    ${chalk.dim('Restore a backup into a fresh, empty brain (admin URL)')}`,
     `  roster brain query "<text>"  ${chalk.dim('Hybrid semantic + keyword + graph search (--kind, --limit, --json)')}`,
     `  roster brain config get|set  ${chalk.dim('Read/set brain settings (embeddings.enabled, provider, model, search knobs)')}`,
+    `  roster brain reindex [--yes]  ${chalk.dim('Backfill embeddings for active chunks missing/stale vectors (--since, --model; admin URL)')}`,
     `  roster migrate from-agent-team <dir>  ${chalk.dim('Migrate a legacy agent-team workspace into roster')}`,
     `  roster migrate codex-skills  ${chalk.dim('Copy legacy .codex/skills into Codex-native .agents/skills')}`,
     '',
@@ -732,6 +734,9 @@ async function runBrain(args: readonly string[]): Promise<number> {
       return await executeBrainConfig({ json: parsed.json, op: 'set', key: parsed.key, value: parsed.value });
     }
     return await executeBrainConfig({ json: parsed.json, op: 'get', key: parsed.key });
+  }
+  if (parsed.subcommand === 'reindex') {
+    return await executeBrainReindex({ json: parsed.json, since: parsed.since, model: parsed.model, yes: parsed.yes });
   }
   if (parsed.subcommand === 'table') {
     if (parsed.op === 'create') {
