@@ -432,6 +432,7 @@ Neon; connection in Infisical, never `.env`). All verbs accept `--json`.
 | `brain sql "SELECT …"` | Read-only SQL (SELECT only; rejects mutations). |
 | `brain mount <file>` | Ingest a file as append-only, searchable document chunks. |
 | `brain config get [key]` · `brain config set <key> <value>` | Read/write non-secret settings (`embeddings.enabled\|provider\|model`, `search.rrf_k\|graph_hops`). |
+| `brain reindex [--all\|--since <ts>] [--model m] [--yes]` | Backfill embeddings for active chunks with missing/stale vectors (admin; previews the count and requires `--yes` to spend; batched + resumable). |
 | `brain export [--out <dir>] [--format jsonl\|sql]` · `brain import <dir>` | Portable backup / restore into a fresh brain. |
 
 Semantic-search embeddings are **off** by default (no paid API calls); enable with

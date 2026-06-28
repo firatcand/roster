@@ -14,7 +14,8 @@ type BrainSubcommand =
   | 'export'
   | 'import'
   | 'query'
-  | 'config';
+  | 'config'
+  | 'reindex';
 
 const BRAIN_SUBCOMMANDS: ReadonlySet<BrainSubcommand> = new Set<BrainSubcommand>([
   'init',
@@ -31,6 +32,7 @@ const BRAIN_SUBCOMMANDS: ReadonlySet<BrainSubcommand> = new Set<BrainSubcommand>
   'import',
   'query',
   'config',
+  'reindex',
 ]);
 
 const SUBCOMMAND_LIST = Array.from(BRAIN_SUBCOMMANDS).join(' | ');
@@ -92,6 +94,7 @@ export type ParsedBrainArgs =
   | { kind: 'ok'; subcommand: 'query'; json: boolean; text: string; entKind?: string; limit?: number }
   | { kind: 'ok'; subcommand: 'config'; json: boolean; op: 'get'; key?: string }
   | { kind: 'ok'; subcommand: 'config'; json: boolean; op: 'set'; key: string; value: string }
+  | { kind: 'ok'; subcommand: 'reindex'; json: boolean; all: boolean; since?: string; model?: string; yes: boolean }
   | { kind: 'err'; message: string };
 
 function isBrainSubcommand(value: string): value is BrainSubcommand {
@@ -155,7 +158,32 @@ export function parseBrainArgs(args: readonly string[]): ParsedBrainArgs {
   if (first === 'import') return parseImport(rest);
   if (first === 'query') return parseQuery(rest);
   if (first === 'config') return parseConfig(rest);
+  if (first === 'reindex') return parseReindex(rest);
   return parseSql(rest);
+}
+
+function parseReindex(rest: readonly string[]): ParsedBrainArgs {
+  let json = false;
+  let all = false;
+  let yes = false;
+  let since: string | undefined;
+  let model: string | undefined;
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i]!;
+    if (arg === '--json') json = true;
+    else if (arg === '--all') all = true;
+    else if (arg === '--yes' || arg === '-y') yes = true;
+    else if (arg === '--since') {
+      const v = readValue(rest, i, 'reindex', '--since'); if ('kind' in v) return v; since = v.value; i = v.next;
+    } else if (arg === '--model') {
+      const v = readValue(rest, i, 'reindex', '--model'); if ('kind' in v) return v; model = v.value; i = v.next;
+    } else if (arg.startsWith('-')) return err(`unknown flag for 'brain reindex': ${arg}`);
+    else return err(`'brain reindex' takes no positional arguments`);
+  }
+  if (all && since !== undefined) {
+    return err(`'brain reindex': --all and --since are mutually exclusive`);
+  }
+  return { kind: 'ok', subcommand: 'reindex', json, all, since, model, yes };
 }
 
 function parseQuery(rest: readonly string[]): ParsedBrainArgs {

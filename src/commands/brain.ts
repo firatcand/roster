@@ -17,7 +17,9 @@ import { importBrain } from '../lib/brain/import.ts';
 import { loadConfig, setConfig, getConfigRows } from '../lib/brain/config.ts';
 import { resolveEmbedder } from '../lib/brain/embed.ts';
 import { query as runQuery, type QueryHit } from '../lib/brain/search.ts';
-import { EXIT_OK, EXIT_ERROR } from '../lib/errors.ts';
+import { reindexBrain, countReindexTargets } from '../lib/brain/reindex.ts';
+import { EMBED_MODEL } from '../lib/brain/config.ts';
+import { EXIT_OK, EXIT_ERROR, RosterError } from '../lib/errors.ts';
 
 export type BrainInitOptions = {
   json: boolean;
@@ -331,6 +333,65 @@ function formatHit(h: QueryHit): string {
   }
   const via = h.via === 'graph' ? chalk.dim(' (graph)') : '';
   return `${chalk.dim(score)} ${chalk.bold('ent')} ${h.kind}/${h.slug}${h.title ? ` — ${h.title}` : ''}${via}`;
+}
+
+export type BrainReindexOptions = {
+  json: boolean;
+  since?: string;
+  model?: string;
+  yes: boolean;
+  adminUrl?: string;
+};
+
+export async function executeBrainReindex(opts: BrainReindexOptions): Promise<number> {
+  if (opts.model !== undefined && opts.model !== EMBED_MODEL && opts.model !== `openai:${EMBED_MODEL}`) {
+    throw new RosterError({
+      header: `${chalk.red.bold('roster:')} unsupported --model ${chalk.yellow(opts.model)}`,
+      body: `  Only 'openai:${EMBED_MODEL}' is supported today.`,
+      remedy: `  Drop --model (uses the configured model) or pass openai:${EMBED_MODEL}.`,
+      exitCode: EXIT_ERROR,
+    });
+  }
+  const adminUrl = opts.adminUrl ?? resolveBrainUrl('admin');
+  const pool = createBrainPool('admin', adminUrl);
+  try {
+    const cfg = await withBrainClient(pool, (c) => loadConfig(c));
+    const embedder = resolveEmbedder(cfg);
+    if (!embedder) {
+      throw new RosterError({
+        header: `${chalk.red.bold('roster:')} embeddings are not enabled`,
+        body: '  reindex needs embeddings on + an API key (OPENAI_API_KEY in the environment).',
+        remedy: '  Enable with: roster brain config set embeddings.enabled true',
+        exitCode: EXIT_ERROR,
+      });
+    }
+    const targeted = await withBrainClient(pool, (c) => countReindexTargets(c, embedder.model, opts.since));
+    if (targeted === 0) {
+      if (opts.json) console.log(JSON.stringify({ ok: true, targeted: 0, embedded: 0, remaining: 0 }, null, 2));
+      else console.log(`${chalk.green('✓')} nothing to reindex — all active chunks are embedded`);
+      return EXIT_OK;
+    }
+    // Bulk-cost guard: a single reindex can embed a whole corpus. Never spend
+    // without an explicit --yes; without it, preview the count and stop.
+    if (!opts.yes) {
+      if (opts.json) {
+        console.log(JSON.stringify({ ok: true, targeted, embedded: 0, remaining: targeted, pending_confirmation: true }, null, 2));
+      } else {
+        console.log(`${chalk.yellow('⚠')} ${targeted} active chunk(s) need embedding — that's ${targeted} paid embedding call(s).`);
+        console.log(`  Re-run with ${chalk.bold('--yes')} to proceed.`);
+      }
+      return EXIT_OK;
+    }
+    const result = await reindexBrain(pool, embedder, { since: opts.since }, (done, total) => {
+      if (!opts.json) process.stderr.write(`\r  embedding ${done}/${total}…`);
+    });
+    if (!opts.json) process.stderr.write('\n');
+    if (opts.json) console.log(JSON.stringify({ ok: true, ...result }, null, 2));
+    else console.log(`${chalk.green('✓')} reindexed ${result.embedded} chunk(s); ${result.remaining} remaining`);
+    return EXIT_OK;
+  } finally {
+    await pool.end();
+  }
 }
 
 export type BrainConfigOptions =
