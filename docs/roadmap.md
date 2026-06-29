@@ -4,9 +4,9 @@ Public view of what's shipped, what's deferred, and what's next. Detailed task t
 
 ## Released
 
-### v1.4.0 — roster brain (in progress)
+### v1.4.0 — roster brain — 2026-06-30
 
-Workspace-scoped, append-only **Postgres knowledge brain** the agent team reads and writes instead of scattering knowledge across markdown. Bring-your-own Neon connection (stored in Infisical, never `.env`); a restricted runtime role enforces append-only at the database level. Verbs: `save`/`get`/`event`/`link`/`merge` (entities, facts, events, typed edges, dedup), `table`/`sql` (brokered custom tables + read-only SQL), `mount` (file ingest), `query` (hybrid pgvector + keyword + graph search), `config`, and `export`/`import` (portable backup). Scaffolded workspaces get `brain/RESOLVER.md` + a `/brain` skill and treat the brain as the team's source of truth. Tracked under ROS-134 (135–142).
+Workspace-scoped, append-only **Postgres knowledge brain** the agent team reads and writes instead of scattering knowledge across markdown. Bring-your-own Neon connection (stored in Infisical, never `.env`); a restricted runtime role enforces append-only at the database level. Verbs: `save`/`get`/`event`/`link`/`merge` (entities, facts, events, typed edges, dedup), `table`/`sql` (brokered custom tables + read-only SQL), `mount` (file ingest), `query` (hybrid pgvector + keyword + graph search), `config`, `reindex` (embeddings backfill), and `export`/`import` (portable backup). Scaffolded workspaces get `brain/RESOLVER.md` + a `/brain` skill and treat the brain as the team's source of truth. Tracked under ROS-134 (135–142). Full changelog: [CHANGELOG.md](../CHANGELOG.md#140--2026-06-30). Retros: [v1.4-brain-phase-1.md](retros/v1.4-brain-phase-1.md), [v1.4-brain-phase-2.md](retros/v1.4-brain-phase-2.md).
 
 ### v1.0.2 — 2026-06-05
 

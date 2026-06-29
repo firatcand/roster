@@ -6,7 +6,22 @@ Per-phase retrospectives live in [`docs/retros/`](docs/retros/) and carry the lo
 
 ## [Unreleased]
 
-_(empty — staging area for post-1.3.0 work)_
+_(empty — staging area for post-1.4.0 work)_
+
+## [1.4.0] — 2026-06-30
+
+Introduces **`roster brain`** — a workspace-scoped, append-only Postgres knowledge store the agent team reads and writes instead of scattering knowledge across markdown. Opt-in; bring-your-own Neon connection. No breaking changes. (ROS-134)
+
+### Added
+
+- **`roster brain` — a Neon-backed workspace knowledge brain.** A bring-your-own-Postgres store (connection string in Infisical, never `.env`) the agent team treats as its source of truth. The store is **append-only and versioned**: no UPDATE/DELETE/DROP, with a `current_facts` view giving latest-wins reads. Append-only is enforced at the database level — a restricted `roster_brain_rw` runtime role holds SELECT + column-scoped INSERT only, so the agent runtime physically cannot mutate or drop data; the admin/owner role handles schema and restore. Opt in per workspace with `roster brain init`, which provisions the schema, both roles, and hands off the runtime credential once. (ROS-135)
+- **Structured verbs** — `save` (entities + provenance-stamped facts), `event` (timeline), `link` (typed graph edges), `get` (entity + current facts + edges), plus `table` and `sql` for power users: `table create` routes through a `SECURITY DEFINER` broker so agents get custom tables without owning DDL, and `sql` runs read-only queries. `entities` are unique per `(kind, slug)`. (ROS-136)
+- **File mount + keyword index** — `roster brain mount <file>` performs one-way, heading-aware markdown ingest into searchable chunks; re-mounting an edited file supersedes its old chunks with no orphans. (ROS-137)
+- **Entity dedup + merge** — `merge` collapses duplicate entities by writing an append-only merge-map row resolved at read time via `brain.canonical_id()`; nothing is deleted. Guarded against merge cycles (full reachability walk) and concurrent races (`pg_advisory_xact_lock`). (ROS-140)
+- **Hybrid semantic search** — `roster brain query` blends pgvector similarity, keyword match, and graph proximity into one ranked result set. Embeddings are cost-gated and opt-in (OpenAI `text-embedding-3-small` by default); when embeddings are unconfigured, query **degrades gracefully** to keyword + graph instead of failing. (ROS-138)
+- **`roster brain reindex`** — backfills embeddings for content stored before semantic search was enabled (or after switching providers), so existing brains become searchable without a re-mount. (ROS-142)
+- **Backup, export & import** — `roster brain export` emits self-generated, tool-restorable **JSONL** (the canonical, verified form) plus an optional standalone `--format sql` psql artifact. `roster brain import` reconstructs a brain id-for-id (`OVERRIDING SYSTEM VALUE`, sequence resets), hard-refuses a non-empty target, and requires an exact schema-version match. (ROS-141)
+- **Scaffold wiring, docs & packaging** — `roster init` workspaces now ship `brain/RESOLVER.md` and a cross-tool `/brain` skill, and instruct the agent team to consult the brain first. The `roster brain` command tree, `roster doctor` brain checks, and accompanying docs round out the surface. (ROS-139)
 
 ## [1.3.0] — 2026-06-20
 
