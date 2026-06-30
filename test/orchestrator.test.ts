@@ -81,6 +81,47 @@ test('orchestrator: body bans subscription-unsafe primitives outside audit-opt-o
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ROS-143 — mode-aware Working-directory guard
+//
+// Chat-session bootstrap must identify a workspace by config/project.yaml alone;
+// a missing runtime roster/ tree is a fresh init, not an abort. The old guard
+// demanded both and made the Codex bootstrap falsely abort. Scheduled-fire must
+// stay strict about roster/<function>/schedules.yaml. These pin both halves so
+// the contradiction can't silently return. Assertions target the guard wording
+// only — they do NOT ban roster/ globally (it is a legitimate path reference).
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('orchestrator: Working-directory guard identifies a workspace by config/project.yaml alone', () => {
+  const content = readFileSync(orchestratorSrc, 'utf8');
+  assert.ok(
+    !/must contain config\/project\.yaml and roster\//.test(content),
+    'old "must contain config/project.yaml and roster/" abort message is gone',
+  );
+  assert.match(
+    content,
+    /must contain config\/project\.yaml\)/,
+    'abort message now requires only config/project.yaml',
+  );
+});
+
+test('orchestrator: distinguishes .roster/ metadata from the runtime roster/ tree', () => {
+  const content = readFileSync(orchestratorSrc, 'utf8');
+  assert.match(content, /`\.roster\/` is not `roster\/`/, '.roster/ is explicitly distinguished from roster/');
+});
+
+test('orchestrator: scheduled-fire (Mode 2) stays strict about roster/<function>/schedules.yaml', () => {
+  const content = readFileSync(orchestratorSrc, 'utf8');
+  // Mode 2 must document an explicit abort when the schedule registry file is
+  // absent — the chat-bootstrap "missing roster/ is fine" tolerance must NOT
+  // leak into scheduled-fire mode.
+  assert.match(
+    content,
+    /Schedule registry not found: roster\/<function>\/schedules\.yaml/,
+    'Mode 2 aborts when the schedule registry file is missing',
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Frontmatter rendering
 // ─────────────────────────────────────────────────────────────────────────────
 

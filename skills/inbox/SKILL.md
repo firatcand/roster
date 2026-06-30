@@ -15,9 +15,11 @@ The skill is **stateless** — it re-reads the queue on every invocation.
 
 ## Working directory
 
-Operate from the workspace root only — the directory containing `config/project.yaml` and a `roster/` directory. If invoked elsewhere, stop and say:
+Operate from the workspace root only — the directory identified by `config/project.yaml` (the v1 workspace identity file). That file alone marks a roster workspace. A missing `roster/` directory just means the queue is empty (`roster review --json` returns `[]`), **not** an error — on a fresh init `roster/` does not exist yet and `/inbox` should simply report inbox-zero. If `config/project.yaml` is missing, stop and say:
 
-> Run /inbox from your roster workspace root (must contain config/project.yaml and roster/).
+> Run /inbox from your roster workspace root (must contain config/project.yaml).
+
+(`.roster/` — dotted — is scaffold/schedule-spec metadata, not the runtime `roster/` queue; never treat one as the other.)
 
 Use that root as `<root>` for every command below (pass it explicitly with `--cwd <root>`).
 
