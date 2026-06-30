@@ -3,7 +3,7 @@ name: roster-orchestrator
 description: "Bootstraps roster workspaces. On chat session start, surfaces unread decisions (HITL) as a single banner pointing at /inbox. On a scheduled fire, verifies the schedule is registered, resolves the agent's merged env, dispatches the named agent via the host tool's native subagent primitive, writes a run log + state.md entry, and exits. Reads roster/<function>/schedules.yaml plus pending items at both roster/<function>/pending/ (error class) and <function>/<agent>/pending/ (lesson class). Subscription-billed primitives only — never invokes the Claude CLI in headless print or API modes, nor the Anthropic SDK."
 version: "1.0.0"
 trigger_conditions:
-  - "Session start in a roster workspace (CLAUDE.md / AGENTS.md / CONTEXT.md present at cwd)"
+  - "Session start in a roster workspace (identified by config/project.yaml at cwd; CLAUDE.md / AGENTS.md / CONTEXT.md typically also present)"
   - "A scheduled fire prompt names a roster agent (e.g., 'Run sdr cold-outreach')"
   - "User invokes /roster-orchestrator"
 ---
@@ -19,9 +19,13 @@ The skill is **stateless**. It re-reads disk on every invocation so `/clear` and
 
 ## Working directory
 
-Operate from the workspace root only — the directory containing `config/project.yaml` (the v1 workspace identity file) plus a `roster/` directory (scheduler namespace). If invoked elsewhere, abort with:
+Operate from the workspace root only — the directory identified by `config/project.yaml` (the v1 workspace identity file). **That file alone marks a roster workspace.** The `roster/` directory (the scheduler/queue namespace) is created lazily by `roster schedule install` / `roster pending sync`, so it is **absent on a fresh init and that is normal** — do not require it for chat-session bootstrap. If `config/project.yaml` is missing, abort with:
 
-> Run roster-orchestrator from your roster workspace root (must contain config/project.yaml and roster/).
+> Run roster-orchestrator from your roster workspace root (must contain config/project.yaml).
+
+A missing `roster/` simply means zero error-class pending items (see Mode 1). The stricter requirement on `roster/<function>/schedules.yaml` applies only to scheduled-fire mode (Mode 2).
+
+> **`.roster/` is not `roster/`.** `.roster/` (dotted) holds scaffold/schedule-spec metadata written by `roster init` / `roster schedule install`; `roster/` (undotted) is the runtime queue + state tree. They are different directories — never treat the presence of `.roster/` as the runtime `roster/`, or vice-versa.
 
 ## Mode detection
 
@@ -35,7 +39,7 @@ When ambiguous, default to chat-session-bootstrap (it is the safe no-op when no 
 ## Mode 1 — Chat-session bootstrap
 
 1. Walk both decision surfaces:
-   - **Error class** — `roster/<function>/pending/*.md` across all functions (synthesized by `roster pending sync` from non-zero cron exit codes / STALE detection).
+   - **Error class** — `roster/<function>/pending/*.md` across all functions (synthesized by `roster pending sync` from non-zero cron exit codes / STALE detection). If `roster/` does not exist yet (fresh init), this surface is simply empty — count it as zero and continue; never abort.
    - **Lesson class** — `<function>/<agent>/pending/*.md` across all agents (drafted by the dreamer skill).
 2. Count files matching `*.md` in each surface. Sum the counts (no dedupe — error and lesson namespaces are disjoint).
 3. If sum == 0 → print nothing, exit silently.
@@ -53,7 +57,9 @@ No other side effects. Do not read item bodies. Do not modify any file.
    - Preferred shape: `<function>/<agent>` (e.g., `gtm/sdr`). Use this whenever the prompt provides it.
    - Bare-agent shape (e.g., `sdr`): resolve by scanning `<function>/<agent>/` for exactly one matching directory. If zero or more than one match, abort with the parsed fields and the candidate functions.
    - Refuse if `<agent>` or `<plan>` is missing — list which one.
-2. Load `roster/<function>/schedules.yaml` using the resolved function from step 1.
+2. Load `roster/<function>/schedules.yaml` using the resolved function from step 1. **Scheduled-fire is strict about this file** — if `roster/` or `roster/<function>/schedules.yaml` is missing or unreadable, abort immediately (the Mode 1 tolerance of a missing `roster/` does NOT apply here):
+
+   > Schedule registry not found: roster/<function>/schedules.yaml. Install the schedule first with `roster schedule install`, or run `roster schedule list` to see what is registered.
 3. Verify a matching entry exists (2-tuple lookup):
    ```
    match = none
@@ -159,8 +165,9 @@ If you encounter a workflow that seems to require one of the above, stop and sur
 
 ## Failure modes
 
-- **Cwd not a roster workspace** → abort with the message above.
+- **No `config/project.yaml` at cwd** → not a roster workspace; abort with the Working-directory message.
 - **Fire prompt missing agent or plan** → abort, list the parsed fields.
-- **Schedule not registered** → abort with the `roster schedule list` pointer.
+- **`roster/<function>/schedules.yaml` missing or unreadable (scheduled fire)** → abort with the registry-not-found message; the missing-`roster/` tolerance does NOT apply to Mode 2.
+- **Schedule registered file present but no matching entry** → abort with the `roster schedule list` pointer.
 - **Subagent dispatch fails** → write `status=failed` to state.md, do not retry. Failure-class HITL items are created by the next session-start (ROS-42 / failure observability).
-- **`roster/` directory missing** → first run on a fresh init; treat as zero pending items, exit cleanly.
+- **`roster/` directory missing (chat-session bootstrap)** → first run on a fresh init; treat error-class pending as zero, continue to lesson-class checks, exit cleanly. Never abort for this in Mode 1.

@@ -205,6 +205,13 @@ assert_contains config/project.yaml 'display_name: "my-test-workspace"' "config/
 assert_count config/project.yaml "{{PROJECT_NAME}}" 0 "config/project.yaml has no PROJECT_NAME placeholder"
 assert_count config/project.yaml "{{DISPLAY_NAME}}" 0 "config/project.yaml has no DISPLAY_NAME placeholder"
 assert "! -e config/project.yaml.template" "config/project.yaml.template suffix stripped after init"
+# ROS-143: fresh init produces the workspace identity file but NOT the runtime
+# roster/ queue tree — the exact precondition that made the Codex
+# roster-orchestrator chat bootstrap falsely abort. Lock it so the mode-aware
+# guard always has a real fresh-init scaffold to bootstrap against. (.roster/
+# scaffold metadata DOES exist and must not be confused with runtime roster/.)
+assert "! -e roster" "fresh init does NOT create a runtime roster/ dir (ROS-143 precondition)"
+assert "-d .roster" ".roster/ scaffold metadata exists, distinct from runtime roster/ (ROS-143)"
 assert "-d guidelines" "guidelines/ ported (v1 cross-agent substrate)"
 assert "-f guidelines/voice.md" "guidelines/voice.md ported"
 assert "-f guidelines/messaging.md" "guidelines/messaging.md ported"
