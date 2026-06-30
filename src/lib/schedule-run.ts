@@ -45,7 +45,7 @@ function renderClaudeHandoff(workspacePath: string, prompt: string, name: string
     `  ${chalk.cyan(prompt)}`,
     '',
     chalk.dim('This is the same prompt the scheduled task fires. Output stays in your chat.'),
-    chalk.dim('roster never invokes `claude -p` itself — that would route through the Agent SDK billing pool.'),
+    chalk.dim('roster never invokes `claude -p` itself — that would route through the Agent SDK billing pool.'), // <!-- roster-audit-ok: claude-p-flag -->
   ];
   if (dryRun) lines.push(chalk.dim('--dry-run: identical to a real fire — `schedule run` for claude is already print-only.'));
   lines.push('');

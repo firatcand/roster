@@ -263,7 +263,7 @@ function collectCronEntries(sourceDir: string, warnings: ScanWarning[]): CronWra
       warnings.push({
         kind: 'subscription-safety',
         wrapperPath: relative(sourceDir, wrapper.wrapperPath),
-        pattern: 'claude -p',
+        pattern: 'claude -p', // <!-- roster-audit-ok: claude-p-flag -->
       });
     }
     pairs.push({ cron: line.cron, crontabLineRaw: line.raw, wrapper });

@@ -51,21 +51,26 @@ Read `conventions.md`. An inconsistent convention is worse than a missing one.
 <!-- roster:managed:end agent-layout -->
 
 <!-- roster:managed:start brain -->
-## The brain (shared team memory)
+## The brain (shared team memory) — brain-first, hard rule
 
 If this workspace has a brain configured (the runtime connection `ROSTER_BRAIN_URL` is
-set in the environment), it is the team's **source of truth** for persistent
-knowledge: competitors, posts, metrics, accounts, people, and strategy. Treat it that
-way:
+set in the environment), it is the team's **single source of truth** for persistent
+knowledge: competitors, posts, metrics, accounts, people, and strategy. This is not
+optional — **route knowledge through the brain, not scattered files or your own memory**:
 
-- **Consult it** before answering from memory or the open web on those topics —
+- **Consult it first.** Before answering from memory or the open web on those topics, run
   `roster brain query "<question>"`. The team may already know.
-- **Write back** durable facts you learn (`roster brain save` / `event` / `link`) so the
-  next session benefits. `brain/RESOLVER.md` says where each thing goes.
-- **Correct** the brain the moment you find it wrong — a new write supersedes; the brain
-  is append-only and nothing is deleted.
+- **Write back, organized.** When you learn a durable fact, record it — and organize as you
+  write: **extract → dedup-before-create → link → tag**, per `brain/RESOLVER.md`. Query
+  before you `save` (heed the dup-warning; `merge` real duplicates), give every fact a
+  `--source`, and make links kind-qualified. Tags are a `tag` entity-kind + a `tagged` edge.
+- **Delegate the big passes.** For a corpus worth a dedicated pass — a notes dump, a
+  transcript, a competitor page — dispatch the **`brain-organizer`** subagent (host tool's
+  native subagent primitive) to run that pipeline over the whole batch, append-only.
+- **Correct** the brain the moment you find it wrong — a new write supersedes; the brain is
+  append-only and nothing is deleted.
 - **Check `roster brain table list` + `brain/RESOLVER.md`** before creating a new table;
-  prefer entities + facts.
+  prefer entities + facts + edges.
 
 The `brain` skill (`/brain`) is the front door. If no brain is configured, ignore this
 section and use normal files.

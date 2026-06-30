@@ -304,10 +304,15 @@ test('audit (gemini/dir): fresh install reports ok', async () => {
 const __filename = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(__filename), '..');
 
-test('ban-list: clean tree reports zero violations across skills/ and src/', () => {
+test('ban-list: clean tree reports zero violations across skills/, src/, agents/ and templates/', () => {
+  // ROS-145: agents/ and templates/ ship to users (tool-global subagents +
+  // init-merged CONTEXT/RESOLVER), so they must be held to the same
+  // subscription-billing ban as skills/ and src/.
   const violations = scanForBannedPrimitives([
     join(repoRoot, 'skills'),
     join(repoRoot, 'src'),
+    join(repoRoot, 'agents'),
+    join(repoRoot, 'templates'),
   ]);
   if (violations.length > 0) {
     const formatted = violations.map((v) => `  ${v.file}:${v.line} [${v.ruleId}] ${v.preview}`).join('\n');
@@ -372,6 +377,61 @@ test('ban-list: opt-out for one rule does NOT shadow other rule violations on th
     const violations = scanForBannedPrimitives([join(root, 'src')]);
     assert.equal(violations.length, 1, 'sdk-import still flagged despite claude-p opt-out');
     assert.equal(violations[0]!.ruleId, 'anthropic-sdk-import');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ROS-145: the trailing boundary is a lookahead, so a banned token followed by
+// punctuation or markdown (comma, backtick, period, quote) is caught — a
+// `(\s|$)` boundary silently missed every punctuated form.
+test('ban-list: catches banned tokens followed by punctuation / markdown', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-ban-'));
+  try {
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(
+      join(root, 'src', 'punct.ts'),
+      [
+        `const a = 'claude -p,';`,
+        'doc: run `claude -p`.',
+        `const c = "claude api";`,
+        'from anthropic.client import X',
+      ].join('\n') + '\n',
+    );
+    const ids = scanForBannedPrimitives([join(root, 'src')]).map((x) => x.ruleId).sort();
+    assert.deepEqual(ids, [
+      'claude-api-cmd',
+      'claude-p-flag',
+      'claude-p-flag',
+      'python-anthropic-import',
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ban-list: a comma-separated opt-out marker suppresses several rules on one doc line', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-ban-'));
+  try {
+    mkdirSync(join(root, 'skills', 'doc'), { recursive: true });
+    writeFileSync(
+      join(root, 'skills', 'doc', 'SKILL.md'),
+      '---\nname: doc\n---\n\nnever `claude -p`, `claude --prompt`, or `claude api`. <!-- roster-audit-ok: claude-p-flag,claude-prompt-flag,claude-api-cmd -->\n',
+    );
+    assert.equal(scanForBannedPrimitives([join(root, 'skills')]).length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ban-list: scans shipped dot-directories, not just top-level files', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-ban-'));
+  try {
+    mkdirSync(join(root, 'templates', '.claude'), { recursive: true });
+    writeFileSync(join(root, 'templates', '.claude', 'cfg.md'), 'run `claude -p x`\n');
+    const v = scanForBannedPrimitives([join(root, 'templates')]);
+    assert.equal(v.length, 1, 'a dot-dir under a shipped root is scanned');
+    assert.equal(v[0]!.ruleId, 'claude-p-flag');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
