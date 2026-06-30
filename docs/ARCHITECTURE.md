@@ -117,6 +117,8 @@ A subagent has its own contract: Role, Inputs, Output, Tools, Boundaries, Qualit
 
 Subagents are the place to put complexity that's specific to the agent but shared across its plans. They are NOT the place to put cross-agent logic — if two different agents would benefit from the same subagent, the right move is usually a separate cross-agent invocation, not duplication.
 
+Distinct from those workspace-local subagents, roster also ships a handful of **tool-global delegated subagents** to each host's agent directory (`lesson-drafter`, `pattern-detector`, `brain-organizer`). These are dispatched by a skill via the host's native subagent primitive, not from a plan. The `brain-organizer` (owned by the `brain` skill) takes a raw idea or corpus and organizes it into the brain — extract → dedup-before-create → link → tag, append-only — reusing only `roster brain` verbs and following `brain/RESOLVER.md`. It runs on the host's subscription like every other subagent; it never reaches for a programmatic model-billing path.
+
 ## Env resolution
 
 Every agent dispatch runs with a merged environment dictionary. Two sources, in order of precedence:

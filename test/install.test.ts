@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, lstatSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { installToTool, type ConfirmFn, type InstallLogger } from '../src/lib/install.ts';
 import { getToolByKey } from '../src/lib/tools.ts';
 import { RosterError, EXIT_ERROR } from '../src/lib/errors.ts';
@@ -592,6 +593,91 @@ test('env overrides are re-read per call — changing ROSTER_*_HOME mid-process 
     assert.ok(!existsSync(join(f.codexHome, 'skills', 'sample-skill', 'SKILL.md')), 'legacy .codex/skills target was not written');
   } finally {
     delete process.env['ROSTER_CODEX_HOME'];
+    f.cleanup();
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Real repo agents/ — brain-organizer ships to every tool target (ROS-145).
+// The fixtures above use a SYNTHETIC one-agent dir, so they can't prove the
+// actual shipped agent installs. Install from the repo's real agents/ dir and
+// assert brain-organizer lands in each tool's native layout.
+// ──────────────────────────────────────────────────────────────────────────────
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const repoAgents = join(repoRoot, 'agents');
+
+function realAgentFixture(): { root: string; emptySkills: string; cleanup: () => void } {
+  const root = mkdtempSync(join(tmpdir(), 'roster-real-agent-'));
+  const emptySkills = join(root, 'skills');
+  mkdirSync(emptySkills, { recursive: true });
+  return { root, emptySkills, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+test('real agents/: brain-organizer.md installs to Claude as a verbatim .md copy', async () => {
+  const f = realAgentFixture();
+  try {
+    const claudeHome = join(f.root, 'claude-home');
+    process.env['ROSTER_CLAUDE_HOME'] = claudeHome;
+    const tool = getToolByKey('claude')!;
+    const { logger } = silentLogger();
+
+    await installToTool(tool, { skills: f.emptySkills, agents: repoAgents, silent: true, logger });
+
+    const target = join(claudeHome, 'agents', 'brain-organizer.md');
+    assert.ok(existsSync(target), 'brain-organizer.md installed for Claude');
+    assert.equal(
+      readFileSync(target, 'utf8'),
+      readFileSync(join(repoAgents, 'brain-organizer.md'), 'utf8'),
+      'Claude agent is a verbatim copy of the source',
+    );
+  } finally {
+    delete process.env['ROSTER_CLAUDE_HOME'];
+    f.cleanup();
+  }
+});
+
+test('real agents/: brain-organizer installs to Codex as .toml + .persona.md (no raw .md)', async () => {
+  const f = realAgentFixture();
+  try {
+    const codexHome = join(f.root, 'codex-home');
+    process.env['ROSTER_CODEX_HOME'] = codexHome;
+    const tool = getToolByKey('codex')!;
+    const { logger } = silentLogger();
+
+    await installToTool(tool, { skills: f.emptySkills, agents: repoAgents, silent: true, logger });
+
+    assert.ok(existsSync(join(codexHome, 'agents', 'brain-organizer.toml')), 'brain-organizer.toml emitted');
+    assert.ok(existsSync(join(codexHome, 'agents', 'brain-organizer.persona.md')), 'brain-organizer.persona.md sidecar emitted');
+    assert.ok(!existsSync(join(codexHome, 'agents', 'brain-organizer.md')), 'no raw .md under codex agents');
+
+    const toml = readFileSync(join(codexHome, 'agents', 'brain-organizer.toml'), 'utf8');
+    assert.match(toml, /^name = "brain-organizer"$/m, 'toml carries the agent name');
+  } finally {
+    delete process.env['ROSTER_CODEX_HOME'];
+    f.cleanup();
+  }
+});
+
+test('real agents/: brain-organizer.md installs to Gemini as a verbatim .md copy', async () => {
+  const f = realAgentFixture();
+  try {
+    const geminiHome = join(f.root, 'gemini-home');
+    process.env['ROSTER_GEMINI_HOME'] = geminiHome;
+    const tool = getToolByKey('gemini')!;
+    const { logger } = silentLogger();
+
+    await installToTool(tool, { skills: f.emptySkills, agents: repoAgents, silent: true, logger });
+
+    const target = join(geminiHome, 'agents', 'brain-organizer.md');
+    assert.ok(existsSync(target), 'brain-organizer.md installed for Gemini');
+    assert.equal(
+      readFileSync(target, 'utf8'),
+      readFileSync(join(repoAgents, 'brain-organizer.md'), 'utf8'),
+      'Gemini agent is a verbatim copy of the source',
+    );
+  } finally {
+    delete process.env['ROSTER_GEMINI_HOME'];
     f.cleanup();
   }
 });

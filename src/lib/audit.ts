@@ -147,20 +147,24 @@ function auditAgentCodexToml(
 // in violation reports so users can search for the exact rule.
 type BanRule = { id: string; regex: RegExp };
 
+// The trailing boundary is a negative lookahead (not `(\s|$)`) so a banned token
+// followed by trailing punctuation or markdown backticks still matches; the old
+// `(\s|$)` boundary silently missed every punctuated form.
 const BAN_RULES: BanRule[] = [
-  { id: 'claude-p-flag', regex: /(^|[^A-Za-z0-9_-])claude\s+-p(\s|$)/ },
-  { id: 'claude-prompt-flag', regex: /(^|[^A-Za-z0-9_-])claude\s+--prompt(\s|$)/ },
-  { id: 'claude-api-cmd', regex: /(^|[^A-Za-z0-9_-])claude\s+api(\s|$)/ },
+  { id: 'claude-p-flag', regex: /(^|[^A-Za-z0-9_-])claude\s+-p(?![A-Za-z0-9_])/ },
+  { id: 'claude-prompt-flag', regex: /(^|[^A-Za-z0-9_-])claude\s+--prompt(?![A-Za-z0-9_])/ },
+  { id: 'claude-api-cmd', regex: /(^|[^A-Za-z0-9_-])claude\s+api(?![A-Za-z0-9_])/ },
   { id: 'anthropic-sdk-import', regex: /['"`]@anthropic-ai\/sdk(?:\/[^'"`]*)?['"`]/ },
-  { id: 'python-anthropic-import', regex: /(^|[^A-Za-z0-9_-])from\s+anthropic(\s|$|\.)/ },
+  { id: 'python-anthropic-import', regex: /(^|[^A-Za-z0-9_-])from\s+anthropic(?![A-Za-z0-9_])/ },
 ];
 
-// Opt-out marker must NAME the rule it suppresses, e.g.
+// Opt-out marker must NAME the rule(s) it suppresses, e.g.
 //   <!-- roster-audit-ok: claude-p-flag -->
-// Per Codex review #4: an unscoped marker can hide unrelated banned literals
-// on the same line. Capture group 1 holds the rule id; only that rule is
-// skipped on the line.
-const OPT_OUT_MARKER = /<!--\s*roster-audit-ok:\s*([A-Za-z0-9_-]+)\s*-->/;
+//   <!-- roster-audit-ok: claude-p-flag,claude-prompt-flag,claude-api-cmd -->
+// Per Codex review #4: an unscoped marker can hide unrelated banned literals on
+// the same line. Capture group 1 holds a comma-separated list of rule ids; only
+// those rules are skipped on the line (a doc line may legitimately name several).
+const OPT_OUT_MARKER = /<!--\s*roster-audit-ok:\s*([A-Za-z0-9_,\s-]+?)\s*-->/;
 
 export type BanlistViolation = {
   file: string;
@@ -172,6 +176,8 @@ export type BanlistViolation = {
 function isTextFile(name: string): boolean {
   return /\.(ts|tsx|js|jsx|mjs|cjs|md|mdx|py|sh|yaml|yml|toml|json)$/i.test(name);
 }
+
+const SKIP_DIRS = new Set(['node_modules', '.git', '.hg', '.svn', '.forge']);
 
 function walkAllFiles(root: string): string[] {
   const out: string[] = [];
@@ -194,7 +200,10 @@ function walkAllFiles(root: string): string[] {
 
   function recurse(dir: string): void {
     for (const dirent of readdirSync(dir, { withFileTypes: true })) {
-      if (dirent.name === 'node_modules' || dirent.name.startsWith('.')) continue;
+      // Skip only VCS/tooling dirs — NOT every dot-dir. Shipped template trees
+      // can contain dot-dirs (e.g. .claude/, .config/) that must be scanned;
+      // a blanket dot-prefix skip silently excluded them.
+      if (SKIP_DIRS.has(dirent.name)) continue;
       const full = join(dir, dirent.name);
       if (dirent.isDirectory()) recurse(full);
       else if (dirent.isFile() && isTextFile(dirent.name)) out.push(full);
@@ -221,9 +230,16 @@ export function scanForBannedPrimitives(roots: string[]): BanlistViolation[] {
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i] ?? '';
         const optOut = line.match(OPT_OUT_MARKER);
-        const suppressedRuleId = optOut ? optOut[1] : undefined;
+        const suppressed = optOut
+          ? new Set(
+              optOut[1]!
+                .split(',')
+                .map((s) => s.trim())
+                .filter(Boolean),
+            )
+          : undefined;
         for (const rule of BAN_RULES) {
-          if (suppressedRuleId === rule.id) continue;
+          if (suppressed?.has(rule.id)) continue;
           if (rule.regex.test(line)) {
             violations.push({
               file,

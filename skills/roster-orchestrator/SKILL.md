@@ -1,6 +1,6 @@
 ---
 name: roster-orchestrator
-description: "Bootstraps roster workspaces. On chat session start, surfaces unread decisions (HITL) as a single banner pointing at /inbox. On a scheduled fire, verifies the schedule is registered, resolves the agent's merged env, dispatches the named agent via the host tool's native subagent primitive, writes a run log + state.md entry, and exits. Reads roster/<function>/schedules.yaml plus pending items at both roster/<function>/pending/ (error class) and <function>/<agent>/pending/ (lesson class). Subscription-billed primitives only — never invokes claude -p, claude --prompt, claude api, or the Anthropic SDK."
+description: "Bootstraps roster workspaces. On chat session start, surfaces unread decisions (HITL) as a single banner pointing at /inbox. On a scheduled fire, verifies the schedule is registered, resolves the agent's merged env, dispatches the named agent via the host tool's native subagent primitive, writes a run log + state.md entry, and exits. Reads roster/<function>/schedules.yaml plus pending items at both roster/<function>/pending/ (error class) and <function>/<agent>/pending/ (lesson class). Subscription-billed primitives only — never invokes the Claude CLI in headless print or API modes, nor the Anthropic SDK."
 version: "1.0.0"
 trigger_conditions:
   - "Session start in a roster workspace (CLAUDE.md / AGENTS.md / CONTEXT.md present at cwd)"
@@ -117,6 +117,22 @@ Invoke the subagent via natural language. Codex resolves the agent name against 
 > Use the `<agent>` subagent to run plan `<plan>`.
 
 Wait for the subagent to return its status, then proceed to the state.md write.
+
+### On Gemini CLI
+
+Dispatch by prefixing the prompt with `@<agent>` — Gemini resolves it against `~/.gemini/agents/<agent>.md` and forces that subagent (an in-session prompt prefix, not a shell command, so it stays on the user's subscription):
+
+> @<agent> run plan <plan>
+
+Wait for the subagent to return its status, then proceed to the state.md write.
+
+### Delegated helper subagents (non-scheduled)
+
+Some subagents are dispatched on demand by a skill rather than by a scheduled fire — e.g. the `brain` skill delegates the **`brain-organizer`** subagent for its on-demand corpus pass. Same primitives, same subscription guarantee:
+
+| Subagent | Claude Code | Codex CLI | Gemini CLI |
+|----------|-------------|-----------|------------|
+| `brain-organizer` | `Task(subagent_type="brain-organizer", prompt="Organize this corpus into the brain", run_in_background=false)` | "Use the `brain-organizer` subagent to organize this corpus into the brain." | `@brain-organizer organize this corpus into the brain` |
 
 ## Subscription-billing guarantee
 

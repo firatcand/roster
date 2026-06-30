@@ -40,6 +40,33 @@ The brain is the team's source of truth. When a request is about persistent know
 4. **Check before creating a table.** Run `roster brain table list` and re-read
    `brain/RESOLVER.md` before `brain table create` — prefer entities + facts.
 
+## Organize, don't just dump
+
+Knowledge written carelessly fragments into duplicates and orphaned facts. Whenever you
+write, organize around the write — the pipeline is **extract → dedup-before-create → link →
+tag**. `brain/RESOLVER.md` is the authoritative guideline (kind taxonomy, corpus-tag
+taxonomy, tags-as-edges convention, dedup discipline, when-to-link branch); follow it.
+
+**Inline (a fact or two learned mid-session):**
+
+1. **Extract** the noun and map it to a `kind` from `RESOLVER.md`.
+2. **Dedup before create** — `roster brain query "<name>"` (or `get --kind <k> --slug <s>`)
+   first. When `save` warns "possible duplicate of: …", evaluate it and
+   `roster brain merge <from> <into>` if it is the same thing. Never leave a near-duplicate.
+3. **Save with provenance** — `roster brain save --kind <k> --slug <s> --field key=value
+   --source "<where it came from>"`. Every fact carries a `--source`.
+4. **Link** asserted relationships, **kind-qualified** (bare slugs are ambiguous):
+   `roster brain link <src> <rel> <dst> --kind-src <kind> --kind-dst <kind>`.
+5. **Tag** for retrieval — a `tag` is a `tag` entity-kind + a `tagged` edge (no schema
+   change): `roster brain save --kind tag --slug <kebab-tag>`, then
+   `roster brain link <entity> tagged <kebab-tag> --kind-src <entity-kind> --kind-dst tag`.
+
+**On-demand corpus pass (a notes dump, transcript, or page worth a dedicated pass):**
+delegate to the `brain-organizer` subagent via the host tool's native subagent primitive
+(see `roster-orchestrator` for the per-tool idiom). It runs the same extract → dedup → link
+→ tag pipeline over the whole corpus, append-only, and returns a summary of what it wrote.
+Everything stays on the host subscription and the `roster brain` verbs.
+
 ## Verb cheatsheet
 
 | Goal | Command |

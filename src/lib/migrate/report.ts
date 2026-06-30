@@ -70,7 +70,7 @@ function renderLogs(plan: MigrationPlan): string[] {
 function renderSubscriptionWarnings(plan: MigrationPlan): string[] {
   if (plan.subscriptionWarnings.length === 0) return [];
   const out: string[] = ['', chalk.red.bold(`⚠ Subscription-safety violations in source wrappers (${plan.subscriptionWarnings.length}):`)];
-  out.push(chalk.dim('   ADR-0001 bans `claude -p` in cron — drains Agent SDK credit, not the interactive subscription.'));
+  out.push(chalk.dim('   ADR-0001 bans `claude -p` in cron — drains Agent SDK credit, not the interactive subscription.')); // <!-- roster-audit-ok: claude-p-flag -->
   for (const w of plan.subscriptionWarnings) {
     out.push(`   ${chalk.red('-')} ${w.wrapperPath} contains '${w.pattern}'`);
   }

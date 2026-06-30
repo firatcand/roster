@@ -11,7 +11,7 @@ Full reference. CLAUDE.md is the short behavioral guide loaded at session start;
 5. **Tooling scoped where it belongs.** Universal MCPs/skills/plugins live at root (`.claude/`, `.mcp.json`). Agent-scoped MCPs live at `<agent>/.mcp.json`. No per-workspace tool duplication.
 6. **Files are the memory layer for agent operations.** Run logs, playbook lessons, configs, and guidelines are Markdown/YAML in Git — no vector DB, no embedding store. Output artifacts (enriched data, drafts, structured results) are not memory; use whatever storage fits — a DB is fine.
 7. **The dreamer learns; agents act.** Reinforcement is a separate, deliberate process. Live agents don't update playbooks. Dreamer-drafted lessons go through HITL approval before they land in `<agent>/playbook/`.
-8. **Schedules are stateless and subscription-billed.** A native local scheduler (Claude Desktop Scheduled Tasks, Codex app Automations, or a Codex cron entry installed via `roster schedule install --via cron`) fires a fresh CLI session that loads `CONTEXT.md` (via `CLAUDE.md`/`AGENTS.md`) and invokes the `roster-orchestrator` skill. No Agent SDK, no `claude -p`. See ADR-0001.
+8. **Schedules are stateless and subscription-billed.** A native local scheduler (Claude Desktop Scheduled Tasks, Codex app Automations, or a Codex cron entry installed via `roster schedule install --via cron`) fires a fresh CLI session that loads `CONTEXT.md` (via `CLAUDE.md`/`AGENTS.md`) and invokes the `roster-orchestrator` skill. No Agent SDK, no `claude -p`. See ADR-0001. <!-- roster-audit-ok: claude-p-flag -->
 
 ## Directory map
 

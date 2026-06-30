@@ -30,9 +30,10 @@ SMOKE_DIR="$(mktemp -d -t roster-smoke-XXXXXXXX)"
 NPM_PREFIX="$SMOKE_DIR/npm-prefix"
 CLAUDE_HOME="$SMOKE_DIR/claude"
 CODEX_HOME="$SMOKE_DIR/codex"
+GEMINI_HOME="$SMOKE_DIR/gemini"
 WORKSPACE="$SMOKE_DIR/workspace"
 FAKE_HOME="$SMOKE_DIR/fake-home"
-mkdir -p "$NPM_PREFIX" "$CLAUDE_HOME" "$CODEX_HOME" "$WORKSPACE" "$FAKE_HOME"
+mkdir -p "$NPM_PREFIX" "$CLAUDE_HOME" "$CODEX_HOME" "$GEMINI_HOME" "$WORKSPACE" "$FAKE_HOME"
 
 cleanup() {
   local rc=$?
@@ -110,7 +111,8 @@ for expected in \
   package/templates/scaffold/logs/cron/.gitkeep \
   package/templates/scaffold/founder-skills.yaml.example \
   package/templates/scaffold/brain/RESOLVER.md \
-  package/skills/brain/SKILL.md
+  package/skills/brain/SKILL.md \
+  package/agents/brain-organizer.md
 do
   assert_contains "$TARBALL_LIST" "^$expected\$" "tarball contains $expected"
 done
@@ -132,6 +134,7 @@ assert "-f \"$CLAUDE_HOME/skills/chief-of-staff/SKILL.md\"" "chief-of-staff SKIL
 assert "-f \"$CLAUDE_HOME/skills/inbox/SKILL.md\"" "inbox SKILL.md installed (ROS-132 — /inbox)"
 assert "-f \"$CLAUDE_HOME/skills/brain/SKILL.md\"" "brain SKILL.md installed (ROS-139 — /brain)"
 assert "-f \"$CLAUDE_HOME/agents/lesson-drafter.md\"" "lesson-drafter.md installed (claude md-copy)"
+assert "-f \"$CLAUDE_HOME/agents/brain-organizer.md\"" "brain-organizer.md installed (ROS-145 — claude md-copy)"
 
 # Idempotency: re-running install should not throw
 HOME="$FAKE_HOME" ROSTER_CLAUDE_HOME="$CLAUDE_HOME" "$ROSTER_BIN" install --yes --scope user --silent
@@ -142,6 +145,9 @@ HOME="$FAKE_HOME" ROSTER_CODEX_HOME="$CODEX_HOME" "$ROSTER_BIN" install --tool c
 assert "-f \"$CODEX_HOME/agents/lesson-drafter.toml\"" "codex emits lesson-drafter.toml"
 assert "-f \"$CODEX_HOME/agents/lesson-drafter.persona.md\"" "codex emits lesson-drafter.persona.md sidecar"
 assert "! -f \"$CODEX_HOME/agents/lesson-drafter.md\"" "codex does NOT copy raw .md into agents/"
+assert "-f \"$CODEX_HOME/agents/brain-organizer.toml\"" "codex emits brain-organizer.toml (ROS-145)"
+assert "-f \"$CODEX_HOME/agents/brain-organizer.persona.md\"" "codex emits brain-organizer.persona.md sidecar (ROS-145)"
+assert "! -f \"$CODEX_HOME/agents/brain-organizer.md\"" "codex does NOT copy raw brain-organizer.md (ROS-145)"
 assert_contains "$CODEX_HOME/agents/lesson-drafter.toml" "^developer_instructions = \"\"\"$" "toml uses developer_instructions key"
 assert_contains "$CODEX_HOME/agents/lesson-drafter.toml" "openai/codex#19399" "toml header references upstream issue"
 # Schema contract: legacy field names must NOT appear at the start of any line.
@@ -150,6 +156,12 @@ if grep -E '^(instructions|reasoning_effort)\s*=' "$CODEX_HOME/agents/lesson-dra
 else
   pass "toml has no legacy instructions/reasoning_effort keys"
 fi
+
+# 4c. Gemini install — skills under extensions/, agents copied as .md (ROS-145)
+HOME="$FAKE_HOME" ROSTER_GEMINI_HOME="$GEMINI_HOME" "$ROSTER_BIN" install --tool gemini --yes --scope user --silent
+assert "-f \"$GEMINI_HOME/extensions/brain/SKILL.md\"" "gemini installs brain skill into extensions/"
+assert "-f \"$GEMINI_HOME/agents/lesson-drafter.md\"" "gemini emits lesson-drafter.md (md-copy)"
+assert "-f \"$GEMINI_HOME/agents/brain-organizer.md\"" "gemini emits brain-organizer.md (ROS-145 — md-copy)"
 
 # 5. roster init
 echo ""
