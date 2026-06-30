@@ -378,16 +378,46 @@ test('self-merge is rejected', opts, async () => {
   }
 });
 
-// ---------- runtime grants (append-only invariant) ----------
-
-test('runtime role can INSERT+SELECT entity_merges/entity_aliases but cannot UPDATE/DELETE', opts, async () => {
+test('merge broker rejects cross-kind ids called directly by the runtime role', opts, async () => {
+  // ROS-146: brain.merge_entities is the runtime-callable SECURITY DEFINER
+  // boundary; a direct call with raw ids must not forge a cross-kind canonical
+  // chain even though the TS wrapper resolves both slugs with one kind.
   const { fresh, password, teardown } = await provision();
   const rt = await runtimeClient(fresh.url, password, fresh.role);
   try {
-    await saveEntity(rt, { kind: 'org', slug: 'a', fields: [] });
-    await saveEntity(rt, { kind: 'org', slug: 'b', fields: [] });
+    const org = await saveEntity(rt, { kind: 'org', slug: 'acme', fields: [] });
+    const person = await saveEntity(rt, { kind: 'person', slug: 'acme', fields: [] });
+    await assert.rejects(
+      rt.query(`SELECT brain.merge_entities($1, $2, NULL)`, [org.entityId, person.entityId]),
+      /different kinds/i,
+    );
+  } finally {
+    await rt.end();
+    await teardown();
+  }
+});
+
+// ---------- runtime grants (append-only invariant) ----------
+
+test('runtime role merges only via the broker: SELECT yes, raw INSERT/UPDATE/DELETE no', opts, async () => {
+  const { fresh, password, teardown } = await provision();
+  const rt = await runtimeClient(fresh.url, password, fresh.role);
+  try {
+    const a = await saveEntity(rt, { kind: 'org', slug: 'a', fields: [] });
+    const b = await saveEntity(rt, { kind: 'org', slug: 'b', fields: [] });
     await mergeEntities(rt, { fromSlug: 'a', intoSlug: 'b', kind: 'org' });
 
+    // ROS-146: the broker (brain.merge_entities) is the only write path. The
+    // runtime role can no longer raw-INSERT entity_merges/entity_aliases, so the
+    // cycle guard + canonical cache cannot be bypassed.
+    await assert.rejects(
+      rt.query(`INSERT INTO brain.entity_merges (from_id, into_id) VALUES ($1, $2)`, [a.entityId, b.entityId]),
+      /permission denied/i,
+    );
+    await assert.rejects(
+      rt.query(`INSERT INTO brain.entity_aliases (entity_id, alias) VALUES ($1, 'x')`, [b.entityId]),
+      /permission denied/i,
+    );
     await assert.rejects(rt.query(`UPDATE brain.entity_merges SET into_id = into_id`), /permission denied/i);
     await assert.rejects(rt.query(`DELETE FROM brain.entity_merges`), /permission denied/i);
     await assert.rejects(rt.query(`UPDATE brain.entity_aliases SET alias = 'x'`), /permission denied/i);
