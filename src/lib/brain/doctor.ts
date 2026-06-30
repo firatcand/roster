@@ -229,14 +229,19 @@ async function checksForRole(client: pg.PoolClient, roleName: string): Promise<D
     await check(
       client,
       'no-audit-column-insert-privs',
-      'runtime role cannot INSERT audit columns id/recorded_at',
-      'runtime role has INSERT on audit column',
+      'runtime role cannot INSERT protected columns (id/recorded_at; entities.canonical_id)',
+      'runtime role has INSERT on protected column',
+      // canonical_id is the materialized cache only on brain.entities; an
+      // agent-created table may legitimately have a user column of that name, so
+      // the canonical_id protection is scoped to entities (id/recorded_at stay
+      // protected on every table).
       `SELECT n.nspname || '.' || c.relname || '.' || a.attname AS obj
          FROM pg_class c
          JOIN pg_namespace n ON n.oid = c.relnamespace
          JOIN pg_attribute a ON a.attrelid = c.oid
         WHERE n.nspname = 'brain' AND c.relkind = 'r'
-          AND a.attname IN ('id', 'recorded_at')
+          AND (a.attname IN ('id', 'recorded_at')
+               OR (a.attname = 'canonical_id' AND c.relname = 'entities'))
           AND has_column_privilege($1, c.oid, a.attnum, 'INSERT')`,
       [roleName],
     ),
@@ -289,6 +294,27 @@ export async function runDoctor(pool: pg.Pool, roleName: string = RUNTIME_ROLE):
     const checks: DoctorCheck[] = [];
     for (const role of roles) {
       checks.push(...(await checksForRole(client, role)));
+    }
+
+    // ROS-146: the materialized canonical_id cache (008) must match the merge
+    // map. Drift is real corruption (a missed refresh), so it fails the report.
+    // Guarded for pre-008 brains that have no canonical_id column.
+    const hasCanonical = await client.query(
+      `SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'brain' AND table_name = 'entities'
+          AND column_name = 'canonical_id'`,
+    );
+    if ((hasCanonical.rowCount ?? 0) > 0) {
+      checks.push(
+        await check(
+          client,
+          'canonical-id-no-drift',
+          'entities.canonical_id matches the merge map for every entity',
+          'canonical_id drift on entity ids',
+          `SELECT id FROM brain.entities
+            WHERE canonical_id IS DISTINCT FROM brain.canonical_id(id) LIMIT 20`,
+        ),
+      );
     }
 
     const ok = checks.every((c) => c.ok);

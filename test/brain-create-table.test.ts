@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createBrainPool, withBrainClient } from '../src/lib/brain/connect.ts';
 import { runMigrations } from '../src/lib/brain/migrate.ts';
 import { ensureRuntimeRole } from '../src/lib/brain/roles.ts';
+import { runDoctor } from '../src/lib/brain/doctor.ts';
 import { HAS_DB, createFreshDb, runtimeClient, type FreshDb } from './brain-helpers.ts';
 
 const opts = { skip: HAS_DB ? false : 'ROSTER_BRAIN_ADMIN_URL not set' };
@@ -56,6 +57,31 @@ test('brokered create_table yields admin-owned INSERT/SELECT-only table (case 3)
     );
   } finally {
     await rt.end();
+    await teardown();
+  }
+});
+
+test('agent table may define a canonical_id column: runtime keeps INSERT, doctor stays green (ROS-146)', opts, async () => {
+  // canonical_id is the protected derived cache only on brain.entities. On a
+  // broker-created agent table it is an ordinary user column: the runtime role
+  // must keep INSERT on it across a re-applyGrants, and doctor must not flag it.
+  const { fresh, password, teardown } = await provision();
+  const rt = await runtimeClient(fresh.url, password, fresh.role);
+  const pool = createBrainPool('admin', fresh.url);
+  try {
+    await rt.query(
+      `SELECT brain.create_table('widgets', '[{"name":"canonical_id","type":"bigint"},{"name":"label","type":"text"}]'::jsonb)`,
+    );
+    await rt.query(`INSERT INTO brain.widgets (canonical_id, label) VALUES (7, 'w')`);
+    // Re-running ensureRuntimeRole/applyGrants must NOT strip the user column's grant.
+    await withBrainClient(pool, (c) => ensureRuntimeRole(c, fresh.role));
+    await rt.query(`INSERT INTO brain.widgets (canonical_id, label) VALUES (8, 'w2')`);
+
+    const report = await runDoctor(pool, fresh.role);
+    assert.equal(report.ok, true, JSON.stringify(report.checks.filter((c) => !c.ok)));
+  } finally {
+    await rt.end();
+    await pool.end();
     await teardown();
   }
 });
