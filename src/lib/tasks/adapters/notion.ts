@@ -16,8 +16,8 @@ type FetchImpl = (input: string, init?: RequestInit) => Promise<Response>;
 
 export interface NotionAdapterOptions {
   dataSourceId: string;
-  statusProp: string;
-  assigneeProp: string;
+  statusProp?: string;
+  assigneeProp?: string;
   token?: string;
   projectProp?: string;
   uniqueIdProp?: string;
@@ -68,13 +68,38 @@ const statusPropSchema = z.object({
   }),
 });
 
+function statusOptionsFromProp(raw: unknown): StatusOption[] {
+  const parsed = statusPropSchema.safeParse(raw);
+  if (!parsed.success) return [];
+  const groupOf = new Map<string, string>();
+  for (const group of parsed.data.status.groups) {
+    for (const optionId of group.option_ids) groupOf.set(optionId, group.name);
+  }
+  return parsed.data.status.options.map((o) => ({ name: o.name, category: groupOf.get(o.id) }));
+}
+
+export interface BoardProperty {
+  name: string;
+  type: string;
+}
+export interface BoardStatusProperty {
+  name: string;
+  options: StatusOption[];
+}
+export interface BoardSchema {
+  properties: BoardProperty[];
+  statusProperties: BoardStatusProperty[];
+  assigneeProperties: string[];
+  uniqueId?: { property: string; prefix?: string };
+}
+
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export class NotionAdapter implements TrackerAdapter {
   private readonly token: string;
   private readonly dataSourceId: string;
-  private readonly statusProp: string;
-  private readonly assigneeProp: string;
+  private readonly statusProp: string | undefined;
+  private readonly assigneeProp: string | undefined;
   private readonly projectProp?: string;
   private readonly uniqueIdProp?: string;
   private readonly fetchImpl: FetchImpl;
@@ -135,6 +160,20 @@ export class NotionAdapter implements TrackerAdapter {
     }
   }
 
+  private requireStatusProp(): string {
+    if (!this.statusProp) {
+      throw new NotionError(0, 'NotionAdapter has no status property configured — run `roster task setup` to write roster/tracker.yaml first.');
+    }
+    return this.statusProp;
+  }
+
+  private requireAssigneeProp(): string {
+    if (!this.assigneeProp) {
+      throw new NotionError(0, 'NotionAdapter has no assignee property configured — run `roster task setup` to write roster/tracker.yaml first.');
+    }
+    return this.assigneeProp;
+  }
+
   async self(): Promise<TaskIdentity> {
     const me = meSchema.parse(await this.request('/v1/users/me'));
     if (me.type === 'person') {
@@ -157,14 +196,16 @@ export class NotionAdapter implements TrackerAdapter {
     if (scope.projectValues?.length && !this.projectProp) {
       throw new NotionError(0, 'listReady received projectValues but no projectProp is configured — refusing to silently widen the query to all projects.');
     }
+    const statusProp = this.requireStatusProp();
+    const assigneeProp = this.requireAssigneeProp();
     const and: unknown[] = [
-      { or: scope.readyStatuses.map((name) => ({ property: this.statusProp, status: { equals: name } })) },
+      { or: scope.readyStatuses.map((name) => ({ property: statusProp, status: { equals: name } })) },
     ];
     if (scope.assigneeId) {
       and.push({
         or: [
-          { property: this.assigneeProp, people: { contains: scope.assigneeId } },
-          { property: this.assigneeProp, people: { is_empty: true } },
+          { property: assigneeProp, people: { contains: scope.assigneeId } },
+          { property: assigneeProp, people: { is_empty: true } },
         ],
       });
     }
@@ -193,6 +234,8 @@ export class NotionAdapter implements TrackerAdapter {
   }
 
   async getTask(handle: string): Promise<Task> {
+    this.requireStatusProp();
+    this.requireAssigneeProp();
     const byUniqueId = this.parseUniqueId(handle);
     if (byUniqueId !== undefined && this.uniqueIdProp) {
       const prop = this.uniqueIdProp;
@@ -213,7 +256,7 @@ export class NotionAdapter implements TrackerAdapter {
   async setStatus(taskId: string, statusName: string): Promise<void> {
     await this.request(`/v1/pages/${taskId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ properties: { [this.statusProp]: { status: { name: statusName } } } }),
+      body: JSON.stringify({ properties: { [this.requireStatusProp()]: { status: { name: statusName } } } }),
     });
   }
 
@@ -226,37 +269,45 @@ export class NotionAdapter implements TrackerAdapter {
   async setAssignees(taskId: string, userIds: string[]): Promise<void> {
     await this.request(`/v1/pages/${taskId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ properties: { [this.assigneeProp]: { people: userIds.map((id) => ({ id })) } } }),
+      body: JSON.stringify({ properties: { [this.requireAssigneeProp()]: { people: userIds.map((id) => ({ id })) } } }),
     });
   }
 
   async introspectStatuses(): Promise<StatusSchema> {
-    const ds = dataSourceSchema.parse(await this.request(`/v1/data_sources/${this.dataSourceId}`));
-    const raw = ds.properties[this.statusProp];
-    const parsed = statusPropSchema.safeParse(raw);
-    if (!parsed.success) {
-      throw new NotionError(0, `Property "${this.statusProp}" is not a Notion status property on this data source.`);
+    const statusProp = this.requireStatusProp();
+    const board = await this.describeBoard();
+    const status = board.statusProperties.find((s) => s.name === statusProp);
+    if (!status) {
+      throw new NotionError(0, `Property "${statusProp}" is not a Notion status property on this data source.`);
     }
-    const groupOf = new Map<string, string>();
-    for (const group of parsed.data.status.groups) {
-      for (const optionId of group.option_ids) groupOf.set(optionId, group.name);
-    }
-    const statuses: StatusOption[] = parsed.data.status.options.map((o) => ({
-      name: o.name,
-      category: groupOf.get(o.id),
-    }));
+    return {
+      statuses: status.options,
+      hasUniqueId: board.uniqueId !== undefined,
+      uniqueIdPrefix: board.uniqueId?.prefix,
+    };
+  }
 
-    let hasUniqueId = false;
-    let uniqueIdPrefix: string | undefined;
-    for (const value of Object.values(ds.properties)) {
-      if ((value as { type?: string })?.type === 'unique_id') {
-        hasUniqueId = true;
+  // Schema discovery that presumes nothing configured — used by `roster task
+  // setup` to find the status/assignee/unique-id columns before a mapping exists.
+  async describeBoard(): Promise<BoardSchema> {
+    const ds = dataSourceSchema.parse(await this.request(`/v1/data_sources/${this.dataSourceId}`));
+    const properties: BoardProperty[] = [];
+    const statusProperties: BoardStatusProperty[] = [];
+    const assigneeProperties: string[] = [];
+    let uniqueId: BoardSchema['uniqueId'];
+    for (const [name, value] of Object.entries(ds.properties)) {
+      const type = (value as { type?: string })?.type ?? 'unknown';
+      properties.push({ name, type });
+      if (type === 'status') {
+        statusProperties.push({ name, options: statusOptionsFromProp(value) });
+      } else if (type === 'people') {
+        assigneeProperties.push(name);
+      } else if (type === 'unique_id') {
         const prefix = (value as { unique_id?: { prefix?: string | null } }).unique_id?.prefix;
-        uniqueIdPrefix = prefix ?? undefined;
-        break;
+        uniqueId = { property: name, prefix: prefix ?? undefined };
       }
     }
-    return { statuses, hasUniqueId, uniqueIdPrefix };
+    return { properties, statusProperties, assigneeProperties, uniqueId };
   }
 
   private parseUniqueId(handle: string): number | undefined {
@@ -270,8 +321,8 @@ export class NotionAdapter implements TrackerAdapter {
       id: page.id,
       handle: this.handleOf(page),
       title: this.titleOf(props),
-      status: this.statusOf(props),
-      assigneeIds: this.assigneesOf(props),
+      status: this.statusOf(props, this.requireStatusProp()),
+      assigneeIds: this.assigneesOf(props, this.requireAssigneeProp()),
     };
   }
 
@@ -297,13 +348,13 @@ export class NotionAdapter implements TrackerAdapter {
     return '';
   }
 
-  private statusOf(props: Record<string, unknown>): string {
-    const v = props[this.statusProp] as { status?: { name?: string } | null } | undefined;
+  private statusOf(props: Record<string, unknown>, statusProp: string): string {
+    const v = props[statusProp] as { status?: { name?: string } | null } | undefined;
     return v?.status?.name ?? '';
   }
 
-  private assigneesOf(props: Record<string, unknown>): string[] {
-    const v = props[this.assigneeProp] as { people?: Array<{ id?: string }> } | undefined;
+  private assigneesOf(props: Record<string, unknown>, assigneeProp: string): string[] {
+    const v = props[assigneeProp] as { people?: Array<{ id?: string }> } | undefined;
     return (v?.people ?? []).map((p) => p.id).filter((id): id is string => typeof id === 'string');
   }
 }

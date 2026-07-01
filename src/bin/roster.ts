@@ -41,6 +41,7 @@ import { syncFounderSkills } from '../lib/founder-skills/sync.ts';
 import { realInstaller } from '../lib/founder-skills/installer.ts';
 import { executeHooksInstall } from '../commands/hooks.ts';
 import { executeMigrateCodexSkills, executeMigrateFromAgentTeam } from '../commands/migrate.ts';
+import { runTask } from '../commands/task.ts';
 import { parseBrainArgs } from '../lib/brain-args.ts';
 import {
   executeBrainInit,
@@ -75,7 +76,7 @@ import {
   workspaceRequiredError,
 } from '../lib/errors.ts';
 
-type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'hooks' | 'migrate' | 'pending' | 'skills' | 'upgrade' | 'update' | 'brain';
+type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'hooks' | 'migrate' | 'pending' | 'skills' | 'upgrade' | 'update' | 'brain' | 'task';
 const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'install',
   'init',
@@ -89,6 +90,7 @@ const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'pending',
   'skills',
   'brain',
+  'task',
 ]);
 
 // Display a path under home as `~/foo`; otherwise if it's under cwd, show
@@ -130,6 +132,7 @@ function printHelp(version: string): void {
     `  roster skills update [--latest]  ${chalk.dim('Re-sync to the lockfile, or bump pinned refs to newest tags')}`,
     `  roster review [function]     ${chalk.dim('Review unread decisions (HITL); --json to list, --approve/--reject <id|path> to apply')}`,
     `  roster pending sync          ${chalk.dim('Synthesize HITL items from failed-fire signals (.exit + STALE)')}`,
+    `  roster task setup            ${chalk.dim('Map your Notion board to canonical task states → roster/tracker.yaml (--data-source, --yes, --json)')}`,
     `  roster hooks install         ${chalk.dim('Install SessionStart banner hooks for Claude + Codex')}`,
     `  roster brain init            ${chalk.dim('Provision the Postgres knowledge brain (admin URL); prints runtime URL once')}`,
     `  roster brain doctor          ${chalk.dim('Audit brain append-only safety + report pending migrations')}`,
@@ -811,6 +814,7 @@ async function main(): Promise<number> {
     if (first === 'migrate') return runMigrate(rest);
     if (first === 'pending') return runPending(rest);
     if (first === 'brain') return await runBrain(rest);
+    if (first === 'task') return await runTask(rest);
   }
 
   throw unknownCommandError(first);
