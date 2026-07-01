@@ -44,6 +44,24 @@ test('parseTrackerConfig rejects a wrong version', () => {
   assert.throws(() => parseTrackerConfig({ ...valid, version: 99 }), TrackerConfigError);
 });
 
+test('parseTrackerConfig rejects a project_filter without a project_property', () => {
+  assert.throws(
+    () => parseTrackerConfig({ ...valid, project_filter: ['Alpha'] }),
+    (e: unknown) => e instanceof TrackerConfigError && (e as TrackerConfigError).issues.some((i) => /project_filter/.test(i.path) || /requires project_property/.test(i.message)),
+  );
+});
+
+test('parseTrackerConfig accepts a project_filter paired with a project_property', () => {
+  const cfg = parseTrackerConfig({ ...valid, project_property: 'Project', project_filter: ['Alpha'] });
+  assert.deepEqual(cfg.project_filter, ['Alpha']);
+  assert.equal(cfg.project_property, 'Project');
+});
+
+test('parseTrackerConfig round-trips unique_id_prefix', () => {
+  const cfg = parseTrackerConfig({ ...valid, unique_id_prefix: 'TASK' });
+  assert.equal(cfg.unique_id_prefix, 'TASK');
+});
+
 test('crossCheckStatusMap passes when every mapped name is a distinct board option', () => {
   const cfg = parseTrackerConfig(valid);
   assert.doesNotThrow(() => crossCheckStatusMap(cfg.status_map, ['To do', 'In progress', 'Done', 'Blocked']));

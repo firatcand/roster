@@ -54,3 +54,10 @@ export function transition(
   }
   return { next: current, illegal: true };
 }
+
+// The events that legally fire from `state`, in table order. The verb layer
+// renders these in "allowed from <state>" errors so its messages can never
+// drift from the transition table above.
+export function allowedEvents(state: CanonicalState): TaskEvent[] {
+  return Object.keys(TABLE[state] ?? {}) as TaskEvent[];
+}

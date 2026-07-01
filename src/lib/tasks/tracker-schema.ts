@@ -27,11 +27,19 @@ export const trackerConfigSchema = z
     status_property: z.string().min(1, { message: 'status_property: required' }),
     assignee_property: z.string().min(1, { message: 'assignee_property: required' }),
     unique_id_property: z.string().min(1).optional(),
+    unique_id_prefix: z.string().min(1).optional(),
     project_property: z.string().min(1).optional(),
     project_filter: z.array(z.string().min(1)).optional(),
     status_map: statusMapSchema,
   })
-  .strict();
+  .strict()
+  // A project_filter is meaningless (and dangerously ignored) without the
+  // property it filters on — refuse the pair rather than silently widening every
+  // query to the whole data source.
+  .refine((c) => !(c.project_filter && c.project_filter.length > 0) || !!c.project_property, {
+    message: 'project_filter: requires project_property to be set',
+    path: ['project_filter'],
+  });
 
 export type TrackerConfig = z.infer<typeof trackerConfigSchema>;
 
