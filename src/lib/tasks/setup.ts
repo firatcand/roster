@@ -88,6 +88,7 @@ export interface DraftTrackerConfig {
   status_property: string;
   assignee_property: string;
   unique_id_property?: string;
+  unique_id_prefix?: string;
   project_property?: string;
   project_filter?: string[];
   status_map: Partial<Record<CanonicalState, string>>;
@@ -171,6 +172,7 @@ export async function runTaskSetup(opts: TaskSetupOptions): Promise<TaskSetupRes
     status_property: statusProp,
     assignee_property: assigneeProp,
     ...(board.uniqueId ? { unique_id_property: board.uniqueId.property } : {}),
+    ...(board.uniqueId?.prefix ? { unique_id_prefix: board.uniqueId.prefix } : {}),
     status_map: map,
   };
 

@@ -238,6 +238,66 @@ test('setAssignees replaces the full people array; [] clears it', async () => {
   assert.deepEqual(h.calls[1]!.body, { properties: { Assignee: { people: [] } } });
 });
 
+// ── listAssigned() + comment() (ROS-151) ─────────────────────────────────────
+
+test('listAssigned builds people-contains + status/project filters and paginates', async () => {
+  const h = harness(
+    { body: { results: [PAGE], has_more: true, next_cursor: 'c2' } },
+    { body: { results: [{ ...PAGE, id: 'p2' }], has_more: false } },
+  );
+  const rows = await makeAdapter(h, { projectProp: 'Project' }).listAssigned({
+    assigneeId: 'u1',
+    statusNames: ['In progress', 'In review'],
+    projectValues: ['Alpha'],
+  });
+  const call = h.calls[0]!;
+  assert.equal(call.method, 'POST');
+  assert.equal(call.url, 'https://api.notion.com/v1/data_sources/ds1/query');
+  assert.deepEqual(call.body.filter, {
+    and: [
+      { property: 'Assignee', people: { contains: 'u1' } },
+      { or: [
+        { property: 'Status', status: { equals: 'In progress' } },
+        { property: 'Status', status: { equals: 'In review' } },
+      ] },
+      { or: [{ property: 'Project', select: { equals: 'Alpha' } }] },
+    ],
+  });
+  assert.equal(rows.length, 2);
+  assert.equal(h.calls[1]!.body.start_cursor, 'c2');
+});
+
+test('listAssigned omits the status clause when no statusNames are given', async () => {
+  const h = harness({ body: { results: [], has_more: false } });
+  await makeAdapter(h).listAssigned({ assigneeId: 'u1' });
+  assert.deepEqual(h.calls[0]!.body.filter, { and: [{ property: 'Assignee', people: { contains: 'u1' } }] });
+});
+
+test('listAssigned throws (no request) when projectValues is given without a projectProp', async () => {
+  const h = harness();
+  await assert.rejects(makeAdapter(h).listAssigned({ assigneeId: 'u1', projectValues: ['Alpha'] }), /no projectProp is configured/);
+  assert.equal(h.calls.length, 0);
+});
+
+test('listAssigned on an unconfigured adapter throws before any request', async () => {
+  const h = harness();
+  const adapter = new NotionAdapter({ token: 't', dataSourceId: 'ds1', fetchImpl: h.fetchImpl });
+  await assert.rejects(adapter.listAssigned({ assigneeId: 'u1' }), /no status property configured/);
+  assert.equal(h.calls.length, 0);
+});
+
+test('comment POSTs /v1/comments with a page parent and rich text', async () => {
+  const h = harness({ body: { id: 'cmt1' } });
+  await makeAdapter(h).comment('p1', '🚧 Blocked: waiting on keys');
+  const call = h.calls[0]!;
+  assert.equal(call.method, 'POST');
+  assert.equal(call.url, 'https://api.notion.com/v1/comments');
+  assert.deepEqual(call.body, {
+    parent: { page_id: 'p1' },
+    rich_text: [{ type: 'text', text: { content: '🚧 Blocked: waiting on keys' } }],
+  });
+});
+
 // ── introspectStatuses() ────────────────────────────────────────────────────
 
 test('introspectStatuses maps options to their group category and detects unique_id', async () => {

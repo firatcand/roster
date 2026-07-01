@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type {
+  AssignedScope,
   ReadyScope,
   StatusOption,
   StatusSchema,
@@ -233,6 +234,39 @@ export class NotionAdapter implements TrackerAdapter {
     return out;
   }
 
+  async listAssigned(scope: AssignedScope): Promise<TaskSummary[]> {
+    if (scope.projectValues?.length && !this.projectProp) {
+      throw new NotionError(0, 'listAssigned received projectValues but no projectProp is configured — refusing to silently widen the query to all projects.');
+    }
+    const statusProp = this.requireStatusProp();
+    const assigneeProp = this.requireAssigneeProp();
+    const and: unknown[] = [{ property: assigneeProp, people: { contains: scope.assigneeId } }];
+    if (scope.statusNames?.length) {
+      and.push({ or: scope.statusNames.map((name) => ({ property: statusProp, status: { equals: name } })) });
+    }
+    if (scope.projectValues?.length && this.projectProp) {
+      const prop = this.projectProp;
+      and.push({ or: scope.projectValues.map((value) => ({ property: prop, select: { equals: value } })) });
+    }
+
+    const out: TaskSummary[] = [];
+    let cursor: string | undefined;
+    do {
+      const body: Record<string, unknown> = { filter: { and } };
+      if (cursor) body['start_cursor'] = cursor;
+      const page = querySchema.parse(
+        await this.request(`/v1/data_sources/${this.dataSourceId}/query`, {
+          method: 'POST',
+          body: JSON.stringify(body),
+        }),
+      );
+      for (const result of page.results) out.push(this.toSummary(result));
+      cursor = page.has_more ? (page.next_cursor ?? undefined) : undefined;
+      if (page.has_more && !cursor) break;
+    } while (cursor);
+    return out;
+  }
+
   async getTask(handle: string): Promise<Task> {
     this.requireStatusProp();
     this.requireAssigneeProp();
@@ -270,6 +304,16 @@ export class NotionAdapter implements TrackerAdapter {
     await this.request(`/v1/pages/${taskId}`, {
       method: 'PATCH',
       body: JSON.stringify({ properties: { [this.requireAssigneeProp()]: { people: userIds.map((id) => ({ id })) } } }),
+    });
+  }
+
+  // Post a comment on the task page. Notion comments carry no idempotency key,
+  // so a retry after a partial failure can duplicate — the verb layer documents
+  // this. Used to record a block reason on the shared board.
+  async comment(taskId: string, text: string): Promise<void> {
+    await this.request('/v1/comments', {
+      method: 'POST',
+      body: JSON.stringify({ parent: { page_id: taskId }, rich_text: [{ type: 'text', text: { content: text } }] }),
     });
   }
 

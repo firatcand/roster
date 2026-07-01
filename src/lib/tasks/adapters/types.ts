@@ -37,6 +37,16 @@ export interface ReadyScope {
   projectValues?: string[];
 }
 
+// Bounded query for a user's in-flight tasks. `statusNames` restricts to mapped
+// statuses (so reverse-mapping can never hit an unmapped status), and
+// `projectValues` honors the configured project filter. Both keep the fuzzy
+// selector pool + status report from pulling in out-of-scope rows.
+export interface AssignedScope {
+  assigneeId: string;
+  statusNames?: string[];
+  projectValues?: string[];
+}
+
 export interface StatusSchema {
   statuses: StatusOption[];
   hasUniqueId: boolean;
@@ -46,8 +56,10 @@ export interface StatusSchema {
 export interface TrackerAdapter {
   self(): Promise<TaskIdentity>;
   listReady(scope: ReadyScope): Promise<TaskSummary[]>;
+  listAssigned(scope: AssignedScope): Promise<TaskSummary[]>;
   getTask(handle: string): Promise<Task>;
   setStatus(taskId: string, statusName: string): Promise<void>;
   setAssignee(taskId: string, userId: string): Promise<void>;
+  comment(taskId: string, text: string): Promise<void>;
   introspectStatuses(): Promise<StatusSchema>;
 }
