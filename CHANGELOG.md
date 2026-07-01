@@ -6,7 +6,23 @@ Per-phase retrospectives live in [`docs/retros/`](docs/retros/) and carry the lo
 
 ## [Unreleased]
 
-_(empty — staging area for post-1.4.0 work)_
+_(empty — staging area for post-1.5.0 work)_
+
+## [1.5.0] — 2026-07-02
+
+Introduces **`roster task`** — an interactive, tracker-agnostic task state machine that drives discrete tasks to done on **your own issue board** (Notion v1). Interactive only: every claim is human-initiated; autonomous runs stay in schedules. No breaking changes. (ROS-147)
+
+### Added
+
+- **Canonical task state machine** — a pure, tracker-agnostic transition table (`ready → claimed → active → review → done`, with `blocked`/`cancelled` branches). Only `ready`/`active`/`done` must exist on your board; unmapped optional stages **collapse** (e.g. no Review status → `done` completes directly from Active, `submit` becomes a guided no-op). (ROS-148)
+- **Notion adapter behind a generic `TrackerAdapter` interface** — the only layer that touches Notion; Linear/GitHub can slot in later. Notion is the sole source of truth: every operation reads live state, computes the transition, writes back. Your identity derives from your own `NOTION_TOKEN` at runtime — never stored. (ROS-149)
+- **`roster task setup`** — introspects your board's status property and writes `roster/tracker.yaml`, mapping your status names onto the canonical lifecycle (`--map` to adjust, `--yes` to write, optional project filter for multi-project boards). (ROS-150)
+- **Task verbs** — `claim` (self-assign, idempotent), `start`, `submit`, `done`, `revise`, `block --reason` (reason posted as a board comment *before* any status write), `unblock`, `cancel`. Selectors: unique id (`TASK-12`), page id, or fuzzy title (ambiguity lists candidates). Illegal transitions error with the allowed verbs. (ROS-151)
+- **Status report + `/tasks` skill** — `roster task list` (claimable pool + your in-flight tasks; stable flat `--json`), `roster task status` (stage-grouped digest with a ⚠ needs-your-attention call-out), and the `/tasks` chat skill for Claude Code/Codex/Gemini: "what's ready?", "work on N", "I'm blocked", "send it for review", "mark it done" — all routed through the CLI state machine, never writing the board directly. (ROS-152)
+
+### Fixed
+
+- Codex `/roster-orchestrator` no longer false-aborts on a fresh workspace — the workspace-root guard is mode-aware during first-run init. (ROS-143)
 
 ## [1.4.0] — 2026-06-30
 
