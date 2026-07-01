@@ -317,3 +317,50 @@ test('request surfaces a malformed/invalid Notion response as a Zod parse error'
   const h = harness({ body: { unexpected: true } });
   await assert.rejects(makeAdapter(h).self());
 });
+
+// ── describeBoard() + unconfigured guards (ROS-150) ──────────────────────────
+
+const BOARD = {
+  properties: {
+    Name: { type: 'title' },
+    Status: {
+      type: 'status',
+      status: {
+        options: [{ id: 'o1', name: 'To do' }, { id: 'o2', name: 'Done' }],
+        groups: [{ id: 'g1', name: 'To-do', option_ids: ['o1'] }, { id: 'g2', name: 'Complete', option_ids: ['o2'] }],
+      },
+    },
+    Owner: { type: 'people' },
+    'Task ID': { type: 'unique_id', unique_id: { prefix: 'TASK' } },
+  },
+};
+
+test('describeBoard classifies status, people, and unique_id properties', async () => {
+  const h = harness({ body: BOARD });
+  const board = await makeAdapter(h).describeBoard();
+  assert.equal(h.calls[0]!.url, 'https://api.notion.com/v1/data_sources/ds1');
+  assert.deepEqual(board.statusProperties.map((s) => s.name), ['Status']);
+  assert.deepEqual(board.statusProperties[0]!.options, [
+    { name: 'To do', category: 'To-do' },
+    { name: 'Done', category: 'Complete' },
+  ]);
+  assert.deepEqual(board.assigneeProperties, ['Owner']);
+  assert.deepEqual(board.uniqueId, { property: 'Task ID', prefix: 'TASK' });
+});
+
+test('describeBoard works on an adapter with no status/assignee configured', async () => {
+  const h = harness({ body: BOARD });
+  const adapter = new NotionAdapter({ token: 't', dataSourceId: 'collection://ds1', fetchImpl: h.fetchImpl });
+  const board = await adapter.describeBoard();
+  assert.equal(board.statusProperties.length, 1);
+});
+
+test('unconfigured adapter throws a clear error on configured-only operations', async () => {
+  const h = harness();
+  const adapter = new NotionAdapter({ token: 't', dataSourceId: 'ds1', fetchImpl: h.fetchImpl });
+  await assert.rejects(adapter.listReady({ readyStatuses: ['To do'] }), /no status property configured/);
+  await assert.rejects(adapter.getTask('TASK-1'), /no status property configured/);
+  await assert.rejects(adapter.setStatus('p1', 'Done'), /no status property configured/);
+  await assert.rejects(adapter.setAssignee('p1', 'u1'), /no assignee property configured/);
+  assert.equal(h.calls.length, 0);
+});
