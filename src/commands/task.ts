@@ -352,8 +352,32 @@ function renderDigest(ctx: TaskContext, digest: TaskDigest): void {
   console.log('');
 }
 
-// `list` is the stable flat view (--json shape frozen since ROS-151);
-// `status` is the stage-grouped digest (--json adds groups + attention).
+// The exact --json payloads, extracted so tests can pin their top-level shapes:
+// `list` is the stable flat view (frozen since ROS-151); `status` adds groups +
+// attention; the single-task view carries `mine` alongside raw assignees.
+export function buildListPayload(ctx: TaskContext, ready: TaskSummary[], mine: TaskSummary[]) {
+  const { pool, inFlight } = composeReport(ctx, ready, mine);
+  return { ok: true, pool, in_flight: inFlight, self: ctx.self };
+}
+
+export function buildStatusPayload(ctx: TaskContext, ready: TaskSummary[], mine: TaskSummary[]) {
+  const d = composeDigest(ctx, ready, mine);
+  return { ok: true, pool: d.pool, in_flight: d.inFlight, groups: d.groups, attention: d.attention, self: ctx.self };
+}
+
+export function buildSingleTaskPayload(ctx: TaskContext, task: Task) {
+  const canonical = deriveCurrentState(ctx, task);
+  return {
+    ok: true,
+    handle: task.handle,
+    title: task.title,
+    status: task.status,
+    canonical,
+    assignees: task.assigneeIds,
+    mine: task.assigneeIds.includes(ctx.self.id),
+  };
+}
+
 // A selector renders the identical single-task view in both modes.
 async function executeTaskReport(argv: string[], mode: 'list' | 'status'): Promise<number> {
   const cwd = flagValue(argv, '--cwd') ?? process.cwd();
@@ -363,13 +387,13 @@ async function executeTaskReport(argv: string[], mode: 'list' | 'status'): Promi
 
   if (selector) {
     const task = await resolveSelector(ctx, selector);
-    const canonical = deriveCurrentState(ctx, task);
+    const payload = buildSingleTaskPayload(ctx, task);
     if (json) {
-      console.log(JSON.stringify({ ok: true, handle: task.handle, title: task.title, status: task.status, canonical, assignees: task.assigneeIds }, null, 2));
+      console.log(JSON.stringify(payload, null, 2));
     } else {
       console.log(`${chalk.bold(task.handle)}  ${task.title}`);
-      console.log(`  stage : ${chalk.cyan(canonical)}  ${chalk.dim(`(status: ${task.status})`)}`);
-      console.log(`  mine  : ${task.assigneeIds.includes(ctx.self.id) ? chalk.green('yes') : chalk.dim('no')}`);
+      console.log(`  stage : ${chalk.cyan(payload.canonical)}  ${chalk.dim(`(status: ${task.status})`)}`);
+      console.log(`  mine  : ${payload.mine ? chalk.green('yes') : chalk.dim('no')}`);
     }
     return EXIT_OK;
   }
@@ -382,7 +406,7 @@ async function executeTaskReport(argv: string[], mode: 'list' | 'status'): Promi
   if (mode === 'status') {
     const digest = composeDigest(ctx, ready, mine);
     if (json) {
-      console.log(JSON.stringify({ ok: true, pool: digest.pool, in_flight: digest.inFlight, groups: digest.groups, attention: digest.attention, self: ctx.self }, null, 2));
+      console.log(JSON.stringify(buildStatusPayload(ctx, ready, mine), null, 2));
     } else {
       renderDigest(ctx, digest);
     }
@@ -392,7 +416,7 @@ async function executeTaskReport(argv: string[], mode: 'list' | 'status'): Promi
   const { pool, inFlight } = composeReport(ctx, ready, mine);
 
   if (json) {
-    console.log(JSON.stringify({ ok: true, pool, in_flight: inFlight, self: ctx.self }, null, 2));
+    console.log(JSON.stringify(buildListPayload(ctx, ready, mine), null, 2));
     return EXIT_OK;
   }
 

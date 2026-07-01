@@ -13,7 +13,14 @@ import {
   resolveSelector,
   type TaskContext,
 } from '../src/lib/tasks/context.ts';
-import { applyVerb, composeDigest, composeReport } from '../src/commands/task.ts';
+import {
+  applyVerb,
+  buildListPayload,
+  buildSingleTaskPayload,
+  buildStatusPayload,
+  composeDigest,
+  composeReport,
+} from '../src/commands/task.ts';
 import { RosterError } from '../src/lib/errors.ts';
 import type { CanonicalState } from '../src/lib/tasks/machine.ts';
 import type {
@@ -301,6 +308,19 @@ test('composeDigest: dedup — a task in both ready(assigned) and mine appears o
   const d = composeDigest(ctx, [row], [row]);
   assert.equal(d.inFlight.length, 1);
   assert.deepEqual(d.groups.claimed.map((r) => r.handle), ['T-9']);
+});
+
+test('payload shapes: list --json stays flat, status --json adds exactly groups+attention, single-task carries mine', () => {
+  const ctx = makeCtx(MINIMAL, new FakeAdapter());
+  const ready: TaskSummary[] = [{ id: 'a', handle: 'T-1', title: 'pool', status: 'To do', assigneeIds: [] }];
+  const mine: TaskSummary[] = [{ id: 'c', handle: 'T-3', title: 'doing', status: 'Doing', assigneeIds: ['u1'] }];
+  assert.deepEqual(Object.keys(buildListPayload(ctx, ready, mine)), ['ok', 'pool', 'in_flight', 'self']);
+  assert.deepEqual(Object.keys(buildStatusPayload(ctx, ready, mine)), ['ok', 'pool', 'in_flight', 'groups', 'attention', 'self']);
+  const single = buildSingleTaskPayload(ctx, task({ id: 'c', handle: 'T-3', status: 'Doing', assigneeIds: ['u1'] }));
+  assert.deepEqual(Object.keys(single), ['ok', 'handle', 'title', 'status', 'canonical', 'assignees', 'mine']);
+  assert.equal(single.mine, true);
+  assert.equal(single.canonical, 'active');
+  assert.equal(buildSingleTaskPayload(ctx, task({ id: 'z', handle: 'T-4', status: 'Doing', assigneeIds: ['u2'] })).mine, false);
 });
 
 test('composeReport row shape is the stable flat API (ROS-151 pin)', () => {

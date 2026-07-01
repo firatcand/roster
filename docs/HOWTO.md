@@ -450,8 +450,10 @@ front door. Every claim is human-initiated: there is no autonomous pickup.
 1. Create an [internal Notion integration](https://www.notion.so/my-integrations) and
    copy its secret.
 2. Share your task board (the database) with that integration (`•••` → Connections).
-3. Export the secret as `NOTION_TOKEN` in the environment where you run `roster`
-   (workspace `/.env` via your secret manager — never commit it).
+3. Make the secret available as `NOTION_TOKEN` **in the process environment** where you
+   run `roster` — `roster task` reads `process.env.NOTION_TOKEN` and does not load
+   `/.env` files itself. Export it in your shell profile, or wrap each call with your
+   secret manager's runner (e.g. `infisical run -- roster task list`). Never commit it.
 
 Your Notion identity is derived from the token at runtime (`fetch self`) — it is never
 stored on disk.
