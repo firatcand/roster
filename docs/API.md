@@ -438,3 +438,25 @@ Neon; connection in Infisical, never `.env`). All verbs accept `--json`.
 Semantic-search embeddings are **off** by default (no paid API calls); enable with
 `roster brain config set embeddings.enabled true` (requires `OPENAI_API_KEY`). Exit
 codes: `0` ok, `1` error. See [HOWTO.md](HOWTO.md) §11 to set one up.
+
+## Tasks (`roster task <verb>`)
+
+Interactive task state machine on the user's own tracker board (Notion v1) —
+`ready → claimed → active → review → done` with `blocked`/`cancelled` branches; unmapped
+optional stages collapse. Requires `roster/tracker.yaml` (written by `task setup`) and
+`NOTION_TOKEN`. `/tasks` is the chat front door (see `skills/tasks/SKILL.md`).
+
+| Verb | Purpose |
+|------|---------|
+| `task setup --data-source <id> [--map state=Status,…] [--yes]` | Introspect the board, map statuses onto canonical states, write `roster/tracker.yaml`. |
+| `task list` | Claimable pool (unassigned Ready) + your in-flight tasks. `--json` is the **stable flat shape**: `{ok, pool, in_flight, self}`. |
+| `task status` | Stage digest. `--json` adds `groups` (`claimed`/`active`/`blocked`/`review`) and `attention` (rows with a `why`) alongside the flat keys. |
+| `task status <sel>` | One task's stage (`canonical`) + board status; `--json` includes `assignees` and a `mine` boolean. |
+| `task claim <sel>` | Self-assign (+ claimed status when mapped). Idempotent. |
+| `task start <sel>` · `submit <sel>` · `done <sel>` · `revise <sel>` | Advance the lifecycle; illegal transitions error with the allowed verbs. |
+| `task block <sel> --reason "<why>"` · `unblock <sel>` | Reason lands as a board comment BEFORE any status write; unmapped Blocked degrades to comment-only. |
+| `task cancel <sel>` | → cancelled when mapped; guided no-op otherwise. |
+
+Selectors: unique id (`TASK-12`), raw page id, or fuzzy title (ambiguity lists
+candidates). All verbs take `--json` and `--cwd`. Exit codes: `0` ok, `1` error. See
+[HOWTO.md](HOWTO.md) §13 to connect a board.

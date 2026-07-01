@@ -13,7 +13,14 @@ import {
   resolveSelector,
   type TaskContext,
 } from '../src/lib/tasks/context.ts';
-import { applyVerb, composeReport } from '../src/commands/task.ts';
+import {
+  applyVerb,
+  buildListPayload,
+  buildSingleTaskPayload,
+  buildStatusPayload,
+  composeDigest,
+  composeReport,
+} from '../src/commands/task.ts';
 import { RosterError } from '../src/lib/errors.ts';
 import type { CanonicalState } from '../src/lib/tasks/machine.ts';
 import type {
@@ -239,6 +246,92 @@ test('composeReport: assigned-to-me Ready surfaces under in-flight (claimed on a
   assert.equal(inFlight.length, 2);
   assert.equal(flight.get('T-2'), 'claimed'); // overlay: assigned Ready = mine
   assert.equal(flight.get('T-3'), 'active');
+});
+
+// ── composeDigest (ROS-152) ──────────────────────────────────────────────────
+
+test('composeDigest: full board — total partition by stage, attention = assigned/claimed/blocked', () => {
+  const ctx = makeCtx(FULL, new FakeAdapter());
+  const ready: TaskSummary[] = [
+    { id: 'a', handle: 'T-1', title: 'pool one', status: 'Ready', assigneeIds: [] },
+    { id: 'b', handle: 'T-2', title: 'assigned ready', status: 'Ready', assigneeIds: ['u1'] },
+  ];
+  const mine: TaskSummary[] = [
+    { id: 'c', handle: 'T-3', title: 'claimed', status: 'Claimed', assigneeIds: ['u1'] },
+    { id: 'd', handle: 'T-4', title: 'doing', status: 'In progress', assigneeIds: ['u1'] },
+    { id: 'e', handle: 'T-5', title: 'stuck', status: 'Blocked', assigneeIds: ['u1'] },
+    { id: 'f', handle: 'T-6', title: 'in review', status: 'In review', assigneeIds: ['u1'] },
+  ];
+  const d = composeDigest(ctx, ready, mine);
+  assert.deepEqual(d.pool.map((r) => r.handle), ['T-1']);
+  // T-2 derives canonical `ready` (claimed is mapped, so no overlay) but is mine —
+  // it buckets under claimed/assigned so the partition stays total.
+  assert.deepEqual(d.groups.claimed.map((r) => r.handle), ['T-2', 'T-3']);
+  assert.equal(d.groups.claimed[0]!.canonical, 'ready');
+  assert.deepEqual(d.groups.active.map((r) => r.handle), ['T-4']);
+  assert.deepEqual(d.groups.blocked.map((r) => r.handle), ['T-5']);
+  assert.deepEqual(d.groups.review.map((r) => r.handle), ['T-6']);
+  const grouped = Object.values(d.groups).reduce((n, g) => n + g.length, 0);
+  assert.equal(grouped, d.inFlight.length); // partition totality
+  assert.deepEqual(
+    d.attention.map((r) => [r.handle, r.why]),
+    [
+      ['T-2', 'assigned to you — not claimed'],
+      ['T-3', 'claimed — not started'],
+      ['T-5', 'blocked — see board comments'],
+    ],
+  );
+});
+
+test('composeDigest: minimal board — assigned-Ready overlays to claimed and lands in attention', () => {
+  const ctx = makeCtx(MINIMAL, new FakeAdapter());
+  const ready: TaskSummary[] = [
+    { id: 'a', handle: 'T-1', title: 'pool', status: 'To do', assigneeIds: [] },
+    { id: 'b', handle: 'T-2', title: 'mine', status: 'To do', assigneeIds: ['u1'] },
+  ];
+  const mine: TaskSummary[] = [{ id: 'c', handle: 'T-3', title: 'doing', status: 'Doing', assigneeIds: ['u1'] }];
+  const d = composeDigest(ctx, ready, mine);
+  assert.deepEqual(d.groups.claimed.map((r) => [r.handle, r.canonical]), [['T-2', 'claimed']]);
+  assert.deepEqual(d.groups.active.map((r) => r.handle), ['T-3']);
+  assert.deepEqual(d.groups.blocked, []);
+  assert.deepEqual(d.attention.map((r) => [r.handle, r.why]), [['T-2', 'claimed — not started']]);
+});
+
+test('composeDigest: empty board — every section empty, no attention', () => {
+  const d = composeDigest(makeCtx(FULL, new FakeAdapter()), [], []);
+  assert.deepEqual(d, { pool: [], inFlight: [], groups: { claimed: [], active: [], blocked: [], review: [] }, attention: [] });
+});
+
+test('composeDigest: dedup — a task in both ready(assigned) and mine appears once', () => {
+  const ctx = makeCtx(MINIMAL, new FakeAdapter());
+  const row: TaskSummary = { id: 'x', handle: 'T-9', title: 'dup', status: 'To do', assigneeIds: ['u1'] };
+  const d = composeDigest(ctx, [row], [row]);
+  assert.equal(d.inFlight.length, 1);
+  assert.deepEqual(d.groups.claimed.map((r) => r.handle), ['T-9']);
+});
+
+test('payload shapes: list --json stays flat, status --json adds exactly groups+attention, single-task carries mine', () => {
+  const ctx = makeCtx(MINIMAL, new FakeAdapter());
+  const ready: TaskSummary[] = [{ id: 'a', handle: 'T-1', title: 'pool', status: 'To do', assigneeIds: [] }];
+  const mine: TaskSummary[] = [{ id: 'c', handle: 'T-3', title: 'doing', status: 'Doing', assigneeIds: ['u1'] }];
+  assert.deepEqual(Object.keys(buildListPayload(ctx, ready, mine)), ['ok', 'pool', 'in_flight', 'self']);
+  assert.deepEqual(Object.keys(buildStatusPayload(ctx, ready, mine)), ['ok', 'pool', 'in_flight', 'groups', 'attention', 'self']);
+  const single = buildSingleTaskPayload(ctx, task({ id: 'c', handle: 'T-3', status: 'Doing', assigneeIds: ['u1'] }));
+  assert.deepEqual(Object.keys(single), ['ok', 'handle', 'title', 'status', 'canonical', 'assignees', 'mine']);
+  assert.equal(single.mine, true);
+  assert.equal(single.canonical, 'active');
+  assert.equal(buildSingleTaskPayload(ctx, task({ id: 'z', handle: 'T-4', status: 'Doing', assigneeIds: ['u2'] })).mine, false);
+});
+
+test('composeReport row shape is the stable flat API (ROS-151 pin)', () => {
+  const ctx = makeCtx(MINIMAL, new FakeAdapter());
+  const { pool, inFlight } = composeReport(
+    ctx,
+    [{ id: 'a', handle: 'T-1', title: 'pool one', status: 'To do', assigneeIds: [] }],
+    [{ id: 'c', handle: 'T-3', title: 'my active', status: 'Doing', assigneeIds: ['u1'] }],
+  );
+  assert.deepEqual(pool, [{ handle: 'T-1', title: 'pool one', status: 'To do', canonical: 'ready' }]);
+  assert.deepEqual(inFlight, [{ handle: 'T-3', title: 'my active', status: 'Doing', canonical: 'active' }]);
 });
 
 test('resolveSelector: fuzzy title unique / ambiguous / not-found', async () => {

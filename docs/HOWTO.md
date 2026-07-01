@@ -439,6 +439,76 @@ Or hand the same command to a managed schedule via `roster schedule` so failures
 
 ---
 
+## 13. Drive tasks on your tracker
+
+Roster can drive discrete tasks (claim → start → submit → done) on **your own issue
+board** — Notion in v1. The CLI owns the state machine; the `/tasks` skill is the chat
+front door. Every claim is human-initiated: there is no autonomous pickup.
+
+### Connect Notion
+
+1. Create an [internal Notion integration](https://www.notion.so/my-integrations) and
+   copy its secret.
+2. Share your task board (the database) with that integration (`•••` → Connections).
+3. Make the secret available as `NOTION_TOKEN` **in the process environment** where you
+   run `roster` — `roster task` reads `process.env.NOTION_TOKEN` and does not load
+   `/.env` files itself. Export it in your shell profile, or wrap each call with your
+   secret manager's runner (e.g. `infisical run -- roster task list`). Never commit it.
+
+Your Notion identity is derived from the token at runtime (`fetch self`) — it is never
+stored on disk.
+
+### Map the board
+
+```bash
+roster task setup --data-source <collection://…|uuid>
+```
+
+The wizard introspects the board's status property and suggests a mapping from your
+status names onto roster's canonical lifecycle
+(`ready → claimed → active → review → done`, with `blocked`/`cancelled` branches).
+Adjust with `--map ready=To do,active=Doing,done=Done`, then re-run with `--yes` to
+write `roster/tracker.yaml`. Only `ready`, `active`, and `done` are required — unmapped
+optional stages collapse (e.g. with no review status, `done` completes directly from
+active, and `submit` becomes a guided no-op).
+
+Multiple projects on one board? Set the optional project filter in `tracker.yaml` so
+list/status only see your rows.
+
+### Work the lifecycle
+
+```bash
+roster task list              # claimable pool + your in-flight tasks
+roster task status            # stage digest + ⚠ needs-your-attention
+roster task claim TASK-12     # self-assign (+ status, if claimed is mapped)
+roster task start TASK-12     # → active
+roster task block TASK-12 --reason "waiting on legal"   # comment first, then status
+roster task unblock TASK-12
+roster task submit TASK-12    # → review
+roster task done TASK-12      # → done
+```
+
+Selectors accept the board's unique id (`TASK-12`), a raw page id, or part of the
+title (fuzzy; ambiguity lists candidates instead of guessing). All commands take
+`--json` and `--cwd`.
+
+From chat, `/tasks` translates plain language ("what's ready?", "work on the landing
+page", "I'm blocked on copy", "send it for review", "status update") into these verbs —
+it never writes the board directly.
+
+### Multi-user boards
+
+One shared board, many rosters: each teammate runs roster with their **own**
+`NOTION_TOKEN`, so assigned-to-me and the claimable pool are scoped per person.
+Unassigned Ready tasks are the shared pool; `claim` self-assigns. A Ready task already
+assigned to you counts as yours (it shows under Claimed / assigned, not the pool).
+
+Caveats: `block` posts the reason as a board comment before any status write, so the
+reason survives even if the status change fails; on boards with **no Blocked status
+mapped**, the task stays Active after `block` — check board comments for context.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |

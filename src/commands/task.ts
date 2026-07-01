@@ -286,7 +286,100 @@ export function composeReport(
   return { pool, inFlight };
 }
 
-async function executeTaskStatus(argv: string[]): Promise<number> {
+export interface AttentionRow extends ReportRow {
+  why: string;
+}
+
+export interface TaskDigest {
+  pool: ReportRow[];
+  inFlight: ReportRow[];
+  groups: Record<'claimed' | 'active' | 'blocked' | 'review', ReportRow[]>;
+  attention: AttentionRow[];
+}
+
+// Group the flat report by stage and derive the needs-attention rows
+// (owner decision, ROS-152: claimed + blocked). A Ready task assigned to me on a
+// board WITH a mapped Claimed status derives canonical `ready` (no overlay), yet
+// composeReport files it under in-flight — it buckets with claimed/assigned work
+// so the groups stay a total partition of in_flight, keeping its honest
+// per-row `canonical`. Blocked tasks on boards with no Blocked status mapped stay
+// `active` (block degrades to a comment) and are NOT detectable here.
+export function composeDigest(ctx: TaskContext, ready: TaskSummary[], mine: TaskSummary[]): TaskDigest {
+  const { pool, inFlight } = composeReport(ctx, ready, mine);
+  const groups: TaskDigest['groups'] = { claimed: [], active: [], blocked: [], review: [] };
+  const attention: AttentionRow[] = [];
+  for (const row of inFlight) {
+    const bucket = row.canonical === 'ready' ? 'claimed' : row.canonical;
+    if (bucket === 'claimed' || bucket === 'active' || bucket === 'blocked' || bucket === 'review') {
+      groups[bucket].push(row);
+    }
+    if (row.canonical === 'ready') attention.push({ ...row, why: 'assigned to you — not claimed' });
+    else if (row.canonical === 'claimed') attention.push({ ...row, why: 'claimed — not started' });
+    else if (row.canonical === 'blocked') attention.push({ ...row, why: 'blocked — see board comments' });
+  }
+  return { pool, inFlight, groups, attention };
+}
+
+const DIGEST_SECTIONS: ReadonlyArray<{ key: keyof TaskDigest['groups']; label: string }> = [
+  { key: 'claimed', label: 'Claimed / assigned' },
+  { key: 'active', label: 'Active' },
+  { key: 'blocked', label: 'Blocked' },
+  { key: 'review', label: 'In review' },
+];
+
+function renderDigest(ctx: TaskContext, digest: TaskDigest): void {
+  console.log('');
+  console.log(chalk.bold('roster tasks — status') + chalk.dim(`  (you: ${ctx.self.name ?? ctx.self.email ?? ctx.self.id})`));
+  console.log(chalk.bold('\n  Ready pool (unassigned)'));
+  if (digest.pool.length === 0) console.log(chalk.dim('    (none)'));
+  for (const r of digest.pool) console.log(`    ${r.handle.padEnd(10)} ${r.title}`);
+  if (digest.inFlight.length === 0) {
+    console.log(chalk.dim('\n  (nothing in flight)'));
+  } else {
+    for (const { key, label } of DIGEST_SECTIONS) {
+      const rows = digest.groups[key];
+      if (rows.length === 0) continue;
+      console.log(chalk.bold(`\n  ${label}`));
+      for (const r of rows) console.log(`    ${r.handle.padEnd(10)} ${r.title}  ${chalk.dim(`(${r.status})`)}`);
+    }
+  }
+  if (digest.attention.length === 0) {
+    console.log(chalk.dim('\n  ✓ nothing needs your attention'));
+  } else {
+    console.log(chalk.yellow.bold('\n  ⚠ Needs your attention'));
+    for (const r of digest.attention) console.log(`    ${r.handle.padEnd(10)} ${r.title}  ${chalk.dim(`— ${r.why}`)}`);
+  }
+  console.log('');
+}
+
+// The exact --json payloads, extracted so tests can pin their top-level shapes:
+// `list` is the stable flat view (frozen since ROS-151); `status` adds groups +
+// attention; the single-task view carries `mine` alongside raw assignees.
+export function buildListPayload(ctx: TaskContext, ready: TaskSummary[], mine: TaskSummary[]) {
+  const { pool, inFlight } = composeReport(ctx, ready, mine);
+  return { ok: true, pool, in_flight: inFlight, self: ctx.self };
+}
+
+export function buildStatusPayload(ctx: TaskContext, ready: TaskSummary[], mine: TaskSummary[]) {
+  const d = composeDigest(ctx, ready, mine);
+  return { ok: true, pool: d.pool, in_flight: d.inFlight, groups: d.groups, attention: d.attention, self: ctx.self };
+}
+
+export function buildSingleTaskPayload(ctx: TaskContext, task: Task) {
+  const canonical = deriveCurrentState(ctx, task);
+  return {
+    ok: true,
+    handle: task.handle,
+    title: task.title,
+    status: task.status,
+    canonical,
+    assignees: task.assigneeIds,
+    mine: task.assigneeIds.includes(ctx.self.id),
+  };
+}
+
+// A selector renders the identical single-task view in both modes.
+async function executeTaskReport(argv: string[], mode: 'list' | 'status'): Promise<number> {
   const cwd = flagValue(argv, '--cwd') ?? process.cwd();
   const json = hasFlag(argv, '--json');
   const [selector] = positionals(argv, ['--cwd']);
@@ -294,13 +387,13 @@ async function executeTaskStatus(argv: string[]): Promise<number> {
 
   if (selector) {
     const task = await resolveSelector(ctx, selector);
-    const canonical = deriveCurrentState(ctx, task);
+    const payload = buildSingleTaskPayload(ctx, task);
     if (json) {
-      console.log(JSON.stringify({ ok: true, handle: task.handle, title: task.title, status: task.status, canonical, assignees: task.assigneeIds }, null, 2));
+      console.log(JSON.stringify(payload, null, 2));
     } else {
       console.log(`${chalk.bold(task.handle)}  ${task.title}`);
-      console.log(`  stage : ${chalk.cyan(canonical)}  ${chalk.dim(`(status: ${task.status})`)}`);
-      console.log(`  mine  : ${task.assigneeIds.includes(ctx.self.id) ? chalk.green('yes') : chalk.dim('no')}`);
+      console.log(`  stage : ${chalk.cyan(payload.canonical)}  ${chalk.dim(`(status: ${task.status})`)}`);
+      console.log(`  mine  : ${payload.mine ? chalk.green('yes') : chalk.dim('no')}`);
     }
     return EXIT_OK;
   }
@@ -309,10 +402,21 @@ async function executeTaskStatus(argv: string[]): Promise<number> {
     ctx.adapter.listReady(readyScope(ctx)),
     ctx.adapter.listAssigned(assignedScope(ctx)),
   ]);
+
+  if (mode === 'status') {
+    const digest = composeDigest(ctx, ready, mine);
+    if (json) {
+      console.log(JSON.stringify(buildStatusPayload(ctx, ready, mine), null, 2));
+    } else {
+      renderDigest(ctx, digest);
+    }
+    return EXIT_OK;
+  }
+
   const { pool, inFlight } = composeReport(ctx, ready, mine);
 
   if (json) {
-    console.log(JSON.stringify({ ok: true, pool, in_flight: inFlight, self: ctx.self }, null, 2));
+    console.log(JSON.stringify(buildListPayload(ctx, ready, mine), null, 2));
     return EXIT_OK;
   }
 
@@ -333,7 +437,7 @@ const VERBS: readonly VerbName[] = ['claim', 'start', 'block', 'unblock', 'submi
 export async function runTask(argv: string[]): Promise<number> {
   const sub = argv[0];
   if (sub === 'setup') return executeTaskSetup(argv.slice(1));
-  if (sub === 'list' || sub === 'status') return executeTaskStatus(argv.slice(1));
+  if (sub === 'list' || sub === 'status') return executeTaskReport(argv.slice(1), sub);
   if (sub && (VERBS as readonly string[]).includes(sub)) {
     return executeTaskVerb(sub as VerbName, argv.slice(1));
   }
