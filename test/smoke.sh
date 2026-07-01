@@ -112,6 +112,7 @@ for expected in \
   package/templates/scaffold/founder-skills.yaml.example \
   package/templates/scaffold/brain/RESOLVER.md \
   package/skills/brain/SKILL.md \
+  package/skills/tasks/SKILL.md \
   package/agents/brain-organizer.md
 do
   assert_contains "$TARBALL_LIST" "^$expected\$" "tarball contains $expected"
@@ -133,6 +134,7 @@ HOME="$FAKE_HOME" ROSTER_CLAUDE_HOME="$CLAUDE_HOME" "$ROSTER_BIN" install --yes 
 assert "-f \"$CLAUDE_HOME/skills/chief-of-staff/SKILL.md\"" "chief-of-staff SKILL.md installed"
 assert "-f \"$CLAUDE_HOME/skills/inbox/SKILL.md\"" "inbox SKILL.md installed (ROS-132 — /inbox)"
 assert "-f \"$CLAUDE_HOME/skills/brain/SKILL.md\"" "brain SKILL.md installed (ROS-139 — /brain)"
+assert "-f \"$CLAUDE_HOME/skills/tasks/SKILL.md\"" "tasks SKILL.md installed (ROS-152 — /tasks)"
 assert "-f \"$CLAUDE_HOME/agents/lesson-drafter.md\"" "lesson-drafter.md installed (claude md-copy)"
 assert "-f \"$CLAUDE_HOME/agents/brain-organizer.md\"" "brain-organizer.md installed (ROS-145 — claude md-copy)"
 
@@ -148,6 +150,7 @@ assert "! -f \"$CODEX_HOME/agents/lesson-drafter.md\"" "codex does NOT copy raw 
 assert "-f \"$CODEX_HOME/agents/brain-organizer.toml\"" "codex emits brain-organizer.toml (ROS-145)"
 assert "-f \"$CODEX_HOME/agents/brain-organizer.persona.md\"" "codex emits brain-organizer.persona.md sidecar (ROS-145)"
 assert "! -f \"$CODEX_HOME/agents/brain-organizer.md\"" "codex does NOT copy raw brain-organizer.md (ROS-145)"
+assert "-f \"$SMOKE_DIR/.agents/skills/tasks/SKILL.md\"" "codex installs tasks skill into .agents/skills/ (ROS-152)"
 assert_contains "$CODEX_HOME/agents/lesson-drafter.toml" "^developer_instructions = \"\"\"$" "toml uses developer_instructions key"
 assert_contains "$CODEX_HOME/agents/lesson-drafter.toml" "openai/codex#19399" "toml header references upstream issue"
 # Schema contract: legacy field names must NOT appear at the start of any line.
@@ -160,6 +163,7 @@ fi
 # 4c. Gemini install — skills under extensions/, agents copied as .md (ROS-145)
 HOME="$FAKE_HOME" ROSTER_GEMINI_HOME="$GEMINI_HOME" "$ROSTER_BIN" install --tool gemini --yes --scope user --silent
 assert "-f \"$GEMINI_HOME/extensions/brain/SKILL.md\"" "gemini installs brain skill into extensions/"
+assert "-f \"$GEMINI_HOME/extensions/tasks/SKILL.md\"" "gemini installs tasks skill into extensions/ (ROS-152)"
 assert "-f \"$GEMINI_HOME/agents/lesson-drafter.md\"" "gemini emits lesson-drafter.md (md-copy)"
 assert "-f \"$GEMINI_HOME/agents/brain-organizer.md\"" "gemini emits brain-organizer.md (ROS-145 — md-copy)"
 
