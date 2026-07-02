@@ -59,6 +59,7 @@ import {
   executeBrainQuery,
   executeBrainConfig,
   executeBrainReindex,
+  executeBrainGc,
 } from '../commands/brain.ts';
 import {
   EXIT_OK,
@@ -146,6 +147,7 @@ function printHelp(version: string): void {
     `  roster brain query "<text>"  ${chalk.dim('Hybrid semantic + keyword + graph search (--kind, --limit, --json)')}`,
     `  roster brain config get|set  ${chalk.dim('Read/set brain settings (embeddings.enabled, provider, model, search knobs)')}`,
     `  roster brain reindex [--yes]  ${chalk.dim('Backfill embeddings for active chunks missing/stale vectors (--since, --model; admin URL)')}`,
+    `  roster brain gc [--yes]      ${chalk.dim('Prune superseded fact/chunk versions older than retention (default 2y; --older-than; admin URL)')}`,
     `  roster migrate from-agent-team <dir>  ${chalk.dim('Migrate a legacy agent-team workspace into roster')}`,
     `  roster migrate codex-skills  ${chalk.dim('Copy legacy .codex/skills into Codex-native .agents/skills')}`,
     '',
@@ -743,6 +745,9 @@ async function runBrain(args: readonly string[]): Promise<number> {
   }
   if (parsed.subcommand === 'reindex') {
     return await executeBrainReindex({ json: parsed.json, since: parsed.since, model: parsed.model, yes: parsed.yes });
+  }
+  if (parsed.subcommand === 'gc') {
+    return await executeBrainGc({ json: parsed.json, olderThan: parsed.olderThan, yes: parsed.yes });
   }
   if (parsed.subcommand === 'table') {
     if (parsed.op === 'create') {

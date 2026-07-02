@@ -15,7 +15,8 @@ type BrainSubcommand =
   | 'import'
   | 'query'
   | 'config'
-  | 'reindex';
+  | 'reindex'
+  | 'gc';
 
 const BRAIN_SUBCOMMANDS: ReadonlySet<BrainSubcommand> = new Set<BrainSubcommand>([
   'init',
@@ -33,6 +34,7 @@ const BRAIN_SUBCOMMANDS: ReadonlySet<BrainSubcommand> = new Set<BrainSubcommand>
   'query',
   'config',
   'reindex',
+  'gc',
 ]);
 
 const SUBCOMMAND_LIST = Array.from(BRAIN_SUBCOMMANDS).join(' | ');
@@ -95,6 +97,7 @@ export type ParsedBrainArgs =
   | { kind: 'ok'; subcommand: 'config'; json: boolean; op: 'get'; key?: string }
   | { kind: 'ok'; subcommand: 'config'; json: boolean; op: 'set'; key: string; value: string }
   | { kind: 'ok'; subcommand: 'reindex'; json: boolean; all: boolean; since?: string; model?: string; yes: boolean }
+  | { kind: 'ok'; subcommand: 'gc'; json: boolean; olderThan?: string; yes: boolean }
   | { kind: 'err'; message: string };
 
 function isBrainSubcommand(value: string): value is BrainSubcommand {
@@ -159,6 +162,7 @@ export function parseBrainArgs(args: readonly string[]): ParsedBrainArgs {
   if (first === 'query') return parseQuery(rest);
   if (first === 'config') return parseConfig(rest);
   if (first === 'reindex') return parseReindex(rest);
+  if (first === 'gc') return parseGc(rest);
   return parseSql(rest);
 }
 
@@ -184,6 +188,22 @@ function parseReindex(rest: readonly string[]): ParsedBrainArgs {
     return err(`'brain reindex': --all and --since are mutually exclusive`);
   }
   return { kind: 'ok', subcommand: 'reindex', json, all, since, model, yes };
+}
+
+function parseGc(rest: readonly string[]): ParsedBrainArgs {
+  let json = false;
+  let yes = false;
+  let olderThan: string | undefined;
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i]!;
+    if (arg === '--json') json = true;
+    else if (arg === '--yes' || arg === '-y') yes = true;
+    else if (arg === '--older-than') {
+      const v = readValue(rest, i, 'gc', '--older-than'); if ('kind' in v) return v; olderThan = v.value; i = v.next;
+    } else if (arg.startsWith('-')) return err(`unknown flag for 'brain gc': ${arg}`);
+    else return err(`'brain gc' takes no positional arguments`);
+  }
+  return { kind: 'ok', subcommand: 'gc', json, olderThan, yes };
 }
 
 function parseQuery(rest: readonly string[]): ParsedBrainArgs {
