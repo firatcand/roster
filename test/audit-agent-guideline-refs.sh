@@ -52,7 +52,18 @@ cleanup() {
     exit 1
   fi
 }
-trap cleanup EXIT INT TERM
+on_signal() {
+  # Separate from the EXIT trap so an interrupted run cannot double-print
+  # the cleanup/summary block (bash runs the EXIT trap after a signal trap
+  # unless it is cleared first).
+  trap - EXIT
+  rm -rf "$TMPDIR_ROOT" 2>/dev/null || true
+  echo ""
+  echo "===> audit-agent-guideline-refs INTERRUPTED"
+  exit 130
+}
+trap cleanup EXIT
+trap on_signal INT TERM
 
 pass() { printf "  \033[32m✓\033[0m %s\n" "$1"; PASS_COUNT=$((PASS_COUNT + 1)); }
 fail() { printf "  \033[31m✗\033[0m %s\n" "$1"; FAIL_COUNT=$((FAIL_COUNT + 1)); }
@@ -261,6 +272,11 @@ if grep -qF "agent runtime will fail to load this ref" "$REPORT"; then
 else
   fail "warning missing runtime-consequence text"
 fi
+if grep -qF "[gtm/test-agent/config.yaml] base schema valid (guideline_refs warnings below)" "$REPORT"; then
+  pass "passed line downgraded to 'base schema valid' when ref warnings exist"
+else
+  fail "passed line still claims full schema validity despite ref warnings"
+fi
 assert_no_failures "$REPORT" "dangling ref"
 
 # -----------------------------------------------------------------------------
@@ -390,3 +406,39 @@ else
   fail "relative ref not warned"
 fi
 assert_no_failures "$REPORT" "mirror semantics"
+
+# -----------------------------------------------------------------------------
+# Test 6: real symlink escaping the workspace root — the ref is lexically
+# inside the workspace, but realpath resolves to an existing file outside it,
+# exercising the post-realpath containment check.
+# -----------------------------------------------------------------------------
+echo ""
+echo "===> Test 6: symlink escaping the workspace root"
+WS="$TMPDIR_ROOT/t6"
+make_workspace "$WS" json
+OUTSIDE_TARGET="$TMPDIR_ROOT/outside-target.md"
+printf 'outside the workspace\n' > "$OUTSIDE_TARGET"
+ln -s "$OUTSIDE_TARGET" "$WS/guidelines/link-out.md"
+cat > "$WS/gtm/test-agent/config.yaml" <<'JSON'
+{
+  "agent": "gtm/test-agent",
+  "plans_dir": "./plans/",
+  "guideline_refs": {
+    "symlink_out": "/guidelines/link-out.md"
+  },
+  "tools": {}
+}
+JSON
+if run_audit "$WS" "$AUDIT_PP"; then
+  pass "exit 0 despite symlink-escaping ref"
+else
+  fail "exit non-zero on symlink escape (stderr: $(cat "$WS/audit.stderr"))"
+fi
+REPORT="$(report_path "$WS")"
+[ -n "$REPORT" ] && [ -f "$REPORT" ] || { fail "report file missing"; REPORT=/dev/null; }
+if grep -qF "guideline_refs.symlink_out" "$REPORT" && grep -qF "resolves via symlink outside the workspace root" "$REPORT"; then
+  pass "symlink escape warned via realpath containment check"
+else
+  fail "symlink escape not warned (report: $(cat "$REPORT"))"
+fi
+assert_no_failures "$REPORT" "symlink escape"

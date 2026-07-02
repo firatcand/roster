@@ -29,7 +29,7 @@
     "smoke": "bash test/smoke.sh",
     "e2e:schedule": "bash test/e2e-schedule.sh",
     "perf": "bash test/perf.sh",
-    "test:scaffold-scripts": "bash test/new-agent-slash-only.sh; s1=$?; bash test/audit-agent-guideline-refs.sh; s2=$?; exit $((s1 || s2))",
+    "test:scaffold-scripts": "bash test/new-agent-slash-only.sh; s1=$?; bash test/audit-agent-guideline-refs.sh; s2=$?; if [ $s1 -ne 0 ]; then exit $s1; fi; exit $s2",
     "probe:claude-url": "bash scripts/probe-claude-url-scheme.sh"
   },
   "keywords": [

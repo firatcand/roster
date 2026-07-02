@@ -202,13 +202,17 @@ for key, ref in (gr or {}).items():
         print(f"{label}: '{ref}' is not a regular file (add a trailing '/' if you meant a directory) — agent runtime will fail to load this ref")
 PYEOF
   if [ $CFG_RC -eq 0 ]; then
-    PASSED+=("[$FN/$AGENT/config.yaml] valid (schema)")
     if [ -s "$CFG_OUT_FILE" ]; then
+      # Not 'valid (schema)': the runtime loader (agent-config-schema) would
+      # reject these refs, so full-pass phrasing would overstate the check.
+      PASSED+=("[$FN/$AGENT/config.yaml] base schema valid (guideline_refs warnings below)")
       while IFS= read -r REF_WARN; do
         [ -z "$REF_WARN" ] && continue
         WARNINGS+=("[$FN/$AGENT/config.yaml] $REF_WARN")
       done < "$CFG_OUT_FILE"
       WARNINGS+=("  → Suggested fix: create the referenced file under guidelines/ or fix the ref in config.yaml — see conventions.md § 'Adding a new guideline file'")
+    else
+      PASSED+=("[$FN/$AGENT/config.yaml] valid (schema)")
     fi
   elif [ $CFG_RC -eq 2 ]; then
     PASSED+=("[$FN/$AGENT/config.yaml] present (schema not validated, pyyaml missing — guideline_refs not checked; install PyYAML)")
