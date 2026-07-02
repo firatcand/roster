@@ -6,6 +6,11 @@ export const RUNTIME_ROLE = 'roster_brain_rw';
 export type EnsureRoleResult = {
   created: boolean;
   password: string | null;
+  // True when the creator's inbound membership (the PG16+/managed-Postgres
+  // auto-grant) could not be revoked — stock-PG16 CREATEROLE admins can't
+  // remove a bootstrap-granted membership. Doctor stays red until a superuser
+  // revokes it; callers surface the remedial SQL.
+  creatorGrantRemains: boolean;
 };
 
 function generatePassword(): string {
@@ -38,6 +43,33 @@ async function registerRuntimeRole(client: pg.PoolClient, role: string): Promise
   );
 }
 
+// PG16+/managed Postgres (Neon): CREATE ROLE by a non-superuser auto-grants the
+// new role back to the creator WITH ADMIN OPTION. That inbound membership trips
+// doctor's no-inbound-members isolation invariant, so strip it (ROS-154).
+// Idempotent — revoking a non-membership is a warning-level no-op. Deliberate
+// one-way door on Neon: the admin forfeits SQL-level ALTER/DROP over the role
+// (no superuser exists to restore admin option); only platform controls remain.
+// Scope: only CURRENT_USER's membership — an inbound grant from any OTHER role
+// is a real violation and stays visible to doctor.
+//
+// The REVOKE can itself silently no-op: stock PG16 records the auto-grant with
+// the BOOTSTRAP superuser as grantor, a non-superuser creator may neither
+// revoke it directly (warning, not error) nor via GRANTED BY (permission
+// denied) — both verified empirically on PG 16. Neon's admin CAN revoke
+// (verified live on Neon PG 17.10). So verify after revoking and report the
+// truth instead of trusting the REVOKE.
+async function stripCreatorGrant(client: pg.PoolClient, role: string): Promise<boolean> {
+  await client.query(`REVOKE ${qIdent(role)} FROM CURRENT_USER`);
+  const remains = await client.query(
+    `SELECT 1 FROM pg_auth_members am
+       JOIN pg_roles r ON r.oid = am.roleid
+       JOIN pg_roles m ON m.oid = am.member
+      WHERE r.rolname = $1 AND m.rolname = current_user`,
+    [ident(role)],
+  );
+  return (remains.rowCount ?? 0) > 0;
+}
+
 export async function ensureRuntimeRole(
   client: pg.PoolClient,
   roleName: string = RUNTIME_ROLE,
@@ -46,7 +78,9 @@ export async function ensureRuntimeRole(
   if (await roleExists(client, role)) {
     await registerRuntimeRole(client, role);
     await applyGrants(client, role);
-    return { created: false, password: null };
+    // Re-init path strips too, so a pre-fix Neon brain self-heals on next init.
+    const creatorGrantRemains = await stripCreatorGrant(client, role);
+    return { created: false, password: null, creatorGrantRemains };
   }
   const password = generatePassword();
   const quotedPassword = "'" + password.replace(/'/g, "''") + "'";
@@ -56,7 +90,8 @@ export async function ensureRuntimeRole(
   );
   await registerRuntimeRole(client, role);
   await applyGrants(client, role);
-  return { created: true, password };
+  const creatorGrantRemains = await stripCreatorGrant(client, role);
+  return { created: true, password, creatorGrantRemains };
 }
 
 async function brainTableNames(client: pg.PoolClient): Promise<string[]> {
@@ -118,7 +153,18 @@ export async function applyGrants(
     `SELECT 1 AS one FROM pg_extension WHERE extname = 'pg_trgm'`,
   );
   if ((hasTrgm.rowCount ?? 0) > 0) {
-    await client.query(`ALTER ROLE ${qrole} SET pg_trgm.similarity_threshold = '0.3'`);
+    // ROS-154: after stripCreatorGrant the connecting admin no longer holds
+    // ADMIN OPTION on the role, so this ALTER would fail on re-init. The value
+    // is pinned on create (while admin is still held) and never changes — skip
+    // when pg_roles.rolconfig already stores it (exact form verified on Neon).
+    const pinned = await client.query(
+      `SELECT 1 FROM pg_roles
+        WHERE rolname = $1 AND rolconfig @> ARRAY['pg_trgm.similarity_threshold=0.3']`,
+      [ident(roleName)],
+    );
+    if ((pinned.rowCount ?? 0) === 0) {
+      await client.query(`ALTER ROLE ${qrole} SET pg_trgm.similarity_threshold = '0.3'`);
+    }
   }
 
   // Narrow brain_meta access (ROS-138): the runtime role may READ the non-secret

@@ -44,6 +44,9 @@ export async function executeBrainInit(opts: BrainInitOptions): Promise<number> 
     const migration = await runMigrations(pool);
     const role = await withBrainClient(pool, (client) => ensureRuntimeRole(client, roleName));
     const runtimeUrl = role.password ? buildRuntimeUrl(adminUrl, role.password, roleName) : null;
+    const adminRole = role.creatorGrantRemains
+      ? (await pool.query<{ u: string }>(`SELECT quote_ident(current_user) AS u`)).rows[0]!.u
+      : null;
 
     if (opts.json) {
       console.log(
@@ -55,6 +58,7 @@ export async function executeBrainInit(opts: BrainInitOptions): Promise<number> 
             roleCreated: role.created,
             embeddings: opts.embeddings,
             runtimeUrl: runtimeUrl,
+            creatorGrantRemains: role.creatorGrantRemains,
           },
           null,
           2,
@@ -65,6 +69,11 @@ export async function executeBrainInit(opts: BrainInitOptions): Promise<number> 
       console.log(chalk.bold('roster brain init'));
       console.log(`  ${chalk.green('✓')} migrations applied: ${migration.applied.length}, up-to-date: ${migration.skipped.length}`);
       console.log(`  ${chalk.green('✓')} runtime role ${role.created ? 'created' : 'already present'}`);
+      if (role.creatorGrantRemains) {
+        console.log(`  ${chalk.yellow('⚠')} could not revoke the creator's membership in ${roleName} (stock PG16`);
+        console.log(`    records it as bootstrap-granted). 'brain doctor' will stay red on no-inbound-members`);
+        console.log(`    until a superuser runs: ${chalk.bold(`REVOKE ${roleName} FROM ${adminRole};`)}`);
+      }
       if (runtimeUrl) {
         console.log('');
         console.log(chalk.yellow('  Runtime connection string (shown once — store it now):'));
