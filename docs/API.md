@@ -483,6 +483,9 @@ overwrite each other's manifest. A second run always refuses — locks are never
 automatically. Under 15 minutes old, the refusal names the holder's pid and age and says
 to wait; past 15 minutes (a messaging threshold, nothing more) it says the run likely
 crashed and to verify no `roster migrate` is running, then delete the lock file and
-retry. Release is owner-token-guarded: a finishing run only removes a lock it wrote, so
-it can never delete a successor's lock after manual intervention. See the [HOWTO
+retry. Release is owner-token-guarded: a finishing run only removes a lock whose content still
+matches the token it wrote, which protects a successor's lock in every scenario the
+documented remedy can produce (the token check reads then unlinks, so it is not atomic —
+but the window is only reachable by deleting and replacing the lock while the original
+run is still live, outside the remedy). See the [HOWTO
 Troubleshooting table](HOWTO.md#troubleshooting) for the refusal messages.
