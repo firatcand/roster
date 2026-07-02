@@ -265,19 +265,46 @@ test('gc drains eligible rows across multiple batches', opts, async () => {
   }
 });
 
-test('snapshot eligibility: non-monotonic recorded_at cannot widen the delete set across batches', opts, async () => {
+test('non-monotonic recorded_at cannot widen the delete set — within a run or across reruns', opts, async () => {
   const fx = await provision();
   try {
     const e = await insertEntity(fx.pool, 'nm');
     const id1 = await insertFact(fx.pool, e, 'k', 'v1', '5 years');
-    await insertFact(fx.pool, e, 'k', 'v2', '1 day'); // recent ts, mid id (the one eligible row)
+    const id2 = await insertFact(fx.pool, e, 'k', 'v2', '1 day'); // recent ts, mid id
     const id3 = await insertFact(fx.pool, e, 'k', 'v3', '3 years'); // highest id, old ts
-    // id1's immediate superseder (id2) is 1 day old -> id1 must survive. A
-    // between-batch recompute would re-attribute id1's supersession to id3 (3y)
-    // once id2 is deleted and wrongly widen the delete set (Codex round-1).
-    const deleted = await runGc(fx.pool, { interval: '2 years', batchSize: 1 });
-    assert.equal(deleted.facts, 1);
-    assert.deepEqual(await factIds(fx.pool), [id1, id3]);
+    // id1's immediate superseder (id2) is 1 day old -> id1 must survive. id2 is
+    // itself 1 day old -> the own-age arm protects it even though its successor
+    // (id3) carries an old timestamp. So NOTHING here is deletable — and that
+    // must hold on a rerun too: deleting id2 would re-anchor id1 to id3 and
+    // wrongly widen the set on the next run (Codex rounds 1-2).
+    for (let run = 0; run < 2; run++) {
+      const deleted = await runGc(fx.pool, { interval: '2 years', batchSize: 1 });
+      assert.equal(deleted.facts, 0, `run ${run + 1} must delete nothing`);
+    }
+    assert.deepEqual(await factIds(fx.pool), [id1, id2, id3]);
+  } finally {
+    await fx.drop();
+  }
+});
+
+test('non-monotonic mount timestamps cannot over-delete document chunks, incl. reruns', opts, async () => {
+  const fx = await provision();
+  try {
+    // m1 (5y) superseded by m2 whose ts is RECENT (1d) even though a later
+    // mount m3 carries an old ts (3y). m1's actual superseder is m2 -> m1's
+    // chunks survive; m2's chunks are 1 day old -> own-age arm protects them.
+    const m1 = await insertMount(fx.pool, 'nm.md', '5 years', ['nm-old']);
+    const m2 = await insertMount(fx.pool, 'nm.md', '1 day', ['nm-mid']);
+    const m3 = await insertMount(fx.pool, 'nm.md', '3 years', ['nm-new']);
+    for (let run = 0; run < 2; run++) {
+      const deleted = await runGc(fx.pool, { interval: '2 years' });
+      assert.equal(deleted.documents, 0, `run ${run + 1} must delete nothing`);
+    }
+    const left = await fx.pool.query<{ id: number }>(`SELECT id FROM brain.documents ORDER BY id`);
+    assert.deepEqual(
+      left.rows.map((r) => Number(r.id)),
+      [...m1.chunkIds, ...m2.chunkIds, ...m3.chunkIds],
+    );
   } finally {
     await fx.drop();
   }

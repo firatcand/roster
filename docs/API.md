@@ -443,7 +443,7 @@ Neon; connection in Infisical, never `.env`). All verbs accept `--json`.
 | `brain config get [key]` · `brain config set <key> <value>` | Read/write non-secret settings (`embeddings.enabled\|provider\|model`, `search.rrf_k\|graph_hops`, `gc.retention`). |
 | `brain reindex [--all\|--since <ts>] [--model m] [--yes]` | Backfill embeddings for active chunks with missing/stale vectors (admin; previews the count and requires `--yes` to spend; batched + resumable). |
 | `brain export [--out <dir>] [--format jsonl\|sql]` · `brain import <dir>` | Portable backup / restore into a fresh brain. |
-| `brain gc [--older-than <N>d\|<N>mo\|<N>y] [--yes]` | Prune superseded fact/chunk **versions** whose replacement is older than the retention window (default `730d`; precedence `--older-than` > `gc.retention` config > default). Admin-only — refuses a runtime URL; previews per-table counts and requires `--yes` to delete; batched + resumable. Never touches current versions, events, edges, or the merge-map. |
+| `brain gc [--older-than <N>d\|<N>mo\|<N>y] [--yes]` | Prune superseded fact/chunk **versions** once both the version and its replacement are older than the retention window (default `730d`; precedence `--older-than` > `gc.retention` config > default). Admin-only — refuses a runtime URL; previews per-table counts and requires `--yes` to delete; batched + resumable. Never touches current versions, events, edges, or the merge-map. |
 
 Semantic-search embeddings are **off** by default (no paid API calls); enable with
 `roster brain config set embeddings.enabled true` (requires `OPENAI_API_KEY`). Exit

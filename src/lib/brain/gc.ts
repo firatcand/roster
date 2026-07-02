@@ -26,28 +26,40 @@ export type GcReport = {
   deleted: GcCounts;
 };
 
-// Age is measured from the moment a row became superseded (the superseding
-// row's/mount's recorded_at), not from the row's own recorded_at — a 3-year-old
-// fact replaced yesterday stays recoverable for the full retention window.
+// A row is eligible only when BOTH it and its IMMEDIATE replacement (next
+// version by id / next with-chunks mount by id) are older than the retention
+// window. The replacement-age arm gives the recoverability guarantee (a
+// 3-year-old fact replaced yesterday survives); the own-age arm makes
+// eligibility stable across runs: a deleted row was necessarily old, so a
+// predecessor's anchor condition was already satisfied through it, and a
+// recent row can never be deleted, so a recent anchor never disappears —
+// re-ranking after deletions (or an interrupted run) can never widen the set
+// even under non-monotonic recorded_at (Codex rounds 1-2).
 const ELIGIBLE_SQL: Record<GcTable, string> = {
   facts: `
     WITH ranked AS (
-      SELECT id, LEAD(recorded_at) OVER (PARTITION BY entity_id, key ORDER BY id) AS superseded_at
+      SELECT id, recorded_at,
+             LEAD(recorded_at) OVER (PARTITION BY entity_id, key ORDER BY id) AS superseded_at
         FROM brain.facts
     )
     SELECT id FROM ranked
-     WHERE superseded_at IS NOT NULL AND superseded_at < now() - $1::interval`,
+     WHERE superseded_at IS NOT NULL
+       AND superseded_at < now() - $1::interval
+       AND recorded_at < now() - $1::interval`,
   documents: `
     SELECT d.id
       FROM brain.documents d
       JOIN LATERAL (
-        SELECT min(m.recorded_at) AS superseded_at
+        SELECT m.recorded_at AS superseded_at
           FROM brain.mounts m
          WHERE m.source_path = d.source_path
            AND m.id > d.mount_id
            AND EXISTS (SELECT 1 FROM brain.documents dm WHERE dm.mount_id = m.id)
+         ORDER BY m.id
+         LIMIT 1
       ) s ON true
-     WHERE s.superseded_at IS NOT NULL AND s.superseded_at < now() - $1::interval`,
+     WHERE s.superseded_at < now() - $1::interval
+       AND d.recorded_at < now() - $1::interval`,
 };
 
 const DURATION_RE = /^(\d+)(d|mo|y)$/;
