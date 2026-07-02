@@ -18,15 +18,31 @@ export interface RefResolver {
   latest(source: string): Promise<string>;
 }
 
+const LS_REMOTE_TIMEOUT_MS = 30_000;
+
 export const realRefResolver: RefResolver = {
   async latest(source) {
     const { owner, repo } = parseSource(source);
     const url = `https://github.com/${owner}/${repo}.git`;
-    const { stdout } = await execFileAsync(
-      'git',
-      ['ls-remote', '--tags', '--refs', '--sort=-v:refname', url],
-      { encoding: 'utf8' },
-    );
+    let stdout: string;
+    try {
+      ({ stdout } = await execFileAsync(
+        'git',
+        ['ls-remote', '--tags', '--refs', '--sort=-v:refname', url],
+        { encoding: 'utf8', timeout: LS_REMOTE_TIMEOUT_MS },
+      ));
+    } catch (err) {
+      // execFile's timeout kills the child (SIGTERM) and rejects with killed:true.
+      if ((err as { killed?: boolean }).killed) {
+        throw new RosterError({
+          header: `${chalk.red.bold('roster:')} tag resolution timed out`,
+          body: `  \`git ls-remote\` against ${url} gave no answer within ${LS_REMOTE_TIMEOUT_MS / 1000}s.`,
+          remedy: `  Check network/GitHub reachability and re-run \`roster skills update --latest\`.`,
+          exitCode: EXIT_ERROR,
+        });
+      }
+      throw err;
+    }
     const first = stdout.split('\n').find((l) => l.includes('refs/tags/'));
     if (!first) {
       throw new RosterError({

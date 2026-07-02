@@ -90,7 +90,7 @@ Using 1Password or Infisical? Compose them with the `.env` model via the recipes
 | `roster upgrade` | Refresh scaffold files to the installed roster; edits become `<file>.new`, never clobbered |
 | `roster doctor` | Audit installation; exits non-zero on drift |
 | `roster skills sync` | Install [founder-skills](https://github.com/firatcand/founder-skills) declared in `founder-skills.yaml` (project-local, ref-pinned) |
-| `roster skills update [--latest]` | Re-sync to the lockfile, or bump pinned refs to newest tags |
+| `roster skills update [--latest]` | Re-sync declared skills from the manifest (the lockfile records the result); `--latest` bumps pinned refs to the newest **git tag** on the source repo |
 | `roster schedule validate` | Validate every `roster/<function>/schedules.yaml` |
 | `roster schedule install` | Install a schedule into your host tool's native scheduler |
 | `roster review [function]` | Review unread decisions (HITL): `--json` lists; `--approve`/`--reject <id\|path>` apply headlessly; bare TTY = interactive walker. `/inbox` is the chat front door. |
@@ -150,7 +150,7 @@ skills:
     ref: v0.9.0            # per-skill override
 ```
 
-`roster skills sync` (also run automatically by `roster install` at project scope) installs each declared skill into `.claude/skills/` (Claude Code) and `.agents/skills/` (Codex) — **never globally** — pinned to its exact ref and materialized with `--copy`. A `founder-skills.lock` records the resolved ref + content hash so re-syncs are reproducible. The manifest is the source of truth: drop a skill and the next sync **prunes** it (roster only ever removes skills it installed). `roster skills update --latest` bumps refs to newest tags; `roster doctor` flags any manifest ↔ lock ↔ installed drift and exits non-zero. No manifest → roster installs zero founder skills.
+`roster skills sync` (also run automatically by `roster install` at project scope) installs each declared skill into `.claude/skills/` (Claude Code) and `.agents/skills/` (Codex) — **never globally** — pinned to its exact ref and materialized with `--copy`. A `founder-skills.lock` records the resolved ref + content hash so re-syncs are reproducible. The manifest is the source of truth: drop a skill and the next sync **prunes** it (roster only ever removes skills it installed). `roster skills update --latest` resolves the newest **git tag** on the source repo (via `git ls-remote --tags`) and rewrites every pinned ref to it — [`firatcand/founder-skills`](https://github.com/firatcand/founder-skills) publishes semver tags (`v1.0.0`+). Branch-pinned manifests (e.g. `ref: main`) keep syncing fine, but `--latest` requires the source repo to have tags and fails loud when there are none. `roster doctor` flags any manifest ↔ lock ↔ installed drift and exits non-zero. No manifest → roster installs zero founder skills.
 
 > roster wraps the existing `npx skills` installer — it does not fetch or vendor skills itself, and never bundles them into its own npm tarball. Gemini is deferred for v1 (Claude + Codex supported). Codex skills land in `.agents/skills/` per the `skills` CLI and Codex-native discovery.
 
