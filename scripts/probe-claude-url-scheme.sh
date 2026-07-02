@@ -3,7 +3,7 @@
 # Tracks ROS-57. ADR-0001 § Action Items #11. Cadence: first Mon monthly + per release.
 #
 # Exit codes:
-#   0  no new routes (claude://cowork/shared-artifact remains the only literal)
+#   0  no schedule-creation routes (non-schedule literals are recorded, not flagged)
 #   1  NEW ROUTE DETECTED — see stdout banner; file a follow-up ticket
 #   2  environment problem (Claude Desktop missing, non-macOS, etc.)
 #
@@ -117,7 +117,8 @@ probe_open_behaviour() {
 
 detect_new_routes() {
   local literals="$1"
-  # Today's baseline: only claude://cowork/shared-artifact should appear.
+  # Known non-schedule literals (2026-07-02 baseline): cowork/shared-artifact,
+  # claude.ai/mcp-auth-callback/sdk, resume — recorded in the report, never flagged.
   # Anything matching schedule|routine|task is the signal we're watching for.
   if grep -Eq 'claude://(schedule|routine|task)' "${literals}" 2>/dev/null; then
     return 1
@@ -180,9 +181,9 @@ Next steps:
 EOF
   else
     cat <<EOF
-No schedule-creation route found. \`claude://cowork/shared-artifact\` (or equivalent Cowork-only literal) remains the only \`claude://*\` route registered. Confirms Spike β finding — UI hand-off remains the only viable Claude schedule install path until [anthropics/claude-code#41364](https://github.com/anthropics/claude-code/issues/41364) ships.
+No schedule-creation route found. Non-schedule \`claude://*\` literals (see §2 above) are recorded without triggering follow-up — the promotion signal is a literal starting \`claude://schedule\`, \`claude://routine\`, or \`claude://task\`. Confirms Spike β's scheduling conclusion — UI hand-off remains the only viable Claude schedule install path until [anthropics/claude-code#41364](https://github.com/anthropics/claude-code/issues/41364) ships.
 
-Next probe due: first Monday of next month.
+Next probe due: next Claude Desktop release or the first Monday of next month, whichever comes first.
 EOF
   fi
 }
@@ -204,7 +205,7 @@ main() {
 
   local result
   if detect_new_routes "${literals}"; then
-    result="No new routes (claude://cowork/shared-artifact only)"
+    result="No schedule-creation routes (non-schedule literals recorded)"
   else
     result="NEW ROUTE DETECTED"
   fi

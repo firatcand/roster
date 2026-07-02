@@ -101,7 +101,7 @@ When Anthropic ships [#41364](https://github.com/anthropics/claude-code/issues/4
 
 ### Re-check protocol for `claude://` URL scheme
 
-Spike β (2026-05-15) confirmed `claude://` today routes only `cowork/shared-artifact` — no schedule-creation deep-link. If Anthropic adds `claude://schedule/...` (or `claude://routine/...`, `claude://task/...`), Roster should promote it from "future investigation" to a first-class install path: lighter than UI hand-off, faster than waiting on [#41364](https://github.com/anthropics/claude-code/issues/41364).
+Spike β (2026-05-15) found `claude://` routed only `cowork/shared-artifact`; the latest probe (2026-07-02, Claude Desktop 1.15962.1) adds two non-schedule literals (`claude://claude.ai/mcp-auth-callback/sdk`, `claude://resume`) — still **no schedule-creation deep-link**, which is the only criterion that matters here: non-schedule routes get recorded in the probe artifact without follow-up. If Anthropic adds `claude://schedule/...` (or `claude://routine/...`, `claude://task/...`), Roster should promote it from "future investigation" to a first-class install path: lighter than UI hand-off, faster than waiting on [#41364](https://github.com/anthropics/claude-code/issues/41364).
 
 **Probe script:** `scripts/probe-claude-url-scheme.sh` (macOS-only; not shipped in the npm tarball — maintainer tool).
 
@@ -115,15 +115,15 @@ pnpm probe:claude-url
 bash scripts/probe-claude-url-scheme.sh
 ```
 
-The script performs three checks (Info.plist `CFBundleURLSchemes`, asar grep for `claude://[a-zA-Z0-9_/.-]+` literals, behaviour probes via `open -g`), prints a paste-ready Markdown report to stdout, and writes a dated artifact under `docs/probes/claude-url-scheme/<YYYY-MM-DD>.md`. Exit codes: `0` no new routes, `1` new route detected (the script prints a loud banner — see below), `2` environment problem.
+The script performs three checks (Info.plist `CFBundleURLSchemes`, asar grep for `claude://[a-zA-Z0-9_/.-]+` literals, behaviour probes via `open -g`), prints a paste-ready Markdown report to stdout, and writes a dated artifact under `docs/probes/claude-url-scheme/<YYYY-MM-DD>.md`. Exit codes: `0` no schedule-creation routes (new non-schedule literals are recorded in the artifact, not flagged), `1` schedule-creation route detected — a literal starting `claude://schedule`, `claude://routine`, or `claude://task` (the script prints a loud banner — see below), `2` environment problem.
 
-**When the script exits 1** (`NEW ROUTE DETECTED`):
+**When the script exits 1** (schedule-creation route detected):
 
 1. File a follow-up Linear ticket under Phase 2.5 to promote the route to a first-class install path in `roster schedule install --tool claude`.
 2. Link the follow-up from [ROS-57](https://linear.app/firatdogan/issue/ROS-57) and update [ADR-0001 Action Item #11](adr/0001-scheduling-architecture.md#action-items).
 3. Close ROS-57 referencing the follow-up.
 
-**When the script exits 0**: paste the Markdown report into the latest comment on [ROS-57](https://linear.app/firatdogan/issue/ROS-57) with `Next probe due: <first Mon of next month>`. ROS-57 stays open — it *is* the recurring tracker.
+**When the script exits 0**: paste the Markdown report into the latest comment on [ROS-57](https://linear.app/firatdogan/issue/ROS-57) with `Next probe due: next Claude Desktop release or the first Monday of next month, whichever comes first`. ROS-57 stays open — it *is* the recurring tracker.
 
 Probe history lives in [`docs/probes/claude-url-scheme/`](probes/claude-url-scheme/).
 
