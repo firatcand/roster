@@ -115,7 +115,7 @@ pnpm probe:claude-url
 bash scripts/probe-claude-url-scheme.sh
 ```
 
-The script performs three checks (Info.plist `CFBundleURLSchemes`, asar grep for `claude://[a-zA-Z0-9_/.-]+` literals, behaviour probes via `open -g`), prints a paste-ready Markdown report to stdout, and writes a dated artifact under `docs/probes/claude-url-scheme/<YYYY-MM-DD>.md`. Exit codes: `0` no schedule-creation routes (new non-schedule literals are recorded in the artifact, not flagged), `1` schedule-creation route detected — a literal starting `claude://schedule|routine|task` (the script prints a loud banner — see below), `2` environment problem.
+The script performs three checks (Info.plist `CFBundleURLSchemes`, asar grep for `claude://[a-zA-Z0-9_/.-]+` literals, behaviour probes via `open -g`), prints a paste-ready Markdown report to stdout, and writes a dated artifact under `docs/probes/claude-url-scheme/<YYYY-MM-DD>.md`. Exit codes: `0` no schedule-creation routes (new non-schedule literals are recorded in the artifact, not flagged), `1` schedule-creation route detected — a literal starting `claude://schedule`, `claude://routine`, or `claude://task` (the script prints a loud banner — see below), `2` environment problem.
 
 **When the script exits 1** (schedule-creation route detected):
 
@@ -123,7 +123,7 @@ The script performs three checks (Info.plist `CFBundleURLSchemes`, asar grep for
 2. Link the follow-up from [ROS-57](https://linear.app/firatdogan/issue/ROS-57) and update [ADR-0001 Action Item #11](adr/0001-scheduling-architecture.md#action-items).
 3. Close ROS-57 referencing the follow-up.
 
-**When the script exits 0**: paste the Markdown report into the latest comment on [ROS-57](https://linear.app/firatdogan/issue/ROS-57) with `Next probe due: <first Mon of next month>`. ROS-57 stays open — it *is* the recurring tracker.
+**When the script exits 0**: paste the Markdown report into the latest comment on [ROS-57](https://linear.app/firatdogan/issue/ROS-57) with `Next probe due: next Claude Desktop release or the first Monday of next month, whichever comes first`. ROS-57 stays open — it *is* the recurring tracker.
 
 Probe history lives in [`docs/probes/claude-url-scheme/`](probes/claude-url-scheme/).
 
