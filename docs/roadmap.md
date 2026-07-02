@@ -4,6 +4,10 @@ Public view of what's shipped, what's deferred, and what's next. Detailed task t
 
 ## Released
 
+### v1.6.0 — brain hardening — 2026-07-02
+
+The append-only brain gets its one sanctioned deleter and a clean first-run story. **`roster brain gc`** (admin-only, preview-by-default) prunes superseded fact versions and re-mounted chunks once both the version and its replacement are older than the retention window (default 2y, `gc.retention` config key) — current versions and read-time results are invariant by construction; events/edges are never touched. `brain init` now strips the PG16+/managed-Postgres creator auto-grant so **fresh Neon brains pass `brain doctor` out of the box** (existing brains self-heal on the next init). Rolls up `roster skills update --latest` (founder-skills semver tags), the doctor expert-route drift guard, and the `migrate` manifest file lock. Tracked under ROS-153, ROS-154, ROS-126, ROS-129, ROS-63, ROS-144. Full changelog: [CHANGELOG.md](../CHANGELOG.md#160--2026-07-02). Retro: [v1.6-brain-hardening.md](retros/v1.6-brain-hardening.md).
+
 ### v1.5.0 — roster tasks — 2026-07-02
 
 Interactive, tracker-agnostic **task state machine** on the user's own issue board — Notion v1 behind a generic `TrackerAdapter`. A canonical lifecycle (`ready → claimed → active → review → done`, `blocked`/`cancelled` branches) maps onto your status names via `roster task setup` → `roster/tracker.yaml`; unmapped optional stages collapse. Verbs (`claim`/`start`/`submit`/`done`/`revise`/`block --reason`/`unblock`/`cancel`) + `list`/`status` reports with a needs-your-attention digest, and the `/tasks` chat skill as the cross-tool front door. Multi-user: one shared board, per-user identity from each user's own token. Interactive only — no autonomous pickup. Tracked under ROS-147 (148–152). Full changelog: [CHANGELOG.md](../CHANGELOG.md#150--2026-07-02). Retro: [v1.5-tasks.md](retros/v1.5-tasks.md).
@@ -73,10 +77,7 @@ Initial public release. Retro: [phase-1.md](retros/phase-1.md). Tool detection l
 
 ## Deferred
 
-Currently in the Linear backlog, both Low priority and not pickup-eligible under the "defer internal hardening pre-launch" rule. Will be reconsidered after the v0.4.0 launch settles.
-
-- [ROS-63](https://linear.app/firatdogan/issue/ROS-63) — `migrate`: file-lock or CAS for manifest writes (TOCTOU window, only matters if two `roster migrate` runs race against each other on the same workspace).
-- [ROS-57](https://linear.app/firatdogan/issue/ROS-57) — periodic re-check of the `claude://` URL scheme for a schedule-creation deep-link (passive watch on Claude Desktop releases; spike already filed in [anthropics/claude-code#41364](https://github.com/anthropics/claude-code/issues/41364)).
+- [ROS-57](https://linear.app/firatdogan/issue/ROS-57) — periodic re-check of the `claude://` URL scheme for a schedule-creation deep-link (passive watch on Claude Desktop releases; spike already filed in [anthropics/claude-code#41364](https://github.com/anthropics/claude-code/issues/41364)). Recurring by design — never closes; last probed 2026-07-02.
 
 ## Out of scope
 
