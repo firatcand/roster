@@ -67,6 +67,10 @@ if [ ! -d "$ROOT/guidelines" ]; then
   REPO_FAILURES+=("[guidelines/] missing — workspace substrate dir required")
 else
   REPO_PASSED+=("[guidelines/] present")
+  # Required guideline files — mirrors the "Required: Yes" rows of
+  # conventions.md § "Workspace guidelines" and its "Adding a new guideline
+  # file" promotion checklist. Audit-enforced warning tier, not a hard gate.
+  # promoted guideline files: append here
   for f in voice.md messaging.md brand-book.md asset-links.md; do
     if [ ! -f "$ROOT/guidelines/$f" ]; then
       REPO_WARNINGS+=("[guidelines/$f] missing — required substrate file")

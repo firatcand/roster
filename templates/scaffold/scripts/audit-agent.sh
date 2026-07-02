@@ -122,7 +122,11 @@ if [ ! -f "$AGENT_DIR/config.yaml" ]; then
   FAILURES+=("  → Suggested fix: add config.yaml at agent root with at least 'agent: $FN/$AGENT' and 'plans_dir: ./plans/'")
 elif command -v python3 >/dev/null 2>&1; then
   CFG_RC=0
-  CFG_MSG="$(AGENT_EXPECT="$FN/$AGENT" CFG_PATH="$AGENT_DIR/config.yaml" python3 - <<'PYEOF' 2>&1
+  # Output via temp files, not $(...) command substitution: bash 3.2 (macOS)
+  # cannot parse a heredoc containing single quotes inside $(...).
+  CFG_OUT_FILE="$(mktemp)"
+  CFG_ERR_FILE="$(mktemp)"
+  AGENT_EXPECT="$FN/$AGENT" CFG_PATH="$AGENT_DIR/config.yaml" WS_ROOT="$ROOT" python3 - <<'PYEOF' > "$CFG_OUT_FILE" 2> "$CFG_ERR_FILE" || CFG_RC=$?
 import os, sys
 try:
     import yaml
@@ -131,6 +135,7 @@ except ImportError:
     sys.exit(2)
 expect = os.environ["AGENT_EXPECT"]
 path = os.environ["CFG_PATH"]
+root = os.path.realpath(os.environ["WS_ROOT"])
 with open(path) as f:
     try:
         doc = yaml.safe_load(f)
@@ -155,16 +160,64 @@ if tools is not None and not isinstance(tools, dict):
 if errs:
     sys.stderr.write("; ".join(errs))
     sys.exit(1)
+
+# guideline_refs existence check — WARN-only (stdout, one line per ref; exit
+# stays 0). Mirrors the runtime loader's semantics (roster
+# src/lib/agent-config-schema.ts): refs are workspace-root-relative, literal
+# absolute fs prefixes are rejected, the resolved path must stay inside the
+# workspace root, and a trailing '/' means directory. The runtime loader
+# hard-rejects these at dispatch — this audit warn is early guidance.
+FORBIDDEN = ("/Users/", "/home/", "/etc/", "/var/", "/tmp/", "/opt/")
+
+def inside_root(p):
+    rel = os.path.relpath(p, root)
+    return rel == "." or not (rel == ".." or rel.startswith(".." + os.sep))
+
+for key, ref in (gr or {}).items():
+    label = f"guideline_refs.{key}"
+    if not isinstance(ref, str) or not ref:
+        print(f"{label}: value is not a non-empty string — runtime loader will reject this ref")
+        continue
+    if any(ref.startswith(p) for p in FORBIDDEN):
+        print(f"{label}: '{ref}' is a literal absolute fs path — runtime loader will reject this ref (use workspace-root-relative refs like /guidelines/<name>.md)")
+        continue
+    if not ref.startswith("/"):
+        print(f"{label}: '{ref}' must start with '/' (workspace-root-relative) — runtime loader will reject this ref")
+        continue
+    wants_dir = ref.endswith("/")
+    resolved = os.path.abspath(os.path.join(root, ref.lstrip("/")))
+    if not inside_root(resolved):
+        print(f"{label}: '{ref}' escapes outside the workspace root — agent runtime will fail to load this ref")
+        continue
+    real = os.path.realpath(resolved)
+    if not os.path.exists(real):
+        print(f"{label}: '{ref}' resolves to {resolved} which does not exist — agent runtime will fail to load this ref")
+        continue
+    if not inside_root(real):
+        print(f"{label}: '{ref}' resolves via symlink outside the workspace root — agent runtime will fail to load this ref")
+        continue
+    if wants_dir and not os.path.isdir(real):
+        print(f"{label}: '{ref}' ends with '/' but is not a directory — agent runtime will fail to load this ref")
+    elif not wants_dir and not os.path.isfile(real):
+        print(f"{label}: '{ref}' is not a regular file (add a trailing '/' if you meant a directory) — agent runtime will fail to load this ref")
 PYEOF
-)" || CFG_RC=$?
   if [ $CFG_RC -eq 0 ]; then
     PASSED+=("[$FN/$AGENT/config.yaml] valid (schema)")
+    if [ -s "$CFG_OUT_FILE" ]; then
+      while IFS= read -r REF_WARN; do
+        [ -z "$REF_WARN" ] && continue
+        WARNINGS+=("[$FN/$AGENT/config.yaml] $REF_WARN")
+      done < "$CFG_OUT_FILE"
+      WARNINGS+=("  → Suggested fix: create the referenced file under guidelines/ or fix the ref in config.yaml — see conventions.md § 'Adding a new guideline file'")
+    fi
   elif [ $CFG_RC -eq 2 ]; then
-    PASSED+=("[$FN/$AGENT/config.yaml] present (schema not validated, pyyaml missing)")
+    PASSED+=("[$FN/$AGENT/config.yaml] present (schema not validated, pyyaml missing — guideline_refs not checked; install PyYAML)")
   else
+    CFG_MSG="$(cat "$CFG_ERR_FILE" 2>/dev/null)"
     FAILURES+=("[$FN/$AGENT/config.yaml] $CFG_MSG")
     FAILURES+=("  → Suggested fix: open the file and ensure it is a single YAML mapping with 'agent: $FN/$AGENT', 'plans_dir', a 'guideline_refs:' mapping, and a 'tools:' mapping (may be empty)")
   fi
+  rm -f "$CFG_OUT_FILE" "$CFG_ERR_FILE"
 else
   PASSED+=("[$FN/$AGENT/config.yaml] present (schema not validated, python3 missing)")
 fi

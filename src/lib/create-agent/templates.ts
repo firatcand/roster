@@ -192,6 +192,10 @@ guideline_refs:
   # do_and_dont: /guidelines/do-and-dont.md
   # compliance: /guidelines/compliance.md
   # competitors: /guidelines/competitors.md
+  # ...or a guideline file you authored (project-local tier), e.g.:
+  # channel_playbook: /guidelines/channel-playbook.md
+  # To make one canonical for every future agent, follow the promotion
+  # checklist in conventions.md § "Adding a new guideline file".
 
 # Tool bindings. Each tool entry names the env var, required flag, and a
 # short description. Env vars themselves live in workspace /.env (or are

@@ -126,6 +126,8 @@ This is the substrate every agent reads. Spend an hour here before running anyth
 
 You don't need every file complete on day one — most agents look up the fields they need and report what's missing. But `voice.md` and at least one ICP file should be real before you run an outbound agent.
 
+**Adding your own guideline file:** create `guidelines/<name>.md` and reference it from each agent that needs it via `config.yaml` `guideline_refs:` — that's the whole project-local tier. To promote it to workspace-canonical (audited, and optionally a default ref for every future agent), follow the short checklist in your workspace's `conventions.md` § "Adding a new guideline file".
+
 ---
 
 ## 5. Workspace secrets — `/.env`
