@@ -116,6 +116,21 @@ test('hostile route text is control-escaped in warnings (text + JSON carry the s
   });
 });
 
+test('hostile directory name is control-escaped in file + message (sibling-gate parity)', () => {
+  withWorkspace((cwd) => {
+    writeFileSync(join(cwd, 'founder-skills.yaml'), 'skills:\n  - pricing\n');
+    writeExpert(cwd, '\u001b[31mevil-dir\u001b[0m', ['bogus-skill']);
+    const r = auditExpertRoutes(cwd);
+    assert.equal(r.status, 'checked');
+    if (r.status === 'checked') {
+      assert.equal(r.warnings.length, 1);
+      assert.equal(r.warnings[0]!.file, '\\x1b[31mevil-dir\\x1b[0m/EXPERT.md');
+      assert.ok(!r.warnings[0]!.file.includes('\u001b'), 'file must carry no raw ESC byte');
+      assert.ok(!r.warnings[0]!.message.includes('\u001b'), 'message must carry no raw ESC byte');
+    }
+  });
+});
+
 test('sanitizeRouteForDisplay: escapes ANSI + newline, truncates, passes kebab through', () => {
   assert.equal(
     sanitizeRouteForDisplay('\u001b[31mevil\u001b[0m\nnext-line'),
