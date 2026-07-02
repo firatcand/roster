@@ -102,8 +102,14 @@ function assertFullChain(cwd: string, calls: AddSpec[], tag: string): void {
     assert.deepEqual([...call.tools].sort(), ['claude', 'codex']);
   }
 
-  assert.ok(existsSync(join(cwd, '.claude', 'skills', 'pricing', 'SKILL.md')));
-  assert.ok(existsSync(join(cwd, '.agents', 'skills', 'sales-skill', 'SKILL.md')));
+  for (const skill of ['pricing', 'sales-skill']) {
+    for (const toolDir of ['.claude', '.agents']) {
+      assert.ok(
+        existsSync(join(cwd, toolDir, 'skills', skill, 'SKILL.md')),
+        `${skill} must be materialized under ${toolDir}/skills`,
+      );
+    }
+  }
 
   const lock = parseYaml(readFileSync(join(cwd, 'founder-skills.lock'), 'utf8')) as {
     source: string;
@@ -150,8 +156,6 @@ test('LIVE: realRefResolver resolves a v* tag for founder-skills', networkGate, 
 });
 
 test('LIVE: --latest with the real resolver bumps the full chain to the newest tag', networkGate, async () => {
-  const expected = await realRefResolver.latest(SOURCE);
-  assert.match(expected, /^v/);
   await withWorkspace(async (cwd) => {
     writeManifest(cwd);
     const { installer, calls } = makeFakeInstaller();
@@ -166,6 +170,13 @@ test('LIVE: --latest with the real resolver bumps the full chain to the newest t
       assert.deepEqual([...r.tools].sort(), ['claude', 'codex']);
       assert.deepEqual(r.installed.sort(), ['pricing', 'sales-skill']);
     }
-    assertFullChain(cwd, calls, expected);
+    // Single resolution chain: read the tag updateFounderSkills itself resolved
+    // back from the rewritten manifest — a second ls-remote could race a tag
+    // pushed mid-test.
+    const manifest = parseYaml(readFileSync(join(cwd, 'founder-skills.yaml'), 'utf8')) as {
+      ref: string;
+    };
+    assert.match(manifest.ref, /^v\d+\.\d+\.\d+$/, `expected a semver tag, got '${manifest.ref}'`);
+    assertFullChain(cwd, calls, manifest.ref);
   });
 });

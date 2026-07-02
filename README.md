@@ -90,7 +90,7 @@ Using 1Password or Infisical? Compose them with the `.env` model via the recipes
 | `roster upgrade` | Refresh scaffold files to the installed roster; edits become `<file>.new`, never clobbered |
 | `roster doctor` | Audit installation; exits non-zero on drift |
 | `roster skills sync` | Install [founder-skills](https://github.com/firatcand/founder-skills) declared in `founder-skills.yaml` (project-local, ref-pinned) |
-| `roster skills update [--latest]` | Re-sync to the lockfile; `--latest` bumps pinned refs to the newest **git tag** on the source repo |
+| `roster skills update [--latest]` | Re-sync declared skills from the manifest (the lockfile records the result); `--latest` bumps pinned refs to the newest **git tag** on the source repo |
 | `roster schedule validate` | Validate every `roster/<function>/schedules.yaml` |
 | `roster schedule install` | Install a schedule into your host tool's native scheduler |
 | `roster review [function]` | Review unread decisions (HITL): `--json` lists; `--approve`/`--reject <id\|path>` apply headlessly; bare TTY = interactive walker. `/inbox` is the chat front door. |

@@ -129,7 +129,7 @@ function printHelp(version: string): void {
     `  roster schedule remove NAME  ${chalk.dim('Remove a schedule (strips crontab block if --via cron)')}`,
     `  roster schedule estimate-usage  ${chalk.dim('Estimate plan-message consumption per schedule')}`,
     `  roster skills sync           ${chalk.dim('Install founder-skills declared in founder-skills.yaml (project-local)')}`,
-    `  roster skills update [--latest]  ${chalk.dim('Re-sync to the lockfile, or bump pinned refs to newest tags')}`,
+    `  roster skills update [--latest]  ${chalk.dim('Re-sync from the manifest (lock records result), or bump pinned refs to newest tags')}`,
     `  roster review [function]     ${chalk.dim('Review unread decisions (HITL); --json to list, --approve/--reject <id|path> to apply')}`,
     `  roster pending sync          ${chalk.dim('Synthesize HITL items from failed-fire signals (.exit + STALE)')}`,
     `  roster task setup            ${chalk.dim('Map your Notion board to canonical task states → roster/tracker.yaml (--data-source, --yes, --json)')}`,
