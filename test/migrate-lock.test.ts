@@ -5,11 +5,9 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
-  renameSync,
   rmSync,
-  statSync,
+  symlinkSync,
   unlinkSync,
   utimesSync,
   writeFileSync,
@@ -51,14 +49,18 @@ function backdate(path: string, ms: number): void {
   utimesSync(path, then, then);
 }
 
-function writeForeignLock(lockPath: string, pid: number): void {
+function writeForeignLock(lockPath: string, content: string): void {
   mkdirSync(dirname(lockPath), { recursive: true });
-  writeFileSync(lockPath, JSON.stringify({ pid, startedAt: '2026-01-01T00:00:00.000Z' }) + '\n', { flag: 'wx' });
+  writeFileSync(lockPath, content, { flag: 'wx' });
+}
+
+function foreignLockJson(pid: unknown): string {
+  return JSON.stringify({ pid, startedAt: '2026-01-01T00:00:00.000Z', token: 'foreign-token' }) + '\n';
 }
 
 const fixedClock = (): Date => new Date('2026-05-18T00:00:00Z');
 
-test('lock: acquire creates <manifest>.lock with pid + startedAt, release removes it', () => {
+test('lock: acquire creates <manifest>.lock with pid + startedAt + token, release removes it', () => {
   const t = makeManifestRoot();
   try {
     const handle = acquireManifestLock(t.manifestPath);
@@ -66,15 +68,18 @@ test('lock: acquire creates <manifest>.lock with pid + startedAt, release remove
     assert.equal(handle.lockPath, `${t.manifestPath}.lock`);
     assert.ok(existsSync(handle.lockPath));
 
-    const body = JSON.parse(readFileSync(handle.lockPath, 'utf8')) as { pid: number; startedAt: string };
+    const body = JSON.parse(readFileSync(handle.lockPath, 'utf8')) as { pid: number; startedAt: string; token: string };
     assert.equal(body.pid, process.pid);
     assert.equal(typeof body.startedAt, 'string');
+    assert.equal(body.token, handle.token);
+    assert.ok(handle.token.length > 0);
 
     releaseManifestLock(handle);
     assert.equal(existsSync(handle.lockPath), false);
 
     const again = acquireManifestLock(t.manifestPath);
     assert.ok(existsSync(again.lockPath));
+    assert.notEqual(again.token, handle.token, 'each acquire mints a fresh token');
     releaseManifestLock(again);
   } finally {
     t.cleanup();
@@ -87,31 +92,98 @@ test('lock: release is best-effort — tolerates an already-missing lock', () =>
     const handle = acquireManifestLock(t.manifestPath);
     releaseManifestLock(handle);
     assert.doesNotThrow(() => releaseManifestLock(handle));
-    assert.doesNotThrow(() => releaseManifestLock({ lockPath: join(tmpdir(), 'roster-lock-nonexistent', 'x.lock') }));
+    assert.doesNotThrow(() =>
+      releaseManifestLock({ lockPath: join(tmpdir(), 'roster-lock-nonexistent', 'x.lock'), token: 'x' }),
+    );
   } finally {
     t.cleanup();
   }
 });
 
-test('lock: fresh held lock refuses with pid, age, and the delete remedy', () => {
+test('lock: release never unlinks a successor lock (token mismatch → no-op)', () => {
+  const t = makeManifestRoot();
+  try {
+    const handle = acquireManifestLock(t.manifestPath);
+    // Manual intervention mid-run: our lock deleted, a successor's created.
+    unlinkSync(handle.lockPath);
+    const successorContent = JSON.stringify({ pid: 22222, startedAt: new Date().toISOString(), token: 'successor-token' }) + '\n';
+    writeFileSync(handle.lockPath, successorContent, { flag: 'wx' });
+
+    releaseManifestLock(handle);
+    assert.ok(existsSync(handle.lockPath), 'successor lock survives our release');
+    assert.equal(readFileSync(handle.lockPath, 'utf8'), successorContent);
+  } finally {
+    t.cleanup();
+  }
+});
+
+test('lock: fresh held lock refuses with pid + age + wait guidance, never breaks', () => {
   const t = makeManifestRoot();
   try {
     const lockPath = manifestLockPathFor(t.manifestPath);
-    writeForeignLock(lockPath, 54321);
+    writeForeignLock(lockPath, foreignLockJson(54321));
     assert.throws(
       () => acquireManifestLock(t.manifestPath),
       (err: unknown) => {
         assert.ok(err instanceof RosterError);
-        assert.match(err.header, /migration manifest/);
+        assert.match(err.header, /another roster migrate is writing this workspace's migration manifest/);
         assert.match(err.body, /pid 54321/);
         assert.match(err.body, /\d+[sm] ago/);
-        assert.match(err.remedy, /delete /);
-        assert.ok(err.remedy.includes(lockPath));
-        assert.match(err.remedy, /if that run crashed/);
+        assert.match(err.remedy, /Wait for that migrate run to finish/);
+        assert.doesNotMatch(err.remedy, /delete/i, 'fresh refusal does not suggest deletion');
         return true;
       },
     );
-    assert.ok(existsSync(lockPath), 'refusal must not remove the holder lock');
+    assert.equal(readFileSync(lockPath, 'utf8'), foreignLockJson(54321), 'holder lock untouched');
+  } finally {
+    t.cleanup();
+  }
+});
+
+test('lock: just-under-threshold lock still gets the fresh (wait) message', () => {
+  const t = makeManifestRoot();
+  try {
+    const lockPath = manifestLockPathFor(t.manifestPath);
+    writeForeignLock(lockPath, foreignLockJson(77777));
+    backdate(lockPath, STALE_LOCK_MS - GENEROUS_SLACK_MS);
+    assert.throws(
+      () => acquireManifestLock(t.manifestPath),
+      (err: unknown) => {
+        assert.ok(err instanceof RosterError);
+        assert.match(err.body, /pid 77777/);
+        assert.match(err.remedy, /Wait for that migrate run to finish/);
+        return true;
+      },
+    );
+    assert.equal(readFileSync(lockPath, 'utf8'), foreignLockJson(77777), 'held lock untouched');
+  } finally {
+    t.cleanup();
+  }
+});
+
+test('lock: stale lock (past 15 min + slack) REFUSES with crashed-run message — never auto-broken', () => {
+  const t = makeManifestRoot();
+  try {
+    const lockPath = manifestLockPathFor(t.manifestPath);
+    writeForeignLock(lockPath, foreignLockJson(99999));
+    backdate(lockPath, STALE_LOCK_MS + GENEROUS_SLACK_MS);
+
+    assert.throws(
+      () => acquireManifestLock(t.manifestPath),
+      (err: unknown) => {
+        assert.ok(err instanceof RosterError);
+        assert.match(err.header, /stale migration-manifest lock/);
+        assert.match(err.header, /likely crashed/);
+        assert.match(err.body, /pid 99999/);
+        assert.match(err.body, /\d+m old/);
+        assert.match(err.remedy, /Verify no roster migrate is running/);
+        assert.match(err.remedy, /delete /);
+        assert.ok(err.remedy.includes(lockPath));
+        assert.match(err.remedy, /and retry/);
+        return true;
+      },
+    );
+    assert.equal(readFileSync(lockPath, 'utf8'), foreignLockJson(99999), 'stale lock is NOT broken or mutated');
   } finally {
     t.cleanup();
   }
@@ -121,8 +193,7 @@ test('lock: unparseable lock content still refuses (pid unknown), never clobbers
   const t = makeManifestRoot();
   try {
     const lockPath = manifestLockPathFor(t.manifestPath);
-    mkdirSync(dirname(lockPath), { recursive: true });
-    writeFileSync(lockPath, 'not json\n');
+    writeForeignLock(lockPath, 'not json\n');
     assert.throws(
       () => acquireManifestLock(t.manifestPath),
       (err: unknown) => {
@@ -137,89 +208,84 @@ test('lock: unparseable lock content still refuses (pid unknown), never clobbers
   }
 });
 
-test('lock: stale lock (mtime past 15 min + slack) is rename-broken and re-acquired, no debris', () => {
-  const t = makeManifestRoot();
-  try {
-    const lockPath = manifestLockPathFor(t.manifestPath);
-    writeForeignLock(lockPath, 99999);
-    backdate(lockPath, STALE_LOCK_MS + GENEROUS_SLACK_MS);
-
-    const winner = acquireManifestLock(t.manifestPath);
-    assert.equal(winner.lockPath, lockPath);
-    const body = JSON.parse(readFileSync(lockPath, 'utf8')) as { pid: number };
-    assert.equal(body.pid, process.pid, 'fresh lock belongs to the breaker');
-    assert.ok(Date.now() - statSync(lockPath).mtimeMs < 60_000, 'fresh lock has a fresh mtime');
-
-    const debris = readdirSync(dirname(lockPath)).filter((f) => f.includes('.stale-'));
-    assert.deepEqual(debris, [], 'winner unlinks the lock it renamed');
-
-    releaseManifestLock(winner);
-    assert.equal(existsSync(lockPath), false);
-  } finally {
-    t.cleanup();
+test('lock: invalid pid values (negative, non-numeric) report pid unknown', () => {
+  for (const pid of [-5, 0, 1.5, '123']) {
+    const t = makeManifestRoot();
+    try {
+      const lockPath = manifestLockPathFor(t.manifestPath);
+      writeForeignLock(lockPath, foreignLockJson(pid));
+      assert.throws(
+        () => acquireManifestLock(t.manifestPath),
+        (err: unknown) => {
+          assert.ok(err instanceof RosterError);
+          assert.match(err.body, /pid unknown/, `pid ${JSON.stringify(pid)} must not be trusted`);
+          return true;
+        },
+      );
+    } finally {
+      t.cleanup();
+    }
   }
 });
 
-test('lock: just-under-threshold lock is NOT broken', () => {
+test('lock: oversized lock file (>4 KB) is read capped — refusal with pid unknown, no crash', () => {
   const t = makeManifestRoot();
   try {
     const lockPath = manifestLockPathFor(t.manifestPath);
-    writeForeignLock(lockPath, 77777);
-    backdate(lockPath, STALE_LOCK_MS - GENEROUS_SLACK_MS);
+    writeForeignLock(lockPath, JSON.stringify({ pid: 54321, padding: 'x'.repeat(64 * 1024) }));
     assert.throws(
       () => acquireManifestLock(t.manifestPath),
-      (err: unknown) => err instanceof RosterError && /pid 77777/.test(err.body),
-    );
-    const body = JSON.parse(readFileSync(lockPath, 'utf8')) as { pid: number };
-    assert.equal(body.pid, 77777, 'held lock untouched');
-  } finally {
-    t.cleanup();
-  }
-});
-
-test('lock: rename-loser hits ENOENT, re-enters acquire, refuses against the winner fresh lock', () => {
-  const t = makeManifestRoot();
-  try {
-    const lockPath = manifestLockPathFor(t.manifestPath);
-    writeForeignLock(lockPath, 99999);
-    backdate(lockPath, STALE_LOCK_MS + GENEROUS_SLACK_MS);
-
-    const events: string[] = [];
-    const winnerStale = `${lockPath}.stale-winner`;
-    assert.throws(
-      () =>
-        acquireManifestLock(t.manifestPath, {
-          beforeStaleBreak: () => {
-            // Deterministic interleave: between the loser's stat and its rename,
-            // the winner renames the stale lock away (winning the break).
-            renameSync(lockPath, winnerStale);
-            events.push('winner-renamed-stale');
-          },
-          beforeAttempt: (attempt) => {
-            if (attempt === 1) {
-              // Before the loser re-enters, the winner finishes its break:
-              // unlink the renamed stale file, wx-create its fresh lock.
-              unlinkSync(winnerStale);
-              writeFileSync(lockPath, JSON.stringify({ pid: 22222, startedAt: new Date().toISOString() }) + '\n', {
-                flag: 'wx',
-              });
-              events.push('winner-created-fresh');
-            }
-          },
-        }),
       (err: unknown) => {
         assert.ok(err instanceof RosterError);
-        assert.match(err.header, /migration manifest/);
-        assert.match(err.body, /pid 22222/);
+        assert.match(err.body, /pid unknown/);
         return true;
       },
     );
+  } finally {
+    t.cleanup();
+  }
+});
 
-    assert.deepEqual(events, ['winner-renamed-stale', 'winner-created-fresh'], 'exactly one break attempt by the loser');
-    const body = JSON.parse(readFileSync(lockPath, 'utf8')) as { pid: number };
-    assert.equal(body.pid, 22222, 'winner lock survives the losing racer');
-    const debris = readdirSync(dirname(lockPath)).filter((f) => f.includes(`.stale-${process.pid}`));
-    assert.deepEqual(debris, [], 'loser never renamed, so it owns no stale file');
+test('lock: symlink at the lock path is refused as suspicious, not treated as a lock, not removed', () => {
+  const t = makeManifestRoot();
+  try {
+    const lockPath = manifestLockPathFor(t.manifestPath);
+    mkdirSync(dirname(lockPath), { recursive: true });
+    const target = join(dirname(lockPath), 'innocent.json');
+    writeFileSync(target, '{"pid": 1}\n');
+    symlinkSync(target, lockPath);
+
+    assert.throws(
+      () => acquireManifestLock(t.manifestPath),
+      (err: unknown) => {
+        assert.ok(err instanceof RosterError);
+        assert.match(err.header, /refusing to trust/);
+        assert.match(err.body, /symbolic link/);
+        assert.match(err.remedy, /remove it manually/);
+        return true;
+      },
+    );
+    assert.ok(existsSync(lockPath), 'symlink left in place');
+    assert.ok(existsSync(target), 'symlink target untouched');
+  } finally {
+    t.cleanup();
+  }
+});
+
+test('lock: directory at the lock path is refused as suspicious', () => {
+  const t = makeManifestRoot();
+  try {
+    const lockPath = manifestLockPathFor(t.manifestPath);
+    mkdirSync(lockPath, { recursive: true });
+    assert.throws(
+      () => acquireManifestLock(t.manifestPath),
+      (err: unknown) => {
+        assert.ok(err instanceof RosterError);
+        assert.match(err.body, /directory/);
+        return true;
+      },
+    );
+    assert.ok(existsSync(lockPath));
   } finally {
     t.cleanup();
   }
@@ -295,7 +361,7 @@ test('executeMigration: pre-held lock — refused run writes NOTHING, winner lea
   }
 });
 
-test('executeMigration: a crashed run\'s stale lock is broken automatically', () => {
+test('executeMigration: crashed-run stale lock refuses; the documented manual delete unblocks', () => {
   const fix = buildAgentTeamMini();
   chmodSync(join(fix.root, '.env'), 0o600);
   const dst = makeDest();
@@ -304,9 +370,23 @@ test('executeMigration: a crashed run\'s stale lock is broken automatically', ()
     const plan = planMigration(model, { destWorkspace: dst.dest, destIsInitialized: true });
     const manifestPath = manifestPathFor(plan.destWorkspace, sourceHashFor(plan.sourceDir));
     const lockPath = manifestLockPathFor(manifestPath);
-    writeForeignLock(lockPath, 99999);
+    writeForeignLock(lockPath, foreignLockJson(99999));
     backdate(lockPath, STALE_LOCK_MS + GENEROUS_SLACK_MS);
 
+    assert.throws(
+      () => executeMigration(plan, { dryRun: false, forceResync: false, clock: fixedClock }),
+      (err: unknown) => {
+        assert.ok(err instanceof RosterError);
+        assert.match(err.header, /likely crashed/);
+        assert.match(err.remedy, /delete /);
+        return true;
+      },
+    );
+    assert.equal(existsSync(manifestPath), false, 'refused run wrote no manifest');
+    assert.ok(existsSync(lockPath), 'stale lock NOT auto-broken');
+
+    // The documented remedy: verify nothing is running, delete, retry.
+    unlinkSync(lockPath);
     const exec = executeMigration(plan, { dryRun: false, forceResync: false, clock: fixedClock });
     assert.equal(exec.blockersHit, false);
     const manifest = readManifest(manifestPath);

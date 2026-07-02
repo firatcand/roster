@@ -479,7 +479,10 @@ writing anything — no files, no manifest, no lock).
 
 Live runs hold a `<manifest>.lock` file for the duration of the manifest read → write
 window, so two concurrent migrates against the same source→dest pair cannot silently
-overwrite each other's manifest. A second run refuses with the holder's pid and lock
-age; crashed-run locks older than 15 minutes are broken automatically (rename-serialized
-— exactly one contender wins the break). See the [HOWTO Troubleshooting
-table](HOWTO.md#troubleshooting) for the refusal message.
+overwrite each other's manifest. A second run always refuses — locks are never broken
+automatically. Under 15 minutes old, the refusal names the holder's pid and age and says
+to wait; past 15 minutes (a messaging threshold, nothing more) it says the run likely
+crashed and to verify no `roster migrate` is running, then delete the lock file and
+retry. Release is owner-token-guarded: a finishing run only removes a lock it wrote, so
+it can never delete a successor's lock after manual intervention. See the [HOWTO
+Troubleshooting table](HOWTO.md#troubleshooting) for the refusal messages.
