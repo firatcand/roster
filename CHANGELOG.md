@@ -6,7 +6,27 @@ Per-phase retrospectives live in [`docs/retros/`](docs/retros/) and carry the lo
 
 ## [Unreleased]
 
-_(empty — staging area for post-1.5.0 work)_
+_(empty — staging area for post-1.6.0 work)_
+
+## [1.6.0] — 2026-07-02
+
+Brain hardening + housekeeping release: the append-only brain gains its one sanctioned deleter (**`roster brain gc`**) and passes `brain doctor` on Neon out of the box, `roster skills update --latest` lights up, and `roster doctor` learns to flag expert-route drift. No breaking changes.
+
+### Added
+
+- **`roster brain gc` — admin-only prune of superseded versions.** The append-only brain accumulates replaced fact versions and re-mounted file chunks forever; `gc` prunes a superseded **version** once *both it and its immediate replacement* are older than the retention window (default 2 years; `--older-than <N>d|<N>mo|<N>y` per run, or persist via the new `gc.retention` config key — flag > config > default). The current version of everything survives at any age, and read-time results (`current_facts`, `resolved_current_facts`, `current_documents`, `canonical_id()`) are provably identical before and after. Events and edges are never touched — they're visible history, not versions. Preview by default, `--yes` to delete; batched, resumable, serialized by an advisory lock; refuses a runtime-role URL, partial DELETE privileges, or a stale schema. (ROS-153)
+- **`roster skills update --latest`** — founder-skills now publishes semver tags (`v1.0.0`), so `--latest` resolves the newest tag and re-syncs the whole chain: manifest ref, both tool targets, lockfile refs + hashes. The git-ref resolver also gains a 30s timeout with a clear error. (ROS-126)
+- **Doctor: expert-route drift guard** — `roster doctor` warns when a workspace `EXPERT.md` route isn't covered by the `founder-skills.yaml` catalog (`expert_routes` in `--json`). Warning-only; never flips the exit code. (ROS-129)
+
+### Fixed
+
+- **Fresh Neon brains pass `brain doctor` out of the box.** PG16+/managed Postgres auto-grants a newly created role back to its creator, tripping the `no-inbound-members` isolation invariant on every fresh Neon brain. `brain init` now strips the creator's membership on both the create and re-init paths (existing brains self-heal on the next `init`) and **verifies** the revoke — on stock PG16 the auto-grant is bootstrap-granted and unrevocable by the creator, so init reports it honestly with the exact superuser remedial SQL instead of pretending. (ROS-154)
+- **`roster migrate` manifest writes take a file lock**, closing the TOCTOU window when two migrate runs race on the same workspace. (ROS-63)
+- Doctor sanitizes workspace directory names embedded in expert-route warnings. (ROS-129)
+
+### Docs
+
+- Canonical process for adding workspace guideline files, aligned with the audit scripts. (ROS-144)
 
 ## [1.5.0] — 2026-07-02
 
