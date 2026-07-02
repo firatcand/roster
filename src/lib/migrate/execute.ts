@@ -13,6 +13,7 @@ import {
   type Manifest,
   type ManifestFileEntry,
 } from './manifest.ts';
+import { acquireManifestLock, releaseManifestLock } from './lock.ts';
 
 export type ExecuteOptions = {
   dryRun: boolean;
@@ -217,45 +218,29 @@ export function executeMigration(plan: MigrationPlan, opts: ExecuteOptions): Exe
     };
   }
 
-  // Manifest read/write is not concurrency-safe: two parallel `roster migrate
-  // from-agent-team` invocations against the same dest could last-writer-wins.
-  // Acceptable today because migrate is a one-shot CLI flow run interactively
-  // against one source-dest pair. Tracked: ROS-63 (file lock or CAS write if
-  // concurrent migration becomes a real surface).
   const sourceHash = sourceHashFor(plan.sourceDir);
   const manifestPath = manifestPathFor(plan.destWorkspace, sourceHash);
-  const previousManifest = readManifest(manifestPath);
-  const lookup = new Map<string, ManifestFileEntry>();
-  if (previousManifest !== null) {
-    for (const e of previousManifest.files) lookup.set(`${e.src}->${e.dest}`, e);
-  }
+  // Live runs hold <manifest>.lock across readManifest → writeManifest so two
+  // concurrent migrates against the same source→dest pair can't last-writer-wins
+  // each other's manifest (ROS-63). Dry-runs acquire nothing and create nothing.
+  const lock = opts.dryRun ? null : acquireManifestLock(manifestPath);
 
-  const newManifestEntries: ManifestFileEntry[] = [];
+  try {
+    const previousManifest = readManifest(manifestPath);
+    const lookup = new Map<string, ManifestFileEntry>();
+    if (previousManifest !== null) {
+      for (const e of previousManifest.files) lookup.set(`${e.src}->${e.dest}`, e);
+    }
 
-  // 1. Pending HITL moves (collision-aware)
-  for (const m of plan.pendingMoves) {
-    fileResults.push(
-      copyPendingWithCollision({
-        src: m.srcPath,
-        dest: m.destPath,
-        manifestEntry: lookup.get(`${m.srcPath}->${m.destPath}`),
-        forceResync: opts.forceResync,
-        generatedAtUtc,
-        dryRun: opts.dryRun,
-        newManifestEntries,
-      }),
-    );
-  }
+    const newManifestEntries: ManifestFileEntry[] = [];
 
-  // 2. Log copies
-  for (const lc of plan.logCopies) {
-    for (const file of lc.files) {
-      const dest = join(lc.destDir, file.relSrc);
+    // 1. Pending HITL moves (collision-aware)
+    for (const m of plan.pendingMoves) {
       fileResults.push(
-        copyFileWithManifest({
-          src: file.absSrc,
-          dest,
-          manifestEntry: lookup.get(`${file.absSrc}->${dest}`),
+        copyPendingWithCollision({
+          src: m.srcPath,
+          dest: m.destPath,
+          manifestEntry: lookup.get(`${m.srcPath}->${m.destPath}`),
           forceResync: opts.forceResync,
           generatedAtUtc,
           dryRun: opts.dryRun,
@@ -263,69 +248,89 @@ export function executeMigration(plan: MigrationPlan, opts: ExecuteOptions): Exe
         }),
       );
     }
-  }
 
-  // 3. .env copy with explicit mode 0o600
-  if (plan.envCopy !== null) {
-    const { src, dest } = plan.envCopy;
-    const srcSha = safeFileSha256(src);
-    const entry = lookup.get(`${src}->${dest}`);
-    if (srcSha === null) {
-      fileResults.push({ kind: 'skipped', src, dest, reason: 'source-unreadable' });
-    } else {
-      const decision = decideFileAction({ srcPath: src, destPath: dest, srcSha, manifestEntry: entry, forceResync: opts.forceResync });
-      if (decision.kind === 'write') {
-        if (opts.dryRun) {
-          fileResults.push({ kind: 'written', src, dest });
-        } else {
-          const body = readFileSync(src);
-          mkdirSync(dirname(dest), { recursive: true });
-          atomicWriteFile(dest, body.toString('utf8'), 0o600);
-          chmodSync(dest, 0o600);
-          newManifestEntries.push({ src, dest, srcSha256: srcSha, copiedAtUtc: generatedAtUtc });
-          fileResults.push({ kind: 'written', src, dest });
-        }
-      } else if (decision.kind === 'noop') {
-        newManifestEntries.push({ src, dest, srcSha256: srcSha, copiedAtUtc: entry?.copiedAtUtc ?? generatedAtUtc });
-        fileResults.push({ kind: 'noop', src, dest, reason: decision.reason });
-      } else {
-        if (entry !== undefined) newManifestEntries.push(entry);
-        fileResults.push({ kind: 'skipped', src, dest, reason: decision.reason });
+    // 2. Log copies
+    for (const lc of plan.logCopies) {
+      for (const file of lc.files) {
+        const dest = join(lc.destDir, file.relSrc);
+        fileResults.push(
+          copyFileWithManifest({
+            src: file.absSrc,
+            dest,
+            manifestEntry: lookup.get(`${file.absSrc}->${dest}`),
+            forceResync: opts.forceResync,
+            generatedAtUtc,
+            dryRun: opts.dryRun,
+            newManifestEntries,
+          }),
+        );
       }
     }
-  }
 
-  // 4. Install script
-  const ts = timestampSlug(opts.clock);
-  const installScriptPath = join(plan.destWorkspace, '.roster', 'migration-scripts', `install-schedules-${ts}.sh`);
-  const installScriptContent = renderInstallScript(plan, generatedAtUtc);
+    // 3. .env copy with explicit mode 0o600
+    if (plan.envCopy !== null) {
+      const { src, dest } = plan.envCopy;
+      const srcSha = safeFileSha256(src);
+      const entry = lookup.get(`${src}->${dest}`);
+      if (srcSha === null) {
+        fileResults.push({ kind: 'skipped', src, dest, reason: 'source-unreadable' });
+      } else {
+        const decision = decideFileAction({ srcPath: src, destPath: dest, srcSha, manifestEntry: entry, forceResync: opts.forceResync });
+        if (decision.kind === 'write') {
+          if (opts.dryRun) {
+            fileResults.push({ kind: 'written', src, dest });
+          } else {
+            const body = readFileSync(src);
+            mkdirSync(dirname(dest), { recursive: true });
+            atomicWriteFile(dest, body.toString('utf8'), 0o600);
+            chmodSync(dest, 0o600);
+            newManifestEntries.push({ src, dest, srcSha256: srcSha, copiedAtUtc: generatedAtUtc });
+            fileResults.push({ kind: 'written', src, dest });
+          }
+        } else if (decision.kind === 'noop') {
+          newManifestEntries.push({ src, dest, srcSha256: srcSha, copiedAtUtc: entry?.copiedAtUtc ?? generatedAtUtc });
+          fileResults.push({ kind: 'noop', src, dest, reason: decision.reason });
+        } else {
+          if (entry !== undefined) newManifestEntries.push(entry);
+          fileResults.push({ kind: 'skipped', src, dest, reason: decision.reason });
+        }
+      }
+    }
 
-  if (!opts.dryRun) {
-    atomicWriteFile(installScriptPath, installScriptContent, 0o755);
-    chmodSync(installScriptPath, 0o755);
-  }
+    // 4. Install script
+    const ts = timestampSlug(opts.clock);
+    const installScriptPath = join(plan.destWorkspace, '.roster', 'migration-scripts', `install-schedules-${ts}.sh`);
+    const installScriptContent = renderInstallScript(plan, generatedAtUtc);
 
-  // 5. Manifest write — only on live execution
-  if (!opts.dryRun) {
-    const manifest: Manifest = {
-      version: MANIFEST_VERSION,
-      sourceDir: plan.sourceDir,
-      sourceHash,
-      migratedAt: generatedAtUtc,
-      files: dedupeEntries(newManifestEntries),
+    if (!opts.dryRun) {
+      atomicWriteFile(installScriptPath, installScriptContent, 0o755);
+      chmodSync(installScriptPath, 0o755);
+    }
+
+    // 5. Manifest write — only on live execution
+    if (!opts.dryRun) {
+      const manifest: Manifest = {
+        version: MANIFEST_VERSION,
+        sourceDir: plan.sourceDir,
+        sourceHash,
+        migratedAt: generatedAtUtc,
+        files: dedupeEntries(newManifestEntries),
+      };
+      writeManifest(manifestPath, manifest);
+    }
+
+    return {
+      blockersHit: false,
+      fileResults,
+      installScriptPath,
+      installScriptContent,
+      reportPath: null, // set by command-level renderer; execute returns the in-memory content
+      manifestPath,
+      generatedAtUtc,
     };
-    writeManifest(manifestPath, manifest);
+  } finally {
+    if (lock !== null) releaseManifestLock(lock);
   }
-
-  return {
-    blockersHit: false,
-    fileResults,
-    installScriptPath,
-    installScriptContent,
-    reportPath: null, // set by command-level renderer; execute returns the in-memory content
-    manifestPath,
-    generatedAtUtc,
-  };
 }
 
 function dedupeEntries(entries: ReadonlyArray<ManifestFileEntry>): ManifestFileEntry[] {

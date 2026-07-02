@@ -469,3 +469,17 @@ optional stages collapse. Requires `roster/tracker.yaml` (written by `task setup
 Selectors: unique id (`TASK-12`), raw page id, or fuzzy title (ambiguity lists
 candidates). All verbs take `--json` and `--cwd`. Exit codes: `0` ok, `1` error. See
 [HOWTO.md](HOWTO.md) §13 to connect a board.
+
+## Migrate (`roster migrate from-agent-team <dir>`)
+
+Copies a legacy agent-team workspace into an initialized roster workspace and records
+every copy in `.roster/migration-manifests/agent-team-<sourceHash>.json`, so re-runs are
+idempotent (`--force-resync` re-copies changed sources; `--dry-run` previews without
+writing anything — no files, no manifest, no lock).
+
+Live runs hold a `<manifest>.lock` file for the duration of the manifest read → write
+window, so two concurrent migrates against the same source→dest pair cannot silently
+overwrite each other's manifest. A second run refuses with the holder's pid and lock
+age; crashed-run locks older than 15 minutes are broken automatically (rename-serialized
+— exactly one contender wins the break). See the [HOWTO Troubleshooting
+table](HOWTO.md#troubleshooting) for the refusal message.

@@ -315,6 +315,33 @@ export function migrateSourceAlreadyRosterError(sourceDir: string): RosterError 
   });
 }
 
+function formatLockAge(ageMs: number): string {
+  const seconds = Math.max(0, Math.round(ageMs / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m`;
+}
+
+export function migrateManifestLockedError(lockPath: string, holderPid: number | null, ageMs: number): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} another roster migrate is writing this workspace's migration manifest`,
+    body: [
+      `  Manifest lock held (started ${formatLockAge(ageMs)} ago, pid ${holderPid ?? 'unknown'}):`,
+      `    ${lockPath}`,
+    ].join('\n'),
+    remedy: `  Wait for that migrate run to finish, or delete ${chalk.bold(lockPath)} if that run crashed.`,
+    exitCode: EXIT_ERROR,
+  });
+}
+
+export function migrateManifestLockContentionError(lockPath: string, attempts: number): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} could not acquire the migration-manifest lock`,
+    body: `  ${lockPath} changed hands ${attempts} times in a row (heavy contention).`,
+    remedy: '  Re-run roster migrate; if this persists, check for stuck roster processes.',
+    exitCode: EXIT_ERROR,
+  });
+}
+
 export function scheduleNotFoundError(name: string, knownNames: ReadonlyArray<string>): RosterError {
   const body =
     knownNames.length === 0
