@@ -101,6 +101,7 @@ async function insertMount(
   sourcePath: string,
   age: string,
   chunks: string[],
+  chunkAge: string = age,
 ): Promise<{ mountId: number; chunkIds: number[] }> {
   const m = await pool.query<{ id: number }>(
     `INSERT INTO brain.mounts (recorded_at, source_path, file_hash)
@@ -113,7 +114,7 @@ async function insertMount(
     const d = await pool.query<{ id: number }>(
       `INSERT INTO brain.documents (recorded_at, source_path, chunk_index, content, content_hash, mount_id)
        VALUES (now() - $5::interval, $1, $2, $3, md5($3), $4) RETURNING id`,
-      [sourcePath, i, content, mountId, age],
+      [sourcePath, i, content, mountId, chunkAge],
     );
     chunkIds.push(Number(d.rows[0]!.id));
   }
@@ -214,6 +215,31 @@ test('gc prunes chunks of long-superseded mounts; empty mounts never supersede',
     }
     const mounts = await fx.pool.query(`SELECT count(*) AS n FROM brain.mounts`);
     assert.equal(Number(mounts.rows[0]!.n), 8, 'mounts rows are never deleted');
+  } finally {
+    await fx.drop();
+  }
+});
+
+test('divergent mount/chunk timestamps: a recent anchor mount can never vanish across reruns', opts, async () => {
+  const fx = await provision();
+  try {
+    // Codex round-3 counterexample: m2's MOUNT is recent (1d) but its chunk
+    // row carries an old timestamp (5y). Without the own-mount-age arm, run 1
+    // deletes m2's chunks (chunk old + successor m3 old), m2 stops bearing
+    // chunks, and run 2 re-anchors m1 to old m3 and wrongly deletes m1's
+    // chunks even though m1's true replacement (m2) was 1 day old.
+    const m1 = await insertMount(fx.pool, 'dv.md', '5 years', ['dv-old']);
+    const m2 = await insertMount(fx.pool, 'dv.md', '1 day', ['dv-mid'], '5 years');
+    const m3 = await insertMount(fx.pool, 'dv.md', '3 years', ['dv-new']);
+    for (let run = 0; run < 2; run++) {
+      const deleted = await runGc(fx.pool, { interval: '2 years' });
+      assert.equal(deleted.documents, 0, `run ${run + 1} must delete nothing`);
+    }
+    const left = await fx.pool.query<{ id: number }>(`SELECT id FROM brain.documents ORDER BY id`);
+    assert.deepEqual(
+      left.rows.map((r) => Number(r.id)),
+      [...m1.chunkIds, ...m2.chunkIds, ...m3.chunkIds],
+    );
   } finally {
     await fx.drop();
   }

@@ -46,9 +46,15 @@ const ELIGIBLE_SQL: Record<GcTable, string> = {
      WHERE superseded_at IS NOT NULL
        AND superseded_at < now() - $1::interval
        AND recorded_at < now() - $1::interval`,
+  // Documents need a third arm: mounts.recorded_at and documents.recorded_at
+  // are independent (imports, manual SQL), and the stability induction anchors
+  // on with-chunks MOUNTS — a mount only stops bearing chunks when all its
+  // chunks are deleted, so requiring the row's OWN mount to be old guarantees
+  // a recent anchor mount can never disappear between runs (Codex round-3).
   documents: `
     SELECT d.id
       FROM brain.documents d
+      JOIN brain.mounts mo ON mo.id = d.mount_id
       JOIN LATERAL (
         SELECT m.recorded_at AS superseded_at
           FROM brain.mounts m
@@ -59,7 +65,8 @@ const ELIGIBLE_SQL: Record<GcTable, string> = {
          LIMIT 1
       ) s ON true
      WHERE s.superseded_at < now() - $1::interval
-       AND d.recorded_at < now() - $1::interval`,
+       AND d.recorded_at < now() - $1::interval
+       AND mo.recorded_at < now() - $1::interval`,
 };
 
 const DURATION_RE = /^(\d+)(d|mo|y)$/;
