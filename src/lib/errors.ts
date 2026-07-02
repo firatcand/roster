@@ -315,6 +315,48 @@ export function migrateSourceAlreadyRosterError(sourceDir: string): RosterError 
   });
 }
 
+function formatLockAge(ageMs: number): string {
+  const seconds = Math.max(0, Math.round(ageMs / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m`;
+}
+
+export function migrateManifestLockedError(lockPath: string, holderPid: number | null, ageMs: number): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} another roster migrate is writing this workspace's migration manifest`,
+    body: [
+      `  Manifest lock held (started ${formatLockAge(ageMs)} ago, pid ${holderPid ?? 'unknown'}):`,
+      `    ${lockPath}`,
+    ].join('\n'),
+    remedy: '  Wait for that migrate run to finish, then retry.',
+    exitCode: EXIT_ERROR,
+  });
+}
+
+export function migrateManifestLockStaleError(lockPath: string, holderPid: number | null, ageMs: number): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} stale migration-manifest lock — the run that created it likely crashed`,
+    body: [
+      `  Lock is ${formatLockAge(ageMs)} old (pid ${holderPid ?? 'unknown'}):`,
+      `    ${lockPath}`,
+    ].join('\n'),
+    remedy: `  Verify no roster migrate is running, then delete ${chalk.bold(lockPath)} and retry.`,
+    exitCode: EXIT_ERROR,
+  });
+}
+
+export function migrateManifestLockSuspiciousError(lockPath: string, kind: string): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} refusing to trust the migration-manifest lock path`,
+    body: [
+      `  ${lockPath}`,
+      `  exists but is a ${kind}, not a lock file roster wrote.`,
+    ].join('\n'),
+    remedy: '  Inspect it; if it does not belong there, remove it manually and retry.',
+    exitCode: EXIT_ERROR,
+  });
+}
+
 export function scheduleNotFoundError(name: string, knownNames: ReadonlyArray<string>): RosterError {
   const body =
     knownNames.length === 0

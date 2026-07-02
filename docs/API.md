@@ -469,3 +469,23 @@ optional stages collapse. Requires `roster/tracker.yaml` (written by `task setup
 Selectors: unique id (`TASK-12`), raw page id, or fuzzy title (ambiguity lists
 candidates). All verbs take `--json` and `--cwd`. Exit codes: `0` ok, `1` error. See
 [HOWTO.md](HOWTO.md) §13 to connect a board.
+
+## Migrate (`roster migrate from-agent-team <dir>`)
+
+Copies a legacy agent-team workspace into an initialized roster workspace and records
+every copy in `.roster/migration-manifests/agent-team-<sourceHash>.json`, so re-runs are
+idempotent (`--force-resync` re-copies changed sources; `--dry-run` previews without
+writing anything — no files, no manifest, no lock).
+
+Live runs hold a `<manifest>.lock` file for the duration of the manifest read → write
+window, so two concurrent migrates against the same source→dest pair cannot silently
+overwrite each other's manifest. A second run always refuses — locks are never broken
+automatically. Under 15 minutes old, the refusal names the holder's pid and age and says
+to wait; past 15 minutes (a messaging threshold, nothing more) it says the run likely
+crashed and to verify no `roster migrate` is running, then delete the lock file and
+retry. Release is owner-token-guarded: a finishing run only removes a lock whose content still
+matches the token it wrote, which protects a successor's lock in every scenario the
+documented remedy can produce (the token check reads then unlinks, so it is not atomic —
+but the window is only reachable by deleting and replacing the lock while the original
+run is still live, outside the remedy). See the [HOWTO
+Troubleshooting table](HOWTO.md#troubleshooting) for the refusal messages.
