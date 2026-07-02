@@ -101,7 +101,7 @@ When Anthropic ships [#41364](https://github.com/anthropics/claude-code/issues/4
 
 ### Re-check protocol for `claude://` URL scheme
 
-Spike β (2026-05-15) confirmed `claude://` today routes only `cowork/shared-artifact` — no schedule-creation deep-link. If Anthropic adds `claude://schedule/...` (or `claude://routine/...`, `claude://task/...`), Roster should promote it from "future investigation" to a first-class install path: lighter than UI hand-off, faster than waiting on [#41364](https://github.com/anthropics/claude-code/issues/41364).
+Spike β (2026-05-15) found `claude://` routed only `cowork/shared-artifact`; the latest probe (2026-07-02, Claude Desktop 1.15962.1) adds two non-schedule literals (`claude.ai/mcp-auth-callback/sdk`, `resume`) — still **no schedule-creation deep-link**, which is the only criterion that matters here: non-schedule routes get recorded in the probe artifact without follow-up. If Anthropic adds `claude://schedule/...` (or `claude://routine/...`, `claude://task/...`), Roster should promote it from "future investigation" to a first-class install path: lighter than UI hand-off, faster than waiting on [#41364](https://github.com/anthropics/claude-code/issues/41364).
 
 **Probe script:** `scripts/probe-claude-url-scheme.sh` (macOS-only; not shipped in the npm tarball — maintainer tool).
 
