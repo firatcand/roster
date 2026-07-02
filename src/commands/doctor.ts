@@ -42,6 +42,10 @@ import {
   auditFounderSkillsDrift,
   type FounderSkillsDriftResult,
 } from '../lib/founder-skills/drift.ts';
+import {
+  auditExpertRoutes,
+  type ExpertRoutesAuditResult,
+} from '../lib/doctor-expert-routes.ts';
 
 export type DoctorOptions = {
   json: boolean;
@@ -814,6 +818,33 @@ function renderFounderSkillsSection(result: FounderSkillsDriftResult): string[] 
   return lines;
 }
 
+// Warning-tier section (ROS-129): renders ⚠ findings but is intentionally
+// excluded from the exit-code aggregate — see auditExpertRoutes. Warning
+// messages arrive pre-sanitized (control chars from untrusted EXPERT.md route
+// text are hex-escaped by sanitizeRouteForDisplay) so they are safe to print.
+function renderExpertRoutesSection(result: ExpertRoutesAuditResult): string[] {
+  if (result.status === 'not-applicable') {
+    if (result.reason === 'no-manifest') return [];
+    return [
+      '',
+      chalk.bold('Expert routes'),
+      `  ${chalk.dim('- skipped — founder-skills.yaml is invalid; see the Founder skills section')}`,
+    ];
+  }
+  const lines: string[] = [
+    '',
+    chalk.bold('Expert routes') + chalk.dim(' (warnings only — never affects exit code)'),
+  ];
+  if (result.warnings.length === 0) {
+    lines.push(`  ${chalk.green('✓')} every EXPERT.md skill route is covered by founder-skills.yaml`);
+    return lines;
+  }
+  for (const w of result.warnings) {
+    lines.push(`  ${chalk.yellow('⚠')} ${w.message}`);
+  }
+  return lines;
+}
+
 export async function executeDoctor(opts: DoctorOptions): Promise<number> {
   // ROS-109: scope-aware audit. Determine effective scope first; downstream
   // tool detection runs against the matching path family.
@@ -950,6 +981,9 @@ export async function executeDoctor(opts: DoctorOptions): Promise<number> {
   });
   const founderSkills = auditFounderSkillsDrift(opts.cwd);
   const founderSkillsOk = founderSkills.status !== 'checked' || !founderSkills.hasFailure;
+  // Deliberately absent from allOk below — expert-route warnings never flip
+  // the exit code (ROS-129).
+  const expertRoutes = auditExpertRoutes(opts.cwd);
 
   const allOk =
     results.every((r) => r.ok) &&
@@ -972,6 +1006,7 @@ export async function executeDoctor(opts: DoctorOptions): Promise<number> {
     for (const line of renderSchedulingDriftSection(schedulingDrift)) console.log(line);
     for (const line of renderStaleFiresSection(schedulingDrift.staleFires)) console.log(line);
     for (const line of renderFounderSkillsSection(founderSkills)) console.log(line);
+    for (const line of renderExpertRoutesSection(expertRoutes)) console.log(line);
     for (const line of renderSafetySection(safety)) console.log(line);
     for (const line of renderSecretsSection(secrets)) console.log(line);
     for (const line of renderFixSection(fixOutcome)) console.log(line);
@@ -1006,6 +1041,7 @@ export async function executeDoctor(opts: DoctorOptions): Promise<number> {
       secrets,
       scheduling_drift: schedulingDrift,
       founder_skills: founderSkills,
+      expert_routes: expertRoutes,
       fix: fixOutcome,
       interactive_fix: interactiveOutcome,
     };

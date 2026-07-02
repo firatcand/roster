@@ -378,6 +378,15 @@ Workspace identity. Fields: `name`, `display_name`, `stage`, `audience`, `motion
 
 Per-agent configuration: `plans_dir`, `guideline_refs` (workspace-rooted paths), and `tools:` bindings (each with `env_var` and `required:`). Schema validated by `src/lib/agent-config-schema.ts`.
 
+### `founder-skills.yaml`
+
+Optional workspace manifest of [founder-skills](https://github.com/firatcand/founder-skills) (`source`, `ref`, `skills:`), installed project-local by `roster skills sync` and pinned in `founder-skills.lock`. `roster doctor` runs two sections against it:
+
+| Doctor section | Semantics |
+|---|---|
+| **Founder skills** | Manifest ↔ lock ↔ installed drift. Fail-loud — any finding flips the exit code. |
+| **Expert routes** | `<function>/EXPERT.md` skill routes not covered by the manifest (built-ins like `frontend-design` excepted). **Warnings only — never affects the exit code**; `expert_routes` in `--json`. Not-applicable when the manifest is absent or invalid (an invalid manifest is reported by Founder skills alone). |
+
 ### `<agent>/CLAUDE.md` (optional)
 
 Agent-level rules — usually not needed; agent.md is the contract.
