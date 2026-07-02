@@ -244,6 +244,8 @@ tools:
 
 `guideline_refs:` paths starting with `/` are **workspace-root-relative**, not absolute filesystem paths. The loader strict-rejects literal absolute paths (`/Users/...`, `/home/...`, `/etc/...`) to avoid ambiguity.
 
+Guideline files come in two tiers. **Workspace-canonical** files are listed in the scaffold's `conventions.md` table, warned on by `audit-repo.sh` when marked Required, and — for the `voice`/`icps`/`messaging` trio — referenced by default in every agent `new-agent.sh` scaffolds. **Project-local** files are any `guidelines/<name>.md` you create and opt into per agent via `guideline_refs:`. Promotion from local to canonical is a documented manual checklist (`conventions.md` § "Adding a new guideline file") — no CLI machinery. Both tiers survive `roster upgrade`: `guidelines/` is excluded from upgrade by default (`DEFAULT_UPGRADE_EXCLUDES`), so user-authored guideline content is never touched.
+
 This pattern keeps secrets out of `agent.md` (which is committed) and out of `config.yaml` (which is also committed but contains references like `env_var: APOLLO_API_KEY`, not the value itself). Values live in `.env` files only.
 
 ## Scheduling

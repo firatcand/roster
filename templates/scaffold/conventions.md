@@ -500,6 +500,36 @@ Files under `guidelines/` at the workspace root. Read by every agent operating i
 
 ICPs note: each persona is a separate file under `icps/`. Buying signals, intent triggers, qualification criteria all live inside the relevant ICP file (not in a separate signals.md).
 
+"Required" and "default ref" are two different tiers. "Required: Yes" means `scripts/audit-repo.sh` warns when the file is missing — an audit-enforced warning, not a hard failure. It does NOT mean every new agent references the file: `scripts/new-agent.sh` scaffolds `guideline_refs:` with only the `voice` / `icps` / `messaging` trio. `brand-book.md` and `asset-links.md` are required-but-not-default-ref by design — agents pull them via `asset-links.md` when a task needs assets, rather than loading them on every run.
+
+### Adding a new guideline file
+
+Two tiers. Start project-local; promote when the file earns it.
+
+**Project-local (opt-in — the default).**
+
+1. Create `guidelines/<name>.md`.
+2. Reference it from each agent that needs it, in that agent's `config.yaml`:
+
+   ```yaml
+   guideline_refs:
+     channel_playbook: /guidelines/channel-playbook.md
+   ```
+
+Done — nothing else to wire. Paths are workspace-root-relative (see § "Agent config schema"). `scripts/audit-agent.sh` warns (without failing the audit) when a ref points at a file that doesn't exist yet — refs may be staged before content lands, but the agent runtime will refuse to load a dangling ref.
+
+**Workspace-canonical (promotion).** When every agent — including future ones — should know the file, additionally:
+
+1. Add a row to the table above (`Required?` = Yes or Optional).
+2. If Required: add the filename to the required list in `scripts/audit-repo.sh` (at the `# promoted guideline files: append here` marker).
+3. If every future agent should reference it by default: add it to the default `guideline_refs:` block in `scripts/new-agent.sh`.
+
+These three lists live in YOUR workspace — this checklist is how they stay in sync, and the audit (`scripts/audit-repo.sh`, or `/chief-of-staff audit-repo`) catches a missing Required file as a warning.
+
+**Worked example — `guidelines/channel-playbook.md`.** You write per-channel outreach rules that `gtm/sdr` needs. Project-local: create the file, add `channel_playbook: /guidelines/channel-playbook.md` under `guideline_refs:` in `gtm/sdr/config.yaml`. A quarter later three agents reference it and every new agent should too — promote it: add a `channel-playbook.md | Per-channel outreach rules | Optional` row to the table, and add `channel_playbook: /guidelines/channel-playbook.md` to `new-agent.sh`'s default refs. Mark it Required (and extend `audit-repo.sh`'s list) only if a workspace missing the file is genuinely broken.
+
+**Upgrade protection.** `roster upgrade` excludes `guidelines/` by default (`DEFAULT_UPGRADE_EXCLUDES` in the CLI), so files in either tier survive upgrades untouched. Edits you make to `scripts/*.sh` and to this file are upgrade-managed: they surface as `<file>.new` conflicts only when the upstream template also changed (the standard conflict flow) — never silently overwritten.
+
 ## Asset references
 
 Two sides:
@@ -620,4 +650,4 @@ Ask before guessing. Inconsistent conventions are worse than missing ones. Write
 
 ---
 
-Last updated: 2026-05-21.
+Last updated: 2026-07-02.

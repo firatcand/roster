@@ -311,11 +311,11 @@ Renames an agent everywhere it appears (folder, slash command, repo-wide referen
 
 ### `audit-agent.sh <function> <agent>`
 
-Validates agent structure: `agent.md` required sections, `config.yaml` schema, `plans/`, slash command, README, `.mcp.json`, subagents.
+Validates agent structure: `agent.md` required sections, `config.yaml` schema, `plans/`, slash command, README, `.mcp.json`, subagents. Also warns — never fails — when a `config.yaml` `guideline_refs:` entry points at a file that doesn't exist, escapes the workspace root, or uses a literal absolute path the runtime loader would reject (mirrors `agent-config-schema` semantics). Requires PyYAML; without it the audit reports "guideline_refs not checked" explicitly.
 
 ### `audit-repo.sh`
 
-Aggregator. Runs agent audits across every `<function>/<agent>/` plus workspace-level checks (universal `.mcp.json`, root files, `config/project.yaml`, `guidelines/` presence).
+Aggregator. Runs agent audits across every `<function>/<agent>/` plus workspace-level checks (universal `.mcp.json`, root files, `config/project.yaml`, `guidelines/` presence). Its required `guidelines/` file list mirrors the "Required: Yes" rows of the scaffold's `conventions.md` table — extend it at the `# promoted guideline files: append here` marker per the promotion checklist in `conventions.md` § "Adding a new guideline file".
 
 ### Scheduling
 

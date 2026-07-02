@@ -62,7 +62,7 @@ pnpm build           # tsdown → bin/roster.js with shebang
 pnpm test            # node --test on test/**/*.test.ts
 pnpm smoke           # bash test/smoke.sh — pack, install, init end-to-end
 pnpm perf            # bash test/perf.sh — measure install/init/doctor + tarball against SPEC budgets (dev-machine only)
-pnpm test:scaffold-scripts # bash test/new-agent-slash-only.sh — exercises templates/scaffold/scripts/new-agent.sh
+pnpm test:scaffold-scripts # test/new-agent-slash-only.sh + test/audit-agent-guideline-refs.sh — exercises templates/scaffold/scripts/
 npm pack --dry-run   # confirm tarball stays clean (~64 kB, ~80 files at v0.1.0)
 ```
 
@@ -104,7 +104,7 @@ The Phase gate command (run before opening a PR): `pnpm typecheck && pnpm build 
 
 ## Dogfooding
 
-There is no in-repo agent-team workspace anymore. To exercise the workspace pattern shipped by `roster init` (`/sdr`, `/chief-of-staff`, `/dreamer`, etc.), scaffold a workspace outside this repo with `roster init` and report regressions back here. The shipped scaffold is exercised in-CI by `pnpm smoke` (`roster init` into a tmpdir) and `pnpm test:scaffold-scripts` (the `new-agent.sh --slash-only` regression suite).
+There is no in-repo agent-team workspace anymore. To exercise the workspace pattern shipped by `roster init` (`/sdr`, `/chief-of-staff`, `/dreamer`, etc.), scaffold a workspace outside this repo with `roster init` and report regressions back here. The shipped scaffold is exercised in-CI by `pnpm smoke` (`roster init` into a tmpdir) and `pnpm test:scaffold-scripts` (the `new-agent.sh --slash-only` and `audit-agent.sh` guideline-refs regression suites).
 
 ## When in doubt
 
