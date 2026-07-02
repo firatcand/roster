@@ -819,7 +819,9 @@ function renderFounderSkillsSection(result: FounderSkillsDriftResult): string[] 
 }
 
 // Warning-tier section (ROS-129): renders ⚠ findings but is intentionally
-// excluded from the exit-code aggregate — see auditExpertRoutes.
+// excluded from the exit-code aggregate — see auditExpertRoutes. Warning
+// messages arrive pre-sanitized (control chars from untrusted EXPERT.md route
+// text are hex-escaped by sanitizeRouteForDisplay) so they are safe to print.
 function renderExpertRoutesSection(result: ExpertRoutesAuditResult): string[] {
   if (result.status === 'not-applicable') {
     if (result.reason === 'no-manifest') return [];

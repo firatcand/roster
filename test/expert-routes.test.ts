@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -11,15 +11,28 @@ import {
 import { isSafeSkillName } from '../src/lib/founder-skills/manifest-schema.ts';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const TEMPLATE_FUNCTIONS = ['gtm', 'product', 'design', 'ops'] as const;
+const scaffoldRoot = join(repoRoot, 'templates', 'scaffold');
+
+const TEMPLATE_FUNCTIONS = readdirSync(scaffoldRoot, { withFileTypes: true })
+  .filter((d) => d.isDirectory() && existsSync(join(scaffoldRoot, d.name, 'EXPERT.md')))
+  .map((d) => d.name)
+  .sort();
 
 function templateRoutes(fn: string): string[] {
-  return parseExpertRoutes(
-    readFileSync(join(repoRoot, 'templates', 'scaffold', fn, 'EXPERT.md'), 'utf8'),
-  );
+  return parseExpertRoutes(readFileSync(join(scaffoldRoot, fn, 'EXPERT.md'), 'utf8'));
 }
 
 const covered = new Set([...KNOWN_FOUNDER_SKILLS, ...BUILTIN_SKILL_EXCEPTIONS]);
+
+test('scaffold ships at least the four function EXPERT.md templates', () => {
+  assert.ok(
+    TEMPLATE_FUNCTIONS.length >= 4,
+    `expected ≥4 EXPERT.md templates, found: ${TEMPLATE_FUNCTIONS.join(', ') || '(none)'}`,
+  );
+  for (const fn of ['design', 'gtm', 'ops', 'product']) {
+    assert.ok(TEMPLATE_FUNCTIONS.includes(fn), `missing scaffold template ${fn}/EXPERT.md`);
+  }
+});
 
 for (const fn of TEMPLATE_FUNCTIONS) {
   test(`${fn}/EXPERT.md routes resolve to known skills`, () => {
@@ -105,8 +118,39 @@ test('empty or malformed rows in the Skills section yield no bogus routes', () =
   assert.deepEqual(parseExpertRoutes(md), ['seo']);
 });
 
+test('a ### subsection table under ## Skills is not parsed as routes', () => {
+  const md = [
+    '## Skills',
+    '',
+    '| Task | Skill |',
+    '|---|---|',
+    '| a | seo |',
+    '',
+    '### Legacy routing',
+    '',
+    '| Task | Skill |',
+    '|---|---|',
+    '| b | not-a-route |',
+  ].join('\n');
+  assert.deepEqual(parseExpertRoutes(md), ['seo']);
+});
+
+test('only the first table under ## Skills counts', () => {
+  const md = [
+    '## Skills',
+    '| Task | Skill |',
+    '|---|---|',
+    '| a | seo |',
+    'Prose between tables.',
+    '| Task | Skill |',
+    '|---|---|',
+    '| b | not-a-route |',
+  ].join('\n');
+  assert.deepEqual(parseExpertRoutes(md), ['seo']);
+});
+
 test(
-  'catalog matches live founder-skills repo',
+  'checked-in catalog entries all exist upstream in founder-skills',
   {
     skip:
       process.env['ROSTER_NETWORK_SMOKE'] !== '1' &&
@@ -120,6 +164,7 @@ test(
           accept: 'application/vnd.github+json',
           'user-agent': 'roster-expert-routes-test',
         },
+        signal: AbortSignal.timeout(30_000),
       },
     );
     assert.ok(res.ok, `GitHub tree fetch failed: ${res.status} ${res.statusText}`);

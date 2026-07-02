@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { auditExpertRoutes } from '../src/lib/doctor-expert-routes.ts';
+import { auditExpertRoutes, sanitizeRouteForDisplay } from '../src/lib/doctor-expert-routes.ts';
 import { syncFounderSkills } from '../src/lib/founder-skills/sync.ts';
 import type { SkillsInstaller } from '../src/lib/founder-skills/installer.ts';
 
@@ -98,6 +98,33 @@ test('EXPERT.md under dot-dirs is ignored', () => {
     assert.equal(r.status, 'checked');
     if (r.status === 'checked') assert.deepEqual(r.warnings, []);
   });
+});
+
+test('hostile route text is control-escaped in warnings (text + JSON carry the same form)', () => {
+  withWorkspace((cwd) => {
+    writeFileSync(join(cwd, 'founder-skills.yaml'), 'skills:\n  - pricing\n');
+    writeExpert(cwd, 'gtm', ['\u001b[31mevil\u001b[0m']);
+    const r = auditExpertRoutes(cwd);
+    assert.equal(r.status, 'checked');
+    if (r.status === 'checked') {
+      assert.equal(r.warnings.length, 1);
+      assert.equal(r.warnings[0]!.route, '\\x1b[31mevil\\x1b[0m');
+      assert.ok(!r.warnings[0]!.route.includes('\u001b'), 'route must carry no raw ESC byte');
+      assert.ok(!r.warnings[0]!.message.includes('\u001b'), 'message must carry no raw ESC byte');
+      assert.match(r.warnings[0]!.message, /\\x1b\[31mevil\\x1b\[0m/);
+    }
+  });
+});
+
+test('sanitizeRouteForDisplay: escapes ANSI + newline, truncates, passes kebab through', () => {
+  assert.equal(
+    sanitizeRouteForDisplay('\u001b[31mevil\u001b[0m\nnext-line'),
+    '\\x1b[31mevil\\x1b[0m\\x0anext-line',
+  );
+  assert.equal(sanitizeRouteForDisplay('sales-skill'), 'sales-skill');
+  const long = sanitizeRouteForDisplay(`UPPER-${'a'.repeat(100)}`);
+  assert.equal(long.length, 61);
+  assert.ok(long.endsWith('…'));
 });
 
 // ── executeDoctor-level: warnings render but NEVER flip the exit code ────────

@@ -27,26 +27,32 @@ export const KNOWN_FOUNDER_SKILLS: readonly string[] = [
 export const BUILTIN_SKILL_EXCEPTIONS: readonly string[] = ['frontend-design'];
 
 const SKILLS_HEADING_RE = /^##\s+Skills\s*$/;
-const SECTION_END_RE = /^#{1,2}\s/;
+const ANY_HEADING_RE = /^#{1,6}\s/;
 const SEPARATOR_CELL_RE = /^:?-+:?$/;
 
-// Extract the second column of the `| Task | Skill |` table under `## Skills`,
-// stopping at the next `#`/`##` heading. Skips the header row and the
-// `|---|---|` separator, strips backticks and the `†` built-in marker, ignores
-// non-table lines, and dedupes.
+// Extract the second column of the FIRST `| Task | Skill |` table under
+// `## Skills`. Parsing stops at any heading (so a `###` subsection's table is
+// never picked up) and at the first non-table line once the table has started
+// (so only the first table counts). Non-table prose before the table is
+// skipped; the header row and `|---|---|` separator are skipped; backticks and
+// the `†` built-in marker are stripped; routes are deduped.
 export function parseExpertRoutes(markdown: string): string[] {
   const routes: string[] = [];
   const seen = new Set<string>();
   let inSkills = false;
+  let tableStarted = false;
   for (const raw of markdown.split('\n')) {
     const line = raw.trim();
-    if (SKILLS_HEADING_RE.test(line)) {
-      inSkills = true;
+    if (!inSkills) {
+      if (SKILLS_HEADING_RE.test(line)) inSkills = true;
       continue;
     }
-    if (!inSkills) continue;
-    if (SECTION_END_RE.test(line)) break;
-    if (!line.startsWith('|')) continue;
+    if (ANY_HEADING_RE.test(line)) break;
+    if (!line.startsWith('|')) {
+      if (tableStarted) break;
+      continue;
+    }
+    tableStarted = true;
     const cells = line
       .replace(/^\|/, '')
       .replace(/\|$/, '')
