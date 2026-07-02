@@ -82,13 +82,16 @@ export function auditExpertRoutes(cwd: string): ExpertRoutesAuditResult {
     } catch {
       continue;
     }
+    // Directory names are the same untrusted workspace content as route text —
+    // sanitize them too, or `file`/`message` smuggle raw escapes past the route gate.
+    const safeDir = sanitizeRouteForDisplay(entry.name);
     for (const route of parseExpertRoutes(markdown)) {
       if (covered.has(route)) continue;
       const safeRoute = sanitizeRouteForDisplay(route);
       warnings.push({
-        file: `${entry.name}/EXPERT.md`,
+        file: `${safeDir}/EXPERT.md`,
         route: safeRoute,
-        message: `${entry.name}/EXPERT.md routes to '${safeRoute}' — not covered by founder-skills.yaml; \`roster skills sync\` installs nothing for it`,
+        message: `${safeDir}/EXPERT.md routes to '${safeRoute}' — not covered by founder-skills.yaml; \`roster skills sync\` installs nothing for it`,
       });
     }
   }
