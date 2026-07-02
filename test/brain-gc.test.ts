@@ -245,6 +245,39 @@ test('divergent mount/chunk timestamps: a recent anchor mount can never vanish a
   }
 });
 
+test('divergent documents.source_path: eligibility anchors on the mount group, never the chunk copy', opts, async () => {
+  const fx = await provision();
+  try {
+    // Codex round-4: documents.source_path is denormalized and unenforced.
+    // Variant (a): d1's own copy says 'b.md' while its mount m1 lives in
+    // 'a.md'. m1's true replacement (m2, 'a.md') is 1 day old, but 'b.md'
+    // holds an old with-chunks mount m3 — anchoring on the chunk copy would
+    // wrongly delete d1.
+    const m1 = await insertMount(fx.pool, 'a.md', '5 years', ['sp-old']);
+    await fx.pool.query(`UPDATE brain.documents SET source_path = 'b.md' WHERE id = ${m1.chunkIds[0]}`);
+    await insertMount(fx.pool, 'a.md', '1 day', ['sp-mid']);
+    await insertMount(fx.pool, 'b.md', '3 years', ['sp-new']);
+    for (let run = 0; run < 2; run++) {
+      const deleted = await runGc(fx.pool, { interval: '2 years' });
+      assert.equal(deleted.documents, 0, `run ${run + 1} must delete nothing`);
+    }
+
+    // Variant (b): a mismatched chunk that IS current for its mount group —
+    // c1 is the only 'c.md' mount, so its chunk is in current_documents even
+    // though the chunk copy says 'b.md' (where an old mount exists). Deleting
+    // it would change current_documents (invariant break, not just widening).
+    const c1 = await insertMount(fx.pool, 'c.md', '5 years', ['sp-cur']);
+    await fx.pool.query(`UPDATE brain.documents SET source_path = 'b.md' WHERE id = ${c1.chunkIds[0]}`);
+    const before = (await fx.pool.query(`SELECT id FROM brain.current_documents ORDER BY id`)).rows;
+    const deleted = await runGc(fx.pool, { interval: '2 years' });
+    assert.equal(deleted.documents, 0);
+    const after = (await fx.pool.query(`SELECT id FROM brain.current_documents ORDER BY id`)).rows;
+    assert.deepEqual(after, before);
+  } finally {
+    await fx.drop();
+  }
+});
+
 test('read-time results are identical before and after gc (incl. merged entities)', opts, async () => {
   const fx = await provision();
   try {

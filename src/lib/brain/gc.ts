@@ -58,7 +58,11 @@ const ELIGIBLE_SQL: Record<GcTable, string> = {
       JOIN LATERAL (
         SELECT m.recorded_at AS superseded_at
           FROM brain.mounts m
-         WHERE m.source_path = d.source_path
+         -- key on the row's OWN mount's source_path: current_documents groups
+         -- by the mount's path, and documents.source_path is denormalized and
+         -- unenforced — a mismatched chunk must anchor with its mount's group,
+         -- never its own copy (Codex round-4).
+         WHERE m.source_path = mo.source_path
            AND m.id > d.mount_id
            AND EXISTS (SELECT 1 FROM brain.documents dm WHERE dm.mount_id = m.id)
          ORDER BY m.id
