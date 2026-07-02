@@ -181,9 +181,9 @@ Next steps:
 EOF
   else
     cat <<EOF
-No schedule-creation route found. Non-schedule \`claude://*\` literals (see §2 above) are recorded without triggering follow-up — the promotion signal is any \`schedule|routine|task\` route. Confirms Spike β finding — UI hand-off remains the only viable Claude schedule install path until [anthropics/claude-code#41364](https://github.com/anthropics/claude-code/issues/41364) ships.
+No schedule-creation route found. Non-schedule \`claude://*\` literals (see §2 above) are recorded without triggering follow-up — the promotion signal is a literal starting \`claude://schedule\`, \`claude://routine\`, or \`claude://task\`. Confirms Spike β's scheduling conclusion — UI hand-off remains the only viable Claude schedule install path until [anthropics/claude-code#41364](https://github.com/anthropics/claude-code/issues/41364) ships.
 
-Next probe due: first Monday of next month.
+Next probe due: next Claude Desktop release or the first Monday of next month, whichever comes first.
 EOF
   fi
 }
