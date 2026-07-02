@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import { createBrainPool, resolveBrainUrl, withBrainClient } from '../lib/brain/connect.ts';
-import { runMigrations } from '../lib/brain/migrate.ts';
+import { runMigrations, pendingMigrations } from '../lib/brain/migrate.ts';
 import { ensureRuntimeRole, buildRuntimeUrl, RUNTIME_ROLE } from '../lib/brain/roles.ts';
 import { runDoctor } from '../lib/brain/doctor.ts';
 import { saveEntity } from '../lib/brain/save.ts';
@@ -19,6 +19,14 @@ import { resolveEmbedder } from '../lib/brain/embed.ts';
 import { query as runQuery, type QueryHit } from '../lib/brain/search.ts';
 import { reindexBrain, countReindexTargets } from '../lib/brain/reindex.ts';
 import { EMBED_MODEL } from '../lib/brain/config.ts';
+import {
+  GC_TABLES,
+  countEligible,
+  preflightGc,
+  resolveRetention,
+  runGc,
+  type GcCounts,
+} from '../lib/brain/gc.ts';
 import { EXIT_OK, EXIT_ERROR, RosterError } from '../lib/errors.ts';
 
 export type BrainInitOptions = {
@@ -351,6 +359,93 @@ export type BrainReindexOptions = {
   yes: boolean;
   adminUrl?: string;
 };
+
+export type BrainGcOptions = {
+  json: boolean;
+  olderThan?: string;
+  yes: boolean;
+  adminUrl?: string;
+};
+
+function gcTotal(counts: GcCounts): number {
+  return GC_TABLES.reduce((sum, t) => sum + counts[t], 0);
+}
+
+export async function executeBrainGc(opts: BrainGcOptions): Promise<number> {
+  const adminUrl = opts.adminUrl ?? resolveBrainUrl('admin');
+  const pool = createBrainPool('admin', adminUrl);
+  try {
+    const pre = await withBrainClient(pool, (c) => preflightGc(c));
+    if (!pre.ok) {
+      const remedy =
+        pre.reason === 'runtime-url'
+          ? `  Point ROSTER_BRAIN_ADMIN_URL at the owner/admin role — gc is the only sanctioned deleter and never runs as the append-only runtime role.`
+          : pre.reason === 'missing-schema'
+            ? `  Run ${chalk.bold('roster brain init')} first.`
+            : `  Connect with a role that owns the brain schema (the one used for brain init).`;
+      throw new RosterError({
+        header: `${chalk.red.bold('roster:')} brain gc refused — ${pre.detail}`,
+        body: '',
+        remedy,
+        exitCode: EXIT_ERROR,
+      });
+    }
+
+    // After the runtime-URL check (the runtime role can't read schema_migrations,
+    // so this would raise a raw permission error first). A stale schema means the
+    // eligibility queries and gc.retention lookup can't be trusted — refuse.
+    const pending = await pendingMigrations(pool);
+    if (pending.length > 0) {
+      throw new RosterError({
+        header: `${chalk.red.bold('roster:')} brain gc refused — schema has ${pending.length} pending migration(s)`,
+        body: '',
+        remedy: `  Run ${chalk.bold('roster brain init')} first to bring the brain up to date.`,
+        exitCode: EXIT_ERROR,
+      });
+    }
+
+    const retention = await withBrainClient(pool, (c) => resolveRetention(c, opts.olderThan));
+    const eligible = await withBrainClient(pool, (c) => countEligible(c, retention.interval));
+    const total = gcTotal(eligible);
+
+    if (total === 0) {
+      if (opts.json) {
+        console.log(JSON.stringify({ ok: true, mode: 'preview', retention: retention.raw, eligible, deleted: null }, null, 2));
+      } else {
+        console.log(`${chalk.green('✓')} nothing to prune — no superseded rows older than ${retention.raw}`);
+      }
+      return EXIT_OK;
+    }
+
+    // Destructive-op guard (mirrors reindex's bulk-cost guard): never delete
+    // without an explicit --yes; preview the per-table counts and stop.
+    if (!opts.yes) {
+      if (opts.json) {
+        console.log(JSON.stringify({ ok: true, mode: 'preview', retention: retention.raw, eligible, deleted: null, pending_confirmation: true }, null, 2));
+      } else {
+        console.log(`${chalk.yellow('⚠')} ${total} superseded row(s) older than ${retention.raw} would be deleted:`);
+        for (const table of GC_TABLES) {
+          if (eligible[table] > 0) console.log(`    brain.${table}: ${eligible[table]}`);
+        }
+        console.log(`  Current versions are never touched. Re-run with ${chalk.bold('--yes')} to delete.`);
+      }
+      return EXIT_OK;
+    }
+
+    const deleted = await runGc(pool, { interval: retention.interval });
+    if (opts.json) {
+      console.log(JSON.stringify({ ok: true, mode: 'delete', retention: retention.raw, eligible, deleted }, null, 2));
+    } else {
+      console.log(`${chalk.green('✓')} pruned ${gcTotal(deleted)} superseded row(s) older than ${retention.raw}`);
+      for (const table of GC_TABLES) {
+        if (deleted[table] > 0) console.log(`    brain.${table}: ${deleted[table]}`);
+      }
+    }
+    return EXIT_OK;
+  } finally {
+    await pool.end();
+  }
+}
 
 export async function executeBrainReindex(opts: BrainReindexOptions): Promise<number> {
   if (opts.model !== undefined && opts.model !== EMBED_MODEL && opts.model !== `openai:${EMBED_MODEL}`) {

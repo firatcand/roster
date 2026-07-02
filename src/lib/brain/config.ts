@@ -1,4 +1,5 @@
 import type pg from 'pg';
+import { parseRetention } from './gc.ts';
 
 // Strict allowlist of brain settings stored in brain_meta.config. NOTHING secret
 // is ever stored here (the embedding API key is read from the environment). An
@@ -8,7 +9,8 @@ export type ConfigKey =
   | 'embeddings.provider'
   | 'embeddings.model'
   | 'search.rrf_k'
-  | 'search.graph_hops';
+  | 'search.graph_hops'
+  | 'gc.retention';
 
 export const EMBED_MODEL = 'text-embedding-3-small';
 
@@ -34,6 +36,7 @@ const KEYS: ReadonlySet<string> = new Set<ConfigKey>([
   'embeddings.model',
   'search.rrf_k',
   'search.graph_hops',
+  'gc.retention',
 ]);
 
 export function isConfigKey(k: string): k is ConfigKey {
@@ -67,6 +70,10 @@ export function parseConfigValue(key: ConfigKey, raw: string): unknown {
       const n = Number(raw);
       if (n !== 0 && n !== 1) throw new Error(`search.graph_hops must be 0 or 1`);
       return n;
+    }
+    case 'gc.retention': {
+      parseRetention(raw);
+      return raw;
     }
   }
 }

@@ -396,6 +396,8 @@ infisical run --env dev --path /<repo> -- roster brain config set embeddings.ena
 
 Day-to-day use is the `/brain` skill and the `roster brain` verbs (full reference in [API.md](API.md) §Brain). Where each piece of knowledge goes is governed by `brain/RESOLVER.md` in your workspace.
 
+The brain is append-only, so replaced fact versions and re-mounted file chunks accumulate. `roster brain gc` (admin URL, like `init`) prunes superseded **versions** once both the version and its replacement are older than the retention window — 2 years by default (`--older-than 18mo` per run, or persist with `roster brain config set gc.retention 18mo`). The current version of everything always survives, whatever its age, and events/edges (visible history) are never touched. It previews counts and only deletes with `--yes` — append-only enforcement for agents is unaffected; gc is the one sanctioned deleter and never runs as the runtime role.
+
 ---
 
 ## 12. Back up the brain
