@@ -20,7 +20,7 @@
 
 | Pillar | What it means |
 |---|---|
-| **Lightweight** | One npm install. No servers, no databases, no SaaS layer. Tiny tarball, no proprietary DSL — your workspace is just markdown and YAML you own and can hand-edit. |
+| **Lightweight** | One npm install. No servers, no SaaS layer, no proprietary DSL — your workspace is just markdown and YAML you own and can hand-edit. The base product needs zero infrastructure; the one optional add-on is `roster brain`, a bring-your-own-Postgres knowledge store you turn on only if you want it. |
 | **Subscription-safe** | Runs on the flat-rate [Claude Code](https://claude.com/code) or [Codex CLI](https://github.com/openai/codex) subscription you already pay for. No per-token API bills, no third-party agent platform. |
 | **Operator-first** | Built by someone running a real business. GTM, product, design, and ops are first-class roles — not a chatbot wrapped in marketing copy. |
 | **Schedule-native** | Agents run on cron-like schedules through your host tool's native scheduler. Daily morning runs, weekly competitor sweeps, PR-triggered design QA. |
@@ -59,7 +59,9 @@ directory, install Roster for Claude Code or Codex, run roster doctor, and stop
 if Node is below 22.18, no supported AI tool is installed, or doctor fails.
 ```
 
-Prefer project scope for the first install. It keeps skills and agents inside the workspace (`.claude/` or `.codex/`) so the setup is reproducible and does not pollute other projects. Use user scope only when the user explicitly wants Roster available across every project on the machine.
+Prefer project scope for the first install. It keeps skills and agents inside the workspace (`.claude/`, `.agents/`, `.codex/`, `.gemini/`) so the setup is reproducible and does not pollute other projects. Use user scope only when the user explicitly wants Roster available across every project on the machine.
+
+To understand what you just scaffolded — the function/agent/plan tree, where guidelines and HITL queues live, the shape of an agent folder — read the [Workspace anatomy](#workspace-anatomy) section below before creating any agents.
 
 ---
 
@@ -98,6 +100,9 @@ Using 1Password or Infisical? Compose them with the `.env` model via the recipes
 | `roster task list` / `status` | Claimable pool + your in-flight tasks; `status` adds the stage digest + needs-your-attention call-out |
 | `roster task claim/start/submit/done…` | Drive a task through its lifecycle on your board (also `block --reason`, `unblock`, `revise`, `cancel`). `/tasks` is the chat front door. |
 | `roster hooks install` | Wire SessionStart banners so chat sessions surface unread-decision counts |
+| `roster brain <verb>` | **Opt-in** append-only Postgres knowledge store — `init`, `save`/`get`/`query`, `mount`, `export`/`import`, `gc` (bring-your-own Neon; connection in Infisical, never `.env`) |
+| `roster migrate <target>` | Migrate a legacy `agent-team` workspace (`from-agent-team`) or legacy Codex skills into `.agents/skills` (`codex-skills`) |
+| `roster pending sync` | Synthesize HITL items from failed-fire signals (`.exit` + STALE) — run automatically by the SessionStart banner |
 
 Full subcommand reference in [docs/HOWTO.md](docs/HOWTO.md). Scheduling rules, UI hand-off, and platform matrix in [docs/SCHEDULING.md](docs/SCHEDULING.md).
 
@@ -133,6 +138,90 @@ Roster scaffolds an opinionated **function → agent → plan** tree. Functions 
 The opinion that keeps it useful at week 12 is **substrate vs artifacts**: long-lived context (voice, ICPs, messaging, brand) lives at the workspace root in `guidelines/`. Daily tactical output (emails, posts, PR comments) lands in `<function>/<agent>/logs/runs/`; anything that needs human approval first lands in `<agent>/pending/`. Experts shape substrate. Agents produce artifacts. Don't conflate them.
 
 A nightly **reinforcement** pass (the `dreamer` skill) reads runs + feedback, detects recurring patterns, and proposes lessons to the agent that produced them. You approve before anything is written. Quality compounds.
+
+### The brain — optional shared memory
+
+By default the memory layer is just files in Git: run logs, playbook lessons, guidelines. When a workspace outgrows that, opt into **`roster brain`** — a workspace-scoped, append-only Postgres knowledge store (bring-your-own [Neon](https://neon.tech); connection string lives in Infisical, never `.env`). The team reads and writes it through structured verbs — `save` (entities + provenance-stamped facts), `event`, `link` (typed graph edges), `get`, `query` (hybrid semantic + keyword + graph search), `mount` (ingest a file as searchable chunks) — instead of scattering facts across markdown. It is **append-only and versioned**: the restricted runtime role physically cannot `UPDATE`, `DELETE`, or `DROP`, so corrections supersede and history stays. Turn it on with `roster brain init`; skip it entirely and nothing else changes. Full model in [docs/HOWTO.md](docs/HOWTO.md) and `brain/RESOLVER.md` inside your workspace.
+
+---
+
+## Workspace anatomy
+
+`roster init` scaffolds an opinionated tree. The philosophy: **one workspace = one product**, identity in `config/`, long-lived context in `guidelines/`, and agents as the unit of reuse. Nothing is a black box — every file below is markdown or YAML you can read and hand-edit.
+
+### What `roster init` gives you
+
+```
+my-team/                          # your workspace (= one product)
+├── CLAUDE.md                     # behavioral rules + identity, loaded at session start
+├── conventions.md                # the long-form structure reference (the full schema)
+├── config/
+│   └── project.yaml              # machine-readable identity (name, stage, motion, audience)
+├── guidelines/                   # cross-agent substrate — every agent reads these
+│   ├── voice.md                  # tone, vocabulary, sentence patterns
+│   ├── messaging.md              # value props, headlines, anti-claims
+│   ├── brand-book.md             # visual identity, logo usage
+│   ├── asset-links.md            # local paths + URLs to brand assets
+│   └── icps/_persona-template.md # one file per ICP/persona
+├── gtm/  product/  design/  ops/ # functions — top-level domains (see .config/functions.yaml)
+│   └── EXPERT.md                 # function-level advisor prompt (shapes substrate, not artifacts)
+├── chief-of-staff/               # built-in agent: scaffolds + audits the workspace itself
+│   ├── agent.md
+│   └── plans/{create-agent,create-function,audit-agent,audit-repo}.yaml
+├── dreamer/                      # built-in agent: nightly reinforcement (drafts lessons → HITL)
+│   ├── agent.md
+│   ├── plans/nightly-reflection.yaml
+│   └── subagents/{lesson-drafter,pattern-detector}.md
+├── brain/
+│   └── RESOLVER.md               # how the team writes to the optional Postgres brain
+├── scripts/                      # scaffolding helpers (new-agent, audit-*, save-state, rename-agent)
+├── logs/cron/                    # cron stdout/stderr + .exit / .events.jsonl for failure observability
+├── .config/functions.yaml        # registry of function categories (single source of truth)
+├── founder-skills.yaml.example   # rename → founder-skills.yaml to pin founder-skills
+├── .env.example                  # copy → .env, chmod 600, fill secrets (workspace-wide)
+├── .gitignore                    # roster defaults appended idempotently
+└── .claude/  .agents/  .gemini/  # skills + agents (written by `roster install`)
+```
+
+Fresh function folders (`gtm/`, `product/`, `design/`, `ops/`) start empty except for their `EXPERT.md`. You add agents into them with `/chief-of-staff create-agent <function> <agent>` (or `bash scripts/new-agent.sh <function> <agent>`). The scheduler runtime tree — `roster/<function>/` with `schedules.yaml`, a `state.md` fire log, and a `pending/` queue — is created the first time you run `roster schedule install`.
+
+### The shape of an agent
+
+Every agent scaffolds at `<function>/<agent>/` — flat, no per-project nesting. This is the unit of reuse: copy the folder to another workspace and the agent comes with it.
+
+```
+gtm/sdr/                          # <function>/<agent>
+├── agent.md                      # behavioral prompt + tool-bindings schema (Purpose, Inputs,
+│                                 #   Plans, Subagents, Tools, Outputs, Approval, Lessons)
+├── config.yaml                   # guideline refs + tool bindings (workspace-root-relative paths)
+├── plans/<plan>.yaml             # named, schedulable workflow recipes (ordered steps + I/O contract)
+├── subagents/<name>.md           # narrow, single-responsibility helpers the plans dispatch
+├── playbook/<lesson>.md          # validated lessons (dreamer- or human-authored)
+├── pending/<item>.md             # HITL items awaiting your approval (dreamer drafts land here)
+├── logs/runs/<YYYY-MM>/          # one file per invocation (inputs, steps, outputs, candidate lessons)
+├── logs/feedback/<YYYY-MM>/      # your feedback, mirroring run filenames
+├── .env                          # agent-scoped secret overrides (optional, 0600) — inherits root /.env
+└── .mcp.json                     # agent-scoped MCP servers (optional)
+```
+
+### The pieces, in one line each
+
+| Piece | What it is |
+|---|---|
+| **Functions** (`gtm/`, `product/`, `design/`, `ops/`) | Top-level domains, registered in `.config/functions.yaml`. Add one with `create-function` only when 2–3 agents will live there within ~90 days. |
+| **Experts** (`<function>/EXPERT.md`) | Function-level advisors that shape substrate (`guidelines/`) — judgment, not tactical output. Invoke ad-hoc: *"Use the GTM expert to critique guidelines/icps/."* |
+| **Agents** (`<function>/<agent>/`) | The doers. Run named **plans**, produce artifacts, log every run. The unit of reuse. |
+| **Plans** (`<agent>/plans/<plan>.yaml`) | Deterministic, repeatable, schedulable workflow recipes. No default plan — invoking an agent without one asks which to run. |
+| **Subagents** (`<agent>/subagents/<name>.md`) | Narrow single-responsibility helpers a plan's steps dispatch. |
+| **Guidelines** (`guidelines/`) | Cross-agent substrate: voice, ICPs, messaging, brand, assets. Read by every agent; **excluded from `roster upgrade`** so your content is never overwritten. |
+| **Playbook + pending** (`<agent>/playbook/`, `<agent>/pending/`) | Validated lessons vs. HITL items awaiting approval. The dreamer drafts to `pending/`; on approval a lesson moves to `playbook/`. |
+| **Chief of Staff** (`chief-of-staff/`) | Built-in maintenance agent — scaffolds and audits the workspace. Never runs business workflows. |
+| **Dreamer** (`dreamer/`) | Built-in reinforcement agent — reads runs + feedback nightly, proposes lessons through HITL. |
+| **Scheduler runtime** (`roster/<function>/`) | `schedules.yaml` entries, a `state.md` fire log, and a `pending/` queue surfaced on session start. |
+| **Scripts** (`scripts/`) | Bash helpers backing the chief-of-staff plans (`new-agent.sh`, `audit-agent.sh`, `audit-repo.sh`, …). |
+| **Brain** (`brain/RESOLVER.md`) | Router for the optional Postgres knowledge store — read before writing so knowledge doesn't fragment. |
+
+The full schema — plan step types, tool bindings, lesson lifecycle, run/feedback file formats, HITL routing — lives in `conventions.md` inside your workspace and in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 
