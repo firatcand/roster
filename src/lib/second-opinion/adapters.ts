@@ -180,9 +180,17 @@ function geminiPreflight(opts: AdapterPreflightOpts): AdapterPreflightResult {
       });
     }
   }
-  // Persisted auth selection: home settings + every .gemini/settings.json in
-  // the cwd ancestry (workspace settings apply to the child).
+  // Persisted auth selection: system settings (env-pointed override plus the
+  // documented platform defaults — Codex impl-pass round-7 finding 1), home
+  // settings, and every .gemini/settings.json in the cwd ancestry (workspace
+  // settings apply to the child).
   const settingsCandidates = [join(opts.homeDir, '.gemini', 'settings.json')];
+  const systemOverride = opts.env['GEMINI_CLI_SYSTEM_SETTINGS_PATH'];
+  if (envSet(systemOverride)) settingsCandidates.push(systemOverride!);
+  settingsCandidates.push(
+    '/Library/Application Support/GeminiCli/settings.json',
+    '/etc/gemini-cli/settings.json',
+  );
   let settingsDir = opts.cwd;
   for (;;) {
     settingsCandidates.push(join(settingsDir, '.gemini', 'settings.json'));

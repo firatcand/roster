@@ -304,3 +304,29 @@ test('adapters: gemini fails closed on malformed settings.json', () => {
     assert.equal(r.ok, false);
   });
 });
+
+test('adapters: gemini refuses when GEMINI_CLI_SYSTEM_SETTINGS_PATH points at non-oauth auth (round-7)', () => {
+  withTmpHome((homeDir, cwd) => {
+    mkdirSync(join(homeDir, '.gemini'), { recursive: true });
+    writeFileSync(join(homeDir, '.gemini', 'oauth_creds.json'), '{}');
+    const sys = join(homeDir, 'system-settings.json');
+    writeFileSync(sys, JSON.stringify({ security: { auth: { selectedType: 'vertex-ai' } } }));
+    const r = getAdapter('gemini').preflight({ homeDir, cwd, env: { GEMINI_CLI_SYSTEM_SETTINGS_PATH: sys } });
+    assert.equal(r.ok, false);
+    if (!r.ok) assert.ok(r.failures.some((f) => f.check === 'selected_auth_type'));
+  });
+});
+
+test('adapters: gemini passes when the system-settings override selects oauth or is absent', () => {
+  withTmpHome((homeDir, cwd) => {
+    mkdirSync(join(homeDir, '.gemini'), { recursive: true });
+    writeFileSync(join(homeDir, '.gemini', 'oauth_creds.json'), '{}');
+    const sys = join(homeDir, 'system-settings.json');
+    writeFileSync(sys, JSON.stringify({ selectedAuthType: 'oauth-personal' }));
+    assert.equal(getAdapter('gemini').preflight({ homeDir, cwd, env: { GEMINI_CLI_SYSTEM_SETTINGS_PATH: sys } }).ok, true);
+    assert.equal(
+      getAdapter('gemini').preflight({ homeDir, cwd, env: { GEMINI_CLI_SYSTEM_SETTINGS_PATH: join(homeDir, 'nope.json') } }).ok,
+      true,
+    );
+  });
+});
