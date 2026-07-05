@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-// Fail-closed subscription preflight for spawning `claude -p` as a second-opinion
+// Fail-closed subscription preflight for spawning `claude -p` as a second-opinion <!-- roster-audit-ok: claude-p-flag -->
 // reviewer (ROS-155, Codex 2nd-pass finding 1). Env-scrub alone is NOT a
 // guarantee: an apiKeyHelper in settings.json or Bedrock/Vertex mode would
 // still route the child through API billing. Mirror of runCodexPreflight:
