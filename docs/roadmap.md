@@ -2,13 +2,12 @@
 
 Public view of what's shipped, what's deferred, and what's next. Detailed task tracking lives in Linear under project `roster` (issues `ROS-*`); planning artifacts (`spec/`, `plans/phases.yaml`) are local-only and not in the repo.
 
-## In progress
-
-### v1.7.0 — second opinion (ROS-155)
-
-Cross-model structured review: `roster second-opinion` sends any artifact (files, `--stdin`, `--diff [ref]`) to a different AI CLI (`codex`, `gemini`, or `claude`) and returns a structured verdict with severity-ranked findings (`major`/`minor`/`nit`/`praise`). A fail-closed preflight (`HOST_NOT_SUBSCRIPTION`) refuses before spawning if the call would incur per-token API charges. The `/second-opinion` skill is the chat front door for all three hosts. ADR-0002 (`docs/adr/0002-second-opinion-claude-adapter.md`) documents the scoped `claude -p` exception; the global ban in `roster doctor` is unchanged. Branch open; targeting v1.7.0. Full changelog: [CHANGELOG.md](../CHANGELOG.md#unreleased).
-
 ## Released
+
+### v1.7.0 — second opinion — 2026-07-06
+
+Cross-model structured review: `roster second-opinion` sends any artifact (files, `--stdin`, `--diff [ref]`) to a different AI CLI (`codex`, `gemini`, or `claude`) and returns a structured verdict with severity-ranked findings (`major`/`minor`/`nit`/`praise`). A fail-closed preflight (`HOST_NOT_SUBSCRIPTION`) refuses before spawning if the call would incur per-token API charges. The `/second-opinion` skill is the chat front door for all three hosts. ADR-0002 (`docs/adr/0002-second-opinion-claude-adapter.md`) documents the scoped `claude -p` exception; the global ban in `roster doctor` is unchanged. Shipped in PR [#301](https://github.com/firatcand/roster/pull/301). Full changelog: [CHANGELOG.md](../CHANGELOG.md#170--2026-07-06).
+
 
 ### v1.6.0 — brain hardening — 2026-07-02
 
