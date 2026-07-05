@@ -31,6 +31,8 @@ import {
   executeScheduleEstimateUsage,
 } from '../commands/schedule.ts';
 import { executeReview } from '../commands/review.ts';
+import { executeSecondOpinion } from '../commands/second-opinion.ts';
+import { parseSecondOpinionArgs } from '../lib/second-opinion-args.ts';
 import { executeSkillsSync, executeSkillsUpdate, renderSyncResult } from '../commands/skills.ts';
 import { parseSkillsArgs } from '../lib/skills-args.ts';
 import { executeUpgradeCommand } from '../commands/upgrade.ts';
@@ -77,13 +79,14 @@ import {
   workspaceRequiredError,
 } from '../lib/errors.ts';
 
-type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'hooks' | 'migrate' | 'pending' | 'skills' | 'upgrade' | 'update' | 'brain' | 'task';
+type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'second-opinion' | 'hooks' | 'migrate' | 'pending' | 'skills' | 'upgrade' | 'update' | 'brain' | 'task';
 const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'install',
   'init',
   'doctor',
   'schedule',
   'review',
+  'second-opinion',
   'hooks',
   'migrate',
   'upgrade',
@@ -132,6 +135,7 @@ function printHelp(version: string): void {
     `  roster skills sync           ${chalk.dim('Install founder-skills declared in founder-skills.yaml (project-local)')}`,
     `  roster skills update [--latest]  ${chalk.dim('Re-sync from the manifest (lock records result), or bump pinned refs to newest tags')}`,
     `  roster review [function]     ${chalk.dim('Review unread decisions (HITL); --json to list, --approve/--reject <id|path> to apply')}`,
+    `  roster second-opinion <files|--stdin|--diff>  ${chalk.dim('Ask a DIFFERENT AI CLI (codex|gemini|claude) for a structured review')}`,
     `  roster pending sync          ${chalk.dim('Synthesize HITL items from failed-fire signals (.exit + STALE)')}`,
     `  roster task setup            ${chalk.dim('Map your Notion board to canonical task states → roster/tracker.yaml (--data-source, --yes, --json)')}`,
     `  roster task list             ${chalk.dim('Show the claimable pool + your in-flight tasks (--json)')}`,
@@ -165,6 +169,9 @@ function printHelp(version: string): void {
     `  --json                       ${chalk.dim('Emit machine-readable JSON (doctor, schedule validate)')}`,
     `  --fix                        ${chalk.dim('Auto-fix broken symlinks + .env permissions (doctor)')}`,
     `  --cwd <dir>                  ${chalk.dim('Run schedule validate against a different cwd')}`,
+    `  --host <name>                ${chalk.dim('Reviewer host: claude | codex | gemini (second-opinion; default: first installed ≠ recommended by skill)')}`,
+    `  --message <text>             ${chalk.dim('What the reviewer should focus on (second-opinion)')}`,
+    `  --timeout <sec>              ${chalk.dim('Reviewer wall clock, default 180 (second-opinion)')}`,
     `  --dest <dir>                 ${chalk.dim('Destination workspace for migrate (default: cwd)')}`,
     `  --dry-run                    ${chalk.dim('Print plan without writes (schedule *, doctor, migrate)')}`,
     `  --force-resync               ${chalk.dim('Re-copy source files that changed since last migration (migrate)')}`,
@@ -782,6 +789,27 @@ async function runDoctor(args: readonly string[]): Promise<number> {
   return code;
 }
 
+async function runSecondOpinion(args: readonly string[]): Promise<number> {
+  const parsed = parseSecondOpinionArgs(args);
+  if (parsed.kind === 'err') {
+    throw new RosterError({
+      header: `${chalk.red.bold('roster:')} ${parsed.message}`,
+      body: '',
+      remedy: `  Usage: roster second-opinion [files...] [--stdin] [--diff [ref]] [--host claude|codex|gemini] [--message "focus"] [--timeout sec] [--json]`,
+      exitCode: EXIT_ERROR,
+    });
+  }
+  return await executeSecondOpinion({
+    files: parsed.files,
+    ...(parsed.host !== undefined ? { host: parsed.host } : {}),
+    ...(parsed.message !== undefined ? { message: parsed.message } : {}),
+    stdin: parsed.stdin,
+    ...(parsed.diff !== undefined ? { diff: parsed.diff } : {}),
+    timeoutSec: parsed.timeoutSec,
+    json: parsed.json,
+  });
+}
+
 function isSubcommand(value: string): value is Subcommand {
   return SUBCOMMANDS.has(value);
 }
@@ -815,6 +843,7 @@ async function main(): Promise<number> {
     if (first === 'doctor') return await runDoctor(rest);
     if (first === 'schedule') return await runSchedule(rest);
     if (first === 'review') return await runReview(rest);
+    if (first === 'second-opinion') return await runSecondOpinion(rest);
     if (first === 'skills') return await runSkills(rest);
     if (first === 'upgrade') return runUpgrade(rest);
     if (first === 'update') return await runUpdate(rest);
