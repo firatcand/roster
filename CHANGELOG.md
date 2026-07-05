@@ -6,7 +6,11 @@ Per-phase retrospectives live in [`docs/retros/`](docs/retros/) and carry the lo
 
 ## [Unreleased]
 
-_(empty — staging area for post-1.6.0 work)_
+### Added
+
+- **`roster second-opinion` — cross-model structured review.** Send any artifact (files, `--stdin`, or `--diff [ref]`) to a different AI CLI (`codex`, `gemini`, or `claude`) and receive a structured verdict: `{summary, findings[{severity, message, location?, confidence?}], host, structured}`. Severity levels: `major`, `minor`, `nit`, `praise`. Flags: `[files...] [--host <host>] [--message "<focus>"] [--stdin] [--diff [ref]] [--timeout <sec>] [--json]`. Each host has a fail-closed preflight — exits `HOST_NOT_SUBSCRIPTION` before spawning if the call would bill per-token: `claude` refuses on `ANTHROPIC_API_KEY`/`AUTH_TOKEN`/`apiKeyHelper`/Bedrock/Vertex env or missing OAuth credential; `codex` reuses `runCodexPreflight`; `gemini` refuses on `GEMINI_API_KEY` or missing `oauth_creds.json`. The brief travels via child stdin, never argv. (ROS-155)
+- **`/second-opinion` skill** — cross-tool chat skill (Claude Code / Codex / Gemini) routing plain-language review requests through `roster second-opinion` — data-egress notice, cross-model host pick, verdict rendering, evaluation discipline. (ROS-155)
+- **Scoped `claude -p` audit exception.** The one sanctioned `claude -p` call (in `src/lib/second-opinion/adapters.ts`) carries a `roster-audit-ok` marker, is guarded by the Claude preflight, and is documented in `docs/adr/0002-second-opinion-claude-adapter.md` (ADR-0002). The global `claude -p` ban in `roster doctor` remains. (ROS-155)
 
 ## [1.6.0] — 2026-07-02
 

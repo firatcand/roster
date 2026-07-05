@@ -513,6 +513,43 @@ mapped**, the task stays Active after `block` — check board comments for conte
 
 ---
 
+## 14. Get a second opinion
+
+`roster second-opinion` sends any artifact to a **different** AI CLI and returns a structured verdict. Use it when you want an independent read on a diff, a draft, or a set of files — without context from the model that produced the original.
+
+### When to use it
+
+- **Before merging**: `roster second-opinion --diff HEAD~1` routes everything changed since the previous commit to Codex (default host) for a fresh read.
+- **On a prose or messaging draft**: `roster second-opinion guidelines/messaging.md --message "Is the positioning sharp?"` gets structured critique you can triage.
+- **Piped from another tool**: `cat spec.md | roster second-opinion --stdin --host gemini`.
+
+### What the verdict looks like
+
+```json
+{
+  "summary": "The diff is sound but one naming inconsistency will confuse downstream agents.",
+  "findings": [
+    { "severity": "minor", "message": "...", "location": "src/lib/foo.ts:12", "confidence": 8 }
+  ],
+  "host": "codex",
+  "structured": true
+}
+```
+
+Omit `--json` to get a plain-text summary. Severity levels: `major`, `minor`, `nit`, `praise`. Pass `--message "<focus>"` to narrow the reviewer's attention (e.g., `"focus on subscription-safety"`).
+
+### `HOST_NOT_SUBSCRIPTION`
+
+If the target CLI would bill per-token — an API key in the environment, `apiKeyHelper` configured, or Bedrock/Vertex detected — `roster second-opinion` exits with `HOST_NOT_SUBSCRIPTION` **before spawning anything**. Options:
+
+- Switch host: `--host gemini` or `--host codex` (whichever authenticates via subscription OAuth on this machine).
+- Log in via the target CLI's subscription auth and retry.
+- Do not export `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` to work around this — that defeats the subscription-safe guarantee and the preflight will still refuse.
+
+The `/second-opinion` skill is the chat front door (Claude Code / Codex / Gemini); every dispatch routes through the CLI and hits the same preflight.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |
