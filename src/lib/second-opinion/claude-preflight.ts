@@ -104,14 +104,20 @@ export function runClaudePreflight(opts: ClaudePreflightOpts): ClaudePreflightRe
     });
   }
 
-  const bedrock = envFlagSet(env['CLAUDE_CODE_USE_BEDROCK']);
-  const vertex = envFlagSet(env['CLAUDE_CODE_USE_VERTEX']);
-  if (bedrock || vertex) {
+  // Any CLAUDE_CODE_USE_* switch routes claude through a third-party provider
+  // (Bedrock, Vertex, Foundry, and whatever ships next) billed to a cloud
+  // account, not the subscription. Refuse the whole family rather than
+  // chasing individual names (Codex impl-pass round-4 finding 1).
+  const providerFlags = Object.keys(env)
+    .filter((k) => k.startsWith('CLAUDE_CODE_USE_'))
+    .filter((k) => envFlagSet(env[k]))
+    .sort();
+  if (providerFlags.length > 0) {
     failures.push({
       check: 'env_bedrock_vertex',
-      actual: bedrock ? 'CLAUDE_CODE_USE_BEDROCK set' : 'CLAUDE_CODE_USE_VERTEX set',
-      expected: 'both unset',
-      remedy: 'Bedrock/Vertex mode bills a cloud account, not your subscription. Unset the flag for this shell or use --host codex|gemini.',
+      actual: `${providerFlags.join(', ')} set`,
+      expected: 'no CLAUDE_CODE_USE_* provider switch set',
+      remedy: 'Provider mode (Bedrock/Vertex/Foundry/…) bills a cloud account, not your subscription. Unset the flag for this shell or use --host codex|gemini.',
     });
   }
 

@@ -31,13 +31,22 @@ export type HostAdapter = {
   buildArgv(): string[];
   // Defense-in-depth: stripped from the child env AFTER the preflight passes.
   scrubEnvKeys: readonly string[];
+  // Prefix families stripped wholesale (e.g. every CLAUDE_CODE_USE_* switch).
+  scrubEnvPrefixes?: readonly string[];
   // Fail-closed subscription gate. Refusal means "do not spawn".
   preflight(opts: AdapterPreflightOpts): AdapterPreflightResult;
 };
 
-export function scrubEnv(env: NodeJS.ProcessEnv, keys: readonly string[]): NodeJS.ProcessEnv {
+export function scrubEnv(
+  env: NodeJS.ProcessEnv,
+  keys: readonly string[],
+  prefixes: readonly string[] = [],
+): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = { ...env };
   for (const k of keys) delete out[k];
+  for (const k of Object.keys(out)) {
+    if (prefixes.some((p) => k.startsWith(p))) delete out[k];
+  }
   return out;
 }
 
@@ -165,7 +174,8 @@ const ADAPTERS: Record<ToolKey, HostAdapter> = {
     // Print mode; the brief arrives on stdin. Sole sanctioned occurrence —
     // guarded by runClaudePreflight above (ADR-0002).
     buildArgv: () => ['-p'], // <!-- roster-audit-ok: claude-p-flag -->
-    scrubEnvKeys: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX'],
+    scrubEnvKeys: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'],
+    scrubEnvPrefixes: ['CLAUDE_CODE_USE_'],
     preflight: (opts) => {
       const r = runClaudePreflight({ homeDir: opts.homeDir, cwd: opts.cwd, env: opts.env });
       if (r.ok) return { ok: true };

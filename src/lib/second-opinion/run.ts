@@ -148,7 +148,7 @@ export async function runSecondOpinion(opts: RunSecondOpinionOpts): Promise<RunS
 
   const nonce = opts.nonce ?? randomBytes(8).toString('hex');
   const brief = buildBrief(opts.inputs, opts.message, nonce);
-  const childEnv = scrubEnv(env, adapter.scrubEnvKeys);
+  const childEnv = scrubEnv(env, adapter.scrubEnvKeys, adapter.scrubEnvPrefixes ?? []);
 
   const spawnFn: SpawnFn = opts.spawn ?? (spawn as SpawnFn);
   const child = spawnFn(binary, adapter.buildArgv(), {

@@ -238,3 +238,14 @@ test('claude-preflight: clean managed settings passes', () => {
     assert.equal(r.ok, true);
   });
 });
+
+test('claude-preflight: ANY truthy CLAUDE_CODE_USE_* provider switch refuses (Foundry & future)', () => {
+  withTmpHome((homeDir, cwd) => {
+    writeOauthState(homeDir);
+    for (const flag of ['CLAUDE_CODE_USE_FOUNDRY', 'CLAUDE_CODE_USE_SOME_FUTURE_PROVIDER']) {
+      const r = runClaudePreflight({ homeDir, cwd, env: { [flag]: '1' } });
+      assert.equal(r.ok, false, flag);
+      assert.ok(failureChecks(r).includes('env_bedrock_vertex'), flag);
+    }
+  });
+});

@@ -53,11 +53,20 @@ test('scrubEnv: strips listed keys, preserves the rest', () => {
   assert.equal(env['ANTHROPIC_API_KEY'], 'k');
 });
 
-test('adapters: claude scrub list covers API + bedrock/vertex vars', () => {
-  const keys = getAdapter('claude').scrubEnvKeys;
-  for (const k of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX']) {
-    assert.ok(keys.includes(k), `missing ${k}`);
+test('adapters: claude scrub covers API keys + the whole CLAUDE_CODE_USE_* family', () => {
+  const a = getAdapter('claude');
+  for (const k of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']) {
+    assert.ok(a.scrubEnvKeys.includes(k), `missing ${k}`);
   }
+  const scrubbed = scrubEnv(
+    { CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_USE_FOUNDRY: '1', CLAUDE_CODE_USE_FUTURE_PROVIDER: '1', PATH: '/usr/bin' },
+    a.scrubEnvKeys,
+    a.scrubEnvPrefixes ?? [],
+  );
+  assert.equal(scrubbed['CLAUDE_CODE_USE_BEDROCK'], undefined);
+  assert.equal(scrubbed['CLAUDE_CODE_USE_FOUNDRY'], undefined);
+  assert.equal(scrubbed['CLAUDE_CODE_USE_FUTURE_PROVIDER'], undefined);
+  assert.equal(scrubbed['PATH'], '/usr/bin');
 });
 
 test('adapters: codex scrub list covers OPENAI/CODEX API keys', () => {
