@@ -6,6 +6,12 @@ Per-phase retrospectives live in [`docs/retros/`](docs/retros/) and carry the lo
 
 ## [Unreleased]
 
+_(empty — staging area for post-1.7.0 work)_
+
+## [1.7.0] — 2026-07-06
+
+Cross-model review release: any artifact — a draft, a spec, a diff — can now get an independent second opinion from a different AI CLI, with a fail-closed subscription preflight guarding every spawn. No breaking changes.
+
 ### Added
 
 - **`roster second-opinion` — cross-model structured review.** Send any artifact (files, `--stdin`, or `--diff [ref]`) to a different AI CLI (`codex`, `gemini`, or `claude`) and receive a structured verdict: `{summary, findings[{severity, message, location?, confidence?}], host, structured}`. Severity levels: `major`, `minor`, `nit`, `praise`. Flags: `[files...] [--host <host>] [--message "<focus>"] [--stdin] [--diff [ref]] [--timeout <sec>] [--json]`. Each host has a fail-closed preflight — exits `HOST_NOT_SUBSCRIPTION` before spawning if the call would bill per-token: `claude` refuses on `ANTHROPIC_API_KEY`/`AUTH_TOKEN`/`apiKeyHelper`/Bedrock/Vertex env or missing OAuth credential; `codex` reuses `runCodexPreflight`; `gemini` refuses on `GEMINI_API_KEY` or missing `oauth_creds.json`. The brief travels via child stdin, never argv. (ROS-155)
