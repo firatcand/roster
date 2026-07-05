@@ -4,6 +4,8 @@ const HOSTS: ReadonlySet<string> = new Set(['claude', 'codex', 'gemini']);
 
 export const DEFAULT_TIMEOUT_SEC = 180;
 
+export type SecondOpinionArgsErrorCode = 'NO_INPUT' | 'HOST_UNKNOWN' | 'INVALID_ARGS';
+
 export type SecondOpinionArgs =
   | {
       kind: 'ok';
@@ -16,7 +18,7 @@ export type SecondOpinionArgs =
       timeoutSec: number;
       json: boolean;
     }
-  | { kind: 'err'; message: string };
+  | { kind: 'err'; code: SecondOpinionArgsErrorCode; message: string };
 
 export function parseSecondOpinionArgs(args: readonly string[]): SecondOpinionArgs {
   const files: string[] = [];
@@ -44,24 +46,24 @@ export function parseSecondOpinionArgs(args: readonly string[]): SecondOpinionAr
       }
     } else if (arg === '--host') {
       const v = args[i + 1];
-      if (v === undefined || v.startsWith('-')) return { kind: 'err', message: '--host requires a value' };
-      if (!HOSTS.has(v)) return { kind: 'err', message: `--host must be one of claude | codex | gemini (got '${v}')` };
+      if (v === undefined || v.startsWith('-')) return { kind: 'err', code: 'INVALID_ARGS', message: '--host requires a value' };
+      if (!HOSTS.has(v)) return { kind: 'err', code: 'HOST_UNKNOWN', message: `--host must be one of claude | codex | gemini (got '${v}')` };
       host = v as ToolKey;
       i++;
     } else if (arg === '--message') {
       const v = args[i + 1];
-      if (v === undefined) return { kind: 'err', message: '--message requires a value' };
+      if (v === undefined) return { kind: 'err', code: 'INVALID_ARGS', message: '--message requires a value' };
       message = v;
       i++;
     } else if (arg === '--timeout') {
       const v = args[i + 1];
-      if (v === undefined || v.startsWith('-')) return { kind: 'err', message: '--timeout requires a value in seconds' };
+      if (v === undefined || v.startsWith('-')) return { kind: 'err', code: 'INVALID_ARGS', message: '--timeout requires a value in seconds' };
       const n = Number(v);
-      if (!Number.isFinite(n) || n <= 0) return { kind: 'err', message: `--timeout must be a positive number of seconds (got '${v}')` };
+      if (!Number.isFinite(n) || n <= 0) return { kind: 'err', code: 'INVALID_ARGS', message: `--timeout must be a positive number of seconds (got '${v}')` };
       timeoutSec = n;
       i++;
     } else if (arg.startsWith('-')) {
-      return { kind: 'err', message: `unknown flag for second-opinion: ${arg}` };
+      return { kind: 'err', code: 'INVALID_ARGS', message: `unknown flag for second-opinion: ${arg}` };
     } else {
       files.push(arg);
     }
@@ -70,6 +72,7 @@ export function parseSecondOpinionArgs(args: readonly string[]): SecondOpinionAr
   if (files.length === 0 && !stdin && diff === undefined) {
     return {
       kind: 'err',
+      code: 'NO_INPUT',
       message: 'at least one input required: file paths, --stdin, or --diff',
     };
   }

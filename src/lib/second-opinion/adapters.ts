@@ -65,6 +65,16 @@ function geminiPreflight(opts: AdapterPreflightOpts): AdapterPreflightResult {
       remedy: 'Unset GOOGLE_GENAI_USE_VERTEXAI — Vertex mode bills a cloud project, not your Google login.',
     });
   }
+  // Vertex service-account path (Codex impl-pass finding 1): ADC credentials
+  // can route gemini through cloud billing without any *_API_KEY set.
+  if (envSet(opts.env['GOOGLE_APPLICATION_CREDENTIALS'])) {
+    failures.push({
+      check: 'env_google_application_credentials',
+      actual: 'exported',
+      expected: 'unset',
+      remedy: 'Unset GOOGLE_APPLICATION_CREDENTIALS — service-account credentials bill a cloud project, not your Google login.',
+    });
+  }
   const creds = join(opts.homeDir, '.gemini', 'oauth_creds.json');
   if (!existsSync(creds)) {
     failures.push({
@@ -110,7 +120,14 @@ const ADAPTERS: Record<ToolKey, HostAdapter> = {
     binaryName: 'gemini',
     // Piped stdin is the prompt in headless mode; no argv needed.
     buildArgv: () => [],
-    scrubEnvKeys: ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENAI_USE_VERTEXAI'],
+    scrubEnvKeys: [
+      'GEMINI_API_KEY',
+      'GOOGLE_API_KEY',
+      'GOOGLE_GENAI_USE_VERTEXAI',
+      'GOOGLE_APPLICATION_CREDENTIALS',
+      'GOOGLE_CLOUD_PROJECT',
+      'GOOGLE_CLOUD_LOCATION',
+    ],
     preflight: geminiPreflight,
   },
 };

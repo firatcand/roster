@@ -792,6 +792,13 @@ async function runDoctor(args: readonly string[]): Promise<number> {
 async function runSecondOpinion(args: readonly string[]): Promise<number> {
   const parsed = parseSecondOpinionArgs(args);
   if (parsed.kind === 'err') {
+    // Machine consumers get the same {ok:false, code, message} envelope for
+    // parse failures (NO_INPUT / HOST_UNKNOWN / INVALID_ARGS) as for run
+    // failures — a bare thrown error would break --json pipelines.
+    if (args.includes('--json')) {
+      console.log(JSON.stringify({ ok: false, code: parsed.code, message: parsed.message }));
+      return EXIT_ERROR;
+    }
     throw new RosterError({
       header: `${chalk.red.bold('roster:')} ${parsed.message}`,
       body: '',

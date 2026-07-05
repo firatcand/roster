@@ -108,3 +108,17 @@ test('args: files + stdin + diff can combine', () => {
     assert.equal(r.diff, 'HEAD~3');
   }
 });
+
+test('args: error variants carry stable machine codes', () => {
+  const noInput = parseSecondOpinionArgs([]);
+  assert.equal(noInput.kind, 'err');
+  if (noInput.kind === 'err') assert.equal(noInput.code, 'NO_INPUT');
+
+  const badHost = parseSecondOpinionArgs(['a.md', '--host', 'gpt5']);
+  assert.equal(badHost.kind, 'err');
+  if (badHost.kind === 'err') assert.equal(badHost.code, 'HOST_UNKNOWN');
+
+  const badFlag = parseSecondOpinionArgs(['a.md', '--frobnicate']);
+  assert.equal(badFlag.kind, 'err');
+  if (badFlag.kind === 'err') assert.equal(badFlag.code, 'INVALID_ARGS');
+});

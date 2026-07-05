@@ -154,3 +154,19 @@ test('resolveHostBinary: returns null when not on PATH', () => {
   const r = resolveHostBinary('gemini', { PATH: '/nonexistent-dir-xyz' });
   assert.equal(r, null);
 });
+
+test('adapters: gemini preflight refuses on GOOGLE_APPLICATION_CREDENTIALS (Vertex ADC path)', () => {
+  withTmpHome((homeDir, cwd) => {
+    mkdirSync(join(homeDir, '.gemini'), { recursive: true });
+    writeFileSync(join(homeDir, '.gemini', 'oauth_creds.json'), '{}');
+    const r = getAdapter('gemini').preflight({ homeDir, cwd, env: { GOOGLE_APPLICATION_CREDENTIALS: '/sa.json' } });
+    assert.equal(r.ok, false);
+  });
+});
+
+test('adapters: gemini scrub list covers ADC + cloud-project vars', () => {
+  const keys = getAdapter('gemini').scrubEnvKeys;
+  for (const k of ['GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_LOCATION']) {
+    assert.ok(keys.includes(k), `missing ${k}`);
+  }
+});

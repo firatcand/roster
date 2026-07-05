@@ -92,8 +92,11 @@ class TailBuffer {
     this.cap = cap;
   }
   push(chunk: Buffer): void {
-    this.chunks.push(chunk);
-    this.total += chunk.length;
+    // A single chunk larger than the cap is tail-sliced immediately so the
+    // buffer never retains more than ~cap bytes (Codex impl-pass finding 3).
+    const bounded = chunk.length > this.cap ? chunk.subarray(chunk.length - this.cap) : chunk;
+    this.chunks.push(bounded);
+    this.total += bounded.length;
     while (this.total > this.cap && this.chunks.length > 1) {
       const dropped = this.chunks.shift()!;
       this.total -= dropped.length;
@@ -187,7 +190,9 @@ export async function runSecondOpinion(opts: RunSecondOpinionOpts): Promise<RunS
       settle({ ok: false, code: 'REVIEW_FAILED', host, message: `failed to spawn ${host}: ${err.message}` });
     });
 
-    child.on('exit', (code: number | null) => {
+    // 'close', not 'exit': exit can fire before the stdio pipes flush, which
+    // would drop a verdict written at process end (Codex impl-pass finding 2).
+    child.on('close', (code: number | null) => {
       if (code === 0) {
         settle({ ok: true, result: extractVerdict(stdout.toString(), nonce, host) });
         return;

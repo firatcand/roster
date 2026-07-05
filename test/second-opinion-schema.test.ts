@@ -115,3 +115,21 @@ test('extractVerdict: oversized stdout keeps the tail (verdict emitted last surv
   assert.equal(v.summary, 'Solid overall; two weak spots.');
   assert.ok(Buffer.byteLength(v.raw, 'utf8') <= RAW_TAIL_CAP_BYTES);
 });
+
+test('extractVerdict: out-of-range confidence is clamped to 1..10, not fatal', () => {
+  const stdout = framed(
+    JSON.stringify({
+      summary: 'x',
+      findings: [
+        { severity: 'major', message: 'a', confidence: 999 },
+        { severity: 'minor', message: 'b', confidence: -3 },
+        { severity: 'nit', message: 'c', confidence: 7.4 },
+      ],
+    }),
+  );
+  const v = extractVerdict(stdout, NONCE, 'codex');
+  assert.equal(v.structured, true);
+  assert.equal(v.findings[0]!.confidence, 10);
+  assert.equal(v.findings[1]!.confidence, 1);
+  assert.equal(v.findings[2]!.confidence, 7);
+});

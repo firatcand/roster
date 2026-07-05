@@ -24,7 +24,12 @@ const findingSchema = z.object({
   severity: z.enum(SEVERITIES),
   message: z.string().min(1),
   location: z.string().optional(),
-  confidence: z.number().optional(),
+  // Documented range is 1-10; models drift, so clamp instead of failing the
+  // whole verdict over one out-of-range number (Codex impl-pass finding 4).
+  confidence: z
+    .number()
+    .transform((v) => Math.min(10, Math.max(1, Math.round(v))))
+    .optional(),
 });
 
 const verdictPayloadSchema = z.object({
