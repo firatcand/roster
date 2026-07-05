@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 // Fail-closed subscription preflight for spawning `claude -p` as a second-opinion <!-- roster-audit-ok: claude-p-flag -->
 // reviewer (ROS-155, Codex 2nd-pass finding 1). Env-scrub alone is NOT a
@@ -27,16 +27,27 @@ export type ClaudePreflightResult =
 
 export type ClaudePreflightOpts = {
   homeDir: string;
-  // The directory the reviewer child will be spawned in. Project-level
-  // .claude/settings(.local).json there applies to the child, so an
-  // apiKeyHelper hiding in the spawn cwd must also refuse.
+  // The directory the reviewer child will be spawned in. Claude Code resolves
+  // project settings from the enclosing project ROOT, not just the cwd, so an
+  // apiKeyHelper in any ancestor's .claude/settings(.local).json applies to
+  // the child and must refuse (Codex impl-pass round-3 finding 1).
   cwd: string;
   env: NodeJS.ProcessEnv;
   // Seam: on macOS the OAuth credential lives in the Keychain, not a file.
   // Callers that have independently verified a Keychain credential can assert
   // it here; tests use it to simulate the darwin layout.
   assumeKeychainCredential?: boolean;
+  // Seam: enterprise managed-settings locations (platform-specific in prod).
+  managedSettingsPaths?: string[];
 };
+
+// Enterprise managed settings can also configure apiKeyHelper. Check the
+// documented locations for both platforms — a missing file is fine, an
+// existing one is inspected, an unreadable one fails closed.
+const DEFAULT_MANAGED_SETTINGS_PATHS = [
+  '/Library/Application Support/ClaudeCode/managed-settings.json',
+  '/etc/claude-code/managed-settings.json',
+];
 
 // Claude Code boolean env semantics: '', '0', 'false' mean disabled.
 function envFlagSet(value: string | undefined): boolean {
@@ -104,12 +115,19 @@ export function runClaudePreflight(opts: ClaudePreflightOpts): ClaudePreflightRe
     });
   }
 
-  // apiKeyHelper can hide at user scope or in the spawn cwd's project scope.
-  const settingsPaths = [
-    join(homeDir, '.claude', 'settings.json'),
-    join(cwd, '.claude', 'settings.json'),
-    join(cwd, '.claude', 'settings.local.json'),
-  ];
+  // apiKeyHelper can hide at user scope, at ANY ancestor's project scope
+  // (Claude Code resolves settings from the enclosing project root, so walk
+  // the whole ancestry rather than guessing which dir is the root), or in
+  // enterprise managed settings.
+  const settingsPaths = [join(homeDir, '.claude', 'settings.json')];
+  let dir = cwd;
+  for (;;) {
+    settingsPaths.push(join(dir, '.claude', 'settings.json'), join(dir, '.claude', 'settings.local.json'));
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  settingsPaths.push(...(opts.managedSettingsPaths ?? DEFAULT_MANAGED_SETTINGS_PATHS));
   for (const p of settingsPaths) {
     const state = apiKeyHelperIn(p);
     if (state === 'absent') continue;

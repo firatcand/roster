@@ -192,3 +192,49 @@ test('claude-preflight: every failure carries actual/expected/remedy', () => {
     }
   });
 });
+
+// --- Codex impl-pass round-3: settings scope coverage ---
+
+test('claude-preflight: apiKeyHelper in an ANCESTOR project root refuses (spawn from subdir)', () => {
+  withTmpHome((homeDir, cwd) => {
+    writeOauthState(homeDir);
+    mkdirSync(join(cwd, '.claude'), { recursive: true });
+    writeFileSync(join(cwd, '.claude', 'settings.json'), JSON.stringify({ apiKeyHelper: 'helper' }));
+    const nested = join(cwd, 'packages', 'web');
+    mkdirSync(nested, { recursive: true });
+    const r = runClaudePreflight({ homeDir, cwd: nested, env: {} });
+    assert.equal(r.ok, false);
+    assert.ok(failureChecks(r).includes('api_key_helper'));
+  });
+});
+
+test('claude-preflight: apiKeyHelper in managed settings refuses', () => {
+  withTmpHome((homeDir, cwd) => {
+    writeOauthState(homeDir);
+    const managed = join(homeDir, 'managed-settings.json');
+    writeFileSync(managed, JSON.stringify({ apiKeyHelper: '/corp/helper.sh' }));
+    const r = runClaudePreflight({ homeDir, cwd, env: {}, managedSettingsPaths: [managed] });
+    assert.equal(r.ok, false);
+    assert.ok(failureChecks(r).includes('api_key_helper'));
+  });
+});
+
+test('claude-preflight: malformed managed settings fails closed', () => {
+  withTmpHome((homeDir, cwd) => {
+    writeOauthState(homeDir);
+    const managed = join(homeDir, 'managed-settings.json');
+    writeFileSync(managed, '{ nope');
+    const r = runClaudePreflight({ homeDir, cwd, env: {}, managedSettingsPaths: [managed] });
+    assert.equal(r.ok, false);
+  });
+});
+
+test('claude-preflight: clean managed settings passes', () => {
+  withTmpHome((homeDir, cwd) => {
+    writeOauthState(homeDir);
+    const managed = join(homeDir, 'managed-settings.json');
+    writeFileSync(managed, JSON.stringify({ permissions: {} }));
+    const r = runClaudePreflight({ homeDir, cwd, env: {}, managedSettingsPaths: [managed] });
+    assert.equal(r.ok, true);
+  });
+});

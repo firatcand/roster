@@ -188,8 +188,11 @@ const ADAPTERS: Record<ToolKey, HostAdapter> = {
   gemini: {
     key: 'gemini',
     binaryName: 'gemini',
-    // Piped stdin is the prompt in headless mode; no argv needed.
-    buildArgv: () => [],
+    // -p forces non-interactive mode (bare gemini with piped stdin may still
+    // open the TUI; Codex impl-pass round-3 finding 2). The -p value is a
+    // static, non-sensitive pointer — the brief itself stays on stdin, which
+    // gemini appends to the prompt.
+    buildArgv: () => ['-p', 'Follow the review brief provided on stdin and end with the sentinel-framed JSON verdict it specifies.'],
     scrubEnvKeys: [
       'GEMINI_API_KEY',
       'GOOGLE_API_KEY',

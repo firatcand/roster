@@ -34,9 +34,11 @@ test('adapters: codex argv is exec with stdin marker', () => {
   assert.ok(argv.includes('-'));
 });
 
-test('adapters: gemini argv is bare (stdin prompt)', () => {
-  const a = getAdapter('gemini');
-  assert.deepEqual(a.buildArgv(), []);
+test('adapters: gemini argv forces non-interactive -p with a static, non-sensitive pointer', () => {
+  const argv = getAdapter('gemini').buildArgv();
+  assert.equal(argv[0], '-p');
+  assert.equal(argv.length, 2);
+  assert.match(argv[1]!, /stdin/);
 });
 
 // --- env scrub ---
