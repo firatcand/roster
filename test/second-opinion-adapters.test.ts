@@ -243,3 +243,64 @@ test('adapters: gemini preflight fails closed on unreadable dotenv', () => {
     assert.equal(r.ok, false);
   });
 });
+
+// --- gemini persisted auth selection (Codex impl-pass round-5 finding 1) ---
+
+test('adapters: gemini refuses when settings.json selects vertex-ai auth (flat v1)', () => {
+  withTmpHome((homeDir, cwd) => {
+    mkdirSync(join(homeDir, '.gemini'), { recursive: true });
+    writeFileSync(join(homeDir, '.gemini', 'oauth_creds.json'), '{}');
+    writeFileSync(join(homeDir, '.gemini', 'settings.json'), JSON.stringify({ selectedAuthType: 'vertex-ai' }));
+    const r = getAdapter('gemini').preflight({ homeDir, cwd, env: {} });
+    assert.equal(r.ok, false);
+    if (!r.ok) assert.ok(r.failures.some((f) => f.check === 'selected_auth_type'));
+  });
+});
+
+test('adapters: gemini refuses when nested v2 security.auth.selectedType is non-oauth', () => {
+  withTmpHome((homeDir, cwd) => {
+    mkdirSync(join(homeDir, '.gemini'), { recursive: true });
+    writeFileSync(join(homeDir, '.gemini', 'oauth_creds.json'), '{}');
+    writeFileSync(
+      join(homeDir, '.gemini', 'settings.json'),
+      JSON.stringify({ security: { auth: { selectedType: 'gemini-api-key' } } }),
+    );
+    const r = getAdapter('gemini').preflight({ homeDir, cwd, env: {} });
+    assert.equal(r.ok, false);
+    if (!r.ok) assert.ok(r.failures.some((f) => f.check === 'selected_auth_type'));
+  });
+});
+
+test('adapters: gemini refuses on workspace .gemini/settings.json selecting non-oauth auth', () => {
+  withTmpHome((homeDir, cwd) => {
+    mkdirSync(join(homeDir, '.gemini'), { recursive: true });
+    writeFileSync(join(homeDir, '.gemini', 'oauth_creds.json'), '{}');
+    mkdirSync(join(cwd, '.gemini'), { recursive: true });
+    writeFileSync(join(cwd, '.gemini', 'settings.json'), JSON.stringify({ selectedAuthType: 'vertex-ai' }));
+    const nested = join(cwd, 'sub');
+    mkdirSync(nested, { recursive: true });
+    const r = getAdapter('gemini').preflight({ homeDir, cwd: nested, env: {} });
+    assert.equal(r.ok, false);
+  });
+});
+
+test('adapters: gemini passes with oauth-personal selection or no selection', () => {
+  withTmpHome((homeDir, cwd) => {
+    mkdirSync(join(homeDir, '.gemini'), { recursive: true });
+    writeFileSync(join(homeDir, '.gemini', 'oauth_creds.json'), '{}');
+    writeFileSync(join(homeDir, '.gemini', 'settings.json'), JSON.stringify({ selectedAuthType: 'oauth-personal' }));
+    assert.equal(getAdapter('gemini').preflight({ homeDir, cwd, env: {} }).ok, true);
+    writeFileSync(join(homeDir, '.gemini', 'settings.json'), JSON.stringify({ theme: 'dark' }));
+    assert.equal(getAdapter('gemini').preflight({ homeDir, cwd, env: {} }).ok, true);
+  });
+});
+
+test('adapters: gemini fails closed on malformed settings.json', () => {
+  withTmpHome((homeDir, cwd) => {
+    mkdirSync(join(homeDir, '.gemini'), { recursive: true });
+    writeFileSync(join(homeDir, '.gemini', 'oauth_creds.json'), '{}');
+    writeFileSync(join(homeDir, '.gemini', 'settings.json'), '{ nope');
+    const r = getAdapter('gemini').preflight({ homeDir, cwd, env: {} });
+    assert.equal(r.ok, false);
+  });
+});

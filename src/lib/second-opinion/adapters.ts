@@ -105,6 +105,32 @@ function billingKeysInDotenv(path: string): string[] | null {
   return found;
 }
 
+// Gemini persists the chosen auth method in settings.json — flat v1
+// (`selectedAuthType`) or nested v2 (`security.auth.selectedType`). A user who
+// once selected Vertex/API-key auth keeps billing that way regardless of env,
+// so the preflight must gate on the persisted selection too (Codex impl-pass
+// round-5 finding 1). 'present-but-not-oauth' and 'unverifiable' both refuse;
+// oauth-personal or no explicit selection (with OAuth creds required
+// separately) pass.
+const GEMINI_OAUTH_AUTH_TYPES = new Set(['oauth-personal']);
+
+function geminiSelectedAuthProblem(settingsPath: string): string | null {
+  if (!existsSync(settingsPath)) return null;
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
+  } catch {
+    return `${settingsPath} unreadable/malformed (cannot verify auth selection)`;
+  }
+  const nested = ((parsed['security'] as Record<string, unknown> | undefined)?.['auth'] as
+    | Record<string, unknown>
+    | undefined)?.['selectedType'];
+  const selected = nested ?? parsed['selectedAuthType'];
+  if (selected === undefined || selected === null) return null;
+  if (typeof selected === 'string' && GEMINI_OAUTH_AUTH_TYPES.has(selected)) return null;
+  return `${settingsPath} selects auth '${String(selected)}'`;
+}
+
 function geminiPreflight(opts: AdapterPreflightOpts): AdapterPreflightResult {
   const failures: PreflightIssue[] = [];
   for (const key of ['GEMINI_API_KEY', 'GOOGLE_API_KEY'] as const) {
@@ -151,6 +177,27 @@ function geminiPreflight(opts: AdapterPreflightOpts): AdapterPreflightResult {
         actual: `${keys.join(', ')} in ${dotenv}`,
         expected: 'no billing keys in the dotenv gemini auto-loads',
         remedy: `Remove ${keys.join('/')} from ${dotenv} (or run from a directory outside its reach) — gemini reloads that file after spawn, bypassing the env scrub.`,
+      });
+    }
+  }
+  // Persisted auth selection: home settings + every .gemini/settings.json in
+  // the cwd ancestry (workspace settings apply to the child).
+  const settingsCandidates = [join(opts.homeDir, '.gemini', 'settings.json')];
+  let settingsDir = opts.cwd;
+  for (;;) {
+    settingsCandidates.push(join(settingsDir, '.gemini', 'settings.json'));
+    const parent = dirname(settingsDir);
+    if (parent === settingsDir) break;
+    settingsDir = parent;
+  }
+  for (const candidate of settingsCandidates) {
+    const problem = geminiSelectedAuthProblem(candidate);
+    if (problem !== null) {
+      failures.push({
+        check: 'selected_auth_type',
+        actual: problem,
+        expected: "selectedAuthType 'oauth-personal' (or no explicit selection)",
+        remedy: `Re-run \`gemini\` and pick "Login with Google", or fix ${candidate} — the persisted selection routes the child through non-subscription billing regardless of env.`,
       });
     }
   }
