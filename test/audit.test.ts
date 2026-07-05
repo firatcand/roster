@@ -536,3 +536,36 @@ test('audit (codex agent): mutating only the persona body reports STALE', async 
     f.cleanup();
   }
 });
+
+// --- ROS-155: the second-opinion claude adapter is the ONE sanctioned,
+// marker-suppressed print-mode spawn site (ADR-0002). These pin that the
+// exception stays scoped and the markers stay load-bearing.
+
+test('ban-list ROS-155: shipped second-opinion sources pass the audit as-is', () => {
+  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const violations = scanForBannedPrimitives([
+    join(repoRoot, 'src', 'lib', 'second-opinion'),
+    join(repoRoot, 'skills', 'second-opinion'),
+  ]);
+  assert.deepEqual(violations, []);
+});
+
+test('ban-list ROS-155: stripping the opt-out markers from the adapter makes the audit bite again', () => {
+  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const root = mkdtempSync(join(tmpdir(), 'roster-ban-ros155-'));
+  try {
+    mkdirSync(join(root, 'src'), { recursive: true });
+    for (const file of ['adapters.ts', 'claude-preflight.ts'] as const) {
+      const real = readFileSync(join(repoRoot, 'src', 'lib', 'second-opinion', file), 'utf8');
+      const unmarked = real.replaceAll(/<!--\s*roster-audit-ok:[^>]*-->/g, '');
+      writeFileSync(join(root, 'src', file), unmarked);
+    }
+    const violations = scanForBannedPrimitives([join(root, 'src')]);
+    assert.ok(
+      violations.some((v) => v.ruleId === 'claude-p-flag'),
+      'unmarked second-opinion sources must trip claude-p-flag',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

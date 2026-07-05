@@ -153,6 +153,8 @@ This skill — and every subagent it dispatches — must run on the user's inter
 
 **Scope of the guarantee.** The static audit blocks the above literals in roster's *shipped source* (skills/, src/) at build/install time. It is a source guard, not a runtime sandbox — nothing prevents a host LLM from inventing a banned invocation while following these instructions. Runtime compliance depends on the LLM honoring this section.
 
+**One sanctioned exception (ADR-0002, ROS-155).** The `second-opinion` claude adapter (`src/lib/second-opinion/adapters.ts`) may spawn claude print mode — human-invoked only, never from a schedule or this orchestrator — because a fail-closed preflight refuses to spawn unless the child is provably on the user's subscription (no API keys, no apiKeyHelper, no Bedrock/Vertex, OAuth credential present). That single marked line does not weaken this list: any other occurrence anywhere in shipped source is still a release blocker.
+
 If you encounter a workflow that seems to require one of the above, stop and surface it as a HITL item. Do not attempt to bypass.
 
 ## What this skill does NOT do
