@@ -330,3 +330,16 @@ test('adapters: gemini passes when the system-settings override selects oauth or
     );
   });
 });
+
+test('adapters: gemini refuses non-oauth GEMINI_DEFAULT_AUTH_TYPE and any GEMINI_CLI_HOME (round-8)', () => {
+  withTmpHome((homeDir, cwd) => {
+    mkdirSync(join(homeDir, '.gemini'), { recursive: true });
+    writeFileSync(join(homeDir, '.gemini', 'oauth_creds.json'), '{}');
+    const bad = getAdapter('gemini').preflight({ homeDir, cwd, env: { GEMINI_DEFAULT_AUTH_TYPE: 'vertex-ai' } });
+    assert.equal(bad.ok, false);
+    const moved = getAdapter('gemini').preflight({ homeDir, cwd, env: { GEMINI_CLI_HOME: '/elsewhere' } });
+    assert.equal(moved.ok, false);
+    const oauth = getAdapter('gemini').preflight({ homeDir, cwd, env: { GEMINI_DEFAULT_AUTH_TYPE: 'oauth-personal' } });
+    assert.equal(oauth.ok, true);
+  });
+});

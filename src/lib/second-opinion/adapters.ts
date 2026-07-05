@@ -151,6 +151,26 @@ function geminiPreflight(opts: AdapterPreflightOpts): AdapterPreflightResult {
       remedy: 'Unset GOOGLE_GENAI_USE_VERTEXAI — Vertex mode bills a cloud project, not your Google login.',
     });
   }
+  // Documented auth/config env selectors (Codex impl-pass round-8): a
+  // non-OAuth GEMINI_DEFAULT_AUTH_TYPE pre-selects billed auth, and a moved
+  // GEMINI_CLI_HOME makes every config file we just verified the wrong one.
+  const defaultAuth = opts.env['GEMINI_DEFAULT_AUTH_TYPE'];
+  if (envSet(defaultAuth) && !GEMINI_OAUTH_AUTH_TYPES.has(defaultAuth!)) {
+    failures.push({
+      check: 'env_gemini_default_auth_type',
+      actual: `GEMINI_DEFAULT_AUTH_TYPE=${defaultAuth!}`,
+      expected: "unset or 'oauth-personal'",
+      remedy: 'Unset GEMINI_DEFAULT_AUTH_TYPE (or set it to oauth-personal) — it pre-selects a billed auth method for the child.',
+    });
+  }
+  if (envSet(opts.env['GEMINI_CLI_HOME'])) {
+    failures.push({
+      check: 'env_gemini_cli_home',
+      actual: 'GEMINI_CLI_HOME exported',
+      expected: 'unset',
+      remedy: 'Unset GEMINI_CLI_HOME — it relocates the config root, so none of the auth files this preflight verified would apply to the child.',
+    });
+  }
   // Vertex service-account path (Codex impl-pass finding 1): ADC credentials
   // can route gemini through cloud billing without any *_API_KEY set.
   if (envSet(opts.env['GOOGLE_APPLICATION_CREDENTIALS'])) {
@@ -190,6 +210,7 @@ function geminiPreflight(opts: AdapterPreflightOpts): AdapterPreflightResult {
   settingsCandidates.push(
     '/Library/Application Support/GeminiCli/settings.json',
     '/etc/gemini-cli/settings.json',
+    'C:\\ProgramData\\gemini-cli\\settings.json',
   );
   let settingsDir = opts.cwd;
   for (;;) {
