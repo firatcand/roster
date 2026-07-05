@@ -49,13 +49,23 @@ function defaultGitDiff(ref: string, cwd: string): GitDiffResult {
   return { ok: true, diff: r.stdout ?? '' };
 }
 
-function inputError(message: string, remedy: string): RosterError {
-  return new RosterError({
-    header: `${chalk.red.bold('roster:')} ${message}`,
-    body: '',
-    remedy: `  ${remedy}`,
-    exitCode: EXIT_ERROR,
-  });
+type InputErrorCode = 'FILE_READ' | 'NO_STDIN' | 'GIT_DIFF_FAILED' | 'EMPTY_DIFF';
+
+class InputError extends RosterError {
+  readonly code: InputErrorCode;
+  constructor(code: InputErrorCode, message: string, remedy: string) {
+    super({
+      header: `${chalk.red.bold('roster:')} ${message}`,
+      body: '',
+      remedy: `  ${remedy}`,
+      exitCode: EXIT_ERROR,
+    });
+    this.code = code;
+  }
+}
+
+function inputError(code: InputErrorCode, message: string, remedy: string): InputError {
+  return new InputError(code, message, remedy);
 }
 
 async function gatherInputs(opts: ExecuteSecondOpinionOpts, cwd: string): Promise<ArtifactInput[]> {
@@ -68,7 +78,7 @@ async function gatherInputs(opts: ExecuteSecondOpinionOpts, cwd: string): Promis
       content = readFileSync(abs, 'utf8');
     } catch (err) {
       const e = err as NodeJS.ErrnoException;
-      throw inputError(`cannot read ${file} (${e.code ?? 'unknown'})`, 'Check the path and permissions, then retry.');
+      throw inputError('FILE_READ', `cannot read ${file} (${e.code ?? 'unknown'})`, 'Check the path and permissions, then retry.');
     }
     inputs.push({ label: file, content });
   }
@@ -77,7 +87,7 @@ async function gatherInputs(opts: ExecuteSecondOpinionOpts, cwd: string): Promis
     const reader = opts.readStdin ?? readAllStdin;
     const content = await reader();
     if (content.trim().length === 0) {
-      throw inputError('--stdin given but no data arrived on stdin', 'Pipe the artifact in: `cat draft.md | roster second-opinion --stdin`.');
+      throw inputError('NO_STDIN', '--stdin given but no data arrived on stdin', 'Pipe the artifact in: `cat draft.md | roster second-opinion --stdin`.');
     }
     inputs.push({ label: 'stdin', content });
   }
@@ -86,10 +96,10 @@ async function gatherInputs(opts: ExecuteSecondOpinionOpts, cwd: string): Promis
     const differ = opts.gitDiff ?? defaultGitDiff;
     const r = differ(opts.diff, cwd);
     if (!r.ok) {
-      throw inputError(`--diff failed: ${r.message}`, 'Run from inside a git repository with a valid ref.');
+      throw inputError('GIT_DIFF_FAILED', `--diff failed: ${r.message}`, 'Run from inside a git repository with a valid ref.');
     }
     if (r.diff.trim().length === 0) {
-      throw inputError(`git diff ${opts.diff} produced no changes`, 'Nothing to review — commit or edit something first, or pass a different ref.');
+      throw inputError('EMPTY_DIFF', `git diff ${opts.diff} produced no changes`, 'Nothing to review — commit or edit something first, or pass a different ref.');
     }
     inputs.push({ label: `git diff ${opts.diff}`, content: r.diff });
   }
@@ -159,7 +169,19 @@ function renderFailureHuman(r: Extract<RunSecondOpinionResult, { ok: false }>): 
 
 export async function executeSecondOpinion(opts: ExecuteSecondOpinionOpts): Promise<number> {
   const cwd = opts.cwd ?? process.cwd();
-  const inputs = await gatherInputs(opts, cwd);
+  let inputs: ArtifactInput[];
+  try {
+    inputs = await gatherInputs(opts, cwd);
+  } catch (err) {
+    // Machine consumers get the same {ok:false, code, message} envelope for
+    // input-gathering failures as for run failures (Codex impl-pass round-6
+    // finding 2); human mode keeps the thrown RosterError rendering.
+    if (opts.json && err instanceof InputError) {
+      console.log(JSON.stringify({ ok: false, code: err.code, message: err.header.replace(/\u001b\[[0-9;]*m/g, '') }));
+      return EXIT_ERROR;
+    }
+    throw err;
+  }
 
   const runFn = opts.runFn ?? runSecondOpinion;
   const result = await runFn({

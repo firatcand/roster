@@ -315,3 +315,28 @@ test('cli: human failure prints failures with remedies, exit 1', async () => {
     assert.match(err, /Unset ANTHROPIC_API_KEY/);
   });
 });
+
+test('cli: --json input-gathering failures emit the {ok:false,code} envelope (round-6 fix)', async () => {
+  await withTmpDir(async (dir) => {
+    const cases: Array<{ opts: Partial<ExecuteSecondOpinionOpts>; code: string }> = [
+      { opts: { files: ['missing.md'] }, code: 'FILE_READ' },
+      { opts: { stdin: true, readStdin: async () => '' }, code: 'NO_STDIN' },
+      { opts: { diff: 'HEAD', gitDiff: () => ({ ok: false, message: 'not a git repository' }) }, code: 'GIT_DIFF_FAILED' },
+      { opts: { diff: 'HEAD', gitDiff: () => ({ ok: true, diff: '' }) }, code: 'EMPTY_DIFF' },
+    ];
+    for (const c of cases) {
+      const cap = captureLogs();
+      let code: number;
+      try {
+        code = await executeSecondOpinion(makeOpts(dir, { ...c.opts, json: true }));
+      } finally {
+        cap.restore();
+      }
+      assert.equal(code, 1, c.code);
+      const parsed = JSON.parse(cap.logs.join('\n')) as Record<string, unknown>;
+      assert.equal(parsed['ok'], false, c.code);
+      assert.equal(parsed['code'], c.code);
+      assert.ok(String(parsed['message']).length > 0, c.code);
+    }
+  });
+});

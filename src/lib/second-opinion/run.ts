@@ -97,9 +97,19 @@ class TailBuffer {
     const bounded = chunk.length > this.cap ? chunk.subarray(chunk.length - this.cap) : chunk;
     this.chunks.push(bounded);
     this.total += bounded.length;
-    while (this.total > this.cap && this.chunks.length > 1) {
-      const dropped = this.chunks.shift()!;
-      this.total -= dropped.length;
+    // Trim byte-precisely from the oldest chunk: dropping whole chunks could
+    // discard a verdict living in the tail of a large early chunk when a tiny
+    // late chunk arrives (Codex impl-pass round-6 finding 1).
+    while (this.total > this.cap) {
+      const excess = this.total - this.cap;
+      const oldest = this.chunks[0]!;
+      if (oldest.length <= excess) {
+        this.chunks.shift();
+        this.total -= oldest.length;
+      } else {
+        this.chunks[0] = oldest.subarray(excess);
+        this.total -= excess;
+      }
     }
   }
   toString(): string {

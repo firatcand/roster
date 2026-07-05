@@ -323,3 +323,22 @@ test('run: child that dies before consuming stdin (EPIPE) settles as REVIEW_FAIL
     if (!r.ok) assert.equal(r.code, 'REVIEW_FAILED');
   });
 });
+
+test('run: verdict in the tail of a huge early chunk survives a tiny late chunk (byte-precise trim)', async () => {
+  await withSubscribedHome(async (homeDir, cwd) => {
+    const child = new FakeChild();
+    const p = runSecondOpinion(baseOpts(homeDir, cwd, { host: 'codex', spawn: makeSpawnSeam(child, []) as never }));
+    setImmediate(() => {
+      const payload = JSON.stringify({ summary: 'tail verdict survives', findings: [] });
+      const big = `${'z'.repeat(200_000)}\n${verdictSentinelOpen(NONCE)}\n${payload}\n${verdictSentinelClose(NONCE)}\n`;
+      child.stdout.emit('data', Buffer.from(big));
+      child.stdout.emit('data', Buffer.from('\n')); // must NOT evict the verdict chunk wholesale
+      child.emit('close', 0, null);
+    });
+    const r = await p;
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.equal(r.result.structured, true);
+    assert.equal(r.result.summary, 'tail verdict survives');
+  });
+});
