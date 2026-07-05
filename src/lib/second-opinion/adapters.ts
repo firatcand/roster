@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { ToolKey } from '../tools.ts';
 import { runCodexPreflight } from '../codex-preflight.ts';
 import { runClaudePreflight } from './claude-preflight.ts';
@@ -45,6 +45,57 @@ function envSet(value: string | undefined): boolean {
   return value !== undefined && value !== '';
 }
 
+const GEMINI_BILLING_KEYS = [
+  'GEMINI_API_KEY',
+  'GOOGLE_API_KEY',
+  'GOOGLE_GENAI_USE_VERTEXAI',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+] as const;
+
+// Gemini CLI auto-loads the FIRST dotenv it finds — <dir>/.gemini/.env then
+// <dir>/.env, walking up from cwd, falling back to the same pair under $HOME.
+// Env-scrub cannot help: the CHILD re-reads that file from disk after spawn
+// (Codex impl-pass round-2 finding 1). Replicate the search and refuse if the
+// file gemini would load carries a billing key.
+export function findGeminiDotenv(cwd: string, homeDir: string): string | null {
+  let dir = cwd;
+  for (;;) {
+    for (const candidate of [join(dir, '.gemini', '.env'), join(dir, '.env')]) {
+      if (existsSync(candidate)) return candidate;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  for (const candidate of [join(homeDir, '.gemini', '.env'), join(homeDir, '.env')]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+// Minimal dotenv scan: KEY=VALUE lines (optional `export `), comments skipped.
+// Returns the billing keys assigned a non-empty value, or null when the file
+// cannot be read (caller fails closed).
+function billingKeysInDotenv(path: string): string[] | null {
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+  const found: string[] = [];
+  for (const line of raw.split('\n')) {
+    const m = line.trim().match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (m === null) continue;
+    const key = m[1]!;
+    const value = m[2]!.trim();
+    if ((GEMINI_BILLING_KEYS as readonly string[]).includes(key) && value.length > 0 && value !== '""' && value !== "''") {
+      found.push(key);
+    }
+  }
+  return found;
+}
+
 function geminiPreflight(opts: AdapterPreflightOpts): AdapterPreflightResult {
   const failures: PreflightIssue[] = [];
   for (const key of ['GEMINI_API_KEY', 'GOOGLE_API_KEY'] as const) {
@@ -74,6 +125,25 @@ function geminiPreflight(opts: AdapterPreflightOpts): AdapterPreflightResult {
       expected: 'unset',
       remedy: 'Unset GOOGLE_APPLICATION_CREDENTIALS — service-account credentials bill a cloud project, not your Google login.',
     });
+  }
+  const dotenv = findGeminiDotenv(opts.cwd, opts.homeDir);
+  if (dotenv !== null) {
+    const keys = billingKeysInDotenv(dotenv);
+    if (keys === null) {
+      failures.push({
+        check: 'dotenv_unreadable',
+        actual: `${dotenv} unreadable (cannot verify)`,
+        expected: 'readable dotenv with no billing keys',
+        remedy: `Fix permissions on ${dotenv} so the preflight can verify it carries no API/Vertex keys.`,
+      });
+    } else if (keys.length > 0) {
+      failures.push({
+        check: 'dotenv_billing_key',
+        actual: `${keys.join(', ')} in ${dotenv}`,
+        expected: 'no billing keys in the dotenv gemini auto-loads',
+        remedy: `Remove ${keys.join('/')} from ${dotenv} (or run from a directory outside its reach) — gemini reloads that file after spawn, bypassing the env scrub.`,
+      });
+    }
   }
   const creds = join(opts.homeDir, '.gemini', 'oauth_creds.json');
   if (!existsSync(creds)) {

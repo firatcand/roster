@@ -25,6 +25,7 @@ class FakeChild extends EventEmitter {
     end: () => {
       this.stdinEnded = true;
     },
+    on: (_event: string, _cb: (...a: unknown[]) => void) => {},
   };
   kill(signal?: string) {
     this.killed = true;
@@ -306,5 +307,19 @@ test('run: single oversized stdout chunk is tail-capped and verdict still parses
     if (!r.ok) return;
     assert.equal(r.result.structured, true);
     assert.equal(r.result.summary, 'tail survived');
+  });
+});
+
+test('run: child that dies before consuming stdin (EPIPE) settles as REVIEW_FAILED, no crash', async () => {
+  await withSubscribedHome(async (homeDir, cwd) => {
+    const child = new FakeChild();
+    child.stdin.write = () => {
+      throw new Error('write EPIPE');
+    };
+    const p = runSecondOpinion(baseOpts(homeDir, cwd, { host: 'codex', spawn: makeSpawnSeam(child, []) as never }));
+    setImmediate(() => child.emit('close', 1, null));
+    const r = await p;
+    assert.equal(r.ok, false);
+    if (!r.ok) assert.equal(r.code, 'REVIEW_FAILED');
   });
 });

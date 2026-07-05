@@ -163,9 +163,17 @@ export async function runSecondOpinion(opts: RunSecondOpinionOpts): Promise<RunS
   child.stderr?.on('data', (chunk: Buffer) => stderr.push(chunk));
 
   // Deliver the brief on stdin and close it — leaving stdin open hangs
-  // print-mode CLIs (forge FORGE-135 precedent).
-  child.stdin?.write(brief);
-  child.stdin?.end();
+  // print-mode CLIs (forge FORGE-135 precedent). A child that dies before
+  // consuming the brief emits EPIPE on this stream; swallow it so the run
+  // settles through the 'close' handler instead of crashing the CLI
+  // (Codex impl-pass round-2 finding 2).
+  child.stdin?.on('error', () => {});
+  try {
+    child.stdin?.write(brief);
+    child.stdin?.end();
+  } catch {
+    // Settled via 'close'/'error' on the child.
+  }
 
   return await new Promise<RunSecondOpinionResult>((resolve) => {
     let settled = false;

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { getAdapter, scrubEnv, resolveHostBinary } from '../src/lib/second-opinion/adapters.ts';
+import { getAdapter, scrubEnv, resolveHostBinary, findGeminiDotenv } from '../src/lib/second-opinion/adapters.ts';
 
 function withTmpHome<T>(fn: (homeDir: string, cwd: string) => T): T {
   const root = mkdtempSync(join(tmpdir(), 'roster-so-adapters-'));
@@ -169,4 +169,66 @@ test('adapters: gemini scrub list covers ADC + cloud-project vars', () => {
   for (const k of ['GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_LOCATION']) {
     assert.ok(keys.includes(k), `missing ${k}`);
   }
+});
+
+// --- gemini dotenv bypass (Codex impl-pass round-2 finding 1) ---
+
+test('adapters: gemini preflight refuses when cwd .env carries GEMINI_API_KEY', () => {
+  withTmpHome((homeDir, cwd) => {
+    mkdirSync(join(homeDir, '.gemini'), { recursive: true });
+    writeFileSync(join(homeDir, '.gemini', 'oauth_creds.json'), '{}');
+    writeFileSync(join(cwd, '.env'), 'GEMINI_API_KEY=abc123\n');
+    const r = getAdapter('gemini').preflight({ homeDir, cwd, env: {} });
+    assert.equal(r.ok, false);
+    if (!r.ok) assert.ok(r.failures.some((f) => f.check === 'dotenv_billing_key'));
+  });
+});
+
+test('adapters: gemini preflight refuses on export-form key in parent-dir .env', () => {
+  withTmpHome((homeDir, cwd) => {
+    mkdirSync(join(homeDir, '.gemini'), { recursive: true });
+    writeFileSync(join(homeDir, '.gemini', 'oauth_creds.json'), '{}');
+    const nested = join(cwd, 'a', 'b');
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(cwd, '.env'), 'export GOOGLE_APPLICATION_CREDENTIALS=/sa.json\n');
+    const r = getAdapter('gemini').preflight({ homeDir, cwd: nested, env: {} });
+    assert.equal(r.ok, false);
+    if (!r.ok) assert.ok(r.failures.some((f) => f.check === 'dotenv_billing_key'));
+  });
+});
+
+test('adapters: gemini preflight passes when the dotenv has no billing keys', () => {
+  withTmpHome((homeDir, cwd) => {
+    mkdirSync(join(homeDir, '.gemini'), { recursive: true });
+    writeFileSync(join(homeDir, '.gemini', 'oauth_creds.json'), '{}');
+    writeFileSync(join(cwd, '.env'), '# workspace agent env\nSLACK_TOKEN=xoxb\nGEMINI_API_KEY=\n');
+    const r = getAdapter('gemini').preflight({ homeDir, cwd, env: {} });
+    assert.equal(r.ok, true);
+  });
+});
+
+test('adapters: findGeminiDotenv prefers .gemini/.env over .env and falls back to home', () => {
+  withTmpHome((homeDir, cwd) => {
+    writeFileSync(join(cwd, '.env'), 'X=1\n');
+    mkdirSync(join(cwd, '.gemini'), { recursive: true });
+    writeFileSync(join(cwd, '.gemini', '.env'), 'Y=1\n');
+    assert.equal(findGeminiDotenv(cwd, homeDir), join(cwd, '.gemini', '.env'));
+
+    const empty = join(cwd, 'a');
+    mkdirSync(empty, { recursive: true });
+    rmSync(join(cwd, '.gemini'), { recursive: true, force: true });
+    rmSync(join(cwd, '.env'));
+    writeFileSync(join(homeDir, '.env'), 'Z=1\n');
+    assert.equal(findGeminiDotenv(empty, homeDir), join(homeDir, '.env'));
+  });
+});
+
+test('adapters: gemini preflight fails closed on unreadable dotenv', () => {
+  withTmpHome((homeDir, cwd) => {
+    mkdirSync(join(homeDir, '.gemini'), { recursive: true });
+    writeFileSync(join(homeDir, '.gemini', 'oauth_creds.json'), '{}');
+    writeFileSync(join(cwd, '.env'), 'GEMINI_API_KEY=abc\n', { mode: 0o000 });
+    const r = getAdapter('gemini').preflight({ homeDir, cwd, env: {} });
+    assert.equal(r.ok, false);
+  });
 });
