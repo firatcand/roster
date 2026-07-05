@@ -96,6 +96,7 @@ Using 1Password or Infisical? Compose them with the `.env` model via the recipes
 | `roster schedule validate` | Validate every `roster/<function>/schedules.yaml` |
 | `roster schedule install` | Install a schedule into your host tool's native scheduler |
 | `roster review [function]` | Review unread decisions (HITL): `--json` lists; `--approve`/`--reject <id\|path>` apply headlessly; bare TTY = interactive walker. `/inbox` is the chat front door. |
+| `roster second-opinion [files…]` | Send any artifact to a different AI CLI (`codex`, `gemini`, `claude`) and get a structured verdict with severity-ranked findings; fail-closed preflight refuses before spawning if API-key auth is detected. |
 | `roster task setup` | Map your own tracker board (Notion v1) onto canonical task states → `roster/tracker.yaml` |
 | `roster task list` / `status` | Claimable pool + your in-flight tasks; `status` adds the stage digest + needs-your-attention call-out |
 | `roster task claim/start/submit/done…` | Drive a task through its lifecycle on your board (also `block --reason`, `unblock`, `revise`, `cancel`). `/tasks` is the chat front door. |
@@ -142,6 +143,17 @@ A nightly **reinforcement** pass (the `dreamer` skill) reads runs + feedback, de
 ### The brain — optional shared memory
 
 By default the memory layer is just files in Git: run logs, playbook lessons, guidelines. When a workspace outgrows that, opt into **`roster brain`** — a workspace-scoped, append-only Postgres knowledge store (bring-your-own [Neon](https://neon.tech); connection string lives in Infisical, never `.env`). The team reads and writes it through structured verbs — `save` (entities + provenance-stamped facts), `event`, `link` (typed graph edges), `get`, `query` (hybrid semantic + keyword + graph search), `mount` (ingest a file as searchable chunks) — instead of scattering facts across markdown. It is **append-only and versioned**: the restricted runtime role physically cannot `UPDATE`, `DELETE`, or `DROP`, so corrections supersede and history stays. Turn it on with `roster brain init`; skip it entirely and nothing else changes. Full model in [docs/HOWTO.md](docs/HOWTO.md) and `brain/RESOLVER.md` inside your workspace.
+
+### Second opinion — cross-model review
+
+Any artifact — a diff, a set of files, or piped content — can be sent to a **different** AI CLI for a structured verdict:
+
+```bash
+roster second-opinion --diff HEAD~1                                              # review changes since previous commit (codex by default)
+roster second-opinion messaging.md --host gemini --message "Is this positioning sharp?"
+```
+
+Each host runs a **fail-closed preflight**: if the call would incur API charges rather than draw from a subscription, `roster second-opinion` exits with `HOST_NOT_SUBSCRIPTION` before spawning anything. Pick a different `--host`, or switch to subscription auth. The verdict is a structured JSON envelope (`summary`, `findings[]` with severity, location, and confidence, `host`, `structured`) — or plain text without `--json`. The `/second-opinion` skill is the chat front door.
 
 ---
 
