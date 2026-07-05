@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { getAdapter, scrubEnv, resolveHostBinary, findGeminiDotenv } from '../src/lib/second-opinion/adapters.ts';
 
 function withTmpHome<T>(fn: (homeDir: string, cwd: string) => T): T {
@@ -342,4 +343,17 @@ test('adapters: gemini refuses non-oauth GEMINI_DEFAULT_AUTH_TYPE and any GEMINI
     const oauth = getAdapter('gemini').preflight({ homeDir, cwd, env: { GEMINI_DEFAULT_AUTH_TYPE: 'oauth-personal' } });
     assert.equal(oauth.ok, true);
   });
+});
+
+test('adapters: the hard-coded gemini system-settings candidates include all three platforms (source pin)', () => {
+  // The Windows default cannot be exercised on a unix runner; pin the
+  // candidate literals at source level so removing one fails a test
+  // (Codex round-9 nit).
+  const src = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'lib', 'second-opinion', 'adapters.ts'),
+    'utf8',
+  );
+  assert.ok(src.includes('/Library/Application Support/GeminiCli/settings.json'));
+  assert.ok(src.includes('/etc/gemini-cli/settings.json'));
+  assert.ok(src.includes('C:\\\\ProgramData\\\\gemini-cli\\\\settings.json'));
 });
