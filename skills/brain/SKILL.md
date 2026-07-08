@@ -1,6 +1,6 @@
 ---
 name: brain
-description: "Front door to the roster brain — the workspace's shared, append-only Postgres memory. Use when the user asks to remember/record/look up team knowledge (competitors, posts, metrics, accounts, people), to search the brain, or to set up/configure it. Routes to `roster brain <verb>` (save/get/event/link/merge/query/table/mount/config/export/import) and follows the brain-first protocol. Triggers on /brain or when a request is about persistent team knowledge in a roster workspace."
+description: "Front door to the roster brain — the workspace's shared, append-only Postgres memory. Use when the user asks to remember/record/look up team knowledge (competitors, posts, metrics, accounts, people), to search the brain, or to set up/configure it. Routes to `roster brain <verb>` (save/get/event/link/merge/query/table/mount/fs/config/export/import) and follows the brain-first protocol. Triggers on /brain or when a request is about persistent team knowledge in a roster workspace."
 version: "1.0.0"
 trigger_conditions:
   - "User invokes /brain"
@@ -81,6 +81,10 @@ Everything stays on the host subscription and the `roster brain` verbs.
 | Custom table | `roster brain table list` · `roster brain table create <name> --col name:type` |
 | Read-only SQL | `roster brain sql "SELECT …"` |
 | Ingest a file | `roster brain mount <file>` |
+| Store a file (S3-backed) | `roster brain fs put --kind <k> --slug <s> <file>` |
+| Fetch a stored file | `roster brain fs get --kind <k> --slug <s> <filename> [--out <path>]` |
+| List stored files | `roster brain fs ls [--kind <k> [--slug <s>]]` |
+| Remove a stored file (tombstone) | `roster brain fs rm --kind <k> --slug <s> <filename>` |
 | Settings | `roster brain config get` · `roster brain config set <key> <value>` |
 | Backup / restore | `roster brain export [--out <dir>]` · `roster brain import <dir>` |
 
@@ -98,6 +102,10 @@ walkthrough: the **Set up the brain** section of the Roster HOWTO.
 ## Safety
 
 - Append-only: you can never UPDATE or DELETE through the runtime role — corrections
-  supersede. Don't try to work around it.
+  supersede. Don't try to work around it. Files are append-only too: the Neon ledger
+  never erases history, so `roster brain fs rm` writes a tombstone row and deletes the
+  S3 object rather than rewriting the past. S3 file *bytes* are mutable, but only
+  through the `roster brain fs` verbs.
 - Never put secrets (API keys, tokens) into the brain; config stores non-secret
-  settings only.
+  settings only. S3 credentials (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`) are
+  environment-only — never stored in the brain.

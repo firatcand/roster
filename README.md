@@ -101,7 +101,7 @@ Using 1Password or Infisical? Compose them with the `.env` model via the recipes
 | `roster task list` / `status` | Claimable pool + your in-flight tasks; `status` adds the stage digest + needs-your-attention call-out |
 | `roster task claim/start/submit/done…` | Drive a task through its lifecycle on your board (also `block --reason`, `unblock`, `revise`, `cancel`). `/tasks` is the chat front door. |
 | `roster hooks install` | Wire SessionStart banners so chat sessions surface unread-decision counts |
-| `roster brain <verb>` | **Opt-in** append-only Postgres knowledge store — `init`, `save`/`get`/`query`, `mount`, `export`/`import`, `gc` (bring-your-own Neon; connection in Infisical, never `.env`) |
+| `roster brain <verb>` | **Opt-in** append-only Postgres knowledge store — `init`, `save`/`get`/`query`, `mount`, `fs` (S3-backed files), `export`/`import`, `gc` (bring-your-own Neon; connection in Infisical, never `.env`) |
 | `roster migrate <target>` | Migrate a legacy `agent-team` workspace (`from-agent-team`) or legacy Codex skills into `.agents/skills` (`codex-skills`) |
 | `roster pending sync` | Synthesize HITL items from failed-fire signals (`.exit` + STALE) — run automatically by the SessionStart banner |
 
@@ -142,7 +142,7 @@ A nightly **reinforcement** pass (the `dreamer` skill) reads runs + feedback, de
 
 ### The brain — optional shared memory
 
-By default the memory layer is just files in Git: run logs, playbook lessons, guidelines. When a workspace outgrows that, opt into **`roster brain`** — a workspace-scoped, append-only Postgres knowledge store (bring-your-own [Neon](https://neon.tech); connection string lives in Infisical, never `.env`). The team reads and writes it through structured verbs — `save` (entities + provenance-stamped facts), `event`, `link` (typed graph edges), `get`, `query` (hybrid semantic + keyword + graph search), `mount` (ingest a file as searchable chunks) — instead of scattering facts across markdown. It is **append-only and versioned**: the restricted runtime role physically cannot `UPDATE`, `DELETE`, or `DROP`, so corrections supersede and history stays. Turn it on with `roster brain init`; skip it entirely and nothing else changes. Full model in [docs/HOWTO.md](docs/HOWTO.md) and `brain/RESOLVER.md` inside your workspace.
+By default the memory layer is just files in Git: run logs, playbook lessons, guidelines. When a workspace outgrows that, opt into **`roster brain`** — a workspace-scoped, append-only Postgres knowledge store (bring-your-own [Neon](https://neon.tech); connection string lives in Infisical, never `.env`). The team reads and writes it through structured verbs — `save` (entities + provenance-stamped facts), `event`, `link` (typed graph edges), `get`, `query` (hybrid semantic + keyword + graph search), `mount` (ingest a file as searchable chunks) — instead of scattering facts across markdown. It is **append-only and versioned**: the restricted runtime role physically cannot `UPDATE`, `DELETE`, or `DROP`, so corrections supersede and history stays. An optional **S3-backed file store** — `roster brain fs put|get|ls|rm` — keeps file bytes in your own bucket while the append-only ledger records every event; text is chunk-indexed so `query` finds it, and `rm` is a tombstone so history survives. Turn it on with `roster brain init`; skip it entirely and nothing else changes. Full model in [docs/HOWTO.md](docs/HOWTO.md) and `brain/RESOLVER.md` inside your workspace.
 
 ### Second opinion — cross-model review
 

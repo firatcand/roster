@@ -4,6 +4,10 @@ Public view of what's shipped, what's deferred, and what's next. Detailed task t
 
 ## Released
 
+### v1.8.0 — brain file system — 2026-07-08
+
+The append-only brain learns to hold files. **`roster brain fs put|get|ls|rm`** attaches files to entities and keeps the bytes in an S3 bucket you own — AWS S3, Cloudflare R2, Backblaze B2, or MinIO (`files.endpoint` + `files.force_path_style`) — while a new append-only `brain.files` ledger in Postgres records every event. Text and markdown are chunk-indexed on upload so `brain query` finds them; binaries are stored pointer-only. Deletes are tombstones — `fs rm` drops the S3 object but the ledger keeps the history — and `roster brain doctor` gains an `s3-file-drift` check (missing object, out-of-band ETag change, or an object orphaned after `rm`; skip-safe on an unconfigured brain). Credentials stay env-only (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`), never in the brain; bucket config (`files.bucket`/`region`/`endpoint`/`prefix`/`force_path_style`) is non-secret. Backups carry file pointers, not bytes — enable S3 bucket versioning for byte-level durability. Tracked under the ROS-156 epic (ledger + S3 port + fs verbs + doctor drift). Full changelog: [CHANGELOG.md](../CHANGELOG.md#180--2026-07-08).
+
 ### v1.7.0 — second opinion — 2026-07-06
 
 Cross-model structured review: `roster second-opinion` sends any artifact (files, `--stdin`, `--diff [ref]`) to a different AI CLI (`codex`, `gemini`, or `claude`) and returns a structured verdict with severity-ranked findings (`major`/`minor`/`nit`/`praise`). A fail-closed preflight (`HOST_NOT_SUBSCRIPTION`) refuses before spawning if the call would incur per-token API charges. The `/second-opinion` skill is the chat front door for all three hosts. ADR-0002 (`docs/adr/0002-second-opinion-claude-adapter.md`) documents the scoped `claude -p` exception; the global ban in `roster doctor` is unchanged. Shipped in PR [#301](https://github.com/firatcand/roster/pull/301). Full changelog: [CHANGELOG.md](../CHANGELOG.md#170--2026-07-06).

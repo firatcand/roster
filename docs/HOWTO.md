@@ -398,11 +398,46 @@ Day-to-day use is the `/brain` skill and the `roster brain` verbs (full referenc
 
 The brain is append-only, so replaced fact versions and re-mounted file chunks accumulate. `roster brain gc` (admin URL, like `init`) prunes superseded **versions** once both the version and its replacement are older than the retention window — 2 years by default (`--older-than 18mo` per run, or persist with `roster brain config set gc.retention 18mo`). The current version of everything always survives, whatever its age, and events/edges (visible history) are never touched. It previews counts and only deletes with `--yes` — append-only enforcement for agents is unaffected; gc is the one sanctioned deleter and never runs as the runtime role.
 
+### File storage (S3)
+
+`roster brain fs` attaches files to entities and keeps the bytes in an S3 bucket you own, while an append-only `brain.files` ledger in Postgres records every put/get/rm. Text and markdown are chunk-indexed on upload so `brain query` finds them; binaries are pointer-only. Bucket settings are non-secret (they live in the brain); credentials are supplied through the environment and never stored:
+
+```bash
+# Non-secret S3 config — stored in the brain:
+roster brain config set files.bucket my-roster-brain
+roster brain config set files.region us-east-1
+# optional: files.prefix scopes keys under a path inside the bucket.
+
+# Credentials — environment only, never in the brain (inject via Infisical):
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, optional AWS_SESSION_TOKEN,
+#   and AWS_REGION (or files.region).
+infisical run --env dev --path /<repo> -- roster brain fs put --kind account --slug acme ./brief.pdf
+infisical run --env dev --path /<repo> -- roster brain fs ls --kind account --slug acme
+```
+
+Files are addressed by entity: `fs put --kind <k> --slug <s> <file>` lands at the S3 key `<prefix>files/<kind>/<slug>/<filename>` (rename with `--filename`). `fs get` verifies the stored hash on download; `fs rm` writes a tombstone row **and** deletes the S3 object, so the ledger keeps the history even though the bytes are gone.
+
+**S3-compatible providers.** Set `files.endpoint` (and, for MinIO, `files.force_path_style`):
+
+```bash
+# Cloudflare R2
+roster brain config set files.endpoint https://<account-id>.r2.cloudflarestorage.com
+roster brain config set files.region auto
+
+# MinIO (self-hosted)
+roster brain config set files.endpoint https://minio.example.com
+roster brain config set files.force_path_style true
+```
+
+Backblaze B2 works the same way through its S3-compatible endpoint. **Byte-level durability is the bucket's job:** a brain backup carries file *pointers*, not the objects (see §12), so enable **S3 bucket versioning** on the bucket if you want recoverable bytes — that's operator-run hardening, not a `roster` command.
+
 ---
 
 ## 12. Back up the brain
 
 The Postgres brain (`roster brain`) is durable team memory. If the Neon project is lost, there's no recovery path unless you keep portable backups.
+
+**Files are pointers, not bytes.** `roster brain export`/`import` round-trip the `brain.files` ledger — S3 keys, hashes, and event history — but not the S3 objects themselves. A restored brain points back at the same bucket, so the bucket must still exist. For byte-level durability, enable S3 bucket versioning (or cross-region replication) on the bucket — that's independent of `roster brain export`.
 
 ```bash
 # Dump every brain table (core + agent-created) to a portable directory.
