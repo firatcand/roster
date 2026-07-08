@@ -440,7 +440,11 @@ Neon; connection in Infisical, never `.env`). All verbs accept `--json`.
 | `brain table list` · `brain table create <name> --col name:type …` | List / create a custom table via the brokered DDL path (types: text, int, bigint, numeric, boolean, timestamptz, jsonb, uuid). |
 | `brain sql "SELECT …"` | Read-only SQL (SELECT only; rejects mutations). |
 | `brain mount <file>` | Ingest a file as append-only, searchable document chunks. |
-| `brain config get [key]` · `brain config set <key> <value>` | Read/write non-secret settings (`embeddings.enabled\|provider\|model`, `search.rrf_k\|graph_hops`, `gc.retention`). |
+| `brain fs put --kind <k> --slug <s> [--filename <name>] [--actor <a>] <file>` | Upload a file to S3 + append a ledger row. Text/markdown is chunk-indexed for `query`; binaries are pointer-only. |
+| `brain fs get --kind <k> --slug <s> <filename> [--out <path>]` | Download the file bytes (verifies the stored hash); writes to `--out`, else `./<filename>` in the current directory. |
+| `brain fs ls [--kind <k> [--slug <s>]]` | List current (non-tombstoned) files; `--slug` requires `--kind`. |
+| `brain fs rm --kind <k> --slug <s> <filename>` | Tombstone the file in the ledger + delete the S3 object; history is retained. |
+| `brain config get [key]` · `brain config set <key> <value>` | Read/write non-secret settings (`embeddings.enabled\|provider\|model`, `search.rrf_k\|graph_hops`, `gc.retention`, `files.bucket\|region\|endpoint\|prefix\|force_path_style`). |
 | `brain reindex [--all\|--since <ts>] [--model m] [--yes]` | Backfill embeddings for active chunks with missing/stale vectors (admin; previews the count and requires `--yes` to spend; batched + resumable). |
 | `brain export [--out <dir>] [--format jsonl\|sql]` · `brain import <dir>` | Portable backup / restore into a fresh brain. |
 | `brain gc [--older-than <N>d\|<N>mo\|<N>y] [--yes]` | Prune superseded fact/chunk **versions** once both the version and its replacement are older than the retention window (default `730d`; precedence `--older-than` > `gc.retention` config > default). Admin-only — refuses a runtime URL; previews per-table counts and requires `--yes` to delete; batched + resumable. Never touches current versions, events, edges, or the merge-map. |
@@ -448,6 +452,12 @@ Neon; connection in Infisical, never `.env`). All verbs accept `--json`.
 Semantic-search embeddings are **off** by default (no paid API calls); enable with
 `roster brain config set embeddings.enabled true` (requires `OPENAI_API_KEY`). Exit
 codes: `0` ok, `1` error. See [HOWTO.md](HOWTO.md) §11 to set one up.
+
+File bytes for `brain fs` live in S3 (or any S3-compatible store — R2, B2, MinIO — via
+`files.endpoint`/`files.force_path_style`); credentials are **env-only**
+(`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`), never in the brain. `brain export` /
+`brain import` round-trip the file ledger rows but not the S3 objects, so a restore needs
+the bucket to still exist.
 
 ## Tasks (`roster task <verb>`)
 
