@@ -16,6 +16,8 @@ import { exportBrain, type ExportFormat } from '../lib/brain/export.ts';
 import { importBrain } from '../lib/brain/import.ts';
 import { loadConfig, setConfig, getConfigRows } from '../lib/brain/config.ts';
 import { resolveEmbedder } from '../lib/brain/embed.ts';
+import { filesConfig, createS3FileStore, type FileStore } from '../lib/brain/s3.ts';
+import { putFile, getFile, listFiles, rmFile } from '../lib/brain/fs.ts';
 import { query as runQuery, type QueryHit } from '../lib/brain/search.ts';
 import { reindexBrain, countReindexTargets } from '../lib/brain/reindex.ts';
 import { EMBED_MODEL } from '../lib/brain/config.ts';
@@ -323,6 +325,102 @@ export async function executeBrainMount(opts: BrainMountOptions): Promise<number
     console.log(`${chalk.dim('·')} ${result.sourcePath} unchanged — no new chunks`);
   }
   return EXIT_OK;
+}
+
+export type BrainFsOptions = RuntimeVerbOptions & {
+  // Test seam: inject a FileStore (MemoryFileStore) instead of hitting S3.
+  makeStore?: (bucket: string) => Promise<FileStore>;
+} & (
+    | { op: 'put'; kind: string; slug: string; file: string; filename?: string; actor?: string }
+    | { op: 'get'; kind: string; slug: string; filename: string; out?: string }
+    | { op: 'ls'; kind?: string; slug?: string }
+    | { op: 'rm'; kind: string; slug: string; filename: string; actor?: string }
+  );
+
+function filesNotConfigured(): RosterError {
+  return new RosterError({
+    header: 'brain fs is not configured',
+    body: 'No S3 file store is set up for this brain.',
+    remedy:
+      "Set a bucket with 'roster brain config set files.bucket <name>' and export " +
+      'AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (and AWS_REGION, or files.region).',
+    exitCode: EXIT_ERROR,
+  });
+}
+
+export async function executeBrainFs(opts: BrainFsOptions): Promise<number> {
+  return withRuntimePool(opts, async (client) => {
+    // `ls` is pure ledger — it never needs S3 or credentials.
+    if (opts.op === 'ls') {
+      const entries = await listFiles(client, { kind: opts.kind, slug: opts.slug });
+      if (opts.json) {
+        console.log(JSON.stringify({ ok: true, files: entries }, null, 2));
+      } else if (entries.length === 0) {
+        console.log(chalk.dim('no files'));
+      } else {
+        for (const e of entries) {
+          const size = e.sizeBytes === null ? '' : ` ${chalk.dim(`${e.sizeBytes}B`)}`;
+          const idx = e.indexed ? '' : chalk.dim(' (not indexed)');
+          console.log(`${e.kind}/${e.slug}/${e.filename}${size}${idx}`);
+        }
+      }
+      return EXIT_OK;
+    }
+
+    const cfg = await loadConfig(client);
+    if (!cfg.filesBucket) throw filesNotConfigured();
+    const target = { bucket: cfg.filesBucket, prefix: cfg.filesPrefix };
+    // The injected store (tests) needs only a configured bucket; the real S3
+    // store additionally needs env credentials (filesConfig returns null without
+    // them, which is the same "not configured" state to the user).
+    let store: FileStore;
+    if (opts.makeStore) {
+      store = await opts.makeStore(cfg.filesBucket);
+    } else {
+      const fc = filesConfig(cfg);
+      if (fc === null) throw filesNotConfigured();
+      store = await createS3FileStore(fc);
+    }
+
+    if (opts.op === 'put') {
+      const embedder = resolveEmbedder(cfg);
+      const res = await putFile(client, store, target, opts, embedder);
+      if (opts.json) {
+        console.log(JSON.stringify({ ok: true, ...res }, null, 2));
+      } else {
+        const idx = res.indexed ? `, +${res.chunks} chunk(s)${res.embedded ? ', embedded' : ''}` : ', not indexed';
+        console.log(`${chalk.green('✓')} put ${res.sourcePath}${idx}`);
+        if (!res.entityExists) {
+          console.log(`  ${chalk.yellow('⚠')} entity ${opts.kind}/${opts.slug} not found in brain (file stored anyway)`);
+        }
+        if (res.supersededUri) console.log(`  ${chalk.dim('·')} superseded ${res.supersededUri}`);
+      }
+      return EXIT_OK;
+    }
+
+    if (opts.op === 'get') {
+      const res = await getFile(client, store, opts);
+      if (opts.json) {
+        console.log(JSON.stringify({ ok: true, ...res }, null, 2));
+      } else {
+        console.log(`${chalk.green('✓')} wrote ${res.outPath} (${res.bytes}B)`);
+        if (!res.hashMatches) {
+          console.log(`  ${chalk.yellow('⚠')} content hash mismatch — the S3 object differs from what the ledger recorded`);
+        }
+      }
+      return EXIT_OK;
+    }
+
+    // rm
+    const res = await rmFile(client, store, opts);
+    if (opts.json) {
+      console.log(JSON.stringify({ ok: true, ...res }, null, 2));
+    } else {
+      const del = res.s3Deleted ? 'S3 object deleted' : chalk.yellow('S3 delete failed — run brain doctor');
+      console.log(`${chalk.green('✓')} tombstoned ${opts.kind}/${opts.slug}/${opts.filename}; ${del}`);
+    }
+    return EXIT_OK;
+  });
 }
 
 export type BrainQueryOptions = RuntimeVerbOptions & { text: string; kind?: string; limit?: number };
