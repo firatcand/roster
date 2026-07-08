@@ -6,7 +6,25 @@ Per-phase retrospectives live in [`docs/retros/`](docs/retros/) and carry the lo
 
 ## [Unreleased]
 
-_(empty — staging area for post-1.7.0 work)_
+_(empty — staging area for post-1.8.0 work)_
+
+## [1.8.0] — 2026-07-08
+
+Brain file-system release: the append-only brain learns to hold **files**. Bytes live in an S3-compatible bucket you own; a new append-only `brain.files` ledger in Postgres records every event and ties each file to the brain's entity taxonomy. No breaking changes.
+
+### Added
+
+- **`roster brain fs put|get|ls|rm` — S3-backed file store.** Attach a file to an entity: `roster brain fs put --kind <k> --slug <s> <file>` uploads the bytes to S3 (key `<prefix>files/<kind>/<slug>/<filename>`; rename with `--filename`) and appends a ledger row. Text and markdown are chunk-indexed on upload so **`brain query` finds them** (the `s3://` URI is their `source_path`); binaries are stored pointer-only. `fs get` downloads and verifies the stored hash; `fs ls [--kind [--slug]]` lists current files; `fs rm` writes a tombstone row **and** deletes the S3 object — the ledger keeps the history. All are runtime-role verbs; add `--json` for machine output. (ROS-157, ROS-159)
+- **S3-compatible storage — AWS S3, Cloudflare R2, Backblaze B2, MinIO.** Non-secret bucket config lives in the brain (`files.bucket`, `files.region`, `files.endpoint`, `files.prefix`, `files.force_path_style`); credentials are **environment-only** (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, optional `AWS_SESSION_TOKEN`, `AWS_REGION`), never stored. Writes are conditional (create-only / ETag compare-and-swap), and `put`/`get`/`rm` serialize per file address so the ledger head can never point at bytes that aren't in S3. (ROS-158)
+- **`roster brain doctor` gains an `s3-file-drift` check** — reconciles the ledger against S3 and flags a missing object, an out-of-band ETag change, or an object orphaned after `rm`. Skip-safe: an unconfigured brain never fails on it. (ROS-160)
+
+### Changed
+
+- **`brain.current_documents` is now file-ledger-aware.** A tombstoned or superseded file's chunks drop out of search, `reindex`, and `gc` automatically — the view keys visibility on the file address's current mount, so an `rm`, an overwrite, and a bucket/prefix change all self-correct. Plain `brain mount` documents are unaffected. (ROS-157)
+
+### Docs
+
+- **ADR-0003** records the Neon-ledger-plus-S3 decision and the rejected alternatives (HydraDB, Postgres `bytea`, an S3-only vault). HOWTO gains an S3 file-storage setup section (R2/MinIO recipes; bucket versioning as optional operator hardening); note that **backups carry file pointers, not bytes** — a restore needs the bucket to still exist. (ROS-160)
 
 ## [1.7.0] — 2026-07-06
 
