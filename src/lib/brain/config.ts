@@ -10,7 +10,12 @@ export type ConfigKey =
   | 'embeddings.model'
   | 'search.rrf_k'
   | 'search.graph_hops'
-  | 'gc.retention';
+  | 'gc.retention'
+  | 'files.bucket'
+  | 'files.region'
+  | 'files.endpoint'
+  | 'files.prefix'
+  | 'files.force_path_style';
 
 export const EMBED_MODEL = 'text-embedding-3-small';
 
@@ -20,6 +25,14 @@ export type BrainConfig = {
   embeddingsModel: string;
   rrfK: number;
   graphHops: number;
+  // S3 file store (ROS-158). All non-secret — the bucket/region/endpoint/prefix
+  // are safe to persist; the AWS credentials are ALWAYS read from the
+  // environment, never stored here. filesBucket === null ⇒ the feature is off.
+  filesBucket: string | null;
+  filesRegion: string | null;
+  filesEndpoint: string | null;
+  filesPrefix: string;
+  filesForcePathStyle: boolean;
 };
 
 export const DEFAULT_CONFIG: BrainConfig = {
@@ -28,6 +41,11 @@ export const DEFAULT_CONFIG: BrainConfig = {
   embeddingsModel: EMBED_MODEL,
   rrfK: 60,
   graphHops: 1,
+  filesBucket: null,
+  filesRegion: null,
+  filesEndpoint: null,
+  filesPrefix: '',
+  filesForcePathStyle: false,
 };
 
 const KEYS: ReadonlySet<string> = new Set<ConfigKey>([
@@ -37,6 +55,11 @@ const KEYS: ReadonlySet<string> = new Set<ConfigKey>([
   'search.rrf_k',
   'search.graph_hops',
   'gc.retention',
+  'files.bucket',
+  'files.region',
+  'files.endpoint',
+  'files.prefix',
+  'files.force_path_style',
 ]);
 
 export function isConfigKey(k: string): k is ConfigKey {
@@ -75,6 +98,48 @@ export function parseConfigValue(key: ConfigKey, raw: string): unknown {
       parseRetention(raw);
       return raw;
     }
+    case 'files.bucket': {
+      // S3 bucket naming: 3-63 chars, lowercase alnum + dot/hyphen, no leading
+      // or trailing separator. (Deliberately not enforcing the stricter IP-form
+      // and adjacent-dot rules — invalid names surface as a clear S3 error.)
+      if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(raw)) {
+        throw new Error(`files.bucket must be a valid S3 bucket name (3-63 lowercase chars)`);
+      }
+      return raw;
+    }
+    case 'files.region': {
+      if (!/^[a-z0-9-]+$/.test(raw)) throw new Error(`files.region must be a region token (e.g. us-east-1, auto)`);
+      return raw;
+    }
+    case 'files.endpoint': {
+      let u: URL;
+      try {
+        u = new URL(raw);
+      } catch {
+        throw new Error(`files.endpoint must be an http(s) URL`);
+      }
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+        throw new Error(`files.endpoint must be an http(s) URL`);
+      }
+      // The brain config is non-secret; credentials are env-only. Reject a URL
+      // that smuggles user:pass@host so nothing secret can be persisted here.
+      if (u.username || u.password) {
+        throw new Error(`files.endpoint must not contain credentials (user:pass@) — S3 credentials are env-only`);
+      }
+      return raw;
+    }
+    case 'files.prefix': {
+      if (raw.startsWith('/')) throw new Error(`files.prefix must not start with '/'`);
+      if (raw.includes('..')) throw new Error(`files.prefix must not contain '..'`);
+      if (/\s/.test(raw)) throw new Error(`files.prefix must not contain whitespace`);
+      if (raw === '') return '';
+      return raw.endsWith('/') ? raw : raw + '/';
+    }
+    case 'files.force_path_style': {
+      if (raw === 'true') return true;
+      if (raw === 'false') return false;
+      throw new Error(`files.force_path_style must be true|false`);
+    }
   }
 }
 
@@ -97,6 +162,21 @@ export async function loadConfig(client: pg.PoolClient | pg.Client): Promise<Bra
         break;
       case 'search.graph_hops':
         cfg.graphHops = Number(row.value);
+        break;
+      case 'files.bucket':
+        cfg.filesBucket = String(row.value);
+        break;
+      case 'files.region':
+        cfg.filesRegion = String(row.value);
+        break;
+      case 'files.endpoint':
+        cfg.filesEndpoint = String(row.value);
+        break;
+      case 'files.prefix':
+        cfg.filesPrefix = String(row.value);
+        break;
+      case 'files.force_path_style':
+        cfg.filesForcePathStyle = row.value === true;
         break;
     }
   }
