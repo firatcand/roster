@@ -62,6 +62,7 @@ import {
   executeBrainConfig,
   executeBrainReindex,
   executeBrainGc,
+  executeBrainFs,
 } from '../commands/brain.ts';
 import {
   EXIT_OK,
@@ -146,6 +147,7 @@ function printHelp(version: string): void {
     `  roster brain doctor          ${chalk.dim('Audit brain append-only safety + report pending migrations')}`,
     `  roster brain save/get/event/link/merge/table/sql  ${chalk.dim('Append-only write/read verbs (runtime role)')}`,
     `  roster brain mount <file>    ${chalk.dim('Ingest a file as append-only document chunks + keyword index (runtime role)')}`,
+    `  roster brain fs put|get|ls|rm  ${chalk.dim('S3-backed file store keyed by --kind/--slug; text is chunk-indexed for query (runtime role)')}`,
     `  roster brain export          ${chalk.dim('Dump all brain tables to a portable backup dir (--out, --format jsonl|sql; admin URL)')}`,
     `  roster brain import <dir>    ${chalk.dim('Restore a backup into a fresh, empty brain (admin URL)')}`,
     `  roster brain query "<text>"  ${chalk.dim('Hybrid semantic + keyword + graph search (--kind, --limit, --json)')}`,
@@ -761,6 +763,27 @@ async function runBrain(args: readonly string[]): Promise<number> {
       return await executeBrainTable({ json: parsed.json, op: 'create', name: parsed.name, columns: parsed.columns });
     }
     return await executeBrainTable({ json: parsed.json, op: 'list' });
+  }
+  if (parsed.subcommand === 'fs') {
+    if (parsed.op === 'put') {
+      return await executeBrainFs({
+        json: parsed.json, op: 'put', kind: parsed.entKind, slug: parsed.slug,
+        file: parsed.file, filename: parsed.filename, actor: parsed.actor,
+      });
+    }
+    if (parsed.op === 'get') {
+      return await executeBrainFs({
+        json: parsed.json, op: 'get', kind: parsed.entKind, slug: parsed.slug,
+        filename: parsed.filename, out: parsed.out,
+      });
+    }
+    if (parsed.op === 'rm') {
+      return await executeBrainFs({
+        json: parsed.json, op: 'rm', kind: parsed.entKind, slug: parsed.slug,
+        filename: parsed.filename, actor: parsed.actor,
+      });
+    }
+    return await executeBrainFs({ json: parsed.json, op: 'ls', kind: parsed.entKind, slug: parsed.slug });
   }
   return await executeBrainSql({ json: parsed.json, query: parsed.query });
 }

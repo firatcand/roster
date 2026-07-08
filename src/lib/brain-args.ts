@@ -16,7 +16,8 @@ type BrainSubcommand =
   | 'query'
   | 'config'
   | 'reindex'
-  | 'gc';
+  | 'gc'
+  | 'fs';
 
 const BRAIN_SUBCOMMANDS: ReadonlySet<BrainSubcommand> = new Set<BrainSubcommand>([
   'init',
@@ -35,6 +36,7 @@ const BRAIN_SUBCOMMANDS: ReadonlySet<BrainSubcommand> = new Set<BrainSubcommand>
   'config',
   'reindex',
   'gc',
+  'fs',
 ]);
 
 const SUBCOMMAND_LIST = Array.from(BRAIN_SUBCOMMANDS).join(' | ');
@@ -98,6 +100,10 @@ export type ParsedBrainArgs =
   | { kind: 'ok'; subcommand: 'config'; json: boolean; op: 'set'; key: string; value: string }
   | { kind: 'ok'; subcommand: 'reindex'; json: boolean; all: boolean; since?: string; model?: string; yes: boolean }
   | { kind: 'ok'; subcommand: 'gc'; json: boolean; olderThan?: string; yes: boolean }
+  | { kind: 'ok'; subcommand: 'fs'; op: 'put'; json: boolean; entKind: string; slug: string; file: string; filename?: string; actor?: string }
+  | { kind: 'ok'; subcommand: 'fs'; op: 'get'; json: boolean; entKind: string; slug: string; filename: string; out?: string }
+  | { kind: 'ok'; subcommand: 'fs'; op: 'ls'; json: boolean; entKind?: string; slug?: string }
+  | { kind: 'ok'; subcommand: 'fs'; op: 'rm'; json: boolean; entKind: string; slug: string; filename: string; actor?: string }
   | { kind: 'err'; message: string };
 
 function isBrainSubcommand(value: string): value is BrainSubcommand {
@@ -163,7 +169,62 @@ export function parseBrainArgs(args: readonly string[]): ParsedBrainArgs {
   if (first === 'config') return parseConfig(rest);
   if (first === 'reindex') return parseReindex(rest);
   if (first === 'gc') return parseGc(rest);
+  if (first === 'fs') return parseFs(rest);
   return parseSql(rest);
+}
+
+function parseFs(rest: readonly string[]): ParsedBrainArgs {
+  const [op, ...tail] = rest;
+  if (op !== 'put' && op !== 'get' && op !== 'ls' && op !== 'rm') {
+    return err(`'brain fs' requires an op: put | get | ls | rm`);
+  }
+  let json = false;
+  let entKind: string | undefined;
+  let slug: string | undefined;
+  let filename: string | undefined;
+  let out: string | undefined;
+  let actor: string | undefined;
+  const positionals: string[] = [];
+  for (let i = 0; i < tail.length; i++) {
+    const arg = tail[i]!;
+    if (arg === '--json') json = true;
+    else if (arg === '--kind') {
+      const v = readValue(tail, i, `fs ${op}`, '--kind'); if ('kind' in v) return v; entKind = v.value; i = v.next;
+    } else if (arg === '--slug') {
+      const v = readValue(tail, i, `fs ${op}`, '--slug'); if ('kind' in v) return v; slug = v.value; i = v.next;
+    } else if (arg === '--filename' && op === 'put') {
+      const v = readValue(tail, i, `fs ${op}`, '--filename'); if ('kind' in v) return v; filename = v.value; i = v.next;
+    } else if (arg === '--out' && op === 'get') {
+      const v = readValue(tail, i, `fs ${op}`, '--out'); if ('kind' in v) return v; out = v.value; i = v.next;
+    } else if (arg === '--actor' && (op === 'put' || op === 'rm')) {
+      const v = readValue(tail, i, `fs ${op}`, '--actor'); if ('kind' in v) return v; actor = v.value; i = v.next;
+    } else if (arg.startsWith('-')) {
+      return err(`unknown flag for 'brain fs ${op}': ${arg}`);
+    } else {
+      positionals.push(arg);
+    }
+  }
+
+  if (op === 'ls') {
+    if (positionals.length > 0) return err(`'brain fs ls' takes no positional arguments`);
+    if (slug !== undefined && entKind === undefined) return err(`'brain fs ls': --slug requires --kind`);
+    return { kind: 'ok', subcommand: 'fs', op: 'ls', json, entKind, slug };
+  }
+
+  // put/get/rm all require an entity address.
+  if (entKind === undefined) return err(`'brain fs ${op}' requires --kind`);
+  if (slug === undefined) return err(`'brain fs ${op}' requires --slug`);
+
+  if (op === 'put') {
+    if (positionals.length !== 1) return err(`'brain fs put' takes exactly one <file> argument`);
+    return { kind: 'ok', subcommand: 'fs', op: 'put', json, entKind, slug, file: positionals[0]!, filename, actor };
+  }
+  // get | rm both take a single <filename> positional.
+  if (positionals.length !== 1) return err(`'brain fs ${op}' takes exactly one <filename> argument`);
+  if (op === 'get') {
+    return { kind: 'ok', subcommand: 'fs', op: 'get', json, entKind, slug, filename: positionals[0]!, out };
+  }
+  return { kind: 'ok', subcommand: 'fs', op: 'rm', json, entKind, slug, filename: positionals[0]!, actor };
 }
 
 function parseReindex(rest: readonly string[]): ParsedBrainArgs {
