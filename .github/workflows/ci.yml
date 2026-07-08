@@ -28,8 +28,27 @@ jobs:
           --health-retries 10
     env:
       ROSTER_BRAIN_ADMIN_URL: postgresql://postgres:postgres@localhost:55432/postgres
+      # S3-compatible endpoint for the brain fs tests (ROS-158). Started as a
+      # docker step below (not a `services:` container — GH service containers
+      # can't override the image command, and minio/minio needs `server /data`).
+      ROSTER_TEST_S3_ENDPOINT: http://localhost:9000
+      AWS_ACCESS_KEY_ID: testkey
+      AWS_SECRET_ACCESS_KEY: testsecret123
+      AWS_REGION: us-east-1
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Start MinIO (S3-compatible) for brain fs tests
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=testkey -e MINIO_ROOT_PASSWORD=testsecret123 \
+            minio/minio:latest server /data
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:9000/minio/health/live >/dev/null; then
+              echo "minio ready after ${i}s"; break
+            fi
+            if [ "$i" -eq 30 ]; then echo "minio failed to become ready"; docker logs minio; exit 1; fi
+            sleep 1
+          done
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
           version: 9
