@@ -60,8 +60,16 @@ CREATE VIEW brain.current_files AS
 --   * re-put at a NEW source_path (config change) hides the old URI's chunks and
 --     shows the new URI's — the address head moved, so the view self-corrects
 --     without any compensating tombstone from the verb layer.
+--   * overwrite with a NON-indexable version hides the old chunks — the head put
+--     row has a NULL mount_id, so it can't equal the shown mount.
 --   * plain `brain mount` paths never appear in the ledger, so they are never
 --     hidden (the LEFT JOIN leaves source_addr NULL → always visible).
+--
+-- The visibility test is `file_head.mount_id = latest.mount_id`: a chunk's mount
+-- is current only when it IS the mount the address head points at. Because a
+-- mount belongs to exactly one source_path, this subsumes the head_path check
+-- AND catches the non-indexable-overwrite case (head mount_id NULL) that a
+-- head_path-only test would miss.
 --
 -- CREATE OR REPLACE with an unchanged column list preserves the view's grants
 -- (the 007 precedent).
@@ -81,10 +89,11 @@ CREATE OR REPLACE VIEW brain.current_documents AS
     ORDER BY source_path, id DESC
   ),
   -- The current head of every file address: latest ledger row per
-  -- (kind, slug, filename) (uses files_addr_id_idx).
+  -- (kind, slug, filename) — its op and the mount_id of that exact version
+  -- (uses files_addr_id_idx).
   file_head AS (
     SELECT DISTINCT ON (kind, slug, filename)
-      kind, slug, filename, op, source_path AS head_path
+      kind, slug, filename, op, mount_id
     FROM brain.files
     ORDER BY kind, slug, filename, id DESC
   )
@@ -95,4 +104,4 @@ CREATE OR REPLACE VIEW brain.current_documents AS
   LEFT JOIN file_head fh
     ON fh.kind = sa.kind AND fh.slug = sa.slug AND fh.filename = sa.filename
   WHERE sa.source_path IS NULL
-     OR (fh.op = 'put' AND fh.head_path = l.source_path);
+     OR (fh.op = 'put' AND fh.mount_id = l.mount_id);
