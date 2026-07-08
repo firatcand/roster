@@ -7,10 +7,10 @@ export const BACKUP_FORMAT_VERSION = 1 as const;
 export const IMPORT_ADVISORY_LOCK_KEY = 8135141;
 
 // Core tables in FK-safe load order: parents before children.
-// `entities` before facts/events/edges/aliases/merges; `mounts` before documents.
-// NOTE: this is the authoritative core set — do NOT reuse table.ts CORE_TABLES,
-// which omits entity_merges/entity_aliases (they'd be misclassified as agent
-// tables and the broker can't recreate their FKs/indexes).
+// `entities` before facts/events/edges/aliases/merges; `mounts` before documents
+// and `files` (both FK mounts). NOTE: this is the authoritative core set — do NOT
+// reuse table.ts CORE_TABLES, which omits entity_merges/entity_aliases (they'd be
+// misclassified as agent tables and the broker can't recreate their FKs/indexes).
 export const CORE_TABLE_ORDER: readonly string[] = [
   'entities',
   'mounts',
@@ -18,6 +18,7 @@ export const CORE_TABLE_ORDER: readonly string[] = [
   'events',
   'edges',
   'documents',
+  'files',
   'entity_aliases',
   'entity_merges',
 ];

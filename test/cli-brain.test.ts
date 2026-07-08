@@ -48,7 +48,7 @@ test('cli: brain init prints runtime URL exactly once; second init is a no-op (c
     const p1 = JSON.parse(first.stdout);
     assert.equal(p1.roleCreated, true);
     assert.ok(typeof p1.runtimeUrl === 'string' && p1.runtimeUrl.includes(fresh.role));
-    assert.deepEqual(p1.applied, ['001_init.sql', '002_roles.sql', '003_attribution.sql', '004_documents_mount.sql', '005_dedup_merge.sql', '006_create_table_import_lock.sql', '007_search_embeddings.sql', '008_canonical_id_and_merge.sql']);
+    assert.deepEqual(p1.applied, ['001_init.sql', '002_roles.sql', '003_attribution.sql', '004_documents_mount.sql', '005_dedup_merge.sql', '006_create_table_import_lock.sql', '007_search_embeddings.sql', '008_canonical_id_and_merge.sql', '009_files.sql']);
 
     const occurrences = (first.stdout.match(new RegExp(fresh.role, 'g')) ?? []).length;
     assert.equal(occurrences, 1, 'runtime URL printed exactly once');
@@ -59,7 +59,7 @@ test('cli: brain init prints runtime URL exactly once; second init is a no-op (c
     assert.equal(p2.roleCreated, false);
     assert.equal(p2.runtimeUrl, null, 'second init must not re-print the secret');
     assert.deepEqual(p2.applied, []);
-    assert.deepEqual(p2.skipped, ['001_init.sql', '002_roles.sql', '003_attribution.sql', '004_documents_mount.sql', '005_dedup_merge.sql', '006_create_table_import_lock.sql', '007_search_embeddings.sql', '008_canonical_id_and_merge.sql']);
+    assert.deepEqual(p2.skipped, ['001_init.sql', '002_roles.sql', '003_attribution.sql', '004_documents_mount.sql', '005_dedup_merge.sql', '006_create_table_import_lock.sql', '007_search_embeddings.sql', '008_canonical_id_and_merge.sql', '009_files.sql']);
   } finally {
     await fresh.drop();
   }
