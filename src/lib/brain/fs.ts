@@ -42,6 +42,15 @@ export function sourceUri(bucket: string, key: string): string {
   return `s3://${bucket}/${key}`;
 }
 
+// The advisory-lock key for a file address. put and rm serialize on this so a
+// concurrent pair can't interleave their S3 write/delete with the other's
+// ledger commit. It is the ADDRESS (not the source_path URI) because rm must
+// lock BEFORE it reads the head — and the head's URI is unknown until read, and
+// may sit under an old bucket after a config change.
+function addressLockKey(kind: string, slug: string, filename: string): string {
+  return `brain.files:${kind}/${slug}/${filename}`;
+}
+
 // Extensions we chunk + index. Everything else is stored as an opaque pointer.
 const TEXT_EXTS: ReadonlySet<string> = new Set([
   '.md', '.markdown', '.txt', '.text', '.csv', '.tsv', '.json', '.yaml', '.yml',
@@ -130,14 +139,16 @@ export async function putFile(
   await client.query('BEGIN');
   try {
     // Take the per-address advisory lock BEFORE the S3 write, so the whole
-    // operation (S3 put + ledger insert) serializes per source_path. Without
-    // this, two concurrent puts to one address could write S3 in one order but
-    // commit their ledger rows in another, leaving current_files pointing at an
-    // etag/hash that isn't the bytes now in S3. The lock is cluster-wide, so it
-    // serializes across processes; mountBytesTx re-takes the same key (reentrant
-    // within this txn). The trade-off — an open txn spanning the S3 network call
-    // — only ever contends for concurrent puts to the SAME file, which is rare.
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [uri]);
+    // operation (S3 put + ledger insert) serializes per address against both
+    // other puts AND concurrent rm. Without this, two concurrent writers to one
+    // address could order their S3 write/delete and ledger commit differently,
+    // leaving current_files pointing at bytes not in S3. The lock is
+    // cluster-wide (serializes across processes); it is released at COMMIT. The
+    // trade-off — an open txn spanning the S3 call — only contends for
+    // concurrent writers to the SAME file, which is rare.
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+      addressLockKey(spec.kind, spec.slug, filename),
+    ]);
 
     // Conditional write: create-only if absent, CAS against the live etag if it
     // already exists — so we never clobber a concurrent writer's object.
@@ -224,33 +235,41 @@ function notFound(addr: FileAddress): RosterError {
   });
 }
 
+// Reads run under the SAME per-address advisory lock as put/rm, held across the
+// S3 fetch. So a concurrent rm can't delete the object between the head read and
+// the fetch: get either sees the current bytes or (if rm won the lock first) the
+// tombstone → a clean "no current file". A null fetch UNDER the lock therefore
+// means genuine drift (the object vanished out-of-band), not a lost race — which
+// is what makes the "run doctor" message trustworthy.
 export async function getFile(
   client: pg.PoolClient | pg.Client,
   store: FileStore,
   spec: GetSpec,
 ): Promise<GetFileResult> {
   const addr = { kind: spec.kind, slug: spec.slug, filename: spec.filename };
-  const row = await client.query<{ s3_key: string; content_hash: string | null }>(
-    `SELECT s3_key, content_hash FROM brain.current_files
-      WHERE kind = $1 AND slug = $2 AND filename = $3`,
-    [spec.kind, spec.slug, spec.filename],
-  );
-  if (row.rowCount === 0) throw notFound(addr);
+  return withAddressLock(client, spec.kind, spec.slug, spec.filename, async () => {
+    const row = await client.query<{ s3_key: string; content_hash: string | null }>(
+      `SELECT s3_key, content_hash FROM brain.current_files
+        WHERE kind = $1 AND slug = $2 AND filename = $3`,
+      [spec.kind, spec.slug, spec.filename],
+    );
+    if (row.rowCount === 0) throw notFound(addr);
 
-  const obj = await store.get(row.rows[0]!.s3_key);
-  if (obj === null) {
-    throw new RosterError({
-      header: `File bytes missing for ${spec.kind}/${spec.slug}/${spec.filename}`,
-      body: `The ledger has this file but the S3 object is gone (drift).`,
-      remedy: `Run 'roster brain doctor' to reconcile.`,
-      exitCode: EXIT_ERROR,
-    });
-  }
+    const obj = await store.get(row.rows[0]!.s3_key);
+    if (obj === null) {
+      throw new RosterError({
+        header: `File bytes missing for ${spec.kind}/${spec.slug}/${spec.filename}`,
+        body: `The ledger has this file but the S3 object is gone (drift).`,
+        remedy: `Run 'roster brain doctor' to reconcile.`,
+        exitCode: EXIT_ERROR,
+      });
+    }
 
-  const outPath = resolve(spec.out ?? `./${spec.filename}`);
-  writeFileSync(outPath, obj.body);
-  const hashMatches = row.rows[0]!.content_hash === sha256(obj.body);
-  return { outPath, hashMatches, bytes: obj.body.length };
+    const outPath = resolve(spec.out ?? `./${spec.filename}`);
+    writeFileSync(outPath, obj.body);
+    const hashMatches = row.rows[0]!.content_hash === sha256(obj.body);
+    return { outPath, hashMatches, bytes: obj.body.length };
+  });
 }
 
 export type FileEntry = {
@@ -303,43 +322,88 @@ export async function listFiles(
 export type RmSpec = { kind: string; slug: string; filename: string; actor?: string };
 export type RmFileResult = { op: 'rm'; sourcePath: string; s3Deleted: boolean };
 
-// Tombstone FIRST (ledger truth), then delete the S3 object. A failed S3 delete
-// is a warning, not an error — the ledger is already correct, doctor surfaces
-// the orphan, and a re-run retries the delete. Idempotent: re-running against an
-// already-tombstoned file just retries the S3 delete if the object lingers.
+type LedgerHead = { op: string; source_path: string; bucket: string; s3_key: string };
+
+// Run `fn` inside a transaction holding the per-address advisory xact lock (auto
+// released at COMMIT/ROLLBACK — pool-safe, unlike a session lock). Serializes
+// against put/get/rm on the same address.
+async function withAddressLock<T>(
+  client: pg.PoolClient | pg.Client,
+  kind: string,
+  slug: string,
+  filename: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  await client.query('BEGIN');
+  try {
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [addressLockKey(kind, slug, filename)]);
+    const out = await fn();
+    await client.query('COMMIT');
+    return out;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  }
+}
+
+async function readHead(client: pg.PoolClient | pg.Client, spec: RmSpec): Promise<LedgerHead | null> {
+  const r = await client.query<LedgerHead>(
+    `SELECT op, source_path, bucket, s3_key FROM brain.files
+      WHERE kind = $1 AND slug = $2 AND filename = $3
+      ORDER BY id DESC LIMIT 1`,
+    [spec.kind, spec.slug, spec.filename],
+  );
+  return r.rowCount === 0 ? null : r.rows[0]!;
+}
+
+// Remove a file in TWO locked transactions so the ledger truth is durable before
+// any bytes are destroyed:
+//
+//   Phase 1 — tombstone (durable). Append an op='rm' row (unless already
+//     tombstoned) and COMMIT. After this the file is gone from every reader's
+//     view, whether or not the S3 delete ever succeeds.
+//   Phase 2 — delete bytes. Re-acquire the lock, RE-READ the head, and delete
+//     the object only if the head is still a tombstone. If a put re-added the
+//     file between phases, the head is now a 'put' and we leave its bytes alone.
+//
+// Splitting the phases (vs. delete-before-commit) means a crash/commit-failure
+// can never strand current_files pointing at deleted bytes: the worst case is a
+// committed tombstone with an orphaned S3 object, which doctor flags and a re-run
+// (phase 2 again) cleans up. Both phases use auto-released xact locks — no
+// session-lock lifetime to leak onto a pooled connection.
 export async function rmFile(
   client: pg.PoolClient | pg.Client,
   store: FileStore,
   spec: RmSpec,
 ): Promise<RmFileResult> {
   const addr = { kind: spec.kind, slug: spec.slug, filename: spec.filename };
-  const latest = await client.query<{ op: string; source_path: string; bucket: string; s3_key: string }>(
-    `SELECT op, source_path, bucket, s3_key FROM brain.files
-      WHERE kind = $1 AND slug = $2 AND filename = $3
-      ORDER BY id DESC LIMIT 1`,
-    [spec.kind, spec.slug, spec.filename],
-  );
-  if (latest.rowCount === 0) throw notFound(addr);
 
-  const row = latest.rows[0]!;
+  // Phase 1: durable tombstone.
+  const head = await withAddressLock(client, spec.kind, spec.slug, spec.filename, async () => {
+    const h = await readHead(client, spec);
+    if (h === null) throw notFound(addr);
+    if (h.op === 'put') {
+      await client.query(
+        `INSERT INTO brain.files (kind, slug, filename, op, source_path, bucket, s3_key, actor)
+         VALUES ($1, $2, $3, 'rm', $4, $5, $6, $7)`,
+        [spec.kind, spec.slug, spec.filename, h.source_path, h.bucket, h.s3_key, spec.actor ?? null],
+      );
+    }
+    return h;
+  });
 
-  // Already tombstoned: don't append another rm row — just retry the S3 delete
-  // if the object is still present (a previously-failed delete).
-  if (row.op === 'rm') {
-    const present = await store.head(row.s3_key);
-    if (present === null) throw notFound(addr);
-    const s3Deleted = await tryDelete(store, row.s3_key);
-    return { op: 'rm', sourcePath: row.source_path, s3Deleted };
-  }
+  // Phase 2: best-effort delete, re-checked under the lock.
+  const s3Deleted = await withAddressLock(client, spec.kind, spec.slug, spec.filename, async () => {
+    const h = await readHead(client, spec);
+    // Only delete when the current head is still a tombstone — a concurrent put
+    // may have re-added the file, and its bytes must survive.
+    if (h !== null && h.op === 'rm') {
+      return tryDelete(store, h.s3_key);
+    }
+    return false;
+  });
 
-  await client.query(
-    `INSERT INTO brain.files (kind, slug, filename, op, source_path, bucket, s3_key, actor)
-     VALUES ($1, $2, $3, 'rm', $4, $5, $6, $7)`,
-    [spec.kind, spec.slug, spec.filename, row.source_path, row.bucket, row.s3_key, spec.actor ?? null],
-  );
-
-  const s3Deleted = await tryDelete(store, row.s3_key);
-  return { op: 'rm', sourcePath: row.source_path, s3Deleted };
+  return { op: 'rm', sourcePath: head.source_path, s3Deleted };
 }
 
 async function tryDelete(store: FileStore, key: string): Promise<boolean> {
