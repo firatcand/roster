@@ -14,6 +14,12 @@ const BATCH_SIZE = 5000;
 // excluded — `brain get` renders raw edge rows as the entity timeline, so
 // superseded edge versions are user-visible history (ROS-153 design pass).
 // Events, merge-map, entities, and mounts rows are never touched.
+//
+// The `files` ledger (ROS-157) is also excluded: it IS the file audit log, so
+// its superseded put/rm rows are history by definition. A consequence worth
+// naming: a tombstoned file's chunks are never gc-eligible either — their mount
+// is never superseded by a newer with-chunks mount, so they stay retained (and
+// invisible to search via current_documents) rather than being reclaimed.
 export const GC_TABLES = ['facts', 'documents'] as const;
 export type GcTable = (typeof GC_TABLES)[number];
 

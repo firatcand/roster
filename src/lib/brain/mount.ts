@@ -15,6 +15,8 @@ export type MountResult = {
   embedded: boolean;
 };
 
+export type MountBytesResult = MountResult & { mountId: string };
+
 export type Chunk = {
   content: string;
   contentHash: string;
@@ -142,6 +144,83 @@ export function chunkFile(
   return { chunks, frontmatter };
 }
 
+// Index bytes under an arbitrary source_path (a local absolute path from
+// `mountFile`, or an `s3://…` URI from `brain fs put`). Runs INSIDE the caller's
+// transaction — no BEGIN/COMMIT here — but takes the per-source_path advisory
+// lock itself so concurrent mounts of one path can never interleave. On an
+// unchanged hash it returns the EXISTING latest mount id (zero paid embedding
+// calls, no new rows), which is what lets a `fs put` after an `fs rm` resurrect
+// chunks without re-embedding.
+export async function mountBytesTx(
+  client: pg.PoolClient | pg.Client,
+  sourcePath: string,
+  rawBytes: Buffer,
+  embedder: Embedder | null = null,
+): Promise<MountBytesResult> {
+  const fileHash = sha256(rawBytes);
+  const raw = rawBytes.toString('utf8');
+  const { chunks, frontmatter } = chunkFile(sourcePath, raw);
+  const frontmatterJson = JSON.stringify(frontmatter);
+
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [sourcePath]);
+
+  const latest = await client.query<{ id: string; file_hash: string }>(
+    `SELECT id, file_hash FROM brain.mounts WHERE source_path = $1 ORDER BY id DESC LIMIT 1`,
+    [sourcePath],
+  );
+  // No-op guard runs BEFORE embedding: an unchanged re-mount incurs zero paid
+  // embedding calls and reuses the existing mount id.
+  if (latest.rowCount !== 0 && latest.rows[0]!.file_hash === fileHash) {
+    return {
+      mounted: false,
+      reason: 'unchanged',
+      sourcePath,
+      fileHash,
+      chunks: 0,
+      embedded: false,
+      mountId: latest.rows[0]!.id,
+    };
+  }
+
+  const mount = await client.query<{ id: string }>(
+    `INSERT INTO brain.mounts (source_path, file_hash) VALUES ($1, $2) RETURNING id`,
+    [sourcePath, fileHash],
+  );
+  const mountId = mount.rows[0]!.id;
+
+  // Embed at INSERT time (append-only: embeddings are never UPDATEd in). On a
+  // provider error the mount still succeeds with NULL embeddings — ROS-142
+  // reindex backfills them later. Chunks mounted while embeddings were off also
+  // stay NULL until reindex.
+  let vectors: (string | null)[] = chunks.map(() => null);
+  let model: string | null = null;
+  let embedded = false;
+  if (embedder && chunks.length > 0) {
+    try {
+      const raws = await embedder.embed(chunks.map((c) => c.content));
+      vectors = raws.map((v) => toVectorLiteral(v));
+      model = embedder.model;
+      embedded = true;
+    } catch (e) {
+      process.stderr.write(
+        `roster brain mount: embedding failed (${(e as Error).message}); stored chunks without vectors — run \`roster brain reindex\` to backfill\n`,
+      );
+    }
+  }
+
+  for (let i = 0; i < chunks.length; i++) {
+    const c = chunks[i]!;
+    await client.query(
+      `INSERT INTO brain.documents
+         (source_path, chunk_index, content, content_hash, mount_id, frontmatter, embedding, embedding_model)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::vector, $8)`,
+      [sourcePath, i, c.content, c.contentHash, mountId, frontmatterJson, vectors[i], model],
+    );
+  }
+
+  return { mounted: true, sourcePath, fileHash, chunks: chunks.length, embedded, mountId };
+}
+
 export async function mountFile(
   client: pg.PoolClient | pg.Client,
   filePath: string,
@@ -149,64 +228,12 @@ export async function mountFile(
 ): Promise<MountResult> {
   const sourcePath = resolve(filePath);
   const rawBytes = readFileSync(sourcePath);
-  const fileHash = sha256(rawBytes);
-  const raw = rawBytes.toString('utf8');
-  const { chunks, frontmatter } = chunkFile(sourcePath, raw);
-  const frontmatterJson = JSON.stringify(frontmatter);
 
   await client.query('BEGIN');
   try {
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [sourcePath]);
-
-    const latest = await client.query<{ file_hash: string }>(
-      `SELECT file_hash FROM brain.mounts WHERE source_path = $1 ORDER BY id DESC LIMIT 1`,
-      [sourcePath],
-    );
-    // No-op guard runs BEFORE embedding: an unchanged re-mount incurs zero paid
-    // embedding calls.
-    if (latest.rowCount !== 0 && latest.rows[0]!.file_hash === fileHash) {
-      await client.query('COMMIT');
-      return { mounted: false, reason: 'unchanged', sourcePath, fileHash, chunks: 0, embedded: false };
-    }
-
-    const mount = await client.query<{ id: string }>(
-      `INSERT INTO brain.mounts (source_path, file_hash) VALUES ($1, $2) RETURNING id`,
-      [sourcePath, fileHash],
-    );
-    const mountId = mount.rows[0]!.id;
-
-    // Embed at INSERT time (append-only: embeddings are never UPDATEd in). On a
-    // provider error the mount still succeeds with NULL embeddings — ROS-142
-    // reindex backfills them later. Chunks mounted while embeddings were off also
-    // stay NULL until reindex.
-    let vectors: (string | null)[] = chunks.map(() => null);
-    let model: string | null = null;
-    let embedded = false;
-    if (embedder && chunks.length > 0) {
-      try {
-        const raws = await embedder.embed(chunks.map((c) => c.content));
-        vectors = raws.map((v) => toVectorLiteral(v));
-        model = embedder.model;
-        embedded = true;
-      } catch (e) {
-        process.stderr.write(
-          `roster brain mount: embedding failed (${(e as Error).message}); stored chunks without vectors — run \`roster brain reindex\` to backfill\n`,
-        );
-      }
-    }
-
-    for (let i = 0; i < chunks.length; i++) {
-      const c = chunks[i]!;
-      await client.query(
-        `INSERT INTO brain.documents
-           (source_path, chunk_index, content, content_hash, mount_id, frontmatter, embedding, embedding_model)
-         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::vector, $8)`,
-        [sourcePath, i, c.content, c.contentHash, mountId, frontmatterJson, vectors[i], model],
-      );
-    }
-
+    const { mountId: _mountId, ...result } = await mountBytesTx(client, sourcePath, rawBytes, embedder);
     await client.query('COMMIT');
-    return { mounted: true, sourcePath, fileHash, chunks: chunks.length, embedded };
+    return result;
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     throw err;

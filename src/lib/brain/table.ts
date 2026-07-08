@@ -25,6 +25,7 @@ const CORE_TABLES = new Set([
   'edges',
   'documents',
   'mounts',
+  'files',
 ]);
 
 export async function listTables(

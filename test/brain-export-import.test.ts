@@ -80,6 +80,17 @@ async function populate(pool: pg.Pool): Promise<void> {
       `INSERT INTO brain.entity_merges (from_id, into_id, actor) VALUES ($1, $2, 'tester')`,
       [globexId, entId],
     );
+
+    // File-ledger rows (ROS-157): a put + a tombstone, so both ops round-trip.
+    await client.query(
+      `INSERT INTO brain.files (kind, slug, filename, op, source_path, bucket, s3_key, size_bytes, content_hash, etag, content_type)
+       VALUES ('company','acme','deck.pdf','put','s3://bkt/files/company/acme/deck.pdf','bkt','files/company/acme/deck.pdf',
+               9007199254740993, 'abc123', 'etag-1', 'application/pdf')`,
+    );
+    await client.query(
+      `INSERT INTO brain.files (kind, slug, filename, op, source_path, bucket, s3_key, actor)
+       VALUES ('company','acme','old.md','rm','s3://bkt/files/company/acme/old.md','bkt','files/company/acme/old.md','tester')`,
+    );
   } finally {
     client.release();
   }
@@ -118,6 +129,7 @@ const BACKUP_TABLES = [
   'edges',
   'mounts',
   'documents',
+  'files',
   'entity_aliases',
   'entity_merges',
   'metrics',

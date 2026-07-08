@@ -416,6 +416,7 @@ test('table create yields a brokered admin-owned table; table list shows it', op
     assert.ok(memos, 'table list surfaces the new user table');
     assert.ok(memos!.columns.some((c) => c.name === 'body'));
     assert.ok(!tables.some((t) => t.name === 'entities'), 'core tables excluded from list by default');
+    assert.ok(!tables.some((t) => t.name === 'files'), 'the file ledger is core, not an agent table');
 
     // runtime can INSERT + SELECT but not UPDATE the brokered table
     await rt.query(`INSERT INTO brain.memos (body, score) VALUES ('hi', 1)`);
