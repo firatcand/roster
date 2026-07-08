@@ -166,8 +166,9 @@ test('tombstone: an rm ledger row hides that file chunks from current_documents 
     await rt.query('BEGIN');
     await mountBytesTx(rt, uri, Buffer.from('# Post\nzebrafishterm content\n'), null);
     await rt.query(
-      `INSERT INTO brain.files (kind, slug, filename, op, source_path, bucket, s3_key, content_hash)
-       VALUES ('concept','rrf','post.md','put',$1,'bkt','files/concept/rrf/post.md','h1')`,
+      `INSERT INTO brain.files (kind, slug, filename, op, source_path, bucket, s3_key, content_hash, mount_id)
+       VALUES ('concept','rrf','post.md','put',$1,'bkt','files/concept/rrf/post.md','h1',
+               (SELECT id FROM brain.mounts WHERE source_path = $1 ORDER BY id DESC LIMIT 1))`,
       [uri],
     );
     await rt.query('COMMIT');
@@ -214,9 +215,9 @@ test('tombstone: re-put after rm resurrects chunks without a new mount', opts, a
     await rt.query('BEGIN');
     const m1 = await mountBytesTx(rt, uri, bytes, null);
     await rt.query(
-      `INSERT INTO brain.files (kind, slug, filename, op, source_path, bucket, s3_key, content_hash)
-       VALUES ('concept','rrf','post.md','put',$1,'bkt','files/concept/rrf/post.md','h1')`,
-      [uri],
+      `INSERT INTO brain.files (kind, slug, filename, op, source_path, bucket, s3_key, content_hash, mount_id)
+       VALUES ('concept','rrf','post.md','put',$1,'bkt','files/concept/rrf/post.md','h1',$2)`,
+      [uri, m1.mountId],
     );
     await rt.query(
       `INSERT INTO brain.files (kind, slug, filename, op, source_path, bucket, s3_key)
@@ -237,9 +238,9 @@ test('tombstone: re-put after rm resurrects chunks without a new mount', opts, a
     await rt.query('BEGIN');
     const m2 = await mountBytesTx(rt, uri, bytes, null);
     await rt.query(
-      `INSERT INTO brain.files (kind, slug, filename, op, source_path, bucket, s3_key, content_hash)
-       VALUES ('concept','rrf','post.md','put',$1,'bkt','files/concept/rrf/post.md','h1')`,
-      [uri],
+      `INSERT INTO brain.files (kind, slug, filename, op, source_path, bucket, s3_key, content_hash, mount_id)
+       VALUES ('concept','rrf','post.md','put',$1,'bkt','files/concept/rrf/post.md','h1',$2)`,
+      [uri, m2.mountId],
     );
     await rt.query('COMMIT');
 
@@ -257,6 +258,48 @@ test('tombstone: re-put after rm resurrects chunks without a new mount', opts, a
   }
 });
 
+test('tombstone: overwriting an indexed file with a NON-indexable version hides the old chunks', opts, async () => {
+  const { fresh, password, teardown } = await provision();
+  const rt = await runtimeClient(fresh.url, password, fresh.role);
+  const uri = 's3://bkt/files/concept/rrf/post.md';
+  try {
+    // v1: indexable text → a real mount with chunks + a put row referencing it.
+    await rt.query('BEGIN');
+    await mountBytesTx(rt, uri, Buffer.from('# Post\nlemurterm original text\n'), null);
+    await rt.query(
+      `INSERT INTO brain.files (kind, slug, filename, op, source_path, bucket, s3_key, content_hash, mount_id)
+       VALUES ('concept','rrf','post.md','put',$1,'bkt','files/concept/rrf/post.md','h1',
+               (SELECT id FROM brain.mounts WHERE source_path = $1 ORDER BY id DESC LIMIT 1))`,
+      [uri],
+    );
+    await rt.query('COMMIT');
+
+    const before = await rt.query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM brain.current_documents WHERE tsv @@ plainto_tsquery('english', $1)`,
+      ['lemurterm'],
+    );
+    assert.ok(before.rows[0]!.c > 0, 'indexed v1 visible');
+
+    // v2: overwrite at the SAME address/URI with a non-indexable version — a put
+    // row with mount_id NULL (no new mount). The old mount stays the latest with
+    // chunks, so a source_path-only view would keep showing it.
+    await rt.query(
+      `INSERT INTO brain.files (kind, slug, filename, op, source_path, bucket, s3_key, content_hash, mount_id)
+       VALUES ('concept','rrf','post.md','put',$1,'bkt','files/concept/rrf/post.md','h2', NULL)`,
+      [uri],
+    );
+
+    const after = await rt.query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM brain.current_documents WHERE tsv @@ plainto_tsquery('english', $1)`,
+      ['lemurterm'],
+    );
+    assert.equal(after.rows[0]!.c, 0, 'stale chunks hidden once the head version is non-indexable');
+  } finally {
+    await rt.end();
+    await teardown();
+  }
+});
+
 test('tombstone: re-put of the same address at a NEW source_path (config change) hides the old chunks', opts, async () => {
   const { fresh, password, teardown } = await provision();
   const rt = await runtimeClient(fresh.url, password, fresh.role);
@@ -265,11 +308,11 @@ test('tombstone: re-put of the same address at a NEW source_path (config change)
   try {
     // First put lands under the old bucket URI.
     await rt.query('BEGIN');
-    await mountBytesTx(rt, oldUri, Buffer.from('# Post\nmarmotterm at old bucket\n'), null);
+    const mOld = await mountBytesTx(rt, oldUri, Buffer.from('# Post\nmarmotterm at old bucket\n'), null);
     await rt.query(
-      `INSERT INTO brain.files (kind, slug, filename, op, source_path, bucket, s3_key, content_hash)
-       VALUES ('concept','rrf','post.md','put',$1,'old-bkt','files/concept/rrf/post.md','h1')`,
-      [oldUri],
+      `INSERT INTO brain.files (kind, slug, filename, op, source_path, bucket, s3_key, content_hash, mount_id)
+       VALUES ('concept','rrf','post.md','put',$1,'old-bkt','files/concept/rrf/post.md','h1',$2)`,
+      [oldUri, mOld.mountId],
     );
     await rt.query('COMMIT');
 
@@ -277,11 +320,11 @@ test('tombstone: re-put of the same address at a NEW source_path (config change)
     // with new bytes. The verb's compensating tombstone is deliberately NOT
     // written here — the view must self-correct on the address, not rely on it.
     await rt.query('BEGIN');
-    await mountBytesTx(rt, newUri, Buffer.from('# Post\notterterm at new bucket\n'), null);
+    const mNew = await mountBytesTx(rt, newUri, Buffer.from('# Post\notterterm at new bucket\n'), null);
     await rt.query(
-      `INSERT INTO brain.files (kind, slug, filename, op, source_path, bucket, s3_key, content_hash)
-       VALUES ('concept','rrf','post.md','put',$1,'new-bkt','files/concept/rrf/post.md','h2')`,
-      [newUri],
+      `INSERT INTO brain.files (kind, slug, filename, op, source_path, bucket, s3_key, content_hash, mount_id)
+       VALUES ('concept','rrf','post.md','put',$1,'new-bkt','files/concept/rrf/post.md','h2',$2)`,
+      [newUri, mNew.mountId],
     );
     await rt.query('COMMIT');
 
