@@ -6,7 +6,19 @@ Per-phase retrospectives live in [`docs/retros/`](docs/retros/) and carry the lo
 
 ## [Unreleased]
 
-_(empty — staging area for post-1.8.0 work)_
+_(empty — staging area for post-1.8.1 work)_
+
+## [1.8.1] — 2026-07-09
+
+Patch: `brain doctor` no longer reports a false-positive on managed Postgres, and the workspace env template documents the brain. No breaking changes.
+
+### Fixed
+
+- **`brain doctor` passes on Neon/managed Postgres out of the box.** The `no-inbound-members` isolation check flagged the platform-forced grant of the database owner (`neondb_owner`) into every role — which Neon's internal `cloud_admin` superuser makes and only it can revoke, so the check failed permanently even though it was benign (the owner already owns every brain object; the membership grants nothing). The check now whitelists an inbound member that is a superuser **or** owns the entire runtime-touched surface — both the `brain` and `brain_meta` schemas, every table/view in them, and every function in them (matching each privilege membership would confer). A partial owner or any genuinely less-privileged member is still flagged. Ownership is checked via `nspowner`/`relowner`/`proowner` (independent of the membership under test). (ROS-161)
+
+### Docs
+
+- **`templates/env.example` documents the brain.** Added commented hints for `ROSTER_BRAIN_URL` / `ROSTER_BRAIN_ADMIN_URL` and the brain file-store `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION` (+ optional `AWS_SESSION_TOKEN`) — the template listed every other integration but omitted the brain. Bucket/region live in the brain config; credentials are env-only. (ROS-161)
 
 ## [1.8.0] — 2026-07-08
 

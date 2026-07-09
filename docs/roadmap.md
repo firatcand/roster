@@ -4,6 +4,10 @@ Public view of what's shipped, what's deferred, and what's next. Detailed task t
 
 ## Released
 
+### v1.8.1 — doctor on managed Postgres — 2026-07-09
+
+Patch. **`roster brain doctor` now passes on Neon out of the box.** The `no-inbound-members` isolation check was flagging the platform-forced grant of the database owner into every role — which only Neon's internal superuser can revoke, so it failed permanently even though it was benign. The check now whitelists an inbound member that is a superuser or owns the entire brain surface the runtime role touches (both schemas + every table/view + every function); a partial or less-privileged member is still flagged. Also: `templates/env.example` now documents the brain (`ROSTER_BRAIN_URL`/`ADMIN_URL`) and the brain-fs `AWS_*` vars. Tracked as ROS-161. Full changelog: [CHANGELOG.md](../CHANGELOG.md#181--2026-07-09).
+
 ### v1.8.0 — brain file system — 2026-07-08
 
 The append-only brain learns to hold files. **`roster brain fs put|get|ls|rm`** attaches files to entities and keeps the bytes in an S3 bucket you own — AWS S3, Cloudflare R2, Backblaze B2, or MinIO (`files.endpoint` + `files.force_path_style`) — while a new append-only `brain.files` ledger in Postgres records every event. Text and markdown are chunk-indexed on upload so `brain query` finds them; binaries are stored pointer-only. Deletes are tombstones — `fs rm` drops the S3 object but the ledger keeps the history — and `roster brain doctor` gains an `s3-file-drift` check (missing object, out-of-band ETag change, or an object orphaned after `rm`; skip-safe on an unconfigured brain). Credentials stay env-only (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`), never in the brain; bucket config (`files.bucket`/`region`/`endpoint`/`prefix`/`force_path_style`) is non-secret. Backups carry file pointers, not bytes — enable S3 bucket versioning for byte-level durability. Tracked under the ROS-156 epic (ledger + S3 port + fs verbs + doctor drift). Full changelog: [CHANGELOG.md](../CHANGELOG.md#180--2026-07-08).
