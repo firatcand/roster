@@ -1,6 +1,6 @@
 {
   "name": "@firatcand/roster",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "description": "A CLI that scaffolds a structured multi-agent workspace on top of AI coding tools (Claude Code, Codex CLI, Gemini)",
   "type": "module",
   "bin": {
