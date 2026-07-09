@@ -83,15 +83,56 @@ async function checksForRole(client: pg.PoolClient, roleName: string): Promise<D
   );
 
   checks.push(
+    // The check flags any role that can act AS the restricted runtime role — an
+    // escalation path — EXCEPT a member that ALREADY holds ≥ the runtime role's
+    // privileges, for which membership grants nothing new. Two such members are
+    // whitelisted (ROS-161):
+    //   * a superuser — trivially exceeds any role;
+    //   * a role that OWNS THE ENTIRE brain surface the runtime role touches —
+    //     both the `brain` and `brain_meta` schemas, every table/view in them,
+    //     AND every function in them. The runtime role's grants are USAGE on
+    //     those schemas, SELECT/INSERT on their tables, SELECT on their views,
+    //     and EXECUTE on the SECURITY DEFINER brokers (create_table, canonical_id,
+    //     merge_entities); ownership of all of it confers each of those, so
+    //     membership adds nothing. Owning only the schema, or only the tables, is
+    //     NOT enough — a partial owner would gain the rest via membership, so it
+    //     stays flagged.
+    // Ownership (nspowner/relowner/proowner) is the right signal because it is
+    // independent of the membership under test — has_table_privilege would be
+    // circular (the member inherits the runtime grants THROUGH that very
+    // membership). This lets `brain doctor` pass on managed Postgres (Neon), where
+    // the control plane force-grants the DB owner (`neondb_owner` — it ran the
+    // migrations and owns every brain object) into every role via an internal
+    // superuser the customer cannot revoke. A genuinely less-privileged inbound
+    // member is still a violation.
     await check(
       client,
       'no-inbound-members',
-      'no other role is a member of the runtime role',
+      'no non-privileged role is a member of the runtime role',
       'runtime role has inbound members',
       `SELECT m.rolname FROM pg_auth_members am
          JOIN pg_roles r ON r.oid = am.roleid
          JOIN pg_roles m ON m.oid = am.member
-        WHERE r.rolname = $1`,
+        WHERE r.rolname = $1
+          AND NOT m.rolsuper
+          AND (
+            EXISTS (
+              SELECT 1 FROM pg_namespace n
+               WHERE n.nspname IN ('brain', 'brain_meta') AND n.nspowner <> m.oid
+            )
+            OR EXISTS (
+              SELECT 1 FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+               WHERE n.nspname IN ('brain', 'brain_meta')
+                 AND c.relkind IN ('r', 'p', 'v', 'm')
+                 AND c.relowner <> m.oid
+            )
+            OR EXISTS (
+              SELECT 1 FROM pg_proc p
+                JOIN pg_namespace n ON n.oid = p.pronamespace
+               WHERE n.nspname IN ('brain', 'brain_meta') AND p.proowner <> m.oid
+            )
+          )`,
       [roleName],
     ),
   );
