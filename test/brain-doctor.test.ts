@@ -31,6 +31,23 @@ async function provision(): Promise<Setup> {
   };
 }
 
+// Transfer every brain + brain_meta object (both schemas, all tables/views, all
+// functions) to `role` — the shape a managed-Postgres owner (Neon's neondb_owner)
+// has. Scoped to brain objects (a blanket REASSIGN OWNED trips on postgres-pinned
+// system objects). `role` is a test-controlled identifier.
+function giveAllBrainObjectsTo(role: string): string {
+  return `DO $do$ DECLARE o record; BEGIN
+    FOR o IN SELECT nspname FROM pg_namespace WHERE nspname IN ('brain','brain_meta') LOOP
+      EXECUTE format('ALTER SCHEMA %I OWNER TO %I', o.nspname, '${role}'); END LOOP;
+    FOR o IN SELECT n.nspname AS s, c.relname AS r FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+             WHERE n.nspname IN ('brain','brain_meta') AND c.relkind IN ('r','p','v','m') LOOP
+      EXECUTE format('ALTER TABLE %I.%I OWNER TO %I', o.s, o.r, '${role}'); END LOOP;
+    FOR o IN SELECT p.oid::regprocedure::text AS f FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+             WHERE n.nspname IN ('brain','brain_meta') LOOP
+      EXECUTE format('ALTER FUNCTION %s OWNER TO %I', o.f, '${role}'); END LOOP;
+  END $do$;`;
+}
+
 test('doctor green on a healthy DB (case 9)', opts, async () => {
   const { fresh, teardown } = await provision();
   const pool = createBrainPool('admin', fresh.url);
@@ -143,6 +160,95 @@ test('doctor red when another role is granted membership of the runtime role (ca
   }
 });
 
+// ROS-161: an inbound member that already has ≥ the runtime role's privileges is
+// not an escalation, so it must NOT trip the check. Managed Postgres (Neon)
+// forces the DB owner into every role; the whitelist is superuser OR the
+// brain-schema owner.
+test('doctor: a SUPERUSER inbound member of the runtime role is not flagged (ROS-161)', opts, async () => {
+  const { fresh, teardown } = await provision();
+  const pool = createBrainPool('admin', fresh.url);
+  const su = `${fresh.role}_su`;
+  try {
+    await pool.query(`CREATE ROLE ${su} SUPERUSER`);
+    await pool.query(`GRANT ${fresh.role} TO ${su}`);
+    const report = await runDoctor(pool, fresh.role);
+    const inbound = report.checks.find((c) => c.name === `no-inbound-members [${fresh.role}]`);
+    assert.equal(inbound!.ok, true, inbound!.detail);
+  } finally {
+    await pool.query(`REVOKE ${fresh.role} FROM ${su}`).catch(() => {});
+    await pool.query(`DROP ROLE IF EXISTS ${su}`).catch(() => {});
+    await pool.end();
+    await teardown();
+  }
+});
+
+test('doctor: a non-superuser member that owns the ENTIRE brain is whitelisted (ROS-161, the real owner case)', opts, async () => {
+  const { fresh, teardown } = await provision();
+  const pool = createBrainPool('admin', fresh.url);
+  const owner = `${fresh.role}_objowner`;
+  try {
+    await pool.query(`CREATE ROLE ${owner} NOSUPERUSER`);
+    await pool.query(giveAllBrainObjectsTo(owner));
+    await pool.query(`GRANT ${fresh.role} TO ${owner}`);
+    const report = await runDoctor(pool, fresh.role);
+    const inbound = report.checks.find((c) => c.name === `no-inbound-members [${fresh.role}]`);
+    assert.equal(inbound!.ok, true, inbound!.detail);
+  } finally {
+    // owner now owns the brain objects; drop them (DB is torn down next) so DROP ROLE succeeds.
+    await pool.query(`DROP OWNED BY ${owner} CASCADE`).catch(() => {});
+    await pool.query(`DROP ROLE IF EXISTS ${owner}`).catch(() => {});
+    await pool.end();
+    await teardown();
+  }
+});
+
+test('doctor: owning only the brain SCHEMA (not its tables) does NOT whitelist a member (ROS-161)', opts, async () => {
+  const { fresh, teardown } = await provision();
+  const pool = createBrainPool('admin', fresh.url);
+  const owner = `${fresh.role}_schemaowner`;
+  try {
+    await pool.query(`CREATE ROLE ${owner} NOSUPERUSER`);
+    // Schema ownership only — the tables stay owned by the admin. Membership WOULD
+    // grant this role table access it lacks, so it must remain a violation.
+    await pool.query(`ALTER SCHEMA brain OWNER TO ${owner}`);
+    await pool.query(`GRANT ${fresh.role} TO ${owner}`);
+    const report = await runDoctor(pool, fresh.role);
+    const inbound = report.checks.find((c) => c.name === `no-inbound-members [${fresh.role}]`);
+    assert.equal(inbound!.ok, false, 'schema ownership alone must not whitelist');
+    assert.match(inbound!.detail, new RegExp(owner));
+  } finally {
+    await pool.query(`ALTER SCHEMA brain OWNER TO CURRENT_USER`).catch(() => {});
+    await pool.query(`REVOKE ${fresh.role} FROM ${owner}`).catch(() => {});
+    await pool.query(`DROP ROLE IF EXISTS ${owner}`).catch(() => {});
+    await pool.end();
+    await teardown();
+  }
+});
+
+// Pins the contract: an ALMOST-complete owner (owns everything but ONE object) is
+// still flagged. Guards against a regression that drops one of the EXISTS clauses.
+test('doctor: an owner missing even one brain object is still flagged (ROS-161)', opts, async () => {
+  const { fresh, teardown } = await provision();
+  const pool = createBrainPool('admin', fresh.url);
+  const owner = `${fresh.role}_partial`;
+  try {
+    await pool.query(`CREATE ROLE ${owner} NOSUPERUSER`);
+    await pool.query(giveAllBrainObjectsTo(owner));
+    // Take one table back — owner is no longer a full owner (relation-EXISTS trips).
+    await pool.query(`ALTER TABLE brain.entities OWNER TO CURRENT_USER`);
+    await pool.query(`GRANT ${fresh.role} TO ${owner}`);
+    const report = await runDoctor(pool, fresh.role);
+    const inbound = report.checks.find((c) => c.name === `no-inbound-members [${fresh.role}]`);
+    assert.equal(inbound!.ok, false, 'a member missing even one brain object must stay flagged');
+  } finally {
+    await pool.query(`ALTER TABLE brain.entities OWNER TO ${owner}`).catch(() => {}); // so DROP OWNED clears it
+    await pool.query(`DROP OWNED BY ${owner} CASCADE`).catch(() => {});
+    await pool.query(`DROP ROLE IF EXISTS ${owner}`).catch(() => {});
+    await pool.end();
+    await teardown();
+  }
+});
+
 test('doctor red when the runtime role is given REPLICATION (case 3/attrs)', opts, async () => {
   const { fresh, teardown } = await provision();
   const pool = createBrainPool('admin', fresh.url);
@@ -235,10 +341,12 @@ test('ensureRuntimeRole strips a Neon-style creator auto-grant; init self-heals 
     );
     await pool.query(`GRANT ${fresh.role} TO CURRENT_USER WITH ADMIN OPTION`);
 
-    const dirty = await runDoctor(pool, fresh.role);
-    assert.equal(dirty.ok, false, 'precondition: auto-grant must trip doctor');
-    const inboundCheck = dirty.checks.find((c) => c.name === `no-inbound-members [${fresh.role}]`);
-    assert.equal(inboundCheck!.ok, false);
+    // ROS-161: CURRENT_USER (the admin) is a superuser AND owns the brain schema,
+    // so this creator membership is whitelisted — doctor is already green. init
+    // still strips the (same-grantor, revocable) grant as defense in depth.
+    const before = await runDoctor(pool, fresh.role);
+    const inboundBefore = before.checks.find((c) => c.name === `no-inbound-members [${fresh.role}]`);
+    assert.equal(inboundBefore!.ok, true, 'a superuser/owner creator member is whitelisted (ROS-161)');
 
     const result = await withBrainClient(pool, (c) => ensureRuntimeRole(c, fresh.role));
     assert.equal(result.creatorGrantRemains, false, 'a same-grantor membership must be revocable');
@@ -304,9 +412,11 @@ test('applyGrants skips the pg_trgm ALTER when the threshold is already pinned (
 // ROS-154 round 2 (Codex finding, verified empirically): stock PG16 records the
 // CREATEROLE auto-grant with the BOOTSTRAP superuser as grantor, so the creator
 // can neither REVOKE it directly (silent warning no-op) nor via GRANTED BY
-// (permission denied). Reproduce with a real non-superuser CREATEROLE admin and
-// assert init reports the truth: creatorGrantRemains=true, doctor honestly red.
-test('stock-PG16 bootstrap-granted membership: init reports creatorGrantRemains, doctor stays red (ROS-154)', opts, async () => {
+// (permission denied). init still reports the truth (creatorGrantRemains=true).
+// ROS-161: but that admin OWNS the brain schema (it ran the migrations), so the
+// membership is whitelisted and doctor is GREEN despite the grant remaining —
+// exactly the managed-Postgres (Neon) case this whitelist exists for.
+test('stock-PG16 bootstrap-granted membership remains, but doctor passes — member owns the brain schema (ROS-161)', opts, async () => {
   const suffix = Math.random().toString(36).slice(2, 10);
   const admin = `fadmin_${suffix}`;
   const db = `brain_fadmin_${suffix}`;
@@ -359,10 +469,13 @@ test('stock-PG16 bootstrap-granted membership: init reports creatorGrantRemains,
       );
       assert.notEqual(grantor.rows[0]?.g, admin, 'precondition: the auto-grant grantor is not the creator');
 
+      // ROS-161: the bootstrap membership physically remains (creatorGrantRemains
+      // stayed true above), but its member is the brain-schema owner, so the check
+      // whitelists it and doctor is green.
       const report = await runDoctor(pool, runtimeRole);
-      assert.equal(report.ok, false, 'doctor must stay honestly red while the membership remains');
       const inbound = report.checks.find((c) => c.name === `no-inbound-members [${runtimeRole}]`);
-      assert.equal(inbound!.ok, false);
+      assert.equal(inbound!.ok, true, inbound!.detail);
+      assert.equal(report.ok, true, JSON.stringify(report.checks.filter((c) => !c.ok)));
 
       const again = await withBrainClient(pool, (c) => ensureRuntimeRole(c, runtimeRole));
       assert.equal(again.creatorGrantRemains, true, 're-init keeps reporting the truth without throwing');
