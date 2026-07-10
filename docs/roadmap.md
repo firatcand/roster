@@ -1,6 +1,6 @@
 # Roster Roadmap
 
-Public view of what's shipped, what's deferred, and what's next. Detailed task tracking lives in Linear under project `roster` (issues `ROS-*`); planning artifacts (`spec/`, `plans/phases.yaml`) are local-only and not in the repo.
+Public view of what's shipped, what's deferred, and what's next. Detailed task tracking lives in [GitHub Issues](https://github.com/firatcand/roster/issues); planning artifacts (`spec/`, `plans/phases.yaml`) are local-only and not in the repo. (Historical `ROS-*` references below are Linear IDs from before the tracker moved to GitHub Issues.)
 
 ## Released
 
@@ -90,7 +90,7 @@ Initial public release. Retro: [phase-1.md](retros/phase-1.md). Tool detection l
 
 ## Deferred
 
-- [ROS-57](https://linear.app/firatdogan/issue/ROS-57) — periodic re-check of the `claude://` URL scheme for a schedule-creation deep-link (passive watch on Claude Desktop releases; spike already filed in [anthropics/claude-code#41364](https://github.com/anthropics/claude-code/issues/41364)). Recurring by design — never closes; last probed 2026-07-02.
+- [#55](https://github.com/firatcand/roster/issues/55) — periodic re-check of the `claude://` URL scheme for a schedule-creation deep-link (passive watch on Claude Desktop releases; spike already filed in [anthropics/claude-code#41364](https://github.com/anthropics/claude-code/issues/41364)). Recurring by design — never closes; last probed 2026-07-02. (Was Linear ROS-57.)
 
 ## Out of scope
 

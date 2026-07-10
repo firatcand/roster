@@ -28,7 +28,7 @@ This repo builds and ships **`@firatcand/roster`**, an npm CLI that installs/sca
 
 > **Working on Roster?** This file describes **Roster the product** — what it is, where things live, how it builds and ships.
 >
-> For the **Forge methodology** we use to build Roster (principles, planning workflow, branch strategy, Linear-as-source-of-truth, worktree/PR rules), see [`.forge/CONTEXT.md`](.forge/CONTEXT.md). Keep the two sets of rules separate so they do not bleed into each other.
+> For the **Forge methodology** we use to build Roster (principles, planning workflow, branch strategy, GitHub-Issues-as-source-of-truth, worktree/PR rules), see [`.forge/CONTEXT.md`](.forge/CONTEXT.md). Keep the two sets of rules separate so they do not bleed into each other.
 
 ## Repo layout
 
@@ -100,7 +100,7 @@ The Phase gate command (run before opening a PR): `pnpm typecheck && pnpm build 
 - Prefer hand-rolled argv parsing over commander/yargs to keep tarball small.
 - No comments unless behavior is non-obvious. No docstrings.
 
-(Build conventions — Linear IDs in commits, phase gates, worktree/PR rules, never auto-commit — live in [`.forge/CONTEXT.md`](.forge/CONTEXT.md). Roadmap is `docs/roadmap.md`; work items tracked in Linear under `ROS-*`.)
+(Build conventions — GitHub issue numbers in commits/branches, phase gates, worktree/PR rules, never auto-commit — live in [`.forge/CONTEXT.md`](.forge/CONTEXT.md). Roadmap is `docs/roadmap.md`; work items tracked in [GitHub Issues](https://github.com/firatcand/roster/issues).)
 
 ## Dogfooding
 
@@ -108,4 +108,4 @@ There is no in-repo agent-team workspace anymore. To exercise the workspace patt
 
 ## When in doubt
 
-Start here, then check [`.forge/CONTEXT.md`](.forge/CONTEXT.md) for build methodology and Linear/phase rules, then `README.md` and `docs/HOWTO.md`. If a CLI convention isn't clear, ask before guessing — this is going on npm and inconsistent UX propagates to everyone who installs it.
+Start here, then check [`.forge/CONTEXT.md`](.forge/CONTEXT.md) for build methodology and tracker/phase rules, then `README.md` and `docs/HOWTO.md`. If a CLI convention isn't clear, ask before guessing — this is going on npm and inconsistent UX propagates to everyone who installs it.

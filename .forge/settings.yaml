@@ -3,9 +3,9 @@ project:
   name: roster
   description: npm CLI that installs and scaffolds the agent-team (Forge) pattern across Claude Code, Codex CLI, and Gemini
 tracker:
-  type: linear
+  type: github
   config:
-    team_id: b085748e-dd08-444b-9894-fb75a33f16a8
+    repo: firatcand/roster
 secrets:
   manager: env_file
   env_file_path: .forge/.env

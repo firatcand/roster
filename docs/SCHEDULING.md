@@ -119,11 +119,11 @@ The script performs three checks (Info.plist `CFBundleURLSchemes`, asar grep for
 
 **When the script exits 1** (schedule-creation route detected):
 
-1. File a follow-up Linear ticket under Phase 2.5 to promote the route to a first-class install path in `roster schedule install --tool claude`.
-2. Link the follow-up from [ROS-57](https://linear.app/firatdogan/issue/ROS-57) and update [ADR-0001 Action Item #11](adr/0001-scheduling-architecture.md#action-items).
-3. Close ROS-57 referencing the follow-up.
+1. File a follow-up GitHub issue to promote the route to a first-class install path in `roster schedule install --tool claude`.
+2. Link the follow-up from [#55](https://github.com/firatcand/roster/issues/55) and update [ADR-0001 Action Item #11](adr/0001-scheduling-architecture.md#action-items).
+3. Close #55 referencing the follow-up.
 
-**When the script exits 0**: paste the Markdown report into the latest comment on [ROS-57](https://linear.app/firatdogan/issue/ROS-57) with `Next probe due: next Claude Desktop release or the first Monday of next month, whichever comes first`. ROS-57 stays open — it *is* the recurring tracker.
+**When the script exits 0**: paste the Markdown report into the latest comment on [#55](https://github.com/firatcand/roster/issues/55) with `Next probe due: next Claude Desktop release or the first Monday of next month, whichever comes first`. #55 stays open — it *is* the recurring tracker. (Was Linear ROS-57.)
 
 Probe history lives in [`docs/probes/claude-url-scheme/`](probes/claude-url-scheme/).
 
@@ -359,7 +359,7 @@ The single thing the e2e shell test fundamentally cannot verify is that the fire
 - **Claude side:** Open the Claude usage page (or Settings → Plan & billing). Confirm the two fires show under your Claude Pro/Max usage counter, **not** under Agent SDK / API spend.
 - **Codex side:** Open the ChatGPT usage dashboard (Settings → Plan → Usage). Confirm the two fires count toward your Codex (ChatGPT Plus/Pro) limit, **not** the API tokens dashboard at `platform.openai.com/usage`.
 
-If either fire shows up under API spend, **stop**: `roster doctor` missed something. File against [ROS-38](https://linear.app/firatdogan/issue/ROS-38) with the exact crontab line / Scheduled Task contents.
+If either fire shows up under API spend, **stop**: `roster doctor` missed something. File a [GitHub issue](https://github.com/firatcand/roster/issues) (historical context: Linear ROS-38) with the exact crontab line / Scheduled Task contents.
 
 ### Disruption checks (optional but recommended)
 
@@ -374,7 +374,7 @@ roster schedule remove ops/heartbeat-noop --tool claude   # prints UI removal ha
 roster schedule remove ops/heartbeat-noop --tool codex    # removes crontab line
 ```
 
-If everything above behaves as documented, the platform is ready for a real schedule. If anything surprises you, file it against the relevant Phase 2.5 Linear issue ([ROS-34](https://linear.app/firatdogan/issue/ROS-34), [ROS-35](https://linear.app/firatdogan/issue/ROS-35), [ROS-38](https://linear.app/firatdogan/issue/ROS-38), [ROS-42](https://linear.app/firatdogan/issue/ROS-42)).
+If everything above behaves as documented, the platform is ready for a real schedule. If anything surprises you, file a [GitHub issue](https://github.com/firatcand/roster/issues) (the original Phase 2.5 work was tracked in Linear as ROS-34, ROS-35, ROS-38, ROS-42).
 
 ---
 
