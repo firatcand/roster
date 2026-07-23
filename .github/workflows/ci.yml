@@ -28,6 +28,8 @@ jobs:
           --health-retries 10
     env:
       ROSTER_BRAIN_ADMIN_URL: postgresql://postgres:postgres@localhost:55432/postgres
+      # Ops persistence integration tests (#318) share the same throwaway PG.
+      ROSTER_OPS_TEST_ADMIN_URL: postgresql://postgres:postgres@localhost:55432/postgres
       # S3-compatible endpoint for the brain fs tests (ROS-158). Started as a
       # docker step below (not a `services:` container — GH service containers
       # can't override the image command, and minio/minio needs `server /data`).
@@ -35,13 +37,19 @@ jobs:
       AWS_ACCESS_KEY_ID: testkey
       AWS_SECRET_ACCESS_KEY: testsecret123
       AWS_REGION: us-east-1
+      # Restricted runtime identity for the ops IAM-matrix negatives (#318):
+      # provisioned by the "Provision restricted MinIO user" step below so the
+      # negative tests RUN in CI instead of skipping.
+      ROSTER_TEST_S3_RESTRICTED_KEY: rtkey
+      ROSTER_TEST_S3_RESTRICTED_SECRET: rtsecret12345
+      ROSTER_TEST_S3_RESTRICTED_BUCKET: roster-ops-restricted
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Start MinIO (S3-compatible) for brain fs tests
         run: |
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=testkey -e MINIO_ROOT_PASSWORD=testsecret123 \
-            minio/minio:latest server /data
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data # pinned (the image :latest currently resolves to)
           for i in $(seq 1 30); do
             if curl -sf http://localhost:9000/minio/health/live >/dev/null; then
               echo "minio ready after ${i}s"; break
@@ -49,6 +57,41 @@ jobs:
             if [ "$i" -eq 30 ]; then echo "minio failed to become ready"; docker logs minio; exit 1; fi
             sleep 1
           done
+      - name: Provision restricted MinIO user (ops runtime IAM matrix, #318)
+        run: |
+          curl -sSfL -o /usr/local/bin/mc \
+            "https://dl.min.io/client/mc/release/linux-amd64/archive/mc.RELEASE.2025-04-08T15-39-49Z" # pinned
+          chmod +x /usr/local/bin/mc
+          mc alias set ci http://localhost:9000 testkey testsecret123
+          mc mb "ci/$ROSTER_TEST_S3_RESTRICTED_BUCKET"
+          mc admin user add ci "$ROSTER_TEST_S3_RESTRICTED_KEY" "$ROSTER_TEST_S3_RESTRICTED_SECRET"
+          # Runtime IAM matrix (docs/ARCHITECTURE.md): Put/Get scoped to the
+          # four data prefixes + GetObject on the exact marker key. No
+          # ListBucket, no Delete, no bucket admin, no root-key writes.
+          cat > /tmp/roster-ops-runtime-policy.json <<POLICY
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Action": ["s3:PutObject", "s3:GetObject"],
+                "Resource": [
+                  "arn:aws:s3:::$ROSTER_TEST_S3_RESTRICTED_BUCKET/hitl/*",
+                  "arn:aws:s3:::$ROSTER_TEST_S3_RESTRICTED_BUCKET/runs/*",
+                  "arn:aws:s3:::$ROSTER_TEST_S3_RESTRICTED_BUCKET/artifacts/*",
+                  "arn:aws:s3:::$ROSTER_TEST_S3_RESTRICTED_BUCKET/outbox/*"
+                ]
+              },
+              {
+                "Effect": "Allow",
+                "Action": ["s3:GetObject"],
+                "Resource": ["arn:aws:s3:::$ROSTER_TEST_S3_RESTRICTED_BUCKET/roster-workspace.json"]
+              }
+            ]
+          }
+          POLICY
+          mc admin policy create ci roster-ops-runtime /tmp/roster-ops-runtime-policy.json
+          mc admin policy attach ci roster-ops-runtime --user "$ROSTER_TEST_S3_RESTRICTED_KEY"
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
           version: 9

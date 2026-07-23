@@ -54,7 +54,7 @@ Read [CLAUDE.md](CLAUDE.md) for repo layout and conventions (ESM, kebab-case fil
 - Filenames: lowercase kebab-case
 - YAML over JSON for config files
 - No comments unless behavior is non-obvious; no docstrings
-- Conventional commits: `feat(scope):`, `fix(scope):`, `chore(scope):`, `docs(scope):`. Include Linear ID (`ROS-N`) when applicable.
+- Conventional commits: `feat(scope):`, `fix(scope):`, `chore(scope):`, `docs(scope):`. Reference the GitHub issue (`Closes #N`) when applicable.
 
 ## CI / branch protection
 

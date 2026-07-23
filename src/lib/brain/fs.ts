@@ -3,9 +3,12 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, extname, resolve } from 'node:path';
 import type pg from 'pg';
 import { RosterError, EXIT_ERROR } from '../errors.ts';
+import { assertSafeSegment } from '../persistence/safe-path.ts';
 import { type Embedder } from './embed.ts';
 import { mountBytesTx } from './mount.ts';
 import { ConditionalWriteFailed, type FileStore } from './s3.ts';
+
+export { assertSafeSegment };
 
 // The `brain fs` verbs: S3 holds the bytes, the brain.files ledger records every
 // event. Files hang off the brain's existing kind/slug entity taxonomy, so a
@@ -16,22 +19,6 @@ export type FilesTarget = { bucket: string; prefix: string };
 
 function sha256(buf: Buffer): string {
   return createHash('sha256').update(buf).digest('hex');
-}
-
-// A single S3 key + display path segment: alnum start, then alnum/dot/dash/
-// underscore, max 128. No '/' (would break the key layout) and no '..'
-// (traversal). Applied to kind, slug, and filename before they touch a key.
-const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
-export function assertSafeSegment(label: string, value: string): void {
-  if (value.length === 0 || value.length > 128 || !SAFE_SEGMENT.test(value) || value.includes('..')) {
-    throw new RosterError({
-      header: `Invalid ${label}`,
-      body: `'${value}' is not a valid ${label}. Use letters, digits, '.', '-', '_' (max 128, no '/' or '..').`,
-      remedy: `Rename it and retry.`,
-      exitCode: EXIT_ERROR,
-    });
-  }
 }
 
 export function deriveKey(prefix: string, addr: FileAddress): string {

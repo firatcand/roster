@@ -44,6 +44,8 @@ import { realInstaller } from '../lib/founder-skills/installer.ts';
 import { executeHooksInstall } from '../commands/hooks.ts';
 import { executeMigrateCodexSkills, executeMigrateFromAgentTeam } from '../commands/migrate.ts';
 import { runTask } from '../commands/task.ts';
+import { executeOpsSetup } from '../commands/ops.ts';
+import { parseOpsArgs } from '../lib/ops-args.ts';
 import { parseBrainArgs } from '../lib/brain-args.ts';
 import {
   executeBrainInit,
@@ -80,7 +82,7 @@ import {
   workspaceRequiredError,
 } from '../lib/errors.ts';
 
-type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'second-opinion' | 'hooks' | 'migrate' | 'pending' | 'skills' | 'upgrade' | 'update' | 'brain' | 'task';
+type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'second-opinion' | 'hooks' | 'migrate' | 'pending' | 'skills' | 'upgrade' | 'update' | 'brain' | 'task' | 'ops';
 const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'install',
   'init',
@@ -96,6 +98,7 @@ const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'skills',
   'brain',
   'task',
+  'ops',
 ]);
 
 // Display a path under home as `~/foo`; otherwise if it's under cwd, show
@@ -154,6 +157,7 @@ function printHelp(version: string): void {
     `  roster brain config get|set  ${chalk.dim('Read/set brain settings (embeddings.enabled, provider, model, search knobs)')}`,
     `  roster brain reindex [--yes]  ${chalk.dim('Backfill embeddings for active chunks missing/stale vectors (--since, --model; admin URL)')}`,
     `  roster brain gc [--yes]      ${chalk.dim('Prune superseded fact/chunk versions older than retention (default 2y; --older-than; admin URL)')}`,
+    `  roster ops setup             ${chalk.dim('Configure the workspace operations backend: --backend local|postgres-s3 (--database, --bucket, --new-identity, --json, --yes)')}`,
     `  roster migrate from-agent-team <dir>  ${chalk.dim('Migrate a legacy agent-team workspace into roster')}`,
     `  roster migrate codex-skills  ${chalk.dim('Copy legacy .codex/skills into Codex-native .agents/skills')}`,
     '',
@@ -788,6 +792,53 @@ async function runBrain(args: readonly string[]): Promise<number> {
   return await executeBrainSql({ json: parsed.json, query: parsed.query });
 }
 
+function opsUsageError(): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} usage: roster ops setup [flags]`,
+    body: [
+      '  Flags:',
+      '    --backend local|postgres-s3   backend to configure (required on first setup)',
+      '    --database brain|dedicated    which Postgres the ops schemas live in (postgres-s3)',
+      '    --bucket <name>               dedicated S3 bucket for this workspace (postgres-s3)',
+      '    --region <region>             bucket region (optional)',
+      '    --endpoint <url>              S3-compatible endpoint, e.g. MinIO/R2 (optional)',
+      '    --force-path-style            path-style S3 addressing (optional)',
+      '    --name <label>                workspace display name (default: directory name)',
+      '    --new-identity                fork a fresh workspace identity (with --yes if resources are claimed)',
+      '    --json                        machine-readable output',
+      '    --yes, -y                     confirm orphaning the previous identity',
+    ].join('\n'),
+    remedy: `  Run ${chalk.bold('roster --help')} for the full command list.`,
+    exitCode: EXIT_ERROR,
+  });
+}
+
+async function runOps(args: readonly string[]): Promise<number> {
+  const parsed = parseOpsArgs(args);
+  if (parsed.kind === 'usage') throw opsUsageError();
+  if (parsed.kind === 'err') {
+    throw new RosterError({
+      header: `${chalk.red.bold('roster:')} ${parsed.message}`,
+      body: '',
+      remedy: `  Run ${chalk.bold('roster ops')} for usage.`,
+      exitCode: EXIT_ERROR,
+    });
+  }
+  return await executeOpsSetup({
+    cwd: parsed.cwd ?? process.cwd(),
+    ...(parsed.backend !== undefined ? { backend: parsed.backend } : {}),
+    ...(parsed.database !== undefined ? { database: parsed.database } : {}),
+    ...(parsed.bucket !== undefined ? { bucket: parsed.bucket } : {}),
+    ...(parsed.region !== undefined ? { region: parsed.region } : {}),
+    ...(parsed.endpoint !== undefined ? { endpoint: parsed.endpoint } : {}),
+    ...(parsed.forcePathStyle ? { forcePathStyle: true } : {}),
+    ...(parsed.name !== undefined ? { name: parsed.name } : {}),
+    newIdentity: parsed.newIdentity,
+    yes: parsed.yes,
+    json: parsed.json,
+  });
+}
+
 async function runDoctor(args: readonly string[]): Promise<number> {
   const parsed = parseDoctorArgs(args);
   if (parsed.kind === 'err') {
@@ -882,6 +933,7 @@ async function main(): Promise<number> {
     if (first === 'pending') return runPending(rest);
     if (first === 'brain') return await runBrain(rest);
     if (first === 'task') return await runTask(rest);
+    if (first === 'ops') return await runOps(rest);
   }
 
   throw unknownCommandError(first);

@@ -260,6 +260,36 @@ Why this split: scheduling concerns (when, retry policy, dependencies) are diffe
 
 See [SCHEDULING.md](SCHEDULING.md) for the platform × tool matrix and install flows, and [ADR-0001](adr/0001-scheduling-architecture.md) for the rationale and rejected alternatives.
 
+## The persistence boundary (operations ledger)
+
+Operational state — HITL requests and decisions, run events, artifacts, and the counts behind the banner/inbox — sits behind an explicit persistence boundary. Every workspace chooses its backend in `roster/persistence.yaml` (written by `roster ops setup`); higher layers depend on store interfaces (`HitlStore`, `RunStore`, `ArtifactStore`), never on Markdown paths or SQL directly. Workspaces without the file keep today's file-based behavior unchanged.
+
+Two backends, both first-class:
+
+- **`local`** — an append-only JSONL ledger under `.roster/ops/`. Durable (fsync + checked writes + torn-tail seal recovery), hash-chained for tamper-evidence, multi-process safe via lockfiles.
+- **`postgres-s3`** — structured records in Postgres (`hitl` + `roster_ops` schemas; reuse the brain database or a dedicated one) and immutable payload bytes in a dedicated S3-compatible bucket. Remote outages spool spoolable writes to a durable local outbox that replays idempotently in order; HITL decisions never spool — they require the live store (fail closed).
+
+**Trust model: one database, one bucket, one workspace.** Isolation is physical, not policy-based (no RLS). Setup stamps the database with the workspace UUID and claims the bucket with a root marker object; every new connection verifies the stamp, and every resolution re-verifies the marker digest against the one recorded in the database. Pointing a workspace at another workspace's database or bucket is refused before any read or write. The bound database is the trust root; the bucket marker is the cross-workspace accident tripwire.
+
+**Admin vs runtime credentials.** Credentials are env-only — `persistence.yaml` never holds secrets. Setup uses the admin URL (`ROSTER_OPS_ADMIN_URL`, or `ROSTER_BRAIN_ADMIN_URL` when reusing the brain database) to migrate schemas, stamp the binding, claim the bucket, and grant the runtime role its least-privilege set: SELECT everywhere, INSERT only on the append tables, sequence USAGE only — no UPDATE/DELETE/TRUNCATE, no DDL, no meta writes. The runtime URL (`ROSTER_OPS_URL` / `ROSTER_BRAIN_URL`) is all the day-to-day path ever uses. Setup refuses to finalize while the runtime role holds anything stronger (the gate names each surplus privilege and the exact REVOKE). The S3 split mirrors this: runtime credentials get put/get on the data prefixes and read-only access to the marker; delete, overwrite, listing, and bucket administration stay admin-only.
+
+**Where data lives locally.** `.roster/ops/` is gitignored machine-local state, namespaced by workspace UUID so a `--new-identity` fork starts a fresh tree and the old one stays archived:
+
+```
+.roster/ops/
+  setup-journal.json                 # in-flight setup only (fixed path, removed at done)
+  <workspaceId>/
+    meta.json                        # identity + producer id + component versions
+    <namespace>/segment-NNNN.jsonl   # hitl/ runs/ artifacts/ — append-only ledger (+ .seal sidecars)
+    outbox/                          # queued remote writes (events + checkpoint.json)
+    spool/<sha256>                   # content-addressed artifact bytes awaiting publication
+    artifacts/<sha256>               # local-backend artifact bytes (content-addressed, beside that namespace's segments)
+```
+
+**What this is NOT.** Append-only is an API guarantee plus hash-chain tamper-*evidence*, not OS tamper-proofing — anyone with filesystem access can edit segments (edits break the chain detectably). It is also not hostile multi-tenancy: the postgres-s3 isolation model assumes each workspace brings its own database and bucket; it defends against accidents (cloned repos, swapped URLs, wrong buckets), not against a malicious co-tenant sharing your credentials.
+
+See [ADR-0004](adr/0004-operations-ledger-contracts.md) for the full protocol reference (store contracts, binding protocol, outbox event model, setup journal, capability negotiation) and [API.md §Ops](API.md#ops-roster-ops-setup) for the command surface and permission matrices.
+
 ## Why these opinions
 
 Each opinion was driven by a specific constraint:
