@@ -49,7 +49,7 @@ jobs:
         run: |
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=testkey -e MINIO_ROOT_PASSWORD=testsecret123 \
-            minio/minio:RELEASE.2025-04-22T22-12-26Z server /data # pinned (was :latest)
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data # pinned (the image :latest currently resolves to)
           for i in $(seq 1 30); do
             if curl -sf http://localhost:9000/minio/health/live >/dev/null; then
               echo "minio ready after ${i}s"; break
