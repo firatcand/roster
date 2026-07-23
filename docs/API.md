@@ -481,6 +481,94 @@ Selectors: unique id (`TASK-12`), raw page id, or fuzzy title (ambiguity lists
 candidates). All verbs take `--json` and `--cwd`. Exit codes: `0` ok, `1` error. See
 [HOWTO.md](HOWTO.md) §13 to connect a board.
 
+## Ops (`roster ops setup`)
+
+Configures the workspace operations backend — where HITL requests/decisions, run
+events, and artifacts persist. Writes `roster/persistence.yaml` (credential-free
+by construction) and ensures `/.roster/ops/` is gitignored as its first side
+effect. Non-interactive: missing required flags error with the exact list, never
+a prompt hang. Design rationale: [ARCHITECTURE.md §The persistence
+boundary](ARCHITECTURE.md#the-persistence-boundary-operations-ledger); full
+protocol: [ADR-0004](adr/0004-operations-ledger-contracts.md).
+
+| Flag | Purpose |
+|------|---------|
+| `--backend local\|postgres-s3` | Backend to configure (required on first setup). |
+| `--database brain\|dedicated` | Which Postgres hosts the ops schemas (postgres-s3; required). `brain` reuses the brain database (separate `hitl`/`roster_ops` schemas); `dedicated` uses its own. |
+| `--bucket <name>` | Dedicated S3 bucket for this workspace (postgres-s3; required). One bucket = one workspace, never shared. |
+| `--region <region>` · `--endpoint <url>` · `--force-path-style` | Object-store addressing (optional; endpoint for MinIO/R2 etc. — http(s) only, credentials in the URL are rejected). |
+| `--name <label>` | Workspace display name (default: directory name). |
+| `--new-identity` | Fork a fresh workspace UUID. Refuses if the current identity has stamped a database/bucket unless `--yes` (prints what it will orphan; nothing is ever deleted or unclaimed). |
+| `--json` | Machine-readable output. |
+| `--yes`, `-y` | Confirm orphaning the previous identity. |
+| `--cwd <dir>` | Operate on another workspace root. |
+
+Re-running with a completed config validates it (flags must match or be
+omitted); re-running after a crash resumes the setup journal and rolls forward.
+Exit codes: `0` ok, `1` error (config errors are always `1`, never `2`).
+
+**Bootstrap states.** A workspace is in exactly one of three states:
+
+| State | Meaning |
+|-------|---------|
+| *legacy-implicit* | No `persistence.yaml`. Everything behaves exactly as before — review/pending/banner flows untouched. |
+| *configured-local* | `backend: local`. Append-only JSONL ledger active under `.roster/ops/<workspaceId>/`. |
+| *postgres-s3* | `backend: postgres-s3` + env URLs resolvable. Postgres records + dedicated-bucket objects, with a durable local outbox for outages. |
+
+**Environment variables** (credentials are env-only; `persistence.yaml` never
+holds secrets):
+
+| Var | When | Purpose |
+|-----|------|---------|
+| `ROSTER_OPS_URL` | `--database dedicated` | Runtime connection string; its user is the runtime role. |
+| `ROSTER_OPS_ADMIN_URL` | `--database dedicated`, setup/validate only | Admin connection string (migrations, binding stamp, grants, role gate). |
+| `ROSTER_BRAIN_URL` / `ROSTER_BRAIN_ADMIN_URL` | `--database brain` | Brain reuse needs nothing new — the existing brain vars are used as-is; the ops grant set extends `roster_brain_rw`. |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (+ `AWS_SESSION_TOKEN`) | postgres-s3 | Object-store credentials. Setup uses admin-capable creds (bucket claim + versioning check); day-to-day runs use the restricted runtime creds. |
+
+Dedicated mode **never mints, prints, or journals a credential**: setup requires
+both URLs up front, verifies the runtime role exists (role absent ⇒ the error
+prints the exact `CREATE ROLE` SQL for the operator), and applies the grant set
+to it. (Contrast `brain init`, which mints the runtime role and prints its
+connection string once.)
+
+**`--json` shape:** `{ok, status: created|resumed|validated|forked, state,
+workspace: {id, name}, backend, configPath, gitignore: appended|present,
+backendInfo: {backend, components: {roster_ops|hitl|objects: {version,
+capabilities}}}, roleInvariants: {ok, violations[]} | null, orphaned | null}`.
+
+**Minimum Postgres permissions:**
+
+| Role | Needs |
+|------|-------|
+| Admin (setup only) | Create the `hitl`/`roster_ops` schemas + tables, write their `meta` rows, `GRANT`/`REVOKE` on them. |
+| Runtime | `USAGE` on both schemas; `SELECT` on all tables; `INSERT` **only** on the append tables (`hitl.requests`, `hitl.decisions`, `roster_ops.run_events`, `roster_ops.artifacts`, `roster_ops.delivery_ledger`) — never `meta`/`schema_migrations`; sequence `USAGE` (nextval) only; **no UPDATE/DELETE/TRUNCATE/DDL**, no ownership, no unsafe role attributes (SUPERUSER, CREATEDB, CREATEROLE, REPLICATION, BYPASSRLS). |
+
+Setup enforces the runtime row via a mandatory pre-finalization gate (direct
+**and inherited** privileges, PUBLIC grants, default ACLs) and refuses to
+finalize until violations are fixed — the error names each surplus privilege
+and the exact `REVOKE`/`ALTER ROLE` to run.
+
+**Minimum S3 IAM:**
+
+| Principal | Allow |
+|-----------|-------|
+| Runtime | `s3:PutObject` + `s3:GetObject` on the four data prefixes (`hitl/*`, `runs/*`, `artifacts/*`, `outbox/*`), plus `s3:GetObject` on the exact marker key `roster-workspace.json`. **No `s3:ListBucket`** (v1 reads are by exact key from the Postgres index), no `s3:DeleteObject*`, no retention bypass, no bucket admin, no root-key writes. |
+| Admin (setup only) | The above plus `s3:PutObject` on the marker key, `s3:GetBucketVersioning`, `s3:GetBucketObjectLockConfiguration`. |
+
+**Bucket requirements:** versioning must be **enabled** (setup verifies with
+admin creds and errors with the exact `aws s3api put-bucket-versioning` command
+otherwise); Object Lock is detected and recorded as a negotiated capability —
+its absence is fine (MinIO/R2 without lock still work).
+
+**Outage semantics (summary):** writes are tri-state — every append returns
+`committed` or `queued` (durably spooled to the local outbox, replayed
+idempotently in per-producer order), never a silent success. Reads and counts
+require the live store (`BackendUnavailable` when down; queued items are
+overlaid and explicitly marked). **HITL decisions fail closed** — they are
+never spooled; a down backend refuses the decision with an actionable error.
+See ADR-0004 for the full model (backlog barrier, poison parking,
+conflict-advance, overlay union).
+
 ## Migrate (`roster migrate from-agent-team <dir>`)
 
 Copies a legacy agent-team workspace into an initialized roster workspace and records

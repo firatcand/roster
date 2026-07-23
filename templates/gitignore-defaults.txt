@@ -22,6 +22,9 @@ node_modules/
 */log/runs/2*/
 */log/feedback/2*/
 
+# Machine-local operations ledger state (`roster ops setup`)
+/.roster/ops/
+
 # Temp / scratch
 **/scratch/
 **/tmp/

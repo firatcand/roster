@@ -21,6 +21,12 @@ src/lib/paths.ts
 # Copied verbatim into users' workspaces by `roster init`
 templates/scaffold/**
 
+# Persistence boundary — DB binding/grants, create-only object store, durable
+# local ledger/outbox, setup journal (writes users' Postgres/S3/.roster/ops)
+src/lib/persistence/**
+src/commands/ops.ts
+data/ops/schema/**
+
 # npm publish allowlist + release CI (wrong = ships secrets or breaks install)
 package.json
 .github/workflows/**
