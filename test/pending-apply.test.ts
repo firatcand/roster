@@ -9,6 +9,7 @@ import {
   resolveItemBySelector,
   approveItem,
   rejectItem,
+  resolveApproveTarget,
 } from '../src/lib/pending-apply.ts';
 import { resolveWorkspaceRelativePath, targetWithinWorkspace, workspaceRelative } from '../src/lib/workspace-path.ts';
 
@@ -19,12 +20,35 @@ function relativeTargetRefused(target: string, root: string): boolean {
   return resolveWorkspaceRelativePath(target, root).status === 'refused';
 }
 
+// Error class — roster/<function>/pending/, needs an explicit target_on_approve.
 function item(root: string, fn: string, filename: string, frontMatter: Record<string, unknown>): PendingItem {
   const dir = join(root, 'roster', fn, 'pending');
   mkdirSync(dir, { recursive: true });
   const path = join(dir, filename);
   writeFileSync(path, '---\n---\nbody', 'utf8');
-  return { function: fn, path, filename, frontMatter, body: 'body' };
+  return { function: fn, class: 'error', path, filename, frontMatter, body: 'body' };
+}
+
+// Lesson class — <agentDir>/pending/, target derived from the agent dir.
+function lessonItem(
+  root: string,
+  agentDir: string,
+  filename: string,
+  frontMatter: Record<string, unknown> = {},
+): PendingItem {
+  const dir = join(root, agentDir, 'pending');
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, filename);
+  writeFileSync(path, '---\n---\nbody', 'utf8');
+  return {
+    function: agentDir.split('/')[0]!,
+    agent: agentDir,
+    class: 'lesson',
+    path,
+    filename,
+    frontMatter,
+    body: 'body',
+  };
 }
 
 function withRoot<T>(fn: (root: string) => T): T {
@@ -145,4 +169,73 @@ test('rejectItem (round-7 finding 8): an error-class item leaves an acknowledgem
     rejectItem(b, root);
     assert.ok(!existsSync(join(root, 'roster', 'gtm', 'pending', 'acknowledged', 'manual-note')));
   });
+});
+
+// --- lesson class: derived approve target -------------------------------------
+
+test('lesson class: approve target derived as <agent>/playbook/<filename>', () => {
+  withRoot((root) => {
+    const l = lessonItem(root, 'design/design-system-builder', 'lesson-1.md');
+    assert.equal(resolveApproveTarget(l), 'design/design-system-builder/playbook/lesson-1.md');
+    const res = approveItem(l, root);
+    assert.ok(res.ok, 'approve should succeed without target_on_approve');
+    assert.ok(!existsSync(l.path));
+    assert.ok(existsSync(join(root, 'design/design-system-builder/playbook/lesson-1.md')));
+  });
+});
+
+test('lesson class: cross-cutting peer agent at the workspace root', () => {
+  withRoot((root) => {
+    const l = lessonItem(root, 'dreamer', 'L-2026-01-01-001.md');
+    assert.equal(resolveApproveTarget(l), 'dreamer/playbook/L-2026-01-01-001.md');
+    assert.ok(approveItem(l, root).ok);
+    assert.ok(existsSync(join(root, 'dreamer/playbook/L-2026-01-01-001.md')));
+  });
+});
+
+test('lesson class: explicit target_on_approve still wins over the derived one', () => {
+  withRoot((root) => {
+    const l = lessonItem(root, 'gtm/sdr', 'x.md', { target_on_approve: 'gtm/sdr/elsewhere/x.md' });
+    assert.equal(resolveApproveTarget(l), 'gtm/sdr/elsewhere/x.md');
+    assert.ok(approveItem(l, root).ok);
+    assert.ok(existsSync(join(root, 'gtm/sdr/elsewhere/x.md')));
+    assert.ok(!existsSync(join(root, 'gtm/sdr/playbook/x.md')));
+  });
+});
+
+test('error class without target_on_approve still cannot be approved', () => {
+  withRoot((root) => {
+    const a = item(root, 'gtm', 'a.md', {});
+    assert.equal(resolveApproveTarget(a), null);
+    assert.ok(!approveItem(a, root).ok);
+    assert.ok(existsSync(a.path));
+  });
+});
+
+test('ids do not collide across surfaces sharing a name and filename', () => {
+  withRoot((root) => {
+    const err = item(root, 'dreamer', 'x.md', {});
+    const lesson = lessonItem(root, 'dreamer', 'x.md');
+    assert.notEqual(computeItemId(err), computeItemId(lesson));
+    const hit = resolveItemBySelector([err, lesson], computeItemId(lesson), root);
+    assert.ok(hit.ok && hit.item === lesson);
+  });
+});
+
+test('lesson class: derived target through an escaping symlink is refused', () => {
+  const escape = mkdtempSync(join(tmpdir(), 'roster-escape-lesson-'));
+  try {
+    withRoot((root) => {
+      const l = lessonItem(root, 'gtm/sdr', 'L-1.md');
+      // <agent>/playbook is a symlink pointing OUTSIDE the workspace — the derived
+      // target must be confined exactly like an explicit one.
+      symlinkSync(escape, join(root, 'gtm', 'sdr', 'playbook'));
+      const res = approveItem(l, root);
+      assert.ok(!res.ok, 'must refuse a derived target that escapes');
+      assert.ok(existsSync(l.path), 'source untouched');
+      assert.ok(!existsSync(join(escape, 'L-1.md')), 'nothing written outside the workspace');
+    });
+  } finally {
+    rmSync(escape, { recursive: true, force: true });
+  }
 });

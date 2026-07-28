@@ -158,6 +158,7 @@ test(
       // pre-swap listing would hand the apply layer.
       const item = {
         function: 'gtm',
+        class: 'error' as const,
         path: join(fx.ws, 'roster', 'gtm', 'pending', 'victim.md'),
         filename: 'victim.md',
         frontMatter: { target_on_approve: 'roster/gtm/approved/victim.md' },

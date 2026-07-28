@@ -6,7 +6,16 @@ Per-phase retrospectives live in [`docs/retros/`](docs/retros/) and carry the lo
 
 ## [Unreleased]
 
-_(empty — staging area for post-1.8.1 work)_
+### Fixed
+
+- **`roster review` now sees both decision surfaces — `/inbox` can act on everything the session-start banner counts.** The banner has always summed two queues: the *error* class (`roster/<function>/pending/`, synthesized by `pending sync` from failed or stale fires) and the *lesson* class (`<function>/<agent>/pending/`, dreamer-drafted lesson candidates, plus `<agent>/pending/` for the cross-cutting `dreamer/` and `chief-of-staff/` peers). `scanPending` only ever read the first, so a workspace whose only pending item was a lesson candidate was told it had an unread decision while `/inbox` reported inbox zero — with no sanctioned way to clear it, since the skill forbids moving decision files by hand. Both surfaces are now walked under the same confinement contract (every directory component resolved before it is walked, bounded no-follow read per item, skipped-with-report on a diverted directory), and `--fn` filters across both. An agent directory is identified by its `agent.md`, so no config file is consulted and the cross-cutting peers are picked up for free.
+- **Lesson-class items no longer need `target_on_approve`.** Their destination is structural — approving a candidate in `<agent>/pending/` promotes it to `<agent>/playbook/<filename>`, matching `conventions.md` § "Lesson lifecycle" and the dreamer skill's stated contract. An explicit `target_on_approve` still wins when present, and the derived target goes through the identical `resolveWorkspaceRelativePath` confinement — no escape, no clobber, no traversal through a diverted parent.
+
+### Changed
+
+- **`--json` items carry `class`, `agent`, and a resolved `target_on_approve`.** `class` is `error` or `lesson`; `agent` is the workspace-relative agent dir (lesson class only); `target_on_approve` is the effective destination — front-matter value, derived playbook path, or `null` when the item cannot be approved. Existing fields are unchanged.
+- **Item ids now include the class in the hashed coordinate.** `roster/dreamer/pending/x.md` and `dreamer/pending/x.md` both reduced to `dreamer/x.md` under the old `sha1(<function>/<filename>)` derivation and collided onto one id. Ids remain derived and are never persisted, so nothing on disk changes; an id from a listing is still valid for the `--approve`/`--reject` call that follows it.
+- **The escape refusal reads `approve target escapes workspace`** (was `target_on_approve escapes workspace`), since the target may now be derived rather than read from front-matter.
 
 ## [1.8.1] — 2026-07-09
 

@@ -26,15 +26,30 @@ function assertItemWithinWorkspace(item: PendingItem, cwd: string): void {
   throw new RosterError({
     header: `${chalk.red.bold('roster:')} refusing to act on a pending item outside the workspace`,
     body: `  ${item.path} resolves outside ${cwd} — a parent directory is a symlink pointing elsewhere.`,
-    remedy: `  Inspect roster/${item.function}/pending (and its parents) and replace the symlink with a real directory.`,
+    remedy: `  Inspect ${item.agent ?? `roster/${item.function}`}/pending (and its parents) and replace the symlink with a real directory.`,
     exitCode: EXIT_ERROR,
   });
 }
 
+// Where an approved item lands. Error-class items carry an explicit
+// target_on_approve. Lesson-class items don't need one: the destination is
+// structural — a candidate in <agent>/pending/ is promoted to <agent>/playbook/
+// under the same name (conventions.md § "Lesson lifecycle", skills/dreamer).
+// An explicit front-matter target still wins, and either way the result goes
+// through the same resolveWorkspaceRelativePath confinement below.
+export function resolveApproveTarget(item: PendingItem): string | null {
+  const explicit = item.frontMatter['target_on_approve'];
+  if (typeof explicit === 'string' && explicit.length > 0) return explicit;
+  if (item.class === 'lesson' && item.agent !== undefined) {
+    return `${item.agent}/playbook/${item.filename}`;
+  }
+  return null;
+}
+
 export function approveItem(item: PendingItem, cwd: string): ApproveResult {
   assertItemWithinWorkspace(item, cwd);
-  const target = item.frontMatter['target_on_approve'];
-  if (typeof target !== 'string' || target.length === 0) {
+  const target = resolveApproveTarget(item);
+  if (target === null) {
     return { ok: false, reason: 'missing target_on_approve in front-matter' };
   }
   // Round-11 finding 2: existsSync FOLLOWED the final component, so a DANGLING
@@ -48,7 +63,7 @@ export function approveItem(item: PendingItem, cwd: string): ApproveResult {
   const res = resolveWorkspaceRelativePath(target, cwd);
   if (res.status === 'refused') {
     return res.reason === 'outside-boundary'
-      ? { ok: false, reason: `target_on_approve escapes workspace (got '${target}')` }
+      ? { ok: false, reason: `approve target escapes workspace (got '${target}')` }
       : {
           ok: false,
           reason: `target is not a safe destination (symlink, special file, or diverted parent): ${target}`,
@@ -85,11 +100,16 @@ export function rejectItem(item: PendingItem, cwd: string): void {
 }
 
 // Stable, derived id for an undecided decision: short sha1 of its workspace
-// coordinate (function + filename). No new on-disk state — satisfies the
-// "rebrand only" decision. Used so the /inbox skill can name an item in chat
-// and call back to apply it headlessly.
+// coordinate. No new on-disk state — satisfies the "rebrand only" decision.
+// Used so the /inbox skill can name an item in chat and call back to apply it
+// headlessly.
+//
+// The class is part of the coordinate because the two surfaces can hold the
+// same filename under the same name: roster/dreamer/pending/x.md (error) and
+// dreamer/pending/x.md (lesson) both reduce to `dreamer/x.md` otherwise.
 export function computeItemId(item: PendingItem): string {
-  return createHash('sha1').update(`${item.function}/${item.filename}`).digest('hex').slice(0, 8);
+  const coordinate = `${item.class}/${item.agent ?? item.function}/${item.filename}`;
+  return createHash('sha1').update(coordinate).digest('hex').slice(0, 8);
 }
 
 // Resolve a user/agent selector to exactly one item. Prefer an exact

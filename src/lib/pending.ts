@@ -16,8 +16,22 @@ import {
 // pulled wholly into memory.
 const MAX_PENDING_ITEM_BYTES = 4 * 1024 * 1024;
 
+// Two decision surfaces, both counted by the SessionStart banner and therefore
+// both actionable through `roster review`:
+//   error  — roster/<function>/pending/  synthesized by `pending sync`.
+//   lesson — <function>/<agent>/pending/ dreamer-drafted lesson candidates, plus
+//            <agent>/pending/ for the cross-cutting peers (dreamer/,
+//            chief-of-staff/) that sit outside any function.
+// Scanning only the first left lesson candidates visible to the banner but
+// unreachable by approve/reject — see conventions.md § "Lesson lifecycle".
+export type PendingClass = 'error' | 'lesson';
+
 export type PendingItem = {
   function: string;
+  // Workspace-relative agent dir; lesson class only. Makes the approve target
+  // derivable (see resolveApproveTarget) and disambiguates the item id.
+  agent?: string;
+  class: PendingClass;
   path: string;
   filename: string;
   frontMatter: Record<string, unknown>;
@@ -92,7 +106,91 @@ function confinedFunctionDirOrReport(cwd: string, rosterDir: string, fn: string,
 // skip-malformed, so a diverted directory must not throw — but it must never
 // pass silently either: `roster review` prints them on stderr, which keeps the
 // `--json` stdout contract (a flat item array) byte-stable for /inbox.
-export function scanPending(cwd: string, fn?: string, refused?: string[]): PendingItem[] {
+// Shared item read for both surfaces: the bounded no-follow read, then
+// front-matter parse. `meta` carries whatever distinguishes the surface.
+function readPendingItems(
+  cwd: string,
+  pendingDir: string,
+  meta: { function: string; agent?: string; class: PendingClass },
+  refused?: string[],
+): PendingItem[] {
+  const items: PendingItem[] = [];
+  for (const filename of listPendingFiles(pendingDir)) {
+    const itemPath = join(pendingDir, filename);
+    const read = readWorkspaceEvidenceFileSync(itemPath, cwd, MAX_PENDING_ITEM_BYTES);
+    if (read.state !== 'ok') {
+      if (read.state === 'malformed' && read.reason === 'outside-workspace') {
+        refused?.push(`${workspaceRelative(itemPath, cwd)} resolves outside the workspace — skipped`);
+      }
+      continue;
+    }
+    const { frontMatter, body } = parseFrontMatter(read.content);
+    items.push({ ...meta, path: itemPath, filename: basename(itemPath), frontMatter, body });
+  }
+  return items;
+}
+
+// An agent directory is one holding an agent.md — the structural invariant from
+// conventions.md § "Agent contract". lstat-only (resolveConfinedPath), so a
+// symlinked agent.md never counts and nothing is read to answer the question.
+function isAgentDir(dirAbs: string, cwd: string): boolean {
+  const res = resolveConfinedPath(join(dirAbs, 'agent.md'), cwd);
+  return res.status === 'ok' && res.stat.isFile();
+}
+
+// Lesson surface. Same confinement contract as the error surface — every
+// directory component is resolved before it is walked and each item goes
+// through the bounded no-follow read — but confined to the WORKSPACE rather
+// than to roster/, because agent dirs legitimately live outside roster/.
+//
+// The speculative probes (is this top-level dir an agent? does it contain
+// agents?) deliberately pass no `refused` channel: every workspace has
+// unrelated top-level dirs, and reporting a symlinked `docs/` as a skipped
+// decision directory would be noise. Refusals are reported only once a real
+// pending/ directory is being resolved.
+function scanLessonClass(cwd: string, fn?: string, refused?: string[]): PendingItem[] {
+  const items: PendingItem[] = [];
+
+  for (const top of listDirNames(cwd)) {
+    // roster/ is the error surface; dotted dirs and node_modules never hold agents.
+    if (top === 'roster' || top === 'node_modules' || top.startsWith('.')) continue;
+    if (fn !== undefined && top !== fn) continue;
+
+    const topDir = confinedDirOrReport(join(cwd, top), cwd);
+    if (topDir === null) continue;
+
+    // Cross-cutting peer agent at the workspace root (dreamer/, chief-of-staff/).
+    if (isAgentDir(topDir, cwd)) {
+      const pendingDir = confinedDirOrReport(join(topDir, 'pending'), cwd, refused);
+      if (pendingDir !== null) {
+        items.push(
+          ...readPendingItems(cwd, pendingDir, { function: top, agent: top, class: 'lesson' }, refused),
+        );
+      }
+      continue;
+    }
+
+    // Otherwise treat it as a function dir and look one level down for agents.
+    for (const agent of listDirNames(topDir)) {
+      const agentDir = confinedDirOrReport(join(topDir, agent), cwd);
+      if (agentDir === null || !isAgentDir(agentDir, cwd)) continue;
+      const pendingDir = confinedDirOrReport(join(agentDir, 'pending'), cwd, refused);
+      if (pendingDir === null) continue;
+      items.push(
+        ...readPendingItems(
+          cwd,
+          pendingDir,
+          { function: top, agent: `${top}/${agent}`, class: 'lesson' },
+          refused,
+        ),
+      );
+    }
+  }
+
+  return items;
+}
+
+function scanErrorClass(cwd: string, fn?: string, refused?: string[]): PendingItem[] {
   const rosterDir = confinedDirOrReport(join(cwd, 'roster'), cwd, refused);
   if (rosterDir === null) return [];
 
@@ -113,27 +211,16 @@ export function scanPending(cwd: string, fn?: string, refused?: string[]): Pendi
     const pendingDir = confinedDirOrReport(join(fnDir, 'pending'), cwd, refused);
     if (pendingDir === null) continue;
 
-    for (const filename of listPendingFiles(pendingDir)) {
-      const itemPath = join(pendingDir, filename);
-      const read = readWorkspaceEvidenceFileSync(itemPath, cwd, MAX_PENDING_ITEM_BYTES);
-      if (read.state !== 'ok') {
-        if (read.state === 'malformed' && read.reason === 'outside-workspace') {
-          refused?.push(`${workspaceRelative(itemPath, cwd)} resolves outside the workspace — skipped`);
-        }
-        continue;
-      }
-      const { frontMatter, body } = parseFrontMatter(read.content);
-      items.push({
-        function: f,
-        path: itemPath,
-        filename: basename(itemPath),
-        frontMatter,
-        body,
-      });
-    }
+    items.push(...readPendingItems(cwd, pendingDir, { function: f, class: 'error' }, refused));
   }
 
   return items;
+}
+
+export function scanPending(cwd: string, fn?: string, refused?: string[]): PendingItem[] {
+  return [...scanErrorClass(cwd, fn, refused), ...scanLessonClass(cwd, fn, refused)].sort((a, b) =>
+    a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
+  );
 }
 
 export function countPending(cwd: string): number {

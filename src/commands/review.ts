@@ -1,12 +1,19 @@
+import { join } from 'node:path';
 import chalk from 'chalk';
 import { scanPending, type PendingItem } from '../lib/pending.ts';
 import {
   approveItem,
   rejectItem,
   computeItemId,
+  resolveApproveTarget,
   resolveItemBySelector,
 } from '../lib/pending-apply.ts';
-import { confinedFunctionDir, workspaceRelative } from '../lib/workspace-path.ts';
+import {
+  confinedFunctionDir,
+  confinedWorkspaceDir,
+  isFunctionName,
+  workspaceRelative,
+} from '../lib/workspace-path.ts';
 import {
   EXIT_OK,
   EXIT_ERROR,
@@ -44,19 +51,24 @@ function pendingItemPreview(item: PendingItem, maxLines: number): string {
 // A symlinked `roster/<fn>` is NOT a valid function dir (round-10 finding 1) —
 // accepting it here would let --approve/--reject name items outside the
 // workspace before the walker ever got a say.
+//
+// --fn names the owner of either surface, so a top-level `<fn>/` holding
+// lesson-class agents counts too. It goes through the same confinement, and the
+// name is validated first so `--fn ../x` can never reach the dir probe.
 function functionDirExists(cwd: string, fn: string): boolean {
-  return confinedFunctionDir(cwd, fn) !== null;
+  if (confinedFunctionDir(cwd, fn) !== null) return true;
+  return isFunctionName(fn) && confinedWorkspaceDir(join(cwd, fn), cwd) !== null;
 }
 
 function renderItem(item: PendingItem, index: number, total: number, cwd: string): void {
   const rel = workspaceRelative(item.path, cwd);
   console.log();
   console.log(
-    `${chalk.bold(`[${index + 1}/${total}]`)} ${chalk.cyan(item.function)} / ${chalk.bold(item.filename)}`,
+    `${chalk.bold(`[${index + 1}/${total}]`)} ${chalk.cyan(item.agent ?? item.function)} / ${chalk.bold(item.filename)}`,
   );
-  console.log(chalk.dim(`  path: ${rel}`));
-  const target = item.frontMatter['target_on_approve'];
-  if (typeof target === 'string' && target.length > 0) {
+  console.log(chalk.dim(`  path: ${rel}  (${item.class})`));
+  const target = resolveApproveTarget(item);
+  if (target !== null) {
     console.log(chalk.dim(`  on approve → ${target}`));
   } else {
     console.log(chalk.dim('  on approve → (no target_on_approve in front-matter — will defer)'));
@@ -132,8 +144,11 @@ export async function executeReview(opts: ReviewOptions): Promise<number> {
     const payload = items.map((item) => ({
       id: computeItemId(item),
       function: item.function,
+      ...(item.agent !== undefined ? { agent: item.agent } : {}),
+      class: item.class,
       path: workspaceRelative(item.path, opts.cwd),
       filename: item.filename,
+      target_on_approve: resolveApproveTarget(item),
       frontMatter: item.frontMatter,
     }));
     console.log(JSON.stringify(payload, null, 2));

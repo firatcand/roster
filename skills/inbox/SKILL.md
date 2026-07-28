@@ -1,6 +1,6 @@
 ---
 name: inbox
-description: "Conversational review of unread decisions in a roster workspace. Lists pending HITL items (roster/<function>/pending/), shows each in chat, collects approve/reject/defer by reply, and applies each via `roster review --approve/--reject <id>`. No TTY needed — this is the chat-native front door for `roster review`. Triggers on /inbox or when the user asks to review their inbox / pending decisions / HITL items."
+description: "Conversational review of unread decisions in a roster workspace. Lists pending HITL items (roster/<function>/pending/ and <agent>/pending/), shows each in chat, collects approve/reject/defer by reply, and applies each via `roster review --approve/--reject <id>`. No TTY needed — this is the chat-native front door for `roster review`. Triggers on /inbox or when the user asks to review their inbox / pending decisions / HITL items."
 version: "1.0.0"
 trigger_conditions:
   - "User invokes /inbox"
@@ -29,13 +29,17 @@ Use that root as `<root>` for every command below (pass it explicitly with `--cw
    ```
    roster review --json --cwd <root>
    ```
-   Parse the JSON array. Each entry has `id`, `function`, `filename`, `path` (workspace-relative), and `frontMatter`. If the `roster` CLI is not on PATH, tell the user to install it (`npm i -g @firatcand/roster`) or run `roster review` in a terminal, and stop.
+   Parse the JSON array. Each entry has `id`, `function`, `class`, `filename`, `path` (workspace-relative), `target_on_approve` (resolved — may be `null`), `frontMatter`, and `agent` on lesson-class items. If the `roster` CLI is not on PATH, tell the user to install it (`npm i -g @firatcand/roster`) or run `roster review` in a terminal, and stop.
+
+   The queue spans **two surfaces**, and `--json` returns both:
+   - `class: "error"` — `roster/<function>/pending/`, synthesized by `roster pending sync` from failed or stale scheduled fires. The approve target comes from `target_on_approve` front-matter.
+   - `class: "lesson"` — `<function>/<agent>/pending/` (and `<agent>/pending/` for the cross-cutting peers `dreamer/` and `chief-of-staff/`), holding dreamer-drafted lesson candidates. These carry no `target_on_approve`: approving promotes the file to `<agent>/playbook/<filename>`, per conventions.md § "Lesson lifecycle". An explicit front-matter target still wins if present.
 
 2. **Empty queue.** If the array is empty, reply `Inbox zero — no unread decisions.` and stop.
 
 3. **Present.** For each item, show a compact, numbered block:
-   - `N. [<function>] <filename>`  ·  id `<id>`
-   - `on approve → <frontMatter.target_on_approve>` (or warn `⚠ no target_on_approve — can't be approved, only rejected/deferred`)
+   - `N. [<agent or function>] <filename>`  ·  id `<id>`  ·  `<class>`
+   - `on approve → <target_on_approve>` (or, when it is `null`, warn `⚠ no target — can't be approved, only rejected/deferred`)
    - the first ~6 lines of the body — read it yourself from `<path>` (you have Read access; `--json` returns front-matter only).
 
 4. **Collect decisions.** Ask the user what to do, accepting free-form replies like "approve 1 and 3, reject 2, leave the rest." Map each to approve / reject / defer. If the user is unsure, summarize what approve (moves the item to its `target_on_approve`) vs reject (deletes it) vs defer (leaves it for later) does. For an error-class item (`error-<id>.md`, synthesized by `roster pending sync` from immutable failed-fire evidence), **reject is the durable skip**: `roster review --reject` also writes an acknowledgement sentinel (`pending/acknowledged/error-<id>`) so the next sync does not re-create the item from the same evidence — a hand-`rm` alone would come back.
@@ -55,6 +59,7 @@ Use that root as `<root>` for every command below (pass it explicitly with `--cw
 - **Never edit a decision's body.** `/inbox` reviews and routes; it does not author.
 - **One workspace at a time** — the root you detected in the working-directory step.
 - **Identify by `id`, fall back to `path`.** The `id` is `roster review`'s stable handle; if it ever reports an ambiguous id, re-run the apply with the exact workspace-relative `path` instead.
+- **The count must match the session-start banner.** Both read the same two surfaces (error + lesson). If they ever disagree, that is a bug worth reporting — never work around it by touching decision files directly.
 - Do not invoke any model billing path other than the host tool's native subscription, and do not spawn subagents — `/inbox` only shells out to `roster` and converses.
 
 ## What this skill does NOT do

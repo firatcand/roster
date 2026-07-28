@@ -677,7 +677,7 @@ test('rejectItem (round-7 finding 8): rejecting an error-class item acknowledges
     assert.equal(first.written.length, 1);
     const path = first.written[0]!.path;
     const filename = path.split('/').pop()!;
-    rejectItem({ function: 'gtm', path, filename, frontMatter: {}, body: '' }, cwd);
+    rejectItem({ function: 'gtm', class: 'error', path, filename, frontMatter: {}, body: '' }, cwd);
     assert.ok(!existsSync(path), 'the item file is deleted');
     const again = syncPending({ cwd });
     assert.equal(again.written.length, 0, 'the rejected item is never resurrected');
