@@ -14,7 +14,11 @@ import {
   codexPreflightError,
 } from './errors.ts';
 import { atomicWriteFile, readExistingSchedulesDoc, upsertEntryInDoc } from './schedule-yaml.ts';
-import { deriveScheduleName, buildOrchestratorPrompt } from './schedule-install.ts';
+import {
+  assertFunctionDirWithinRoster,
+  deriveScheduleName,
+  buildOrchestratorPrompt,
+} from './schedule-install.ts';
 import {
   runCodexPreflight,
   type PreflightResult,
@@ -24,10 +28,12 @@ import {
   upsertCronEntry,
   defaultCrontabIO,
   getMarkerStrings,
+  cronMarkerId,
   resolveCodexBinaryPath,
   type CrontabIO,
 } from './codex-cron.ts';
-import { exitPathFor, eventsPathFor, logPathFor } from './cron-exit-log.ts';
+import { exitDirFor, eventsPathFor, logPathFor } from './cron-exit-log.ts';
+import { functionsRegisteringSchedule } from './schedule-read.ts';
 
 export type CodexInstallOpts = {
   cwd: string;
@@ -60,16 +66,15 @@ export type CodexInstallResult = {
   attestation: { auth_mode: 'chatgpt'; env_policy: 'cleared'; codex_home: string };
 };
 
-const KEBAB_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-
 function renderCodexHandoffDoc(args: {
   name: string;
   cron: string;
   workspacePath: string;
+  functionName: string;
   agent: string;
   plan: string;
 }): string {
-  const prompt = buildOrchestratorPrompt(args.agent, args.plan);
+  const prompt = buildOrchestratorPrompt(args.functionName, args.agent, args.plan, args.name);
   return [
     `# Codex App Automation — ${args.name}`,
     '',
@@ -110,6 +115,7 @@ function renderCodexHandoffDoc(args: {
 function renderHandoffMessage(args: {
   installMode: InstallModeValue;
   name: string;
+  markerId: string;
   fieldsDocPath: string | null;
   cron: string;
   cronLine: string | null;
@@ -138,7 +144,7 @@ function renderHandoffMessage(args: {
   }
 
   // via-cron
-  const markers = getMarkerStrings(args.name);
+  const markers = getMarkerStrings(args.markerId);
   const linesOut = [
     '',
     `${chalk.green('✓')} ${verb} codex schedule ${chalk.bold(args.name)} ${chalk.dim(`(cron: ${args.cron})`)}`,
@@ -160,15 +166,7 @@ function renderHandoffMessage(args: {
 export function installCodexSchedule(opts: CodexInstallOpts): CodexInstallResult {
   const resolvedName = deriveScheduleName(opts.agent, opts.plan, opts.name);
   const workspacePath = resolve(opts.cwd);
-
-  if (!KEBAB_RE.test(opts.functionName)) {
-    throw new RosterError({
-      header: `${chalk.red.bold('roster:')} invalid function name`,
-      body: `  '${opts.functionName}' is not kebab-case (lowercase letters, digits, hyphens).`,
-      remedy: `  Use a kebab-case function name (e.g., 'gtm', 'product-ops').`,
-      exitCode: EXIT_ERROR,
-    });
-  }
+  const functionDir = assertFunctionDirWithinRoster(workspacePath, opts.functionName);
 
   const homeDir = opts.homeDir ?? homedir();
   const env = opts.env ?? process.env;
@@ -205,16 +203,17 @@ export function installCodexSchedule(opts: CodexInstallOpts): CodexInstallResult
   const validatedEntry: ScheduleEntry = parsed.data;
 
   // ── Paths ───────────────────────────────────────────────────────────────
-  const schedulesYamlPath = join(workspacePath, 'roster', opts.functionName, 'schedules.yaml');
+  const schedulesYamlPath = join(functionDir, 'schedules.yaml');
   const fieldsDocPath = opts.installMode === 'ui-handoff'
     ? join(workspacePath, '.roster', 'schedule-specs', `${resolvedName}.codex.fields.md`)
     : null;
   const logPath = opts.installMode === 'via-cron'
-    ? logPathFor(workspacePath, resolvedName)
+    ? logPathFor(workspacePath, opts.functionName, resolvedName)
     : null;
-  const exitPath = opts.installMode === 'via-cron'
-    ? exitPathFor(workspacePath, resolvedName)
+  const exitDir = opts.installMode === 'via-cron'
+    ? exitDirFor(workspacePath, opts.functionName, resolvedName)
     : null;
+  const markerId = cronMarkerId(opts.functionName, resolvedName);
 
   // ── Rendered content ────────────────────────────────────────────────────
   const fieldsDocContent = opts.installMode === 'ui-handoff'
@@ -222,6 +221,7 @@ export function installCodexSchedule(opts: CodexInstallOpts): CodexInstallResult
         name: resolvedName,
         cron: validatedEntry.cron,
         workspacePath,
+        functionName: opts.functionName,
         agent: validatedEntry.agent,
         plan: validatedEntry.plan,
       })
@@ -234,11 +234,11 @@ export function installCodexSchedule(opts: CodexInstallOpts): CodexInstallResult
       cron: validatedEntry.cron,
       workspacePath,
       codexBinaryPath,
-      prompt: buildOrchestratorPrompt(validatedEntry.agent, validatedEntry.plan),
+      prompt: buildOrchestratorPrompt(opts.functionName, validatedEntry.agent, validatedEntry.plan, resolvedName),
       logPath: logPath!,
-      exitPath: exitPath!,
+      exitDir: exitDir!,
       ...(validatedEntry.capture_events === true
-        ? { eventsPath: eventsPathFor(workspacePath, resolvedName) }
+        ? { eventsPath: eventsPathFor(workspacePath, opts.functionName, resolvedName) }
         : {}),
     });
   }
@@ -257,6 +257,7 @@ export function installCodexSchedule(opts: CodexInstallOpts): CodexInstallResult
       handoffMessage: renderHandoffMessage({
         installMode: opts.installMode,
         name: resolvedName,
+        markerId,
         fieldsDocPath,
         cron: validatedEntry.cron,
         cronLine,
@@ -272,7 +273,7 @@ export function installCodexSchedule(opts: CodexInstallOpts): CodexInstallResult
   // We compute the upsert against an in-memory copy first so a YAML conflict
   // doesn't surface AFTER we've already mutated the user's crontab. The real
   // write happens last, after any side-effects on disk that could fail.
-  const { doc } = readExistingSchedulesDoc(schedulesYamlPath);
+  const { doc } = readExistingSchedulesDoc(schedulesYamlPath, workspacePath);
   const { action } = upsertEntryInDoc(doc, validatedEntry);
 
   // ── Side-effect writes (crontab/fields doc) before YAML ─────────────────
@@ -281,16 +282,30 @@ export function installCodexSchedule(opts: CodexInstallOpts): CodexInstallResult
   // line. Side-effects now run before the YAML write — if any of them fail,
   // schedules.yaml stays consistent with the previous (un-touched) state.
   if (opts.installMode === 'ui-handoff') {
-    atomicWriteFile(fieldsDocPath!, fieldsDocContent!);
+    atomicWriteFile(fieldsDocPath!, fieldsDocContent!, workspacePath);
   } else {
-    const logDir = join(workspacePath, 'logs', 'cron');
-    mkdirSync(logDir, { recursive: true });
+    // Create the per-fire exit dir at install time with a CHECKED mkdir (should-
+    // fix 5): the runtime wrapper's `mkdir -p` can then never be the first attempt
+    // on an unwritable path silently, and the dir's parent `logs/cron/<function>/`
+    // (which also holds the log/events files) exists before the cron line's `>>`
+    // redirect runs.
+    mkdirSync(exitDir!, { recursive: true });
     const io = opts.crontabIO ?? defaultCrontabIO();
-    upsertCronEntry(io, resolvedName, cronLine!);
+    // The legacy bare-name fallback carries the workspace-wide claimant list —
+    // the installing function included, since its YAML entry is written LAST
+    // (round-7 finding 2): once two functions claim the name, a bare marker can
+    // no longer be attributed and the install refuses rather than rewriting the
+    // other function's live block.
+    upsertCronEntry(io, markerId, cronLine!, {
+      id: resolvedName,
+      registeredFunctions: [
+        ...new Set([...functionsRegisteringSchedule(workspacePath, resolvedName), opts.functionName]),
+      ],
+    });
   }
 
   // ── YAML write last (commit) ────────────────────────────────────────────
-  atomicWriteFile(schedulesYamlPath, doc.toString());
+  atomicWriteFile(schedulesYamlPath, doc.toString(), workspacePath);
 
   return {
     resolvedName,
@@ -304,6 +319,7 @@ export function installCodexSchedule(opts: CodexInstallOpts): CodexInstallResult
     handoffMessage: renderHandoffMessage({
       installMode: opts.installMode,
       name: resolvedName,
+      markerId,
       fieldsDocPath,
       cron: validatedEntry.cron,
       cronLine,

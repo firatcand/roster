@@ -421,7 +421,7 @@ test('scheduling.gate: upsertEntryInDoc refuses to overwrite a claude entry with
   const fx = makeWorkspace();
   try {
     seedSchedulesYaml(fx.cwd, 'gtm', [sdrEntryBase]);
-    const { doc } = readExistingSchedulesDoc(join(fx.cwd, 'roster', 'gtm', 'schedules.yaml'));
+    const { doc } = readExistingSchedulesDoc(join(fx.cwd, 'roster', 'gtm', 'schedules.yaml'), fx.cwd);
     assert.throws(
       () =>
         upsertEntryInDoc(doc, {
@@ -446,10 +446,10 @@ test('scheduling.gate: upsertEntryInDoc allows same-name same-tool overwrite, wr
   try {
     const yamlPath = join(fx.cwd, 'roster', 'gtm', 'schedules.yaml');
     seedSchedulesYaml(fx.cwd, 'gtm', [sdrEntryBase]);
-    const { doc } = readExistingSchedulesDoc(yamlPath);
+    const { doc } = readExistingSchedulesDoc(yamlPath, fx.cwd);
     const result = upsertEntryInDoc(doc, { ...sdrEntryBase, cron: '0 17 * * 1-5' });
     assert.equal(result.action, 'updated');
-    atomicWriteFile(yamlPath, doc.toString());
+    atomicWriteFile(yamlPath, doc.toString(), fx.cwd);
     const fromDisk = YAML.parse(readFileSync(yamlPath, 'utf8'));
     assert.equal(fromDisk.schedules.length, 1);
     assert.equal(fromDisk.schedules[0].name, 'sdr-cold-outreach');

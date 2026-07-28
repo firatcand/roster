@@ -1,7 +1,15 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import YAML from 'yaml';
 import { scheduleEntrySchema, scheduleFileSchema, type ScheduleEntry } from './schedule-schema.ts';
+import { readWorkspaceEvidenceFileSync } from './schedule-state.ts';
+import { confinedFunctionDir, confinedWorkspaceDir } from './workspace-path.ts';
+
+// The registry is a small YAML file; the cap only bounds a hostile/runaway one.
+// Exported so every reader of roster/<fn>/schedules.yaml — including the ones
+// outside this module (schedule-yaml's install/remove upsert, schedule-validate,
+// doctor) — shares ONE bound (round-9 finding 1).
+export const MAX_SCHEDULES_YAML_BYTES = 1024 * 1024;
 
 // Shared schedule-reading helpers (ROS-121). Consolidates copies that lived in
 // schedule-list.ts and schedule-resolve.ts.
@@ -9,9 +17,25 @@ import { scheduleEntrySchema, scheduleFileSchema, type ScheduleEntry } from './s
 // List roster/<fn> directories. When `only` is given, short-circuit to just that
 // one (schedule-resolve's --function path); otherwise enumerate + sort.
 export function listFunctionDirs(workspacePath: string, only?: string): string[] {
-  if (only !== undefined) return [only];
-  const rosterDir = join(workspacePath, 'roster');
-  if (!existsSync(rosterDir)) return [];
+  // Round-11 finding 1: `only` is CALLER-SUPPLIED (`--function`) and used to be
+  // returned verbatim, so `../archive` was joined under roster/ and resolved to
+  // a sibling registry that remove/status/run then read and REWROTE. It is now
+  // validated as a function name AND confined beneath <workspace>/roster/ — a
+  // refused or absent function simply names no registry, which is the same
+  // zero-entry shape a valid-but-empty function already produced (the
+  // not-found / not-in-function errors are unchanged).
+  if (only !== undefined) {
+    return confinedFunctionDir(workspacePath, only) === null ? [] : [only];
+  }
+  // Round-10 finding 1: the plain statSync here FOLLOWED a symlinked function
+  // dir, so `roster/gtm -> /elsewhere` put a foreign directory into every
+  // schedule walk (list, resolve, the install/remove upsert). Confinement is
+  // realpath-based, so the symlinked ancestor is refused, not followed.
+  // Round-11 finding 1 narrows the boundary from the WORKSPACE to roster/: a
+  // link that stays inside the workspace (`roster/gtm -> ../archive`) passed the
+  // wider check and still diverted the whole walk to a sibling registry.
+  const rosterDir = confinedWorkspaceDir(join(workspacePath, 'roster'), workspacePath);
+  if (rosterDir === null) return [];
   let entries: string[];
   try {
     entries = readdirSync(rosterDir);
@@ -20,12 +44,7 @@ export function listFunctionDirs(workspacePath: string, only?: string): string[]
   }
   const out: string[] = [];
   for (const name of entries) {
-    const full = join(rosterDir, name);
-    try {
-      if (statSync(full).isDirectory()) out.push(name);
-    } catch {
-      // skip
-    }
+    if (confinedFunctionDir(workspacePath, name) !== null) out.push(name);
   }
   return out.sort();
 }
@@ -42,19 +61,30 @@ export function readScheduleEntries(
   warnings?: string[],
 ): ScheduleEntry[] {
   const path = join(workspacePath, 'roster', functionName, 'schedules.yaml');
-  if (!existsSync(path)) return [];
+  // Round-11 finding 1: the read is bounded by roster/, not by the WORKSPACE.
+  // The wider boundary was satisfied by `roster/gtm -> ../archive` and by a
+  // literal `--function ../archive`, so a sibling tree's registry was read as
+  // if it were the function's own. Refusals keep the existing taxonomy — the
+  // evidence reader folds them into `malformed`, so each caller's contract
+  // (warning row for schedule list, throw for resolve) is untouched.
+  const boundary = confinedWorkspaceDir(join(workspacePath, 'roster'), workspacePath) ?? workspacePath;
 
-  let content: string;
-  try {
-    content = readFileSync(path, 'utf8');
-  } catch (err) {
+  // Hardened read (round-8 finding 1 sweep): the registry lives in the workspace
+  // an agent can write, so a planted FIFO/symlink/oversized file must never block
+  // or divert a reader (schedule list, resolve, doctor, pending sync). A hostile
+  // shape reads exactly like the unreadable file it is. Round-10 finding 1 adds
+  // the ANCESTOR half: a symlinked `roster/<fn>` is refused, not followed.
+  const read = readWorkspaceEvidenceFileSync(path, boundary, MAX_SCHEDULES_YAML_BYTES);
+  if (read.state === 'missing') return [];
+  if (read.state === 'malformed') {
+    const detail = `roster/${functionName}/schedules.yaml: cannot read (${read.reason})`;
     if (warnings) {
-      const e = err as NodeJS.ErrnoException;
-      warnings.push(`roster/${functionName}/schedules.yaml: cannot read (${e.code ?? e.message})`);
+      warnings.push(detail);
       return [];
     }
-    throw err;
+    throw new Error(detail);
   }
+  const content = read.content;
 
   if (content.trim().length === 0) return [];
 
@@ -87,6 +117,21 @@ export function readScheduleEntries(
   return out;
 }
 
+// Every function in the workspace that registers a schedule under this name.
+// The pre-#323 crontab marker was the BARE schedule name, so adopting such a
+// block is only unambiguous when exactly one function claims the name; this is
+// the registry-side half of that guard (codex-cron.ts holds the content-side
+// ownership proof). Scans ALL functions, never just the caller's.
+export function functionsRegisteringSchedule(workspacePath: string, scheduleName: string): string[] {
+  const out = new Set<string>();
+  for (const fn of listFunctionDirs(workspacePath)) {
+    for (const entry of readScheduleEntries(workspacePath, fn, [])) {
+      if (entry.name === scheduleName) out.add(fn);
+    }
+  }
+  return [...out].sort();
+}
+
 export type LoadedSchedule = { entry: ScheduleEntry; functionName: string };
 
 // Load + whole-file-validate (scheduleFileSchema) every schedule across
@@ -100,7 +145,8 @@ export function loadSchedules(
   cwd: string,
   opts: { sort?: boolean; filter?: (entry: ScheduleEntry) => boolean } = {},
 ): LoadedSchedule[] {
-  const root = join(cwd, 'roster');
+  const root = confinedWorkspaceDir(join(cwd, 'roster'), cwd);
+  if (root === null) return [];
   let fns: string[];
   try {
     fns = readdirSync(root);
@@ -111,18 +157,11 @@ export function loadSchedules(
 
   const out: LoadedSchedule[] = [];
   for (const fn of fns) {
-    const fnDir = join(root, fn);
-    try {
-      if (!statSync(fnDir).isDirectory()) continue;
-    } catch {
-      continue;
-    }
-    let raw: string;
-    try {
-      raw = readFileSync(join(fnDir, 'schedules.yaml'), 'utf8');
-    } catch {
-      continue;
-    }
+    const fnDir = confinedFunctionDir(cwd, fn);
+    if (fnDir === null) continue;
+    const read = readWorkspaceEvidenceFileSync(join(fnDir, 'schedules.yaml'), cwd, MAX_SCHEDULES_YAML_BYTES);
+    if (read.state !== 'ok') continue;
+    const raw = read.content;
     let parsed: unknown;
     try {
       parsed = YAML.parse(raw);

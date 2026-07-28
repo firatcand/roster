@@ -106,12 +106,15 @@ test('executeRemove: codex via-cron → YAML + crontab block both stripped', asy
   const { root, cleanup } = makeWorkspace();
   try {
     const yamlPath = writeSchedules(root, 'ops', yamlCodexCron);
+    // A legacy bare-name block whose line PROVES ops ownership (function-scoped
+    // log path) — round-6 finding 8: an unprovable bare block is refused, so the
+    // migration-strip path needs provable content.
     const cron = [
       '# user comment',
       '0 0 * * * user-job',
       '',
       '# roster:schedule:heartbeat:begin (do not edit; managed by `roster schedule install`)',
-      '*/5 * * * * /bin/echo hi',
+      "*/5 * * * * /bin/echo hi >> '/w/logs/cron/ops/heartbeat.log' 2>&1",
       '# roster:schedule:heartbeat:end',
       '',
     ].join('\n');
@@ -129,6 +132,43 @@ test('executeRemove: codex via-cron → YAML + crontab block both stripped', asy
     assert.ok(io.current.includes('user-job'));
     const after = readFileSync(yamlPath, 'utf8');
     assert.ok(!after.includes('heartbeat'));
+  } finally {
+    cleanup();
+  }
+});
+
+test('executeRemove (round-6 finding 8): an UNPROVABLE legacy bare block refuses — crontab AND YAML both untouched', async () => {
+  const { root, cleanup } = makeWorkspace();
+  try {
+    const yamlPath = writeSchedules(root, 'ops', yamlCodexCron);
+    // No function-scoped path in the line → ownership unprovable → the remove
+    // must refuse BEFORE the YAML write (side-effects-first ordering), so the
+    // registry never claims the schedule is gone while a live block may remain.
+    const cron = [
+      '# roster:schedule:heartbeat:begin (do not edit; managed by `roster schedule install`)',
+      '*/5 * * * * /bin/echo hi',
+      '# roster:schedule:heartbeat:end',
+      '',
+    ].join('\n');
+    const io = fakeIO(cron);
+    await assert.rejects(
+      () =>
+        executeRemove({
+          cwd: root,
+          name: 'heartbeat',
+          functionName: undefined,
+          dryRun: false,
+          yes: true,
+          crontabIO: io,
+        }),
+      (err: unknown) => {
+        assert.ok(err instanceof RosterError);
+        assert.match(err.header, /cannot adopt legacy cron block/);
+        return true;
+      },
+    );
+    assert.equal(io.written.length, 0, 'crontab untouched');
+    assert.ok(readFileSync(yamlPath, 'utf8').includes('heartbeat'), 'YAML entry survives the refusal');
   } finally {
     cleanup();
   }
@@ -304,7 +344,7 @@ test('executeRemove: kept-for-audit hints populated correctly per tool/mode', as
       yes: true,
       crontabIO: fakeIO(''),
     });
-    assert.ok(r.logPathHint?.endsWith('logs/cron/heartbeat.log'));
+    assert.ok(r.logPathHint?.endsWith('logs/cron/ops/heartbeat.log'), r.logPathHint ?? '(null)');
     assert.equal(r.fieldsDocPathHint, null);
   } finally {
     cleanup();
@@ -345,6 +385,95 @@ test('resolveScheduleByName: --function set and name truly missing → regular n
         return true;
       },
     );
+  } finally {
+    cleanup();
+  }
+});
+
+// ── round-7 finding 2: a bare legacy marker is adoptable only when the schedule
+// name is GLOBALLY unique across the workspace's functions ────────────────────
+//
+// Pre-upgrade state: gtm/nightly AND ops/nightly are both registered while a
+// single bare `roster:schedule:nightly` block is live. The bare marker names no
+// function, so which schedule it drives is decided by user-editable crontab text
+// alone. Removing one function's schedule must NOT consume it — the other
+// function's schedule would silently stop firing.
+
+const yamlCodexCronNightly = (fn: string) => `version: 1
+schedules:
+  - name: nightly
+    agent: ${fn}-bot
+    plan: sweep
+    cron: "0 0 * * *"
+    tool: codex
+    install_mode: via-cron
+    status: installed
+    subscription_attestation:
+      auth_mode: chatgpt
+      env_policy: cleared
+      codex_home: /Users/test/.codex
+`;
+
+function bareNightlyBlockOwnedBy(root: string, fn: string): string {
+  return (
+    '# roster:schedule:nightly:begin (do not edit; managed by `roster schedule install`)\n' +
+    `0 0 * * * old-line >> '${root}/logs/cron/${fn}/nightly.log' 2>&1\n` +
+    '# roster:schedule:nightly:end\n'
+  );
+}
+
+test('executeRemove (round-7 finding 2): two functions register `nightly` → the bare legacy block is REFUSED, never consumed', async () => {
+  const { root, cleanup } = makeWorkspace();
+  try {
+    writeSchedules(root, 'gtm', yamlCodexCronNightly('gtm'));
+    writeSchedules(root, 'ops', yamlCodexCronNightly('ops'));
+    // The bare block's own content would "prove" gtm — but the name is claimed
+    // by two functions, so adoption is ambiguous by construction.
+    const io = fakeIO(bareNightlyBlockOwnedBy(root, 'gtm'));
+    await assert.rejects(
+      () =>
+        executeRemove({
+          cwd: root,
+          name: 'nightly',
+          functionName: 'gtm',
+          dryRun: false,
+          yes: true,
+          crontabIO: io,
+        }),
+      (err: unknown) => {
+        assert.ok(err instanceof RosterError);
+        assert.match(err.header, /ambiguous legacy cron block 'nightly'/);
+        assert.match(err.body, /gtm/);
+        assert.match(err.body, /ops/);
+        return true;
+      },
+    );
+    assert.equal(io.written.length, 0, 'the crontab is never rewritten');
+    assert.ok(io.current.includes('old-line'), 'the bare block SURVIVES');
+    assert.ok(
+      readFileSync(join(root, 'roster', 'gtm', 'schedules.yaml'), 'utf8').includes('nightly'),
+      'the YAML entry is untouched — the remove aborted before the commit',
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('executeRemove (round-7 finding 2): a GLOBALLY UNIQUE schedule name still migrates the provably-owned legacy block (round-6 behavior kept)', async () => {
+  const { root, cleanup } = makeWorkspace();
+  try {
+    writeSchedules(root, 'gtm', yamlCodexCronNightly('gtm'));
+    const io = fakeIO(bareNightlyBlockOwnedBy(root, 'gtm'));
+    const r = await executeRemove({
+      cwd: root,
+      name: 'nightly',
+      functionName: 'gtm',
+      dryRun: false,
+      yes: true,
+      crontabIO: io,
+    });
+    assert.equal(r.cronStripped, true, 'the legacy fallback still strips the block');
+    assert.equal(io.current.includes('old-line'), false);
   } finally {
     cleanup();
   }

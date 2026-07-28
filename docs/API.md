@@ -523,7 +523,8 @@ holds secrets):
 | `ROSTER_OPS_URL` | `--database dedicated` | Runtime connection string; its user is the runtime role. |
 | `ROSTER_OPS_ADMIN_URL` | `--database dedicated`, setup/validate only | Admin connection string (migrations, binding stamp, grants, role gate). |
 | `ROSTER_BRAIN_URL` / `ROSTER_BRAIN_ADMIN_URL` | `--database brain` | Brain reuse needs nothing new — the existing brain vars are used as-is; the ops grant set extends `roster_brain_rw`. |
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (+ `AWS_SESSION_TOKEN`) | postgres-s3 | Object-store credentials. Setup uses admin-capable creds (bucket claim + versioning check); day-to-day runs use the restricted runtime creds. |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (+ `AWS_SESSION_TOKEN`) | postgres-s3 | **Restricted runtime** object-store credentials — day-to-day reads/writes by exact key + version. |
+| `ROSTER_OPS_ADMIN_AWS_ACCESS_KEY_ID` / `ROSTER_OPS_ADMIN_AWS_SECRET_ACCESS_KEY` (+ `ROSTER_OPS_ADMIN_AWS_SESSION_TOKEN`) | postgres-s3 setup + `run doctor`/`run repair` | **Distinct admin/read** object-store credentials — bucket claim + versioning check at setup, and `ListBucketVersions`/`GetObjectVersion` for repair/doctor. Falls back to the standard `AWS_*` pair only for single-identity dev; production separates the two identities. |
 
 Dedicated mode **never mints, prints, or journals a credential**: setup requires
 both URLs up front, verifies the runtime role exists (role absent ⇒ the error
@@ -552,8 +553,8 @@ and the exact `REVOKE`/`ALTER ROLE` to run.
 
 | Principal | Allow |
 |-----------|-------|
-| Runtime | `s3:PutObject` + `s3:GetObject` on the four data prefixes (`hitl/*`, `runs/*`, `artifacts/*`, `outbox/*`), plus `s3:GetObject` on the exact marker key `roster-workspace.json`. **No `s3:ListBucket`** (v1 reads are by exact key from the Postgres index), no `s3:DeleteObject*`, no retention bypass, no bucket admin, no root-key writes. |
-| Admin (setup only) | The above plus `s3:PutObject` on the marker key, `s3:GetBucketVersioning`, `s3:GetBucketObjectLockConfiguration`. |
+| Runtime (`AWS_*`) | `s3:PutObject` + `s3:GetObject` + **`s3:GetObjectVersion`** on the four data prefixes (`hitl/*`, `runs/*`, `artifacts/*`, `outbox/*`), plus `s3:GetObject` on the exact marker key `roster-workspace.json`. `GetObjectVersion` is required for exact-version artifact reads (the ledger records each blob's immutable `object_version_id` and reads that version, not "latest"). **No `s3:ListBucket`/`s3:ListBucketVersions`** (runtime reads are by exact key + version from the Postgres index), no `s3:DeleteObject*`, no retention bypass, no bucket admin, no root-key writes. |
+| Admin / repair (`ROSTER_OPS_ADMIN_AWS_*`) | The runtime set plus `s3:PutObject` on the marker key, `s3:GetBucketVersioning`, `s3:GetBucketObjectLockConfiguration`, and — for `run doctor`/`run repair` — **`s3:ListBucketVersions`** (enumerate the `artifacts/` prefix with version ids) and **`s3:GetObjectVersion`** (hash-verify a candidate version before blessing it). This is a **distinct identity** from the runtime creds — a restricted runtime can never list the bucket. |
 
 **Bucket requirements:** versioning must be **enabled** (setup verifies with
 admin creds and errors with the exact `aws s3api put-bucket-versioning` command
@@ -568,6 +569,54 @@ overlaid and explicitly marked). **HITL decisions fail closed** — they are
 never spooled; a down backend refuses the decision with an actionable error.
 See ADR-0004 for the full model (backlog barrier, poison parking,
 conflict-advance, overlay union).
+
+## Run + artifact ledger (`roster run <verb>`)
+
+Records runs and their declared outputs into the configured ops backend (see
+`roster ops setup`), so a run is queryable and reconstructable from any machine
+sharing the workspace backend. Opt-in: without `persistence.yaml` every verb
+errors `not configured` (exit 1) and legacy workspaces are untouched. Full
+protocol: [ADR-0004](adr/0004-operations-ledger-contracts.md).
+
+| Verb | Purpose |
+|------|---------|
+| `run start <run>` | Record a `run-start` lifecycle event (**source=cli**). Flags: `--agent`, `--skill`, `--trigger`, `--parent-run`, `--origin-task`. |
+| `run end <run>` | Record a `run-end` lifecycle event (source=cli). Duration is derived at read (`ended_at − started_at`), never stored. |
+| `run event --run <id> --kind <k> --correlation-id <c>` | Record a **generic** event. `--kind` accepts only `error` \| `retry` \| `resumed` \| `approval-ref` (lifecycle / `tool-*` / `report` / `artifact-declared` are refused — they come from dedicated verbs or the #322 hook). `--correlation-id` is required (deterministic dedupe). `--data <json>` optional. |
+| `run report --run <id> (--file <p> \| --stdin)` | Store the agent's final report (**source=agent**, always unverified prose). `--file`/`--stdin` mutually exclusive; **128 KiB (131072 bytes) raw cap**, enforced by the read itself (an over-cap file is refused from its stat; an over-cap pipe is abandoned one byte past the cap — the input is never buffered whole just to be rejected). 128 KiB is the *portable* limit: the local JSONL backend applies a 1 MiB limit to the ENTIRE serialized record, so the raw cap reserves room for worst-case JSON escaping (6× for control bytes), the sanitized index projection, and the sealed envelope — a report at exactly the advertised cap is storable on every backend, for any byte sequence. Larger output belongs in `declare-artifact`. The text is run through the sanitizer at write — only the redacted projection is indexed. |
+| `run declare-artifact --run <id> --agent <a> …` | Declare a produced/used artifact (`--role produced\|used`, default produced). **Internal:** `--digest <sha256> --file <p>` (or `--stdin`) uploads bytes create-only + writes a declaration; the digest must match the bytes. **External:** `--external provider:id [--url <u>]` writes a declaration-only row (no bytes). `--type`, `--media-type`, `--text` optional. |
+| `run show <run>` | Reconstruct + print the run (`composeRun`): lifecycle + status, unverified report + sanitized projection, tool calls (host-attested success only), artifacts (`resolved`/`pending`/`external`), errors/retries, derived duration. |
+| `run list [--task <id>] [--agent <a>] [--limit <n>]` | List runs (default limit 100). Filtering by `--task`/`--agent` filters **before** the limit — it pages through runs (bounded) until `--limit` matches are collected, so a match beyond the first page is not dropped. |
+| `run doctor` | Diagnose ledger drift (postgres-s3 only; capability-gated on `run-ledger` + objects `version-id`/`list-prefix` **before** admin credentials are resolved — a v1 backend gets a `VersionSkewError`, never a raw SQL error): declaration-without-blob, orphan blob (via admin `listPrefix`), digest mismatch (bounded deep re-hash), object-version mismatch, run-end-without-start, dangling `parent_run_id`, missing object version, and a residual `declaration-version-unverified` (a declaration still `unverified` although its blob records an immutable version — an offline artifact now derives `verified` on drain, so anything left is repairable residue). Read-only. Exit 1 when findings exist, 0 when clean. |
+| `run repair --fill-version-ids` | Admin-only mutation, capability-gated exactly like `run doctor` (refused with `VersionSkewError` on a v1 backend before any admin pool is opened). For each blob missing its `object_version_id` **or** whose internal declarations are still `unverified`: read the candidate object version's bytes, **verify `sha256 == digest`** (a mismatch is never blessed), then in **one transaction** set `object_version_id` + flip the declarations' `version_state` to `verified`. The **sole** updater of those columns — needs `ROSTER_OPS_ADMIN_URL` (Postgres UPDATE) and the admin AWS creds (`ROSTER_OPS_ADMIN_AWS_*`, for `ListBucketVersions`/`GetObjectVersion`); the runtime role holds no UPDATE grant. |
+
+**Global flags:** `--cwd <dir>`, `--json`, `--allow-partial` (degraded reads serve
+the queued outbox overlay, marked partial). Writes are tri-state — `committed` or
+`queued` (run events ARE spoolable during an outage, unlike HITL decisions) —
+reported in the outcome.
+
+**Trust levels** (a `source` LEVEL set by the write path, never a caller claim):
+`host-attested` (#322 hook only — a true external-action attestation),
+`cli` (a lifecycle event from `roster run` in the trusted process),
+`agent` (report prose — always unverified), `unverified` (legacy/unknown).
+`run show` promotes a lifecycle fact from `cli`/`host-attested`, but a
+"successful external action" only from a `host-attested` correlated tool result.
+
+**`--json` shapes:** writes → `{ok, verb, runId, outcome, id, …}`; `run show` →
+`{ok, run: <ComposedRun>}`; `run list` → `{ok, runs: [{runId, agent, originTaskId,
+status, events, startedAt, lastEventAt, queued}], partial}`; `run doctor` →
+`{ok, findings: [{kind, ref, detail}], counts, deep}`; `run repair` →
+`{ok, verb, filled, skippedNoObject, skippedNoVersion}`. A store error surfaces
+as `{ok:false, error, message}` with exit 1.
+
+**Sanitized index policy.** The run + artifact ledger produces safe **index
+inputs** only: reports/declaration text are redacted at write time (secret shapes
+— env/key-token/bearer/URL-creds/JWT/PEM/GitHub/Slack/AWS) and the `run_index` /
+`artifact_index` views expose ONLY validated identifiers + those sanitized
+columns (never raw payload/provenance/digest/full URL). Semantic-search retrieval
+over that index (embedding + brain wiring) is a **deferred** follow-up.
+
+**Exit codes:** `0` ok, `1` error / not-configured / doctor findings.
 
 ## Migrate (`roster migrate from-agent-team <dir>`)
 

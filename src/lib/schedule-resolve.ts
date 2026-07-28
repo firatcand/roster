@@ -6,6 +6,7 @@ import {
   scheduleNotInFunctionError,
 } from './errors.ts';
 import { listFunctionDirs, readScheduleEntries } from './schedule-read.ts';
+import { confinedFunctionDir } from './workspace-path.ts';
 
 // Resolve a bare <name> argument across all roster/<fn>/schedules.yaml files,
 // or short-circuit when --function is supplied. Shared by remove/status/run.
@@ -61,10 +62,16 @@ export function resolveScheduleByName(opts: ResolveOptions): ResolvedSchedule {
   }
 
   const match = matches[0]!;
+  // The registry the mutating verbs (remove) rewrite. listFunctionDirs already
+  // proved this function resolves beneath roster/ on BOTH paths (enumerate and
+  // --function); re-deriving the path from the confined directory keeps the
+  // write target and the proof in one expression rather than two.
+  const functionDir = confinedFunctionDir(workspacePath, match.functionName);
+  if (functionDir === null) throw scheduleNotFoundError(opts.name, []);
   return {
     workspacePath,
     functionName: match.functionName,
-    schedulesYamlPath: join(workspacePath, 'roster', match.functionName, 'schedules.yaml'),
+    schedulesYamlPath: join(functionDir, 'schedules.yaml'),
     entry: match.entry,
   };
 }

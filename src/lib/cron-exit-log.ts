@@ -1,41 +1,36 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { assertSafeSegment, readWorkspaceEvidenceFileSync, scheduleRunDir } from './schedule-state.ts';
+import { confinedWorkspaceDir } from './workspace-path.ts';
 
-// Reader for sibling `.exit` files written by the cron wrapper installed by
-// `roster schedule install --tool codex --via cron`. Layout:
+// Reader for the sibling `.exit` files written by the cron wrapper installed by
+// `roster schedule install --tool codex --via cron`. Round-5 per-fire layout:
 //
-//   <cwd>/logs/cron/<schedule-name>.log         (existing)
-//   <cwd>/logs/cron/<schedule-name>.exit        (this module — process exit code)
-//   <cwd>/logs/cron/<schedule-name>.events.jsonl (optional, when entry has capture_events)
+//   <cwd>/logs/cron/<name>.log                       (existing, per-schedule)
+//   <cwd>/logs/cron/<name>.events.jsonl              (optional, per-schedule)
+//   <cwd>/logs/cron/<function>/<name>/<fireId>.exit   (this module — per-fire exit code)
+//   <cwd>/logs/cron/<function>/<name>/<fireId>.run-id (schedule-state.ts — per-fire run id)
 //
-// Acceptance ROS-42 #1: each scheduled fire writes timestamp + status to
-// state.md AND exit code to a sibling .exit file. This module owns the .exit
-// side of that bargain; src/lib/schedule-state.ts owns the state.md side.
+// PER-FIRE + FUNCTION-SCOPED. Each fire mints a fire id in its cron wrapper and
+// writes its exit code to `<fireId>.exit` in a function-scoped dir, so overlapping
+// fires never clobber a shared file (round-5 finding 1) and two functions owning a
+// same-named schedule never collide (finding 2). The `.exit` and `.run-id` for one
+// fire are co-located and pair by exact fire id — no timestamp heuristic.
 
 export type ExitRecord = {
+  functionName: string;
   scheduleName: string;
+  fireId: string;
   exitPath: string;
-  // `null` when the file exists but cannot be parsed as a non-negative integer
-  // (race with the writer, manual edit, etc.). `unknown`-class items surface as
-  // doctor warnings, never as auto-pending banners.
+  // `null` when the file EXISTS but is malformed evidence: unparsable as a
+  // non-negative integer, or a hardened-read violation (FIFO/symlink/oversized/
+  // unreadable — round-7 finding 7). Round-7 finding 9: malformed evidence is
+  // FAILURE evidence — pending-sync surfaces it and closes the correlated run
+  // exactly like a non-zero exit (with a distinct malformed-exit reason); it
+  // never suppresses both the failed-exit and stale paths.
   exitCode: number | null;
   mtimeMs: number;
 };
-
-export type CronExitLogDir = {
-  dir: string;
-  records: ExitRecord[];
-};
-
-// Filename → schedule name. We do not embed timestamps in the filename — the
-// .exit is overwritten on every fire (one source of truth per schedule). This
-// matches the renderCronLine contract: a single `<name>.exit` path per entry.
-function scheduleNameFromExitFilename(filename: string): string | null {
-  if (!filename.endsWith('.exit')) return null;
-  const stem = filename.slice(0, -'.exit'.length);
-  if (stem.length === 0) return null;
-  return stem;
-}
 
 function parseExitCode(content: string): number | null {
   const trimmed = content.trim();
@@ -46,53 +41,111 @@ function parseExitCode(content: string): number | null {
   return n;
 }
 
-export function readExitRecord(exitPath: string): ExitRecord | null {
-  if (!existsSync(exitPath)) return null;
-  let stat: ReturnType<typeof statSync>;
-  let content: string;
-  try {
-    stat = statSync(exitPath);
-    content = readFileSync(exitPath, 'utf8');
-  } catch {
-    return null;
+function fireIdFromExitFilename(filename: string): string | null {
+  if (!filename.endsWith('.exit')) return null;
+  const stem = filename.slice(0, -'.exit'.length);
+  return stem.length === 0 ? null : stem;
+}
+
+// The per-fire exit dir (shared with the run-id sidecar). Validates segments via
+// scheduleRunDir (rejects `..`, `/`, control chars).
+export function exitDirFor(cwd: string, functionName: string, scheduleName: string): string {
+  return scheduleRunDir(cwd, functionName, scheduleName);
+}
+
+export function exitPathForFire(cwd: string, functionName: string, scheduleName: string, fireId: string): string {
+  return join(exitDirFor(cwd, functionName, scheduleName), `${fireId}.exit`);
+}
+
+export function readExitRecord(
+  cwd: string,
+  functionName: string,
+  scheduleName: string,
+  exitPath: string,
+): ExitRecord | null {
+  const fireId = fireIdFromExitFilename(exitPath.split('/').pop() ?? '');
+  if (fireId === null) return null;
+  // Hardened read (round-7 finding 7): O_NOFOLLOW + regular-file check + size
+  // cap BEFORE the read — a planted FIFO, a symlink, or a huge file classifies
+  // as malformed evidence (exitCode null) instead of hanging or exhausting the
+  // caller. Only a genuinely ABSENT file reads as "no evidence" (null record).
+  // Round-10 finding 1 adds the ancestor half: a symlinked `logs/cron/<fn>/` is
+  // malformed evidence too, never a read of a foreign exit code.
+  const read = readWorkspaceEvidenceFileSync(exitPath, cwd);
+  if (read.state === 'missing') return null;
+  if (read.state === 'malformed') {
+    return { functionName, scheduleName, fireId, exitPath, exitCode: null, mtimeMs: read.mtimeMs };
   }
-  const scheduleName = scheduleNameFromExitFilename(exitPath.split('/').pop() ?? '');
-  if (scheduleName === null) return null;
   return {
+    functionName,
     scheduleName,
+    fireId,
     exitPath,
-    exitCode: parseExitCode(content),
-    mtimeMs: stat.mtimeMs,
+    exitCode: parseExitCode(read.content),
+    mtimeMs: read.mtimeMs,
   };
 }
 
-export function scanExitRecords(cwd: string): CronExitLogDir {
-  const dir = join(cwd, 'logs', 'cron');
-  if (!existsSync(dir)) return { dir, records: [] };
+export function readExitRecordForFire(
+  cwd: string,
+  functionName: string,
+  scheduleName: string,
+  fireId: string,
+): ExitRecord | null {
+  let path: string;
+  try {
+    path = exitPathForFire(cwd, functionName, scheduleName, fireId);
+  } catch {
+    return null;
+  }
+  return readExitRecord(cwd, functionName, scheduleName, path);
+}
+
+// Every per-fire exit record for one (function, schedule), sorted by fire id.
+export function listExitRecords(cwd: string, functionName: string, scheduleName: string): ExitRecord[] {
+  let dir: string;
+  try {
+    dir = exitDirFor(cwd, functionName, scheduleName);
+  } catch {
+    return [];
+  }
+  if (confinedWorkspaceDir(dir, cwd) === null) return [];
   let entries: string[];
   try {
     entries = readdirSync(dir);
   } catch {
-    return { dir, records: [] };
+    return [];
   }
   const records: ExitRecord[] = [];
   for (const filename of entries.sort()) {
     if (!filename.endsWith('.exit')) continue;
-    const full = join(dir, filename);
-    const rec = readExitRecord(full);
+    const rec = readExitRecord(cwd, functionName, scheduleName, join(dir, filename));
     if (rec !== null) records.push(rec);
   }
-  return { dir, records };
+  return records;
 }
 
-export function exitPathFor(cwd: string, scheduleName: string): string {
-  return join(cwd, 'logs', 'cron', `${scheduleName}.exit`);
+// FUNCTION-SCOPED like the exit dir (finding 2): the log + events files live at
+// `logs/cron/<function>/<name>.log` / `.events.jsonl`, siblings of the per-fire
+// exit dir `logs/cron/<function>/<name>/`. Two functions owning a same-named
+// schedule (gtm/nightly vs ops/nightly) therefore never share a log/event stream
+// and never collide. Segments are validated (rejects `..`/`/`/control chars).
+export function logPathFor(cwd: string, functionName: string, scheduleName: string): string {
+  return join(
+    cwd,
+    'logs',
+    'cron',
+    assertSafeSegment('function', functionName),
+    `${assertSafeSegment('schedule', scheduleName)}.log`,
+  );
 }
 
-export function logPathFor(cwd: string, scheduleName: string): string {
-  return join(cwd, 'logs', 'cron', `${scheduleName}.log`);
-}
-
-export function eventsPathFor(cwd: string, scheduleName: string): string {
-  return join(cwd, 'logs', 'cron', `${scheduleName}.events.jsonl`);
+export function eventsPathFor(cwd: string, functionName: string, scheduleName: string): string {
+  return join(
+    cwd,
+    'logs',
+    'cron',
+    assertSafeSegment('function', functionName),
+    `${assertSafeSegment('schedule', scheduleName)}.events.jsonl`,
+  );
 }

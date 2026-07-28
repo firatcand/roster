@@ -122,6 +122,109 @@ test('orchestrator: scheduled-fire (Mode 2) stays strict about roster/<function>
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Round-6 finding 3 — schedule-name-first fire lookup
+//
+// Two schedules in one function may share (agent, plan); the installed prompt
+// therefore carries a `(schedule <name>)` suffix and the skill matches by name
+// first. The legacy nameless prompt falls back to (agent, plan) but must REFUSE
+// on ambiguity rather than take the first match.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('orchestrator (round-6 finding 3): the fire prompt suffix and the skill lookup agree on `(schedule <name>)`', async () => {
+  const { buildOrchestratorPrompt } = await import('../src/lib/schedule-install.ts');
+  const prompt = buildOrchestratorPrompt('gtm', 'sdr', 'cold-outreach', 'sdr-morning');
+  assert.ok(prompt.endsWith('(schedule sdr-morning)'), `installed prompt names its schedule: ${prompt}`);
+  const content = readFileSync(orchestratorSrc, 'utf8');
+  assert.match(content, /\(schedule <name>\)/, 'the skill documents the (schedule <name>) suffix it parses');
+  assert.match(content, /entry\.name == "<schedule>"/, 'the lookup matches by schedule NAME first');
+});
+
+test('orchestrator (round-6 finding 3): the legacy nameless-prompt fallback requires (agent, plan) uniqueness — ambiguity aborts', () => {
+  const content = readFileSync(orchestratorSrc, 'utf8');
+  assert.match(content, /Ambiguous fire/, 'an ambiguous legacy fire errors with a clear message');
+  assert.match(content, /refusing to guess/, 'the skill never guesses among same-(agent,plan) schedules');
+  assert.ok(!/for entry in schedules_yaml\.schedules:[\s\S]*?break/.test(content), 'the old first-match break loop is gone');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Round-7 finding 1 — bare-agent registry vs function-qualified prompt
+//
+// schedules.yaml entries store the BARE agent (schema: kebab, no slash) — the
+// file is function-scoped by its path. The old skill compared match.agent
+// against "<function>/<agent>", which NEVER matches a real registry entry, so a
+// normal scheduled fire aborted instead of dispatching; and the installed
+// prompt omitted the function, so a bare agent duplicated across functions
+// (gtm/sdr vs ops/sdr) was unresolvable. The chain now agrees end to end: the
+// prompt carries `<function>/<agent>`, the skill strips the prefix, loads
+// roster/<function>/schedules.yaml by NAME, and compares bare-to-bare.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('orchestrator (round-7 finding 1): the installed prompt carries the function-qualified agent', async () => {
+  const { buildOrchestratorPrompt } = await import('../src/lib/schedule-install.ts');
+  const prompt = buildOrchestratorPrompt('gtm', 'sdr', 'cold-outreach', 'sdr-morning');
+  assert.equal(
+    prompt,
+    'Use the roster-orchestrator skill to run plan cold-outreach for agent gtm/sdr (schedule sdr-morning)',
+    'the prompt names the function so a bare agent duplicated across functions still resolves',
+  );
+  // Two functions with the same bare agent render DISTINCT prompts — each fire
+  // names its own registry, so the right one is loaded without a directory scan.
+  const ops = await import('../src/lib/schedule-install.ts');
+  assert.match(ops.buildOrchestratorPrompt('ops', 'sdr', 'sweep', 'sdr-sweep'), / for agent ops\/sdr /);
+});
+
+test('orchestrator (round-7 finding 1): the skill compares the registry BARE agent against the prompt bare agent — never a qualified string', () => {
+  const content = readFileSync(orchestratorSrc, 'utf8');
+  assert.match(content, /registry stores the BARE agent/, 'the bare-agent registry shape is documented');
+  assert.match(content, /match\.agent != "<agent>"/, 'name-first verification compares bare-to-bare');
+  assert.ok(
+    !content.includes('match.agent != "<function>/<agent>"'),
+    'the old function-qualified comparison (which never matched a real entry) is gone',
+  );
+  assert.match(content, /entry\.agent == "<agent>"/, 'the legacy (agent, plan) fallback also compares the bare agent');
+  assert.ok(
+    !content.includes('entry.agent == "<function>/<agent>"'),
+    'the legacy fallback no longer repeats the qualified mismatch',
+  );
+  // The fallback stays scoped to the function named by the prompt.
+  assert.match(content, /scoped to the named function/, 'the (agent, plan) fallback is function-scoped');
+});
+
+test('orchestrator (round-7 finding 1): a bare-agent legacy prompt duplicated across functions is TRUE ambiguity and still aborts', () => {
+  const content = readFileSync(orchestratorSrc, 'utf8');
+  assert.match(
+    content,
+    /If zero or more than one match \(the same bare agent exists under two functions\), abort/,
+    'the multi-function bare-agent scan still refuses to guess',
+  );
+  assert.match(content, /a current install avoids it by qualifying the agent in the prompt/, 'and documents why current installs never hit it');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Round-6 finding 4 — `--schedule` is cron-wrapper-only
+//
+// `roster run start --schedule` requires ROSTER_FIRE_ID, which only the cron
+// wrapper mints. A UI-hosted fire (Claude Desktop / Codex app) following an
+// unconditional `--schedule` instruction failed run-start and got NO ledger
+// record. The skill must gate the flag on the env var being present.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('orchestrator (round-6 finding 4): run-start passes --schedule ONLY when ROSTER_FIRE_ID is present', () => {
+  const content = readFileSync(orchestratorSrc, 'utf8');
+  assert.match(
+    content,
+    /pass `--schedule` ONLY when[\s\S]{0,40}`ROSTER_FIRE_ID` is set/,
+    'the conditional gate is documented before the command',
+  );
+  assert.match(content, /`ROSTER_FIRE_ID` absent \(UI-hosted fire/, 'the UI-hosted branch exists');
+  // The UI-hosted branch's command line carries NO --schedule flag.
+  const absentBranch = content.split('`ROSTER_FIRE_ID` absent')[1]?.split('The fire id comes from')[0] ?? '';
+  assert.ok(absentBranch.includes('roster run start --run <run-id>'), 'the plain run-start command is shown');
+  assert.ok(!absentBranch.includes('--schedule'), 'the UI-hosted branch never passes --schedule');
+  assert.match(content, /crash correlation is cron-wrapper-only/, 'the limitation is documented');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Frontmatter rendering
 // ─────────────────────────────────────────────────────────────────────────────
 

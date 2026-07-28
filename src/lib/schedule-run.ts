@@ -71,8 +71,10 @@ export async function executeRun(opts: ScheduleRunOpts): Promise<ScheduleRunResu
   });
 
   const prompt = buildOrchestratorPrompt(
+    resolved.functionName,
     resolved.entry.agent,
     resolved.entry.plan,
+    resolved.entry.name,
   );
 
   if (resolved.entry.tool === 'claude') {

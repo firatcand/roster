@@ -88,7 +88,7 @@ test('executeRun (claude): prints the orchestrator prompt, does NOT spawn anythi
     assert.equal(r.tool, 'claude');
     assert.equal(r.exitCode, 0);
     assert.match(r.prompt, /Use the roster-orchestrator skill/);
-    assert.match(r.prompt, /plan cold-outreach for agent sdr/);
+    assert.match(r.prompt, /plan cold-outreach for agent gtm\/sdr/);
     assert.match(out, /Manual fire for nightly/);
     assert.match(out, /Use the roster-orchestrator skill/);
   } finally {
@@ -111,7 +111,7 @@ test('executeRun (claude) --silent: prints nothing, still returns prompt for cal
     );
     assert.equal(out, '');
     const r = result as { tool: string; prompt: string };
-    assert.match(r.prompt, /plan cold-outreach for agent sdr/);
+    assert.match(r.prompt, /plan cold-outreach for agent gtm\/sdr/);
   } finally {
     cleanup();
   }

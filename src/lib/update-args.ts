@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 export type ParsedUpdateArgs =
   | { kind: 'ok'; json: boolean; cwd: string | undefined; excludes: string[] }
   | { kind: 'err'; message: string };
@@ -14,7 +15,7 @@ export function parseUpdateArgs(args: readonly string[]): ParsedUpdateArgs {
     } else if (arg === '--cwd') {
       const v = args[i + 1];
       if (v === undefined || v.startsWith('-')) return { kind: 'err', message: '--cwd requires a value' };
-      cwd = v;
+      cwd = resolve(v);
       i++;
     } else if (arg === '--exclude') {
       const v = args[i + 1];

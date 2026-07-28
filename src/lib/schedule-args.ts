@@ -1,4 +1,6 @@
+import { resolve } from 'node:path';
 import { TOOL_VALUES, type ToolValue } from './schedule-schema.ts';
+import { invalidFunctionNameMessage, isFunctionName } from './workspace-path.ts';
 
 type ScheduleSubcommand = 'validate' | 'install' | 'list' | 'remove' | 'status' | 'run' | 'estimate-usage';
 
@@ -159,10 +161,10 @@ function parseEstimateUsage(rest: readonly string[]): ParsedScheduleArgs {
     else if (arg === '--cwd') {
       const next = rest[i + 1];
       if (next === undefined) return { kind: 'err', message: '--cwd requires a path argument' };
-      cwd = next;
+      cwd = resolve(next);
       i++;
     } else if (arg.startsWith('--cwd=')) {
-      cwd = arg.slice('--cwd='.length);
+      cwd = resolve(arg.slice('--cwd='.length));
     } else if (arg === '--plan') {
       const next = rest[i + 1];
       if (next === undefined || next.startsWith('-')) {
@@ -209,10 +211,10 @@ function parseValidate(rest: readonly string[]): ParsedScheduleArgs {
     else if (arg === '--cwd') {
       const next = rest[i + 1];
       if (next === undefined) return { kind: 'err', message: '--cwd requires a path argument' };
-      cwd = next;
+      cwd = resolve(next);
       i++;
     } else if (arg.startsWith('--cwd=')) {
-      cwd = arg.slice('--cwd='.length);
+      cwd = resolve(arg.slice('--cwd='.length));
     } else if (arg.startsWith('-')) {
       return { kind: 'err', message: `unknown flag for 'schedule validate': ${arg}` };
     } else {
@@ -284,11 +286,11 @@ function parseInstall(rest: readonly string[]): ParsedScheduleArgs {
     } else if (arg === '--cwd') {
       const r = consumeValue('--cwd', cwd, rest[i + 1]);
       if (!r.ok) return { kind: 'err', message: r.message };
-      cwd = r.value;
+      cwd = resolve(r.value);
       i++;
     } else if (arg.startsWith('--cwd=')) {
       if (cwd !== undefined) return { kind: 'err', message: 'flag --cwd specified more than once' };
-      cwd = arg.slice('--cwd='.length);
+      cwd = resolve(arg.slice('--cwd='.length));
     } else if (arg === '--dry-run') {
       dryRun = true;
     } else if (arg === '--cloud-routine') {
@@ -329,6 +331,10 @@ function parseInstall(rest: readonly string[]): ParsedScheduleArgs {
       kind: 'err',
       message: `first positional must be '<function>/<agent>' (got '${fnAgent}' — extra '/' in agent name)`,
     };
+  }
+  // ARGUMENT boundary for the registry path segment (round-11 finding 1).
+  if (!isFunctionName(functionName)) {
+    return { kind: 'err', message: `<function>/<agent>: ${invalidFunctionNameMessage(functionName)}` };
   }
 
   if (cron === undefined) return { kind: 'err', message: "missing required flag --cron for 'schedule install'" };
@@ -377,10 +383,10 @@ function parseList(rest: readonly string[]): ParsedScheduleArgs {
     else if (arg === '--cwd') {
       const next = rest[i + 1];
       if (next === undefined) return { kind: 'err', message: '--cwd requires a path argument' };
-      cwd = next;
+      cwd = resolve(next);
       i++;
     } else if (arg.startsWith('--cwd=')) {
-      cwd = arg.slice('--cwd='.length);
+      cwd = resolve(arg.slice('--cwd='.length));
     } else if (arg.startsWith('-')) {
       return { kind: 'err', message: `unknown flag for 'schedule list': ${arg}` };
     } else {
@@ -418,10 +424,10 @@ function parseNamed(rest: readonly string[], subcommand: 'remove' | 'status' | '
     } else if (arg === '--cwd') {
       const next = rest[i + 1];
       if (next === undefined) return { kind: 'err', message: '--cwd requires a path argument' };
-      cwd = next;
+      cwd = resolve(next);
       i++;
     } else if (arg.startsWith('--cwd=')) {
-      cwd = arg.slice('--cwd='.length);
+      cwd = resolve(arg.slice('--cwd='.length));
     } else if (arg === '--json') {
       if (subcommand === 'run') return { kind: 'err', message: "--json is not supported for 'schedule run' (streams child stdout)" };
       json = true;
@@ -447,6 +453,12 @@ function parseNamed(rest: readonly string[], subcommand: 'remove' | 'status' | '
           ? `missing positional <name> for 'schedule ${subcommand}'`
           : `'schedule ${subcommand}' expected 1 positional argument <name>, got ${positionals.length}`,
     };
+  }
+
+  // ARGUMENT boundary (round-11 finding 1): `--function ../archive` used to
+  // reach a sibling registry that remove/status/run then read AND rewrote.
+  if (functionName !== undefined && !isFunctionName(functionName)) {
+    return { kind: 'err', message: `--function: ${invalidFunctionNameMessage(functionName)}` };
   }
 
   const name = positionals[0]!;

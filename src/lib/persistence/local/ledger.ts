@@ -2,7 +2,6 @@ import {
   chmodSync,
   closeSync,
   constants as fsConstants,
-  existsSync,
   fchmodSync,
   fstatSync,
   fsyncSync,
@@ -13,13 +12,14 @@ import {
   readFileSync,
   readSync,
   realpathSync,
+  linkSync,
   renameSync,
   unlinkSync,
   writeSync,
   ftruncateSync,
 } from 'node:fs';
 import type { Stats } from 'node:fs';
-import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
   BackendUnavailableError,
@@ -32,6 +32,12 @@ import {
 } from '../contracts.ts';
 import { assertSafeSegment } from '../safe-path.ts';
 import { isUuidV4, PERSISTENCE_YAML_VERSION } from '../config-schema.ts';
+import {
+  pathComponentsBelow,
+  resolveConfinedPath,
+  type ConfinedPath,
+} from '../../workspace-path.ts';
+import { describeEvidenceFailure, readEvidenceFileSync } from '../../evidence-read.ts';
 
 // Append-only JSONL ledger for the local backend (#318 section D). Layout:
 //   <opsRoot>/<workspaceId>/meta.json
@@ -46,6 +52,29 @@ import { isUuidV4, PERSISTENCE_YAML_VERSION } from '../config-schema.ts';
 
 export const MAX_RECORD_BYTES = 1024 * 1024;
 
+// The component versions the local JSONL backend advertises (#323): its code
+// implements the run ledger + artifact declarations, so it mints roster_ops +
+// objects at v2. Kept in sync with capabilities.ts CURRENT_COMPONENT_VERSIONS.
+export const LOCAL_COMPONENT_VERSIONS: Readonly<Record<string, number>> = { hitl: 1, roster_ops: 2, objects: 2 };
+
+function needsComponentUpgrade(versions: Record<string, number> | undefined): boolean {
+  if (versions === undefined) return true;
+  for (const [name, min] of Object.entries(LOCAL_COMPONENT_VERSIONS)) {
+    if ((versions[name] ?? 1) < min) return true;
+  }
+  return false;
+}
+
+// Merge UP: never downgrade a component the tree already advertises higher than
+// the current baseline (forward-compat), only raise below-baseline components.
+function mergeComponentVersions(versions: Record<string, number> | undefined): Record<string, number> {
+  const out: Record<string, number> = { ...(versions ?? {}) };
+  for (const [name, min] of Object.entries(LOCAL_COMPONENT_VERSIONS)) {
+    out[name] = Math.max(out[name] ?? 1, min);
+  }
+  return out;
+}
+
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 const LOOSE_MODE_MASK = 0o077;
@@ -53,6 +82,12 @@ const DEFAULT_LOCK_TIMEOUT_MS = 10_000;
 const LOCK_RETRY_MS = 20;
 const SCAN_CHUNK_BYTES = 64 * 1024;
 const SEGMENT_RE = /^segment-(\d{4,})\.jsonl$/;
+// Byte caps for the small JSON sidecars read through the hardened bounded
+// reader. Generous enough for any legitimate file, small enough that a planted
+// runaway one is refused instead of loaded.
+const MAX_META_BYTES = 64 * 1024;
+const MAX_SEAL_BYTES = 64 * 1024;
+const MAX_LOCK_BYTES = 4 * 1024;
 
 // No-follow append+create open (finding: append-path symlink TOCTOU). O_NOFOLLOW
 // makes open() ELOOP if the final path component is a symlink — closing the
@@ -61,7 +96,11 @@ const SEGMENT_RE = /^segment-(\d{4,})\.jsonl$/;
 // (Windows): the immediately-preceding lstat + the post-open fstat(isFile)
 // narrow the window there.
 const O_NOFOLLOW = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0;
+const O_NONBLOCK = typeof fsConstants.O_NONBLOCK === 'number' ? fsConstants.O_NONBLOCK : 0;
 const APPEND_OPEN_FLAGS = fsConstants.O_WRONLY | fsConstants.O_APPEND | fsConstants.O_CREAT | O_NOFOLLOW;
+// Read opens over agent-writable ledger files: never follow a symlinked final
+// component, never block on a planted FIFO.
+const RO_NOFOLLOW_FLAGS = fsConstants.O_RDONLY | O_NOFOLLOW | O_NONBLOCK;
 
 export type LedgerRecord = {
   id: string;
@@ -74,6 +113,11 @@ export type LedgerRecord = {
   prev: string | null;
   producerId: string;
   producerSeq: number;
+  // #323 store-assigned observations: metadata recorded ALONGSIDE the record but
+  // EXCLUDED from the checksum (which covers `payload` only), so a retry that
+  // changes only observations (a new pid/timestamp/version) is an idempotent
+  // replay, not a ConflictError. Absent on records that carry none.
+  observations?: unknown;
 };
 
 export type LedgerMeta = {
@@ -83,7 +127,7 @@ export type LedgerMeta = {
   componentVersions: Record<string, number>;
 };
 
-export type AppendInput = { id: string; kind: string; payload: unknown };
+export type AppendInput = { id: string; kind: string; payload: unknown; observations?: unknown };
 export type AppendResult = { record: LedgerRecord; replayed: boolean };
 
 // Crash-matrix injection points for the durability tests; never set outside
@@ -131,8 +175,9 @@ type NamespaceState = {
   tailSealed: boolean;
 };
 
-// Test seam: the raw directory-fsync operation, replaceable to fault-inject
-// EIO/ENOSPC-class failures without touching the real filesystem.
+// Test seams: the raw directory-fsync, rename, and hard-link operations,
+// replaceable to fault-inject EIO/ENOSPC-class failures (and the create-only
+// race) without touching the real filesystem.
 export const ledgerFsSeams = {
   fsyncDirRaw(path: string): void {
     const fd = openSync(path, 'r');
@@ -141,6 +186,15 @@ export const ledgerFsSeams = {
     } finally {
       closeSync(fd);
     }
+  },
+  renameRaw(from: string, to: string): void {
+    renameSync(from, to);
+  },
+  linkRaw(from: string, to: string): void {
+    linkSync(from, to);
+  },
+  createExclusiveRaw(path: string, mode: number): number {
+    return openSync(path, 'wx', mode);
   },
 };
 
@@ -204,18 +258,79 @@ export function assertRegularFileIfExists(path: string): Stats | null {
   return st;
 }
 
+// Read a whole regular file through its DESCRIPTOR (round-8 finding 3): the open
+// is O_NOFOLLOW (a symlinked final component is refused, never traversed) and
+// O_NONBLOCK (a planted FIFO opens instantly instead of blocking forever), and
+// fstat re-verifies the OPENED inode is a regular file — so a FIFO, directory, or
+// device swapped in between an lstat check and the read can neither hang the
+// caller nor divert it to foreign bytes. Returns null when the path is absent;
+// content integrity (digest) stays the caller's check.
+export function readRegularFileSync(path: string): Buffer | null {
+  let fd: number;
+  try {
+    fd = openSync(path, RO_NOFOLLOW_FLAGS);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return null;
+    if (code === 'ELOOP') throw symlinkRefusal(path);
+    throw new InvalidRecordError(`'${path}' cannot be read (${code ?? (err as Error).message})`);
+  }
+  try {
+    if (!fstatSync(fd).isFile()) {
+      throw new InvalidRecordError(`'${path}' is not a regular file — refusing to read it`);
+    }
+    return readFileSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function componentsBelow(boundary: string, path: string): string[] {
-  const rel = relative(boundary, path);
-  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+  const parts = pathComponentsBelow(boundary, path);
+  if (parts === null) {
     throw new InvalidRecordError(`'${path}' is not under '${boundary}' — refusing to touch it`);
   }
-  const out: string[] = [];
-  let cur = boundary;
-  for (const part of rel.split(sep)) {
-    cur = join(cur, part);
-    out.push(cur);
+  return parts;
+}
+
+// ── the READ-side boundary (round-12 finding 2) ──────────────────────────────
+//
+// ensureOwnedDir below is the WRITE-side rule: walk every component under the
+// boundary, refuse any symlink. The read paths had no equivalent — `scan` only
+// lstat'd the FINAL namespace directory and `readLedgerMeta` used a raw
+// readFileSync — so `.roster/ops/<workspaceId> -> <another ledger tree>` let
+// `run list`/`run show` reconstruct a FOREIGN ledger, and let `scan` acquire
+// that tree's lock and recover/seal its segments: a nominal READ mutating
+// someone else's data.
+//
+// This is the read-only sibling: the SAME component-wise no-follow walk (the
+// shared primitive workspace-path.ts#resolveConfinedPath) translated into the
+// ledger's error taxonomy, creating no directory and repairing no mode.
+export type ConfinedDirState = 'absent' | 'present';
+
+function refuseConfinement(res: Extract<ConfinedPath, { status: 'refused' }>, path: string): never {
+  if (res.reason === 'symlink-component') throw symlinkRefusal(res.at);
+  if (res.reason === 'outside-boundary') {
+    throw new InvalidRecordError(
+      `'${path}' resolves outside the workspace boundary (at '${res.at}') — refusing to touch it`,
+    );
   }
-  return out;
+  throw new BackendUnavailableError(`cannot lstat ${res.at}: the path component is unreadable`);
+}
+
+export function confinedLedgerDir(path: string, boundary: string): ConfinedDirState {
+  const res = resolveConfinedPath(path, boundary);
+  if (res.status === 'refused') refuseConfinement(res, path);
+  if (res.status === 'absent') return 'absent';
+  if (!res.stat.isDirectory()) {
+    throw new InvalidRecordError(`'${path}' exists but is not a directory — refusing to read it`);
+  }
+  return 'present';
+}
+
+// The containment boundary for a `<cwd>/.roster/ops` tree: the workspace root.
+export function ledgerBoundaryFor(opsRoot: string): string {
+  return dirname(dirname(opsRoot));
 }
 
 // Creates (0700) or validates every path component strictly below `boundary`:
@@ -277,22 +392,81 @@ export function atomicWriteFileSync(path: string, contents: string): void {
     }
   }
   const tmp = join(dir, `.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`);
-  const fd = openSync(tmp, 'wx', FILE_MODE);
+  // Round-6 finding 10: a write/fsync/close/rename failure must not strand the
+  // .tmp-* staging file (the blob writer below already cleans up; this one did
+  // not). The original error is rethrown unchanged.
   try {
-    writeFully(fd, Buffer.from(contents, 'utf8'));
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
+    const fd = openSync(tmp, 'wx', FILE_MODE);
+    try {
+      writeFully(fd, Buffer.from(contents, 'utf8'));
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    ledgerFsSeams.renameRaw(tmp, path);
+  } catch (err) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // never landed
+    }
+    throw err;
   }
-  renameSync(tmp, path);
   fsyncDir(dir);
 }
 
-// Content-addressed byte staging shared by the local artifact store and the
-// outbox spool: write-temp → fsync → rename → dir-fsync, create-only. A write
-// failure (disk full, permissions) surfaces as BackendUnavailableError — the
-// bytes either land fully durable under their final name or not at all.
-export function writeBlobSync(dir: string, name: string, bytes: Uint8Array): void {
+// The shared hardened create-only writer core (round-6 findings 5+9+10): the
+// single write path for content-addressed blobs, the outbox spool, and the
+// per-fire schedule sidecars. Protections: same-dir tmp opened 'wx'
+// (O_CREAT|O_EXCL — never follows a symlink final component), full write +
+// fsync(fd), an lstat re-verification of the target IMMEDIATELY before the
+// rename (rename replaces, so the recheck narrows the window in which a
+// concurrent create could be clobbered — Node exposes no dirfd-relative rename,
+// so a residual sub-millisecond window remains), tmp unlinked on ANY failure,
+// dir-fsync after the rename. An existing target — before the write or appearing
+// during it — is a ConflictError; callers wanting idempotent-replay semantics
+// catch it and compare content.
+//
+// Filesystems that cannot hard-link (some network/FUSE mounts). There the publish
+// FAILS CLOSED (round-8 finding 2): it re-publishes with an O_CREAT|O_EXCL create
+// AT THE FINAL NAME — still a genuinely exclusive create-once, the kernel refuses
+// the second creator with EEXIST — and if even that is impossible it refuses with
+// an actionable error. rename(2) is NEVER an acceptable publish: it REPLACES, so
+// two writers racing one name could both "create" it and the later one would
+// silently rebind it (a fire id re-pointed at another run, so the exit signal
+// closes the WRONG run). link(2) stays PRIMARY because it is exclusive *and*
+// all-or-nothing: the final name never appears holding a partially written blob.
+const LINK_UNSUPPORTED: ReadonlySet<string> = new Set(['EPERM', 'EOPNOTSUPP', 'ENOTSUP', 'ENOSYS', 'EXDEV']);
+
+function publishExclusiveInPlace(target: string, name: string, bytes: Buffer, linkCode: string): void {
+  let fd: number;
+  try {
+    fd = ledgerFsSeams.createExclusiveRaw(target, FILE_MODE);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EEXIST') {
+      throw new ConflictError(name, `'${target}' appeared during the write — refusing to replace it (create-only)`);
+    }
+    throw new BackendUnavailableError(
+      `cannot publish ${target} create-once: this filesystem does not support link(2) (${linkCode}) and an exclusive create at the final name failed (${code ?? (err as Error).message}) — refusing to fall back to a replacing rename, which would let two concurrent writers both claim the name`,
+    );
+  }
+  try {
+    writeFully(fd, bytes);
+    fsyncSync(fd);
+  } catch (err) {
+    try {
+      unlinkSync(target);
+    } catch {
+      // best effort: never leave a half-written publication behind
+    }
+    throw err;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function createOnlyWriteCore(dir: string, name: string, bytes: Buffer): void {
   const target = join(dir, name);
   if (lstatOrNull(target) !== null) {
     throw new ConflictError(name, `'${target}' already exists — the blob writer is create-only`);
@@ -301,12 +475,29 @@ export function writeBlobSync(dir: string, name: string, bytes: Uint8Array): voi
   try {
     const fd = openSync(tmp, 'wx', FILE_MODE);
     try {
-      writeFully(fd, Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes));
+      writeFully(fd, bytes);
       fsyncSync(fd);
     } finally {
       closeSync(fd);
     }
-    renameSync(tmp, target);
+    // Publish by HARD LINK, not rename (round-7 finding 3). link(2) is an atomic
+    // create-if-absent — it fails EEXIST when the target exists and never follows
+    // or replaces it — so a concurrent writer that landed after the lstat above
+    // LOSES here instead of being silently clobbered. (rename(2) replaces, so the
+    // old lstat-recheck+rename form left a real window in which two processes
+    // both "created" the file and the later one won: a fire id could be rebound
+    // to a second run.) Durability is unchanged: same-dir tmp → write → fsync →
+    // publish → dir fsync; the tmp link is dropped once the target name exists.
+    try {
+      ledgerFsSeams.linkRaw(tmp, target);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EEXIST') {
+        throw new ConflictError(name, `'${target}' appeared during the write — refusing to replace it (create-only)`);
+      }
+      if (!LINK_UNSUPPORTED.has(code ?? '')) throw err;
+      publishExclusiveInPlace(target, name, bytes, code ?? 'unknown');
+    }
   } catch (err) {
     try {
       unlinkSync(tmp);
@@ -316,7 +507,29 @@ export function writeBlobSync(dir: string, name: string, bytes: Uint8Array): voi
     if (err instanceof PersistenceError) throw err;
     throw new BackendUnavailableError(`cannot write ${target}: ${(err as Error).message}`);
   }
+  try {
+    unlinkSync(tmp);
+  } catch {
+    // already gone
+  }
   fsyncDir(dir);
+}
+
+// Content-addressed byte staging shared by the local artifact store and the
+// outbox spool: write-temp → fsync → rename → dir-fsync, create-only. A write
+// failure (disk full, permissions) surfaces as BackendUnavailableError — the
+// bytes either land fully durable under their final name or not at all.
+export function writeBlobSync(dir: string, name: string, bytes: Uint8Array): void {
+  createOnlyWriteCore(dir, name, Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes));
+}
+
+// String flavor of the create-only core for small JSON sidecars (the per-fire
+// schedule run-id channel). Same hardening, same ConflictError-on-exists
+// contract (round-6 findings 5+9: the sidecar must never REBIND an existing
+// fire id via a replacing write, and must not go through a weaker parallel
+// pathname helper).
+export function writeFileCreateOnlySync(dir: string, name: string, contents: string): void {
+  createOnlyWriteCore(dir, name, Buffer.from(contents, 'utf8'));
 }
 
 function sleepSync(ms: number): void {
@@ -344,14 +557,26 @@ export type ReclaimHooks = { beforeRename?: () => void };
 // NEVER moved back, so a concurrently-acquired live lock can never be
 // clobbered by a reclaim restoring stale state over it.
 export function tryReclaimStaleLock(lockPath: string, hooks?: ReclaimHooks): boolean {
+  // A lock file is agent-writable state like every other sidecar: refuse a
+  // planted symlink outright (never reclaim THROUGH it), open no-follow +
+  // non-blocking so a FIFO cannot hang the acquire loop, and re-verify through
+  // the descriptor that the opened inode is a regular file of sane size before
+  // reading the holder record.
+  const planted = lstatOrNull(lockPath);
+  if (planted === null) return true; // gone already — retry the O_EXCL acquire
+  if (planted.isSymbolicLink()) throw symlinkRefusal(lockPath);
   let fd: number;
   try {
-    fd = openSync(lockPath, 'r');
-  } catch {
-    return true; // gone already — retry the O_EXCL acquire
+    fd = openSync(lockPath, RO_NOFOLLOW_FLAGS);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ELOOP') throw symlinkRefusal(lockPath);
+    if (code === 'ENOENT') return true;
+    return false;
   }
   try {
     const fdStat = fstatSync(fd);
+    if (!fdStat.isFile() || fdStat.size > MAX_LOCK_BYTES) return false;
     let pathStat = lstatOrNull(lockPath);
     if (pathStat === null) return true;
     if (pathStat.ino !== fdStat.ino || pathStat.dev !== fdStat.dev) return false;
@@ -445,15 +670,26 @@ export function releasePathLock(lock: LockHandle): void {
 // doctor paths read the tree's identity without creating one. Returns null when
 // the tree has no meta.json yet; refuses loudly on corruption or a foreign
 // workspace id.
-export function readLedgerMeta(treeDir: string, workspaceId: string): LedgerMeta | null {
+//
+// Round-12 finding 2: this was a raw readFileSync over an unconfined tree, so a
+// symlinked `.roster/ops/<workspaceId>` handed backend resolution a FOREIGN
+// meta.json (and a planted FIFO blocked it forever). The directory chain is now
+// component-wise confined and the file itself read through the shared hardened
+// bounded reader (O_NOFOLLOW + O_NONBLOCK + fstat regular-file + byte cap).
+export function readLedgerMeta(treeDir: string, workspaceId: string, boundary: string): LedgerMeta | null {
+  if (confinedLedgerDir(treeDir, boundary) === 'absent') return null;
   const metaPath = join(treeDir, 'meta.json');
-  let raw: string;
-  try {
-    raw = readFileSync(metaPath, 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw new BackendUnavailableError(`cannot read ${metaPath}: ${(err as Error).message}`);
+  const read = readEvidenceFileSync(metaPath, MAX_META_BYTES);
+  if (read.state === 'missing') return null;
+  if (read.state === 'malformed') {
+    if (read.reason === 'unreadable') {
+      throw new BackendUnavailableError(`cannot read ${metaPath}: ${describeEvidenceFailure(read.reason)}`);
+    }
+    throw new InvalidRecordError(
+      `${metaPath} is ${describeEvidenceFailure(read.reason, MAX_META_BYTES)} — refusing to guess a producer identity`,
+    );
   }
+  const raw = read.content;
   let parsed: LedgerMeta;
   try {
     parsed = JSON.parse(raw) as LedgerMeta;
@@ -490,16 +726,19 @@ function sealChecksum(seal: Omit<SealSidecar, 'checksum'>): string {
   );
 }
 
+// The sidecar is derived metadata a hostile checkout can plant, so it is read
+// through the SAME hardened bounded reader as every other agent-writable
+// sidecar (round-12 finding 2 audit): O_NOFOLLOW so a symlink swapped in
+// between the lstat above and this read is refused, O_NONBLOCK so a FIFO cannot
+// hang recovery, and a byte cap so a runaway file is never loaded. Any refusal
+// is `null` — the caller's existing "discard the sidecar and recompute from the
+// segment bytes" path, which never drops records.
 function readSeal(sealPath: string, segmentFile: string): SealSidecar | null {
-  let raw: string;
-  try {
-    raw = readFileSync(sealPath, 'utf8');
-  } catch {
-    return null;
-  }
+  const read = readEvidenceFileSync(sealPath, MAX_SEAL_BYTES);
+  if (read.state !== 'ok') return null;
   let parsed: SealSidecar;
   try {
-    parsed = JSON.parse(raw) as SealSidecar;
+    parsed = JSON.parse(read.content) as SealSidecar;
   } catch {
     return null;
   }
@@ -540,7 +779,7 @@ export class LocalLedger {
     this.opsRoot = opts.opsRoot;
     this.workspaceId = opts.workspaceId;
     this.treeDir = join(opts.opsRoot, opts.workspaceId);
-    this.boundary = dirname(dirname(opts.opsRoot));
+    this.boundary = ledgerBoundaryFor(opts.opsRoot);
     this.now = opts.now ?? Date.now;
     this.maxRecordBytes = opts.maxRecordBytes ?? MAX_RECORD_BYTES;
     this.lockTimeoutMs = opts.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
@@ -569,19 +808,40 @@ export class LocalLedger {
     if (this.cachedMeta) return this.cachedMeta;
     const metaPath = join(this.treeDir, 'meta.json');
     this.ensureDir(this.treeDir);
-    let meta = readLedgerMeta(this.treeDir, this.workspaceId);
+    let meta = readLedgerMeta(this.treeDir, this.workspaceId, this.boundary);
     if (meta === null) {
       const lock = acquirePathLock(this.treeDir, '.init.lock', this.lockTimeoutMs);
       try {
-        meta = readLedgerMeta(this.treeDir, this.workspaceId);
+        meta = readLedgerMeta(this.treeDir, this.workspaceId, this.boundary);
         if (meta === null) {
           meta = {
             configVersion: PERSISTENCE_YAML_VERSION,
             workspaceId: this.workspaceId,
             producerId: randomUUID(),
-            componentVersions: { hitl: 1, roster_ops: 1, objects: 1 },
+            // The local JSONL backend implements the #323 run ledger + artifact
+            // declarations unconditionally, so it mints roster_ops/objects at v2
+            // — its meta must ADVERTISE that so the per-operation capability gates
+            // (run-ledger) pass on a local workspace (finding: local mints v1).
+            componentVersions: LOCAL_COMPONENT_VERSIONS,
           };
           atomicWriteFileSync(metaPath, JSON.stringify(meta, null, 2) + '\n');
+        }
+      } finally {
+        releasePathLock(lock);
+      }
+    } else if (needsComponentUpgrade(meta.componentVersions)) {
+      // A tree minted by #318 records roster_ops v1; the #323 code serves v2
+      // features over it unchanged, so upgrade the meta advertisement in place
+      // (a local, code-driven "migration") so the capability gates authorize the
+      // run-ledger operations (finding: implement the local meta upgrade).
+      const lock = acquirePathLock(this.treeDir, '.init.lock', this.lockTimeoutMs);
+      try {
+        const fresh = readLedgerMeta(this.treeDir, this.workspaceId, this.boundary) ?? meta;
+        if (needsComponentUpgrade(fresh.componentVersions)) {
+          meta = { ...fresh, componentVersions: mergeComponentVersions(fresh.componentVersions) };
+          atomicWriteFileSync(metaPath, JSON.stringify(meta, null, 2) + '\n');
+        } else {
+          meta = fresh;
         }
       } finally {
         releasePathLock(lock);
@@ -650,6 +910,10 @@ export class LocalLedger {
         // Single-producer tree: the store-assigned seq IS the producer seq
         // (both are allocated under the same lock).
         producerSeq: seq,
+        // Observations ride ALONGSIDE the payload but are excluded from the
+        // checksum above, so a same-id replay with different observations dedups
+        // (first-write-wins) rather than conflicting.
+        ...(input.observations !== undefined ? { observations: input.observations } : {}),
       };
       const line = JSON.stringify(record) + '\n';
       const buf = Buffer.from(line, 'utf8');
@@ -719,7 +983,13 @@ export class LocalLedger {
 
   scan(namespace: string): { records: LedgerRecord[]; lastSeq: number } {
     const nsDir = this.namespaceDir(namespace);
-    if (!existsSync(nsDir)) return { records: [], lastSeq: 0 };
+    // Round-12 finding 2: this checked only the FINAL namespace component, so a
+    // symlinked `.roster/ops/<workspaceId>` still made the read path scan — and
+    // LOCK, recover and seal — a FOREIGN ledger tree. Confine EVERY component
+    // below the workspace boundary before touching anything. Same taxonomy as
+    // the write side (ensureOwnedDir): missing is "no records yet", a link or a
+    // non-directory is an integrity refusal.
+    if (confinedLedgerDir(nsDir, this.boundary) === 'absent') return { records: [], lastSeq: 0 };
     const lock = acquirePathLock(nsDir, '.lock', this.lockTimeoutMs);
     try {
       const state = this.recoverNamespace(nsDir);
@@ -795,7 +1065,21 @@ export class LocalLedger {
           `ledger segment ${segPath} is shorter (${size} bytes) than its seal sidecar records (${seal.lastValidOffset} bytes) — corruption before the seal point`,
         );
       }
-      const fd = openSync(segPath, 'r');
+      // Descriptor-verified read open, matching the append path: O_NOFOLLOW so a
+      // symlink swapped in after the lstat above is refused rather than
+      // traversed, O_NONBLOCK so a FIFO cannot hang recovery, and an fstat that
+      // re-proves the OPENED inode is the regular file we measured.
+      let fd: number;
+      try {
+        fd = openSync(segPath, RO_NOFOLLOW_FLAGS);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ELOOP') throw symlinkRefusal(segPath);
+        throw new BackendUnavailableError(`cannot read ledger segment ${segPath}: ${(err as Error).message}`);
+      }
+      if (!fstatSync(fd).isFile()) {
+        closeSync(fd);
+        throw new InvalidRecordError(`ledger segment ${segPath} is not a regular file`);
+      }
       let scanned: SegmentScan;
       try {
         if (seal !== null) {

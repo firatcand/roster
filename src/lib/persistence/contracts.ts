@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { RunEventKind, RunEventSource } from './run-events.ts';
 
 // v1 store contracts for the workspace operations ledger (#318 section C).
 // Local and postgres-s3 backends implement these; one contract test suite runs
@@ -92,15 +93,31 @@ export type WriteOutcome = { outcome: WriteOutcomeKind; id: string };
 
 export type OverlayPosition = { producerId: string; producerSeq: number };
 
+// One queued-overlay run frozen into a Cursor at creation (round-7 finding 4):
+// its stable ordering position plus the canonical-id → stable-payload-hash map
+// of its queued events. Later pages traverse THIS set and read each run through
+// by id — committed or pending, regardless of seq — so a run that fully
+// commits+acks mid-pagination neither vanishes nor duplicates.
+export type FrozenQueuedRun = {
+  runId: string;
+  pos: OverlayPosition;
+  hashes: Record<string, string>;
+  startedAt: number;
+  lastEventAt: number;
+};
+
 // Composite cursor: `watermark` is the committed-seq high-water mark captured
 // at page 1 — later pages only return committed rows at/below it, so an
 // overlay record acked mid-pagination cannot reappear as committed. `overlay`
 // tracks position in the queued-overlay domain (per producer), used by the
 // postgres-s3 backend's outbox overlay; always null on a purely local listing.
+// `frozenQueued` is the queued-overlay identity set captured at cursor creation
+// (postgres run listing only — see FrozenQueuedRun).
 export type Cursor = {
   watermark: number;
   committed: number;
   overlay: OverlayPosition | null;
+  frozenQueued?: FrozenQueuedRun[];
 };
 
 export type Page<T> = { items: T[]; cursor: Cursor | null; partial: boolean };
@@ -188,18 +205,51 @@ export interface HitlStore {
 
 // ---------- runs ----------
 
+// #323: the run-event write input is the sealed model (run-events.ts). `kind` is
+// the closed typed kind; the dedupe key is DERIVED (fixed for singletons, the
+// caller correlation id for repeatable kinds) — never caller-supplied free text.
+// agent/skill/trigger/parentRunId/originTaskId are stable semantic fields (in the
+// payload hash). source/pid/startedAt/endedAt are store-assigned observations
+// (stamped by the write path; NEVER in the id/hash). `source` is NOT a caller
+// field: the STORE derives the trust level from the write path (a `report`
+// event is 'agent'; every other CLI-written event is 'cli'). 'host-attested'
+// is produced by NO #323 path (a DB CHECK rejects it) — it is #322's attested
+// channel. This closes the forge-trust hole (a runtime caller cannot mint a
+// trusted lifecycle or a host-attested success).
 export type RunEventInput = {
   runId: string;
-  // Caller-owned identity within the run: retrying the same event reuses the
-  // same key (idempotent-ok); the same key with different data is a Conflict.
-  dedupeKey: string;
-  type: string;
+  kind: RunEventKind;
   data: unknown;
+  correlationId?: string | null;
+  agent?: string | null;
+  skill?: string | null;
+  trigger?: string | null;
+  parentRunId?: string | null;
+  originTaskId?: string | null;
+  pid?: string | null;
+  startedAt?: number | null;
+  endedAt?: number | null;
 };
 
-export type RunEventEnvelope = RunEventInput & {
+export type RunEventEnvelope = {
   id: string;
   workspaceId: string;
+  runId: string;
+  kind: RunEventKind;
+  dedupeKey: string;
+  data: unknown;
+  agent: string | null;
+  skill: string | null;
+  trigger: string | null;
+  parentRunId: string | null;
+  originTaskId: string | null;
+  correlationId: string | null;
+  // resolved observations (null when unstamped / a legacy v1 row)
+  source: RunEventSource;
+  pid: string | null;
+  startedAt: number | null;
+  endedAt: number | null;
+  sanitizedReport: string | null;
   createdAt: number;
   seq: number | null;
   queued: boolean;
@@ -246,15 +296,102 @@ export type ArtifactRecord = {
   createdAt: number;
   seq: number | null;
   queued: boolean;
+  // The store's version handle for the immutable bytes (S3 x-amz-version-id);
+  // null for a legacy/queued/local blob without a captured version (#323).
+  objectVersionId: string | null;
 };
 
-export type ArtifactPutResult = WriteOutcome & { digest: string };
+// ---------- artifact declarations (#323 identity split) ----------
 
-// Create-only content-addressed store. No delete anywhere in the interface.
+// A run DECLARES it produced or used an artifact. Identity (id) covers role, so
+// a produced and a used declaration of the same reference by the same run/agent
+// are two distinct rows (Rev4-R3-2). Provenance/run metadata lives HERE, never
+// on the content blob — two runs declaring identical bytes yield one blob + two
+// declarations.
+export type ArtifactRole = 'produced' | 'used';
+export type ArtifactDeclarationKind = 'internal' | 'external';
+
+export type ArtifactDeclaration = {
+  id: string;
+  workspaceId: string;
+  runId: string;
+  declaringAgent: string;
+  role: ArtifactRole;
+  kind: ArtifactDeclarationKind;
+  // internal only: the content blob's digest (ref).
+  digest: string | null;
+  // external only: the provider triple (no digest — declaration-only row).
+  provider: string | null;
+  externalId: string | null;
+  externalUrl: string | null;
+  artifactType: string | null;
+  mediaType: string | null;
+  provenance: unknown;
+  // external references stay false until a correlated host-attested tool result
+  // exists (#322): never caller-supplied, never runtime-mutated.
+  verified: boolean;
+  versionState: string | null;
+  // internally-produced sanitized projection of any declaration prose (Rev4-R3-3).
+  sanitizedText: string | null;
+  createdAt: number;
+  seq: number | null;
+  queued: boolean;
+};
+
+// Optional declaration context for an INTERNAL put: when supplied (a run + agent
+// are known) the store writes an internal declaration alongside the blob. Absent
+// ⇒ a bare content blob (the #318 behavior, no declaration).
+export type InternalDeclarationInput = {
+  runId: string;
+  declaringAgent: string;
+  role?: ArtifactRole;
+  artifactType?: string | null;
+  mediaType?: string | null;
+  provenance?: unknown;
+  // free-text description sanitized into sanitized_text.
+  text?: string | null;
+};
+
+// An EXTERNAL artifact: a declaration-only row (no bytes, no digest).
+export type ExternalArtifactInput = {
+  runId: string;
+  declaringAgent: string;
+  role?: ArtifactRole;
+  provider: string;
+  externalId: string;
+  externalUrl?: string | null;
+  artifactType?: string | null;
+  mediaType?: string | null;
+  provenance?: unknown;
+  text?: string | null;
+};
+
+export type ArtifactPutResult = WriteOutcome & {
+  digest: string;
+  objectVersionId: string | null;
+  // The internal declaration written alongside the blob, when a declaration
+  // context was supplied; null for a bare-blob put.
+  declarationId: string | null;
+  // The two sub-writes exposed independently (finding: a multi-write result must
+  // not hide a queued declaration behind a committed blob). The top-level
+  // `outcome` is the AGGREGATE — 'queued' if EITHER sub-write queued.
+  blobOutcome: WriteOutcomeKind;
+  // null when no declaration was written (bare-blob put).
+  declarationOutcome: WriteOutcomeKind | null;
+};
+
+export type DeclarationPutResult = WriteOutcome;
+
+// Create-only content-addressed store + the #323 declaration surface. No delete
+// anywhere in the interface.
 export interface ArtifactStore {
-  putArtifact(meta: ArtifactMeta, bytes: Uint8Array): Promise<ArtifactPutResult>;
+  putArtifact(meta: ArtifactMeta, bytes: Uint8Array, decl?: InternalDeclarationInput): Promise<ArtifactPutResult>;
   getArtifact(digest: string, opts?: ReadOpts): Promise<{ record: ArtifactRecord; bytes: Buffer } | null>;
   head(digest: string, opts?: ReadOpts): Promise<ArtifactRecord | null>;
+  // #323 declaration surface (parity local + postgres).
+  putExternal(meta: ExternalArtifactInput): Promise<DeclarationPutResult>;
+  getByRun(runId: string, opts?: ReadOpts): Promise<ArtifactDeclaration[]>;
+  getDeclaration(id: string, opts?: ReadOpts): Promise<ArtifactDeclaration | null>;
 }
 
 // ---------- action / wake adapters (declarations only; #322 / #324) ----------

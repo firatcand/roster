@@ -203,7 +203,7 @@ export async function runTaskSetup(opts: TaskSetupOptions): Promise<TaskSetupRes
       if (err instanceof TrackerConfigError) throw configErrorToRoster(err);
       throw err;
     }
-    atomicWriteFile(path, YAML.stringify(config));
+    atomicWriteFile(path, YAML.stringify(config), opts.cwd);
     return { config, written: true, warnings, path };
   }
 

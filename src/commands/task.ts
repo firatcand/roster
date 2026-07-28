@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { resolve } from 'node:path';
 import { EXIT_OK, EXIT_ERROR, RosterError } from '../lib/errors.ts';
 import { CANONICAL_STATES, type CanonicalState } from '../lib/tasks/machine.ts';
 import { runTaskSetup, type TaskSetupResult } from '../lib/tasks/setup.ts';
@@ -13,6 +14,13 @@ import {
   type VerbName,
 } from '../lib/tasks/context.ts';
 import type { Task, TaskSummary } from '../lib/tasks/adapters/types.ts';
+
+// The workspace root doubles as a confinement boundary, which is absolute by
+// contract (workspace-path.ts#assertAbsolutePath) — a relative `--cwd repo`
+// used to make every confined walk inspect `<pwd>/repo/repo/…`.
+function resolveCwd(value: string | undefined): string {
+  return value === undefined ? process.cwd() : resolve(value);
+}
 
 function flagValue(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name);
@@ -101,7 +109,7 @@ async function executeTaskSetup(argv: string[]): Promise<number> {
 
   const mapSpec = flagValue(argv, '--map');
   const result = await runTaskSetup({
-    cwd: flagValue(argv, '--cwd') ?? process.cwd(),
+    cwd: resolveCwd(flagValue(argv, '--cwd')),
     dataSourceId: dataSource,
     overrides: mapSpec ? parseMap(mapSpec) : undefined,
     statusProperty: flagValue(argv, '--status-property'),
@@ -237,7 +245,7 @@ function renderOutcome(out: VerbOutcome): void {
 }
 
 async function executeTaskVerb(verb: VerbName, argv: string[]): Promise<number> {
-  const cwd = flagValue(argv, '--cwd') ?? process.cwd();
+  const cwd = resolveCwd(flagValue(argv, '--cwd'));
   const json = hasFlag(argv, '--json');
   const reason = flagValue(argv, '--reason');
   const [selector] = positionals(argv, ['--reason', '--cwd']);
@@ -380,7 +388,7 @@ export function buildSingleTaskPayload(ctx: TaskContext, task: Task) {
 
 // A selector renders the identical single-task view in both modes.
 async function executeTaskReport(argv: string[], mode: 'list' | 'status'): Promise<number> {
-  const cwd = flagValue(argv, '--cwd') ?? process.cwd();
+  const cwd = resolveCwd(flagValue(argv, '--cwd'));
   const json = hasFlag(argv, '--json');
   const [selector] = positionals(argv, ['--cwd']);
   const ctx = await loadTaskContext({ cwd });

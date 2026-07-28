@@ -7,17 +7,21 @@ import {
   NotConfiguredError,
   VersionSkewError,
   WorkspaceMismatchError,
+  type ArtifactDeclaration,
   type ArtifactMeta,
   type ArtifactPutResult,
   type ArtifactRecord,
   type ArtifactStore,
   type CountResult,
   type Cursor,
+  type DeclarationPutResult,
+  type ExternalArtifactInput,
   type HitlDecisionInput,
   type HitlRequestEnvelope,
   type HitlRequestFilter,
   type HitlRequestInput,
   type HitlStore,
+  type InternalDeclarationInput,
   type OpsBackend,
   type Page,
   type ReadOpts,
@@ -28,6 +32,7 @@ import {
   type RunSummary,
   type WriteOutcome,
 } from './contracts.ts';
+import { externalDeclarationParts, internalDeclarationParts } from './artifact-declarations.ts';
 import { classifyDeliveryError } from './error-classify.ts';
 import {
   loadPersistenceConfig,
@@ -58,6 +63,8 @@ import {
 import {
   overlayArtifactGet,
   overlayArtifactHead,
+  overlayDeclarationGet,
+  overlayDeclarationsByRun,
   overlayHitlCount,
   overlayHitlGet,
   overlayHitlList,
@@ -155,6 +162,9 @@ export function withCapabilityGate(backend: OpsBackend, info: BackendInfo): OpsB
       putArtifact: gate(info, 'artifacts.putArtifact', artifacts.putArtifact.bind(artifacts)),
       getArtifact: gate(info, 'artifacts.getArtifact', artifacts.getArtifact.bind(artifacts)),
       head: gate(info, 'artifacts.head', artifacts.head.bind(artifacts)),
+      putExternal: gate(info, 'artifacts.putExternal', artifacts.putExternal.bind(artifacts)),
+      getByRun: gate(info, 'artifacts.getByRun', artifacts.getByRun.bind(artifacts)),
+      getDeclaration: gate(info, 'artifacts.getDeclaration', artifacts.getDeclaration.bind(artifacts)),
     },
   };
 }
@@ -219,16 +229,23 @@ class DegradedRunStore implements RunStore {
   private readonly workspaceId: string;
   private readonly outbox: LocalOutbox;
   private readonly reason: string;
+  private readonly now: () => number;
+  private readonly pid: () => string;
 
-  constructor(workspaceId: string, outbox: LocalOutbox, reason: string) {
+  constructor(workspaceId: string, outbox: LocalOutbox, reason: string, now: () => number, pid: () => string) {
     this.workspaceId = workspaceId;
     this.outbox = outbox;
     this.reason = reason;
+    this.now = now;
+    this.pid = pid;
   }
 
   async appendEvent(input: RunEventInput): Promise<WriteOutcome> {
-    const { id, payload } = runEventParts(this.workspaceId, input);
-    const res = this.outbox.enqueue({ namespace: 'runs', id, kind: 'run-event', payload });
+    const { id, payload, observations } = runEventParts(this.workspaceId, input, {
+      now: this.now(),
+      pid: this.pid(),
+    });
+    const res = this.outbox.enqueue({ namespace: 'runs', id, kind: 'run-event', payload, observations });
     return { outcome: 'queued', id: res.id };
   }
 
@@ -260,10 +277,71 @@ class DegradedArtifactStore implements ArtifactStore {
     this.reason = reason;
   }
 
-  async putArtifact(meta: ArtifactMeta, bytes: Uint8Array): Promise<ArtifactPutResult> {
-    const { id, payload, digest } = artifactParts(this.workspaceId, meta, bytes);
-    const res = this.outbox.enqueueArtifact({ namespace: 'artifacts', id, kind: 'artifact', payload }, bytes);
-    return { outcome: 'queued', id: res.id, digest };
+  async putArtifact(meta: ArtifactMeta, bytes: Uint8Array, decl?: InternalDeclarationInput): Promise<ArtifactPutResult> {
+    const { id, payload, digest, observations } = artifactParts(this.workspaceId, meta, bytes);
+    // Derive + snapshot the COMPLETE declaration (role/agent/types AND the
+    // provenance canonical serialization) BEFORE spooling any bytes, so a bad
+    // field OR unserializable (circular) provenance throws with NO side effect
+    // (finding: validation ran AFTER the spool — a bad declaration left a durable
+    // queued upload orphaned). object_version_id is unknown while degraded, so
+    // version_state stays 'unverified'.
+    const declParts =
+      decl !== undefined ? internalDeclarationParts(this.workspaceId, digest, decl, 'unverified') : undefined;
+    // …and that 'unverified' is a PLACEHOLDER, not a verdict: mark the
+    // declaration version-pending so the materializing store derives the real
+    // state from the committed blob row when this spool drains (round-7 finding
+    // 5 — parity with the healthy backend's queued write-through path).
+    if (declParts !== undefined) declParts.observations.versionPending = true;
+    const res = this.outbox.enqueueArtifact(
+      { namespace: 'artifacts', id, kind: 'artifact', payload, observations },
+      bytes,
+    );
+    let declarationId: string | null = null;
+    if (declParts !== undefined) {
+      // Blob enqueued first (earlier producerSeq → drains first); the declaration
+      // references it and converges on drain.
+      this.outbox.enqueue({
+        namespace: 'artifacts',
+        id: declParts.id,
+        kind: 'artifact-declaration',
+        payload: declParts.payload,
+        observations: declParts.observations,
+      });
+      declarationId = declParts.id;
+    }
+    return {
+      outcome: 'queued',
+      id: res.id,
+      digest,
+      objectVersionId: null,
+      declarationId,
+      blobOutcome: 'queued',
+      declarationOutcome: decl !== undefined ? 'queued' : null,
+    };
+  }
+
+  async putExternal(meta: ExternalArtifactInput): Promise<DeclarationPutResult> {
+    const parts = externalDeclarationParts(this.workspaceId, meta);
+    const res = this.outbox.enqueue({
+      namespace: 'artifacts',
+      id: parts.id,
+      kind: 'artifact-declaration',
+      payload: parts.payload,
+      observations: parts.observations,
+    });
+    return { outcome: 'queued', id: res.id };
+  }
+
+  async getByRun(runId: string, opts?: ReadOpts): Promise<ArtifactDeclaration[]> {
+    requireReadId('runId', runId);
+    if (opts?.allowPartial !== true) readsUnavailable(this.reason);
+    return overlayDeclarationsByRun(this.outbox, this.workspaceId, runId);
+  }
+
+  async getDeclaration(id: string, opts?: ReadOpts): Promise<ArtifactDeclaration | null> {
+    requireReadId('id', id);
+    if (opts?.allowPartial !== true) readsUnavailable(this.reason);
+    return overlayDeclarationGet(this.outbox, this.workspaceId, id);
   }
 
   async getArtifact(digest: string, opts?: ReadOpts): Promise<{ record: ArtifactRecord; bytes: Buffer } | null> {
@@ -330,6 +408,137 @@ export type ResolveOptions = {
   // Runtime object-store injection (MemoryFileStore in tests, doctor probes).
   files?: FileStore;
   now?: () => number;
+  // Injectable pid seam for the run-event observation columns (tests).
+  pid?: () => string;
+};
+
+// The LIST-capable admin/read object resolver (#323 object-store extension).
+// Repair/doctor enumerate the artifacts/ prefix via CreateOnlyObjectStore.listPrefix
+// AND read exact object versions (GetObjectVersion) — capabilities the RESTRICTED
+// runtime IAM intentionally lacks (no bucket-wide list, no versioned reads). So it
+// resolves with a DISTINCT admin credential pair (finding: runtime and admin used
+// the same creds, and the least-privilege policies omitted the version primitives):
+//   ROSTER_OPS_ADMIN_AWS_ACCESS_KEY_ID / ROSTER_OPS_ADMIN_AWS_SECRET_ACCESS_KEY
+//   (+ optional ROSTER_OPS_ADMIN_AWS_SESSION_TOKEN)
+// falling back to the standard AWS_* pair only when the admin pair is unset (a
+// single-identity dev convenience — production separates the identities; see the
+// IAM matrix in docs/API.md + docs/adr/0004). The runtime object store is
+// unchanged. It reuses the SAME object config setup used (bucket/region/endpoint/
+// force_path_style from persistence.yaml); tests inject a MemoryFileStore via opts.files.
+export type ObjectAdminResolver = (cwd: string, opts?: ResolveOptions) => Promise<CreateOnlyObjectStore>;
+
+// Classify the admin object credentials against the SHARED partial-pair rule —
+// the SINGLE source of truth for "how are admin object creds resolved". Both
+// adminObjectEnv (the resolve/repair/doctor path) AND `roster ops setup`'s
+// object-env resolution (requireSetupEnv + setupObjectEnv) route through this so
+// the rule can never drift between them (finding: setup still fell back to AWS_*
+// when only ONE ROSTER_OPS_ADMIN_AWS_* value was set, bypassing the strict rule
+// adminObjectEnv already enforced).
+//
+//   - 'admin-pair'   → both admin key AND secret present (a complete triple; the
+//                      session token rides only when the admin channel supplies it).
+//   - 'aws-fallback' → EVERY ROSTER_OPS_ADMIN_AWS_* field is absent → defer to AWS_*.
+//   - THROWS         → a PARTIALLY-set admin pair (key-only, secret-only, or a lone
+//                      session token). A typo in one admin var must NEVER silently
+//                      select the AWS_* identity (possibly more-privileged).
+export type AdminObjectCredKind = 'admin-pair' | 'aws-fallback';
+
+export function classifyAdminObjectCreds(env: NodeJS.ProcessEnv): AdminObjectCredKind {
+  const adminKey = env.ROSTER_OPS_ADMIN_AWS_ACCESS_KEY_ID;
+  const adminSecret = env.ROSTER_OPS_ADMIN_AWS_SECRET_ACCESS_KEY;
+  const adminToken = env.ROSTER_OPS_ADMIN_AWS_SESSION_TOKEN;
+  if (adminKey && adminSecret) return 'admin-pair';
+  if (adminKey || adminSecret || adminToken) {
+    const present = (
+      [
+        adminKey ? 'ROSTER_OPS_ADMIN_AWS_ACCESS_KEY_ID' : null,
+        adminSecret ? 'ROSTER_OPS_ADMIN_AWS_SECRET_ACCESS_KEY' : null,
+        adminToken ? 'ROSTER_OPS_ADMIN_AWS_SESSION_TOKEN' : null,
+      ] as (string | null)[]
+    ).filter((v): v is string => v !== null);
+    const missing = (
+      [
+        adminKey ? null : 'ROSTER_OPS_ADMIN_AWS_ACCESS_KEY_ID',
+        adminSecret ? null : 'ROSTER_OPS_ADMIN_AWS_SECRET_ACCESS_KEY',
+      ] as (string | null)[]
+    ).filter((v): v is string => v !== null);
+    throw new RosterError({
+      header: 'roster: incomplete admin object credentials',
+      body:
+        `  A partial admin credential set is configured (${present.join(', ')}) but ` +
+        `${missing.join(' + ')} ${missing.length > 1 ? 'are' : 'is'} missing.\n` +
+        '  Refusing to fall back to the AWS_* identity — a typo in one admin var must not\n' +
+        '  silently select a different (possibly more-privileged) identity.',
+      remedy:
+        '  Set BOTH ROSTER_OPS_ADMIN_AWS_ACCESS_KEY_ID and ROSTER_OPS_ADMIN_AWS_SECRET_ACCESS_KEY\n' +
+        '  (plus optional ROSTER_OPS_ADMIN_AWS_SESSION_TOKEN), or unset every ROSTER_OPS_ADMIN_AWS_* to use AWS_*.',
+      exitCode: EXIT_ERROR,
+    });
+  }
+  return 'aws-fallback';
+}
+
+// Resolve the admin AWS credential env, preferring the distinct admin pair and
+// falling back to the standard pair. Returns an env object whose AWS_* keys carry
+// the admin identity (createS3FileStore reads AWS_ACCESS_KEY_ID/SECRET).
+//
+// The admin credential triple is built PURELY from one source — either all from
+// ROSTER_OPS_ADMIN_AWS_* (key, secret, AND session token) OR all from AWS_*
+// (finding: admin creds inherited an unrelated runtime STS token). When the
+// admin key/secret pair is used, the runtime's AWS_SESSION_TOKEN is DROPPED
+// unless a matching ROSTER_OPS_ADMIN_AWS_SESSION_TOKEN is set — a long-lived
+// admin key paired with a runtime temp-session token is an invalid mixed triple
+// (S3 rejects it), so the runtime token must never bleed into the admin identity.
+export function adminObjectEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (classifyAdminObjectCreds(env) === 'admin-pair') {
+    const out: NodeJS.ProcessEnv = {
+      ...env,
+      AWS_ACCESS_KEY_ID: env.ROSTER_OPS_ADMIN_AWS_ACCESS_KEY_ID,
+      AWS_SECRET_ACCESS_KEY: env.ROSTER_OPS_ADMIN_AWS_SECRET_ACCESS_KEY,
+    };
+    // All-three-or-none from the admin source: the admin session token rides
+    // ONLY when the admin channel supplies it; a runtime AWS_SESSION_TOKEN is
+    // never inherited alongside a long-lived admin key/secret.
+    if (env.ROSTER_OPS_ADMIN_AWS_SESSION_TOKEN) {
+      out.AWS_SESSION_TOKEN = env.ROSTER_OPS_ADMIN_AWS_SESSION_TOKEN;
+    } else {
+      delete out.AWS_SESSION_TOKEN;
+    }
+    return out;
+  }
+  // aws-fallback: EVERY admin field is absent — require the standard AWS_* pair.
+  const missing = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'].filter((v) => !env[v]);
+  if (missing.length > 0) {
+    throw missingEnvError([
+      'ROSTER_OPS_ADMIN_AWS_ACCESS_KEY_ID + ROSTER_OPS_ADMIN_AWS_SECRET_ACCESS_KEY (admin repair/doctor creds — list + version reads)',
+      ...missing.map((v) => `${v} (fallback)`),
+    ]);
+  }
+  // Fallback: the standard AWS_* triple, kept intact (key + secret + its own
+  // session token) — a single-identity dev convenience where runtime == admin.
+  return env;
+}
+
+export const resolveObjectAdmin: ObjectAdminResolver = async (cwd, opts = {}) => {
+  const loaded = loadPersistenceConfig(cwd);
+  if (loaded.state !== 'postgres-s3') {
+    throw new NotConfiguredError(
+      'the list-capable admin/read object store is only available for the postgres-s3 backend (run repair/doctor there)',
+    );
+  }
+  const config = loaded.config;
+  const env = opts.env ?? process.env;
+  if (opts.files) return new CreateOnlyFileStore(opts.files);
+  const files = await createS3FileStore(
+    {
+      bucket: config.objects.bucket,
+      region: config.objects.region,
+      endpoint: config.objects.endpoint,
+      forcePathStyle: config.objects.force_path_style,
+    },
+    adminObjectEnv(env),
+  );
+  return new CreateOnlyFileStore(files);
 };
 
 function envBindingFor(config: PostgresS3PersistenceConfig): RoleEnvBinding {
@@ -505,12 +714,14 @@ async function resolvePostgresS3(
   const objects = new CreateOnlyFileStore(files);
   const configTuple = configTupleOf(config);
 
+  const nowFn = opts.now ?? Date.now;
+  const pidFn = opts.pid ?? (() => String(process.pid));
   const degraded = (reason: string): ResolvedOpsBackend => {
     const backend: OpsBackend = {
       backend: 'postgres-s3',
       workspaceId: ws.id,
       hitl: new DegradedHitlStore(ws.id, outbox, reason),
-      runs: new DegradedRunStore(ws.id, outbox, reason),
+      runs: new DegradedRunStore(ws.id, outbox, reason, nowFn, pidFn),
       artifacts: new DegradedArtifactStore(ws.id, outbox, reason),
     };
     return {
@@ -612,7 +823,17 @@ async function resolvePostgresS3(
     await verifyWorkspaceMarker(objects, { workspaceId: ws.id, markerSha256: configTuple.markerSha256 });
   };
 
-  const pgBackend = createPgBackend({ pool, objects, outbox, preflight, ...(opts.now ? { now: opts.now } : {}) });
+  const pgBackend = createPgBackend({
+    pool,
+    objects,
+    outbox,
+    preflight,
+    // Pass the negotiated roster_ops version so a v1 backend's artifact reads
+    // stay version-less (finding 5: v1 read must not execute v2-only SQL).
+    opsVersion: info.components.roster_ops.version,
+    ...(opts.now ? { now: opts.now } : {}),
+    ...(opts.pid ? { pid: opts.pid } : {}),
+  });
   return {
     state: 'postgres-s3',
     config,
@@ -658,6 +879,7 @@ export async function resolveOpsBackend(cwd: string, opts: ResolveOptions = {}):
       opsRoot: opsRootFor(cwd),
       workspaceId: config.workspace.id,
       ...(opts.now ? { now: opts.now } : {}),
+      ...(opts.pid ? { pid: opts.pid } : {}),
     });
     return {
       state: 'local',

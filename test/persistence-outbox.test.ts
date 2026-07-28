@@ -12,10 +12,12 @@ import {
   payloadHashOf,
   type DeliverResult,
   type ObjectTarget,
+  type ObjectDeliverResult,
   type OutboxRecord,
   type RemoteTarget,
 } from '../src/lib/persistence/outbox.ts';
 import { LocalLedger } from '../src/lib/persistence/local/ledger.ts';
+import { overlayRunGet, overlayRunsList } from '../src/lib/persistence/overlay-reads.ts';
 import {
   BackendUnavailableError,
   ConflictError,
@@ -35,23 +37,27 @@ import {
 
 class MemoryObjectTarget implements ObjectTarget {
   readonly store = new Map<string, Buffer>();
+  readonly versions = new Map<string, string>();
   readonly puts: string[] = [];
   down = false;
   failAfterStore = false;
+  private counter = 0;
 
-  async deliver(digest: string, bytes: Buffer): Promise<'stored' | 'exists'> {
+  async deliver(digest: string, bytes: Buffer): Promise<ObjectDeliverResult> {
     this.puts.push(digest);
     // Transport-coded so it classifies as a genuine retryable outage (a bare
     // Error is now 'unknown' and would fail closed / halt).
     if (this.down) throw Object.assign(new Error('object store down'), { code: 'ECONNREFUSED' });
     if (sha256Hex(bytes) !== digest) throw new ConflictError(digest, 'bytes do not match digest');
-    if (this.store.has(digest)) return 'exists';
+    if (this.store.has(digest)) return { outcome: 'exists', objectVersionId: this.versions.get(digest) ?? null };
     this.store.set(digest, Buffer.from(bytes));
+    const versionId = `obj-v${String(++this.counter).padStart(6, '0')}`;
+    this.versions.set(digest, versionId);
     if (this.failAfterStore) {
       this.failAfterStore = false;
       throw Object.assign(new Error('connection dropped after object store'), { code: 'ECONNRESET' });
     }
-    return 'stored';
+    return { outcome: 'stored', objectVersionId: versionId };
   }
 }
 
@@ -953,7 +959,7 @@ test('halt: S3 AccessDenied from the object leg halts the drain (no poison, no a
       async deliver(d, b) {
         if (denied) throw Object.assign(new Error('Access Denied'), { name: 'AccessDenied' });
         assert.equal(sha256Hex(b), d);
-        return 'stored';
+        return { outcome: 'stored', objectVersionId: 'v-1' };
       },
     };
     for (let i = 0; i < 4; i++) {
@@ -1342,6 +1348,45 @@ test('checkpoint: torn or checksum-invalid checkpoint.json is discarded and reco
     cp = makeOutbox(env).checkpoint();
     assert.equal(cp.lastAcked.runs, 1);
     assert.equal(readFileSync(path, 'utf8'), good);
+  } finally {
+    cleanup(env);
+  }
+});
+
+// ---------------- finding 4: canonical event counting in overlay summaries -----
+
+// A queued v1 run-start (payload.type, #318 shape) and a v2 retry (payload.kind)
+// of the SAME logical start share a canonical id. overlayRunGet already collapsed
+// them via dedupRunEvents; overlayRunsList counted each PHYSICAL entry, so the
+// degraded backend + the PG allow-partial fallback (both delegate here) reported
+// events=2 while getRun returned 1. Group by canonicalRunEventId so they agree.
+test('overlayRunsList (finding 4): a queued v1 run-start + v2 retry count as ONE canonical event', () => {
+  const env = makeEnv();
+  try {
+    const outbox = makeOutbox(env);
+    outbox.enqueue({
+      namespace: 'runs',
+      id: 'v1-start',
+      kind: 'run-event',
+      payload: { runId: 'r', dedupeKey: 'start', type: 'run-start', data: null },
+    });
+    outbox.enqueue({
+      namespace: 'runs',
+      id: 'v2-start',
+      kind: 'run-event',
+      payload: { runId: 'r', dedupeKey: 'start', kind: 'run-start', data: null },
+    });
+
+    const page = overlayRunsList(outbox, env.ws, {}, undefined);
+    const summary = page.items.find((s) => s.runId === 'r');
+    assert.ok(summary, 'the run appears in the overlay listing');
+    assert.equal(summary!.events, 1, 'canonical identity collapses the v1 record + its v2 retry (was 2)');
+    assert.equal(page.partial, true);
+
+    // Parity: overlayRunGet (the getRun overlay path) already returns ONE event.
+    const got = overlayRunGet(outbox, env.ws, 'r');
+    assert.ok(got);
+    assert.equal(got!.events.length, 1, 'getRun and listRuns agree on the canonical count');
   } finally {
     cleanup(env);
   }

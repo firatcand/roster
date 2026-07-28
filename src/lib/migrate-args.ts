@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 type MigrateSubcommand = 'from-agent-team' | 'codex-skills';
 
 const MIGRATE_SUBCOMMANDS: ReadonlySet<MigrateSubcommand> = new Set<MigrateSubcommand>([
@@ -70,11 +71,11 @@ function parseCodexSkills(rest: readonly string[]): ParsedMigrateArgs {
     if (arg === '--cwd') {
       const r = consumeValue('--cwd', cwd, rest[i + 1]);
       if (!r.ok) return { kind: 'err', message: r.message };
-      cwd = r.value;
+      cwd = resolve(r.value);
       i++;
     } else if (arg.startsWith('--cwd=')) {
       if (cwd !== undefined) return { kind: 'err', message: 'flag --cwd specified more than once' };
-      cwd = arg.slice('--cwd='.length);
+      cwd = resolve(arg.slice('--cwd='.length));
     } else if (arg === '--dry-run') {
       dryRun = true;
     } else if (arg === '--json') {

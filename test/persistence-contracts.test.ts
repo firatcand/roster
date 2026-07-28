@@ -620,21 +620,21 @@ for (const factory of factories) {
       for (let i = 1; i <= 3; i++) {
         const outcome = await h.backend.runs.appendEvent({
           runId: 'run-a',
-          dedupeKey: `evt-${i}`,
-          type: 'step',
+          kind: 'tool-call',
+          correlationId: `evt-${i}`,
           data: { n: i },
         });
         assert.equal(outcome.outcome, 'committed');
       }
       const replay = await h.backend.runs.appendEvent({
         runId: 'run-a',
-        dedupeKey: 'evt-2',
-        type: 'step',
+        kind: 'tool-call',
+        correlationId: 'evt-2',
         data: { n: 2 },
       });
       assert.equal(replay.outcome, 'committed');
       await assert.rejects(
-        h.backend.runs.appendEvent({ runId: 'run-a', dedupeKey: 'evt-2', type: 'step', data: { n: 99 } }),
+        h.backend.runs.appendEvent({ runId: 'run-a', kind: 'tool-call', correlationId: 'evt-2', data: { n: 99 } }),
         ConflictError,
       );
       const run = await h.backend.runs.getRun('run-a');
@@ -657,7 +657,47 @@ for (const factory of factories) {
     }
   });
 
-  test(t('artifacts: content-addressed put/get/head, idempotent replay, meta-mismatch conflict, no delete'), { skip: factory.skip }, async () => {
+  test(t('run events: observation columns (source default cli, agent override, lifecycle timestamps, sanitized report)'), { skip: factory.skip }, async () => {
+    const h = await factory.create();
+    try {
+      // A lifecycle event written through the store defaults to the trusted 'cli'
+      // source and stamps a pid + started_at (Rev3-R2-1 / R2-2).
+      await h.backend.runs.appendEvent({ runId: 'obs', kind: 'run-start', data: null });
+      // An agent-authored report stamps 'agent' (DERIVED from the report kind,
+      // not caller-supplied) and its prose is sanitized into sanitized_report — a
+      // planted secret never lands in the projection column.
+      await h.backend.runs.appendEvent({
+        runId: 'obs',
+        kind: 'report',
+        data: 'published; the token is ghp_1234567890abcdefghijABCDEFGHIJ1234 fyi',
+      });
+      await h.backend.runs.appendEvent({ runId: 'obs', kind: 'run-end', data: null });
+
+      const run = await h.backend.runs.getRun('obs');
+      assert.ok(run);
+      const start = run.events.find((e) => e.kind === 'run-start')!;
+      const report = run.events.find((e) => e.kind === 'report')!;
+      const end = run.events.find((e) => e.kind === 'run-end')!;
+
+      assert.equal(start.source, 'cli', 'the RunStore write path defaults to the trusted cli source');
+      assert.ok(typeof start.pid === 'string' && start.pid.length > 0, 'pid is stamped');
+      assert.ok(typeof start.startedAt === 'number', 'run-start stamps started_at');
+      assert.equal(start.sanitizedReport, null);
+
+      assert.equal(report.source, 'agent', 'the agent report path stamps agent');
+      assert.ok(report.sanitizedReport !== null, 'report prose is sanitized at write');
+      assert.ok(
+        !report.sanitizedReport.includes('ghp_1234567890abcdefghijABCDEFGHIJ1234'),
+        'the secret never reaches sanitized_report',
+      );
+
+      assert.ok(typeof end.endedAt === 'number', 'run-end stamps ended_at');
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  test(t('artifacts: content-addressed put/get/head, idempotent replay, identical-bytes/different-meta DEDUP (content-only identity), no delete'), { skip: factory.skip }, async () => {
     const h = await factory.create();
     try {
       const bytes = Buffer.from('artifact bytes v1');
@@ -675,10 +715,14 @@ for (const factory of factories) {
       assert.equal(headed.digest, put.digest);
       const replay = await h.backend.artifacts.putArtifact(meta, bytes);
       assert.equal(replay.id, put.id);
-      await assert.rejects(
-        h.backend.artifacts.putArtifact({ ...meta, filename: 'renamed.md' }, bytes),
-        ConflictError,
-      );
+      // Finding 4: the blob identity is CONTENT-ONLY (digest+size). Re-declaring
+      // identical bytes with DIFFERENT meta is NOT a conflict — it dedups to one
+      // blob (first writer's meta wins); run metadata belongs on declarations.
+      const renamed = await h.backend.artifacts.putArtifact({ ...meta, filename: 'renamed.md' }, bytes);
+      assert.equal(renamed.id, put.id, 'identical bytes reuse the one blob id');
+      assert.equal(renamed.digest, put.digest);
+      const afterRename = await h.backend.artifacts.getArtifact(put.digest);
+      assert.deepEqual(afterRename!.record.meta, meta, 'the first writer meta is retained (no clobber, no conflict)');
       assert.equal(await h.backend.artifacts.getArtifact(sha256Hex('missing')), null);
       assert.equal(await h.backend.artifacts.head(sha256Hex('missing')), null);
       for (const forbidden of ['del', 'delete', 'remove', 'deleteArtifact']) {
@@ -692,11 +736,182 @@ for (const factory of factories) {
     }
   });
 
+  test(t('artifact declarations: internal put writes a declaration, getByRun + getDeclaration round-trip (parity)'), { skip: factory.skip }, async () => {
+    const h = await factory.create();
+    try {
+      const bytes = Buffer.from('report body v1');
+      const meta = { filename: 'r.md', contentType: 'text/markdown', runId: null };
+      const put = await h.backend.artifacts.putArtifact(meta, bytes, {
+        runId: 'run-a',
+        declaringAgent: 'sdr',
+        role: 'produced',
+        artifactType: 'report',
+        mediaType: 'text/markdown',
+        text: 'the api_key=SUPERsecretVALUE123456 is in here',
+      });
+      assert.equal(put.digest, sha256Hex(bytes));
+      assert.ok(put.declarationId, 'an internal put with a declaration context returns a declarationId');
+      // objectVersionId is a string on a versioned object store, null on local.
+      assert.ok(put.objectVersionId === null || typeof put.objectVersionId === 'string');
+
+      const decl = await h.backend.artifacts.getDeclaration(put.declarationId!);
+      assert.ok(decl);
+      assert.equal(decl.kind, 'internal');
+      assert.equal(decl.digest, put.digest);
+      assert.equal(decl.runId, 'run-a');
+      assert.equal(decl.declaringAgent, 'sdr');
+      assert.equal(decl.role, 'produced');
+      assert.equal(decl.verified, true, 'internal (digest-verified) content is verified');
+      assert.equal(decl.artifactType, 'report');
+      // the declaration prose is sanitized — the planted secret never lands
+      assert.ok(decl.sanitizedText !== null);
+      assert.ok(!decl.sanitizedText.includes('SUPERsecretVALUE123456'), 'declaration text is sanitized at write');
+
+      const byRun = await h.backend.artifacts.getByRun('run-a');
+      assert.equal(byRun.length, 1);
+      assert.equal(byRun[0]!.id, put.declarationId);
+      assert.equal(await h.backend.artifacts.getDeclaration(sha256Hex('missing')), null);
+      assert.deepEqual(await h.backend.artifacts.getByRun('run-none'), []);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  test(t('artifact declarations: two runs, identical bytes → one blob + two declarations; produced+used → two rows'), { skip: factory.skip }, async () => {
+    const h = await factory.create();
+    try {
+      const bytes = Buffer.from('shared bytes');
+      const digest = sha256Hex(bytes);
+
+      // Finding 4: run A and run B declare IDENTICAL bytes with DIFFERENT meta.
+      // The blob identity is content-only, so this must NOT ConflictError — it
+      // yields ONE blob row (first meta wins) + TWO declarations.
+      const a = await h.backend.artifacts.putArtifact(
+        { filename: 'a-report.bin', contentType: 'application/octet-stream', runId: 'run-a' },
+        bytes,
+        { runId: 'run-a', declaringAgent: 'sdr' },
+      );
+      const b = await h.backend.artifacts.putArtifact(
+        { filename: 'b-DIFFERENT.bin', contentType: 'text/plain', runId: 'run-b' },
+        bytes,
+        { runId: 'run-b', declaringAgent: 'sdr' },
+      );
+      assert.equal(a.digest, digest);
+      assert.equal(b.digest, digest);
+      assert.equal(a.blobOutcome, 'committed');
+      assert.equal(b.blobOutcome, 'committed', 'the second identical-bytes/different-meta blob dedups, never conflicts');
+      assert.notEqual(a.declarationId, b.declarationId, 'different runs → different declaration ids');
+      // ONE content blob for the identical bytes (deduped by digest); first meta wins.
+      const head = await h.backend.artifacts.head(digest);
+      assert.ok(head);
+      assert.equal(head.meta.filename, 'a-report.bin', 'the first writer meta is retained');
+      assert.equal((await h.backend.artifacts.getByRun('run-a')).length, 1);
+      assert.equal((await h.backend.artifacts.getByRun('run-b')).length, 1);
+
+      // produced + used of the SAME ref by the SAME run/agent → two rows (role in id).
+      const cMeta = { filename: 'x.bin', contentType: 'application/octet-stream', runId: null };
+      const produced = await h.backend.artifacts.putArtifact(cMeta, bytes, { runId: 'run-c', declaringAgent: 'sdr', role: 'produced' });
+      const used = await h.backend.artifacts.putArtifact(cMeta, bytes, { runId: 'run-c', declaringAgent: 'sdr', role: 'used' });
+      assert.notEqual(produced.declarationId, used.declarationId, 'produced vs used of the same ref are distinct declarations');
+      const runC = await h.backend.artifacts.getByRun('run-c');
+      assert.equal(runC.length, 2);
+      assert.deepEqual(new Set(runC.map((d) => d.role)), new Set(['produced', 'used']));
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  test(t('artifact declarations: unserializable (circular) provenance throws BEFORE any blob write (no orphan)'), { skip: factory.skip }, async () => {
+    const h = await factory.create();
+    try {
+      const bytes = Buffer.from('provenance-guard bytes');
+      const digest = sha256Hex(bytes);
+      const circular: Record<string, unknown> = {};
+      circular.self = circular; // JSON.stringify throws on this
+      await assert.rejects(
+        h.backend.artifacts.putArtifact(
+          { filename: 'p.md', contentType: 'text/markdown', runId: 'run-p' },
+          bytes,
+          { runId: 'run-p', declaringAgent: 'sdr', role: 'produced', provenance: circular },
+        ),
+        InvalidRecordError,
+      );
+      // The complete declaration is snapshotted before any upload/spool/blob
+      // append, so the failure leaves NO blob and NO declaration (finding: the
+      // blob committed, THEN provenance serialization threw — orphaning the blob).
+      assert.equal(await h.backend.artifacts.head(digest), null, 'no blob written / uploaded');
+      assert.deepEqual(await h.backend.artifacts.getByRun('run-p'), [], 'no declaration');
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  test(t('putExternal: delimiter-ambiguous provider:externalId pairs get DISTINCT declaration ids (framed, not colon-joined)'), { skip: factory.skip }, async () => {
+    const h = await factory.create();
+    try {
+      // provider='a:b',id='c' and provider='a',id='b:c' both colon-join to 'a:b:c'
+      // — a raw join collided. A length-prefixed frame keeps them distinct.
+      const one = await h.backend.artifacts.putExternal({ runId: 'run-amb', declaringAgent: 'sdr', role: 'used', provider: 'a:b', externalId: 'c' });
+      const two = await h.backend.artifacts.putExternal({ runId: 'run-amb', declaringAgent: 'sdr', role: 'used', provider: 'a', externalId: 'b:c' });
+      assert.notEqual(one.id, two.id, 'the two ambiguous pairs produce DIFFERENT declaration ids');
+      const decls = await h.backend.artifacts.getByRun('run-amb');
+      assert.equal(decls.length, 2, 'both external declarations coexist (no false payload conflict)');
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  test(t('artifact declarations: putExternal writes a declaration-only row (no digest, unverified)'), { skip: factory.skip }, async () => {
+    const h = await factory.create();
+    try {
+      const res = await h.backend.artifacts.putExternal({
+        runId: 'run-x',
+        declaringAgent: 'sdr',
+        provider: 'notion',
+        externalId: 'page-42',
+        externalUrl: 'https://notion.so/page-42',
+        artifactType: 'doc',
+        text: 'the doc lives at token=ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+      });
+      assert.match(res.id, /^[0-9a-f]{64}$/);
+      const decl = await h.backend.artifacts.getDeclaration(res.id);
+      assert.ok(decl);
+      assert.equal(decl.kind, 'external');
+      assert.equal(decl.digest, null, 'external declarations carry no digest');
+      assert.equal(decl.provider, 'notion');
+      assert.equal(decl.externalId, 'page-42');
+      assert.equal(decl.verified, false, 'external stays unverified until a host attestation exists');
+      assert.equal(decl.versionState, null);
+      assert.ok(decl.sanitizedText !== null && !decl.sanitizedText.includes('ghp_abcdefghijklmnopqrstuvwxyz0123456789'));
+      const byRun = await h.backend.artifacts.getByRun('run-x');
+      assert.equal(byRun.length, 1);
+      assert.equal(byRun[0]!.kind, 'external');
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  test(t('artifact declarations: a bare put (no declaration context) writes only a blob'), { skip: factory.skip }, async () => {
+    const h = await factory.create();
+    try {
+      const bytes = Buffer.from('no declaration bytes');
+      const put = await h.backend.artifacts.putArtifact(
+        { filename: 'b.txt', contentType: 'text/plain', runId: null },
+        bytes,
+      );
+      assert.equal(put.declarationId, null, 'no declaration context → no declaration');
+      assert.ok(await h.backend.artifacts.head(put.digest), 'the blob still lands');
+      assert.deepEqual(await h.backend.artifacts.getByRun('anything'), []);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
   test(t('workspace scoping: a sibling workspace on the same infrastructure sees nothing'), { skip: factory.skip }, async () => {
     const h = await factory.create();
     try {
       await h.backend.hitl.createRequest(requestInput());
-      await h.backend.runs.appendEvent({ runId: 'run-a', dedupeKey: 'e1', type: 'step', data: null });
+      await h.backend.runs.appendEvent({ runId: 'run-a', kind: 'tool-call', correlationId: 'e1', data: null });
       const bytes = Buffer.from('scoped');
       await h.backend.artifacts.putArtifact(
         { filename: 'a.txt', contentType: 'text/plain', runId: null },
@@ -739,14 +954,14 @@ for (const factory of factories) {
     try {
       const first = await h.backend.runs.appendEvent({
         runId: 'run-a',
-        dedupeKey: 'evt-1',
-        type: 'step',
+        kind: 'tool-call',
+        correlationId: 'evt-1',
         data: { b: 2, a: 1, nested: { z: 9, y: 8 } },
       });
       const replay = await h.backend.runs.appendEvent({
         runId: 'run-a',
-        dedupeKey: 'evt-1',
-        type: 'step',
+        kind: 'tool-call',
+        correlationId: 'evt-1',
         data: { nested: { y: 8, z: 9 }, a: 1, b: 2 },
       });
       assert.equal(replay.id, first.id);
@@ -772,7 +987,7 @@ for (const factory of factories) {
           return { n: calls };
         },
       };
-      const first = await h.backend.runs.appendEvent({ runId: 'stateful', dedupeKey: 'k', type: 'step', data });
+      const first = await h.backend.runs.appendEvent({ runId: 'stateful', kind: 'tool-call', correlationId: 'k', data });
       assert.equal(first.outcome, 'committed');
       const run = await h.backend.runs.getRun('stateful');
       assert.ok(run);
@@ -785,8 +1000,8 @@ for (const factory of factories) {
       // hash agrees with the stored content (else replay would Conflict).
       const replay = await h.backend.runs.appendEvent({
         runId: 'stateful',
-        dedupeKey: 'k',
-        type: 'step',
+        kind: 'tool-call',
+        correlationId: 'k',
         data: { toJSON: () => ({ n: 1 }) },
       });
       assert.equal(replay.outcome, 'committed');
@@ -802,7 +1017,7 @@ for (const factory of factories) {
     const h = await factory.create();
     try {
       const req = await h.backend.hitl.createRequest(requestInput());
-      await h.backend.runs.appendEvent({ runId: 'run-a', dedupeKey: 'e1', type: 'step', data: null });
+      await h.backend.runs.appendEvent({ runId: 'run-a', kind: 'tool-call', correlationId: 'e1', data: null });
       const bytes = Buffer.from('flagged');
       const art = await h.backend.artifacts.putArtifact(
         { filename: 'f.txt', contentType: 'text/plain', runId: null },

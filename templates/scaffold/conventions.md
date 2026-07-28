@@ -613,7 +613,7 @@ Each run:
 Two complementary signals catch the cases where a fire doesn't complete cleanly:
 
 - **`roster/<function>/state.md`** — orchestrator skill appends one line per fire (`<utc-iso> | <function>/<agent>/<plan> | success|failed`). This is the *agent-level* signal: it requires the orchestrator to actually run to completion.
-- **`logs/cron/<name>.exit`** — for codex `--via cron` schedules, the wrapper records the process exit code (1-3 byte ASCII integer) independently of the agent. Non-zero here means cron fired but the codex process exited with an error.
+- **`logs/cron/<function>/<name>/<fireId>.exit`** — for codex `--via cron` schedules, the wrapper mints a per-fire id, exports it to the agent as `ROSTER_FIRE_ID`, and records the process exit code (1-3 byte ASCII integer) to a per-fire file independently of the agent. Non-zero here means cron fired but the codex process exited with an error. The per-fire, function-scoped path means overlapping fires never clobber each other's exit and two functions can own a same-named schedule. The orchestrator's `roster run start --schedule <name> --function <fn>` writes the matching `<fireId>.run-id` sidecar in the same dir, so a delayed failure correlates to the exact fire's ledger run.
 
 `roster doctor` (the `Scheduling fires` section) cross-references both. `roster pending sync` synthesizes `roster/<fn>/pending/error-<id>.md` items from any non-zero `.exit` or STALE detection (last run older than expected next-fire + 2h grace). The SessionStart hook runs `pending sync` automatically before counting items, so a failed fire surfaces in the very next chat session — no manual step required.
 

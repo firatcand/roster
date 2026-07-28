@@ -329,7 +329,7 @@ export function executeScheduleStatus(opts: ScheduleStatusOptions): number {
   });
 
   const stateMdPath = join(resolved.workspacePath, 'roster', resolved.functionName, 'state.md');
-  const state = readStateMd(stateMdPath);
+  const state = readStateMd(stateMdPath, resolved.workspacePath);
   const history = findRecentRuns(state.lines, resolved.functionName, resolved.entry.agent, resolved.entry.plan, HISTORY_LIMIT);
   const lastRun = history[0];
   const now = new Date();

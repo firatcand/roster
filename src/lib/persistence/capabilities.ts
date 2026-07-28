@@ -6,7 +6,7 @@ import {
 } from './contracts.ts';
 import { isUuidV4 } from './config-schema.ts';
 import { assertSafeSegment } from './safe-path.ts';
-import { readLedgerMeta } from './local/ledger.ts';
+import { ledgerBoundaryFor, readLedgerMeta } from './local/ledger.ts';
 
 // Capability discovery / version negotiation (#318 section H). Components
 // version independently (schemas migrate independently); the CLI declares a
@@ -33,26 +33,39 @@ export type BackendInfo = {
   readonly components: Readonly<Record<OpsComponent, ComponentInfo>>;
 };
 
+// The version a fresh postgres-s3 migration mints (roster_ops/objects at #323's
+// v2), and the offline default localBackendInfo reports for a tree with no
+// meta.json. The local JSONL backend keeps minting roster_ops/objects at v1 (it
+// does not implement the v2 run-ledger schema); both v1 and v2 stay in range, so
+// per-operation gates never refuse a v1 backend for a v1 operation.
 export const CURRENT_COMPONENT_VERSIONS: Readonly<Record<OpsComponent, number>> = {
-  roster_ops: 1,
+  roster_ops: 2,
   hitl: 1,
-  objects: 1,
+  objects: 2,
 };
 
 // Capabilities this CLI knows each component version provides. A version
 // absent from this table (a future one) reports an empty capability list —
 // backendInfo() still DESCRIBES it for doctor visibility, but every
-// assert helper refuses it before any write.
+// assert helper refuses it before any write. v2 is a superset of v1: run-ledger
+// (declarations + sanitized projections) for roster_ops; version-id + list-prefix
+// (object version tracking + repair listing) for objects (#323).
 const KNOWN_COMPONENT_CAPABILITIES: Readonly<Record<OpsComponent, Readonly<Record<number, readonly string[]>>>> = {
-  roster_ops: { 1: ['runs', 'artifacts', 'outbox', 'checkpoint'] },
+  roster_ops: {
+    1: ['runs', 'artifacts', 'outbox', 'checkpoint'],
+    2: ['runs', 'artifacts', 'outbox', 'checkpoint', 'run-ledger'],
+  },
   hitl: { 1: ['requests', 'decisions'] },
-  objects: { 1: ['content-addressed', 'create-only'] },
+  objects: {
+    1: ['content-addressed', 'create-only'],
+    2: ['content-addressed', 'create-only', 'version-id', 'list-prefix'],
+  },
 };
 
 export const SUPPORTED_COMPONENT_RANGES: Readonly<Record<OpsComponent, { readonly min: number; readonly max: number }>> = {
-  roster_ops: { min: 1, max: 1 },
+  roster_ops: { min: 1, max: 2 },
   hitl: { min: 1, max: 1 },
-  objects: { min: 1, max: 1 },
+  objects: { min: 1, max: 2 },
 };
 
 // Complete per-operation gate table — READS INCLUDED. An operation is gated
@@ -64,13 +77,39 @@ export const OPERATION_REQUIREMENTS = {
   'hitl.listRequests': { hitl: ['requests'] },
   'hitl.appendDecision': { hitl: ['decisions'] },
   'hitl.count': { hitl: ['requests'] },
-  'runs.appendEvent': { roster_ops: ['runs'] },
-  'runs.getRun': { roster_ops: ['runs'] },
-  'runs.listRuns': { roster_ops: ['runs'] },
-  'runs.count': { roster_ops: ['runs'] },
-  'artifacts.putArtifact': { roster_ops: ['artifacts'], objects: ['content-addressed', 'create-only'] },
+  // Run-event ops read/write the v2 provenance columns (source/agent/pid/…) and
+  // are therefore gated on the v2 `run-ledger` capability, NOT the base v1 `runs`
+  // (finding: capability gates authorize v2 SQL against a v1 PostgreSQL — a v1
+  // backend must get an actionable VersionSkewError, not a missing-column SQL
+  // error). The local JSONL backend reports roster_ops v2 (its code implements
+  // the run ledger unconditionally), so this never blocks a local workspace.
+  'runs.appendEvent': { roster_ops: ['run-ledger'] },
+  'runs.getRun': { roster_ops: ['run-ledger'] },
+  'runs.listRuns': { roster_ops: ['run-ledger'] },
+  'runs.count': { roster_ops: ['run-ledger'] },
+  // putArtifact ALWAYS records object_version_id (a v2 objects column) and, when
+  // a declaration is supplied, writes the v2 artifact_declarations table — so it
+  // is gated on the v2 `run-ledger` + objects `version-id` capabilities, checked
+  // BEFORE any object upload or blob write (finding: declare-artifact against a
+  // v1 PG backend uploaded the object + committed the blob, THEN failed on
+  // v2-only SQL; the gate must refuse with VersionSkewError before side effects).
+  'artifacts.putArtifact': { roster_ops: ['run-ledger'], objects: ['content-addressed', 'create-only', 'version-id'] },
   'artifacts.getArtifact': { roster_ops: ['artifacts'], objects: ['content-addressed'] },
   'artifacts.head': { roster_ops: ['artifacts'] },
+  // #323 declaration surface reads/writes the v2 artifact_declarations table, so
+  // it is gated on `run-ledger` (not the base v1 `artifacts`).
+  'artifacts.putExternal': { roster_ops: ['run-ledger'] },
+  'artifacts.getByRun': { roster_ops: ['run-ledger'] },
+  'artifacts.getDeclaration': { roster_ops: ['run-ledger'] },
+  // `roster run doctor` / `repair --fill-version-ids` bypass the store wrappers:
+  // they run declaration/version SQL (v2 tables + columns) on the runtime pool
+  // and enumerate the bucket through the admin object store. Gate them on the
+  // same v2 capabilities every other run-ledger op needs plus the objects
+  // listing (round-8 finding 4: against a supported v1 postgres-s3 backend these
+  // two verbs emitted a raw missing-relation DB error instead of an actionable
+  // VersionSkewError).
+  'runs.doctor': { roster_ops: ['run-ledger'], objects: ['content-addressed', 'version-id', 'list-prefix'] },
+  'runs.repair': { roster_ops: ['run-ledger'], objects: ['content-addressed', 'version-id', 'list-prefix'] },
   'outbox.enqueue': { roster_ops: ['outbox'] },
   'outbox.drain': { roster_ops: ['outbox', 'checkpoint'] },
 } as const satisfies Record<string, Partial<Record<OpsComponent, readonly string[]>>>;
@@ -108,17 +147,25 @@ export function makeBackendInfo(
   return { backend, components: out };
 }
 
+// The floor the local JSONL backend reports: its code implements the #323 run
+// ledger + declarations unconditionally, so a tree minted by an older CLI (which
+// recorded roster_ops v1) is clamped UP here — the code IS v2 the moment it runs
+// (finding: local mints v1; implement the local meta upgrade). ledger.meta()
+// rewrites the stored meta.json to match on the next write; this read path never
+// under-reports a capability the code provides.
+const LOCAL_MIN_VERSIONS: Readonly<Record<OpsComponent, number>> = { roster_ops: 2, hitl: 1, objects: 2 };
+
 // backendInfo() for the local backend: reads meta.json componentVersions
 // read-only (no minting). A tree that does not exist yet reports the CLI's
 // current baseline (the versions a fresh tree would be minted with); corrupt
-// meta refuses loudly; a component the meta predates defaults to version 1
-// (versions only ever grow — a missing key can never be a FUTURE version).
+// meta refuses loudly; a component the meta predates defaults to version 1 then
+// is clamped up to the local code floor (versions only ever grow).
 export function localBackendInfo(opsRoot: string, workspaceId: string): BackendInfo {
   if (!isUuidV4(workspaceId)) {
     throw new InvalidRecordError(`workspace id must be a UUID v4 (got '${workspaceId}')`);
   }
   assertSafeSegment('workspace id', workspaceId);
-  const meta = readLedgerMeta(join(opsRoot, workspaceId), workspaceId);
+  const meta = readLedgerMeta(join(opsRoot, workspaceId), workspaceId, ledgerBoundaryFor(opsRoot));
   const versions = meta?.componentVersions ?? CURRENT_COMPONENT_VERSIONS;
   const components = {} as Record<OpsComponent, ComponentDescriptor>;
   for (const name of OPS_COMPONENTS) {
@@ -128,7 +175,7 @@ export function localBackendInfo(opsRoot: string, workspaceId: string): BackendI
         `meta.json componentVersions.${name} must be a positive integer (got ${String(raw)})`,
       );
     }
-    components[name] = { version: raw ?? 1 };
+    components[name] = { version: Math.max(raw ?? 1, LOCAL_MIN_VERSIONS[name]) };
   }
   return makeBackendInfo('local', components);
 }

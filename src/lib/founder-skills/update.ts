@@ -70,7 +70,7 @@ function rewriteManifestRef(workspaceRoot: string, ref: string): void {
   const parsed = founderManifestSchema.parse(raw ?? {});
   const names = normalizeManifest(parsed).skills.map((s) => s.name);
   const next = { source: parsed.source, ref, skills: names };
-  atomicWriteFile(path, stringifyYaml(next));
+  atomicWriteFile(path, stringifyYaml(next), workspaceRoot);
 }
 
 export async function updateFounderSkills(opts: UpdateOptions): Promise<SyncResult> {

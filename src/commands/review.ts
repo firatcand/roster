@@ -1,14 +1,12 @@
-import { statSync } from 'node:fs';
-import { join } from 'node:path';
 import chalk from 'chalk';
 import { scanPending, type PendingItem } from '../lib/pending.ts';
 import {
   approveItem,
   rejectItem,
-  workspaceRelative,
   computeItemId,
   resolveItemBySelector,
 } from '../lib/pending-apply.ts';
+import { confinedFunctionDir, workspaceRelative } from '../lib/workspace-path.ts';
 import {
   EXIT_OK,
   EXIT_ERROR,
@@ -43,12 +41,11 @@ function pendingItemPreview(item: PendingItem, maxLines: number): string {
   return lines.join('\n');
 }
 
+// A symlinked `roster/<fn>` is NOT a valid function dir (round-10 finding 1) —
+// accepting it here would let --approve/--reject name items outside the
+// workspace before the walker ever got a say.
 function functionDirExists(cwd: string, fn: string): boolean {
-  try {
-    return statSync(join(cwd, 'roster', fn)).isDirectory();
-  } catch {
-    return false;
-  }
+  return confinedFunctionDir(cwd, fn) !== null;
 }
 
 function renderItem(item: PendingItem, index: number, total: number, cwd: string): void {
@@ -66,6 +63,12 @@ function renderItem(item: PendingItem, index: number, total: number, cwd: string
   }
   const preview = pendingItemPreview(item, 6);
   for (const line of preview.split('\n')) console.log('  ' + line);
+}
+
+function reportRefusals(refused: readonly string[]): void {
+  for (const line of refused) {
+    console.error(`${chalk.yellow('⚠')} ${line}`);
+  }
 }
 
 function summarize(s: ReviewSummary): string {
@@ -103,7 +106,7 @@ function applyOne(items: readonly PendingItem[], opts: ReviewOptions): number {
     return EXIT_OK;
   }
 
-  rejectItem(item);
+  rejectItem(item, opts.cwd);
   if (opts.json) console.log(JSON.stringify({ ok: true, action: 'reject', path: rel, id: computeItemId(item) }, null, 2));
   else if (!opts.silent) console.log(`${chalk.red('✗')} rejected (deleted) ${rel}`);
   return EXIT_OK;
@@ -114,7 +117,12 @@ export async function executeReview(opts: ReviewOptions): Promise<number> {
     throw invalidFunctionError(opts.fn);
   }
 
-  const items = scanPending(opts.cwd, opts.fn);
+  const refused: string[] = [];
+  const items = scanPending(opts.cwd, opts.fn, refused);
+  // Skipped-with-report: the walker's contract is skip-malformed, so a diverted
+  // directory cannot throw — but it must not vanish either. stderr keeps the
+  // --json stdout contract (a flat item array) byte-stable for /inbox.
+  reportRefusals(refused);
 
   if (opts.approve !== undefined || opts.reject !== undefined) {
     return applyOne(items, opts);
@@ -175,7 +183,7 @@ export async function executeReview(opts: ReviewOptions): Promise<number> {
           summary.deferred++;
         }
       } else if (decision === 'reject') {
-        rejectItem(item);
+        rejectItem(item, opts.cwd);
         console.log(chalk.red('  ✗ rejected (file deleted)'));
         summary.rejected++;
       } else {

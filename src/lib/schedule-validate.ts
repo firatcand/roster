@@ -1,5 +1,6 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { confinedFunctionDir, confinedWorkspaceDir } from './workspace-path.ts';
 import YAML from 'yaml';
 import {
   findDuplicateNames,
@@ -7,6 +8,8 @@ import {
   scheduleFileSchema,
   type FieldError,
 } from './schedule-schema.ts';
+import { MAX_SCHEDULES_YAML_BYTES } from './schedule-read.ts';
+import { readWorkspaceEvidenceFileSync } from './schedule-state.ts';
 
 type FileStatus = 'pass' | 'fail';
 
@@ -24,12 +27,12 @@ export type ValidationReport = {
   files: FileReport[];
 };
 
-function rosterDir(cwd: string): string {
-  return join(cwd, 'roster');
-}
-
 export function findScheduleFiles(cwd: string): string[] {
-  const root = rosterDir(cwd);
+  // Round-10 finding 1: the walk is confined before it enumerates, so a
+  // symlinked `roster/` or `roster/<fn>` reports NO files rather than
+  // validating (and legitimizing) a foreign directory's registries.
+  const root = confinedWorkspaceDir(join(cwd, 'roster'), cwd);
+  if (root === null) return [];
   let topEntries: string[];
   try {
     topEntries = readdirSync(root);
@@ -39,14 +42,10 @@ export function findScheduleFiles(cwd: string): string[] {
 
   const found: string[] = [];
   for (const entry of topEntries) {
-    const fnDir = join(root, entry);
-    let s;
-    try {
-      s = statSync(fnDir);
-    } catch {
-      continue;
-    }
-    if (!s.isDirectory()) continue;
+    // Round-11 finding 1: the boundary is roster/, not the workspace — an
+    // in-workspace `roster/gtm -> ../archive` used to legitimize a sibling tree.
+    const fnDir = confinedFunctionDir(cwd, entry);
+    if (fnDir === null) continue;
     const candidate = join(fnDir, 'schedules.yaml');
     try {
       statSync(candidate);
@@ -58,13 +57,17 @@ export function findScheduleFiles(cwd: string): string[] {
   return found.sort();
 }
 
-function readFile(path: string): { ok: true; content: string } | { ok: false; error: string } {
-  try {
-    return { ok: true, content: readFileSync(path, 'utf8') };
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    return { ok: false, error: e.code ?? e.message ?? 'unreadable' };
-  }
+// Hardened bounded read (round-9 finding 1): the registry is workspace state a
+// sandboxed agent can write, so `roster schedule validate` — the command a user
+// reaches for precisely BECAUSE the file looks wrong — must never block on a
+// planted FIFO, follow a symlink out of the workspace, or load an unbounded
+// file. The failure stays this module's own per-file `cannot read file: …`
+// report row rather than an exception.
+function readFile(cwd: string, path: string): { ok: true; content: string } | { ok: false; error: string } {
+  const read = readWorkspaceEvidenceFileSync(path, cwd, MAX_SCHEDULES_YAML_BYTES);
+  if (read.state === 'ok') return { ok: true, content: read.content };
+  if (read.state === 'missing') return { ok: false, error: 'ENOENT' };
+  return { ok: false, error: read.reason };
 }
 
 function parseYaml(content: string): { ok: true; value: unknown } | { ok: false; error: string } {
@@ -110,7 +113,7 @@ function validateOneFile(cwd: string, absPath: string): FileReport {
     };
   }
 
-  const read = readFile(absPath);
+  const read = readFile(cwd, absPath);
   if (!read.ok) {
     return {
       path: absPath,

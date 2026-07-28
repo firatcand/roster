@@ -282,6 +282,38 @@ export async function verifyBinding(q: PgQueryable, workspaceId: string): Promis
   return hitl;
 }
 
+// Fresh-path bootstrap guard: refuse to run a migration against a database that
+// is already stamped for a DIFFERENT workspace, BEFORE any DDL touches it
+// (finding: fresh setup ran runOpsMigrations before stampPending, so pointing the
+// admin URL at another workspace's finalized v1 DB upgraded it to v2 before the
+// stamp arbitration could reject it). Permit bootstrap ONLY for a demonstrably
+// empty/unstamped database: an unmigrated schema (no meta relation), an unstamped
+// binding (workspace_id NULL), or one already stamped for THIS workspace (resume).
+// A per-schema missing-relation is treated as "that schema unmigrated" so a
+// half-migrated DB still refuses if the migrated half carries a foreign binding.
+export async function assertBootstrapEligible(q: PgQueryable, workspaceId: string): Promise<void> {
+  if (!isUuidV4(workspaceId)) {
+    throw new InvalidRecordError(`workspace id must be a UUID v4 (got '${workspaceId}')`);
+  }
+  const readOrNull = async (schema: OpsSchema): Promise<BindingRecord | null> => {
+    try {
+      return await readBindingRow(q, schema, false);
+    } catch (err) {
+      if (err instanceof NotConfiguredError) return null; // unmigrated schema → empty
+      throw err;
+    }
+  };
+  const hitl = await readOrNull('hitl');
+  const rosterOps = await readOrNull('roster_ops');
+  if (hitl === null && rosterOps === null) return; // empty/unmigrated DB → bootstrap OK
+  for (const rec of [hitl, rosterOps]) {
+    if (rec === null) continue; // this schema unmigrated; the other decides
+    if (rec.workspaceId === null) continue; // migrated but unstamped → OK to stamp
+    if (rec.workspaceId === workspaceId) continue; // already this workspace → resume
+    throw rec.state === 'finalized' ? belongsToError(rec) : stalePendingError(rec);
+  }
+}
+
 // pg-pool grew PoolConfig.onConnect together with the internal _promiseTry
 // helper that awaits it; probing for the helper is the reliable feature test.
 export function poolSupportsOnConnect(): boolean {
@@ -364,6 +396,7 @@ const STAMPED_TABLES = [
   'hitl.decisions',
   'roster_ops.run_events',
   'roster_ops.artifacts',
+  'roster_ops.artifact_declarations',
   'roster_ops.delivery_ledger',
 ] as const;
 

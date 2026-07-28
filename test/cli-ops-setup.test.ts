@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -28,7 +29,10 @@ import {
 import { setupJournalPath, type SetupJournal, type SetupPhase } from '../src/lib/persistence/setup-journal.ts';
 import { opsRootFor, resolveOpsBackend } from '../src/lib/persistence/resolve.ts';
 import { MemoryFileStore } from '../src/lib/persistence/s3-core.ts';
-import { WORKSPACE_MARKER_KEY, workspaceMarkerBody } from '../src/lib/persistence/objects.ts';
+import { WORKSPACE_MARKER_KEY, workspaceMarkerBody, workspaceMarkerSha256 } from '../src/lib/persistence/objects.ts';
+import { runMigrations } from '../src/lib/persistence/migrate-core.ts';
+import { HITL_MIGRATION_TARGET, ROSTER_OPS_MIGRATION_TARGET, opsSchemaDir } from '../src/lib/persistence/postgres/migrate.ts';
+import { finalizeBinding, recordMarkerEtag, stampPending } from '../src/lib/persistence/postgres/binding.ts';
 import { LocalLedger } from '../src/lib/persistence/local/ledger.ts';
 import { LocalOutbox } from '../src/lib/persistence/outbox.ts';
 import { loadPersistenceConfig } from '../src/lib/persistence/config-schema.ts';
@@ -162,6 +166,37 @@ test('cli ops setup: postgres-s3 without env URLs → error listing every missin
   }
 });
 
+test('cli ops setup: a PARTIAL admin object pair (key set, secret omitted) is an incomplete-admin error even with complete AWS_* (finding 1)', () => {
+  const cwd = tmp('ops-partial-admin-');
+  try {
+    // DB URLs present (so we reach the object-cred check), complete AWS_*
+    // fallback available, but only ONE ROSTER_OPS_ADMIN_AWS_* value set. Setup
+    // must REFUSE with an incomplete-admin error — never silently fall back to
+    // AWS_* (which the round-5 fix closed on the resolve path but left open in
+    // setupObjectEnv / requireSetupEnv).
+    const r = runCli(
+      ['ops', 'setup', '--backend', 'postgres-s3', '--database', 'dedicated', '--bucket', 'acme-ops'],
+      cwd,
+      {
+        ROSTER_OPS_ADMIN_URL: 'postgres://admin@localhost/x',
+        ROSTER_OPS_URL: 'postgres://rt@localhost/x',
+        AWS_ACCESS_KEY_ID: 'AKIAFALLBACK',
+        AWS_SECRET_ACCESS_KEY: 'fallbacksecret',
+        ROSTER_OPS_ADMIN_AWS_ACCESS_KEY_ID: 'AKIAADMINONLY',
+        ROSTER_OPS_ADMIN_AWS_SECRET_ACCESS_KEY: '',
+        ROSTER_OPS_ADMIN_AWS_SESSION_TOKEN: '',
+      },
+    );
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /incomplete admin object credentials/);
+    assert.match(r.stderr, /ROSTER_OPS_ADMIN_AWS_SECRET_ACCESS_KEY/);
+    // It refused BEFORE writing any config.
+    assert.equal(existsSync(join(cwd, 'roster', 'persistence.yaml')), false);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 // ---------- local end-to-end via the CLI ----------
 
 test('cli ops setup: local end-to-end, --json shape, idempotent revalidate', () => {
@@ -245,6 +280,22 @@ test('gitignore 7e: template-scaffolded workspace already ships the rule; handcr
   } finally {
     rmSync(cwd, { recursive: true, force: true });
     rmSync(handcrafted, { recursive: true, force: true });
+  }
+});
+
+// Round-13 class sweep: .gitignore is workspace state, so `ops setup` reads it
+// through the same hardened bounded reader as the ledger's sidecars — a planted
+// FIFO must surface an actionable error, never block the command forever.
+test('gitignore: a FIFO at .gitignore is refused with an actionable error, never a hang', { skip: process.platform === 'win32' ? 'POSIX only (mkfifo)' : false }, () => {
+  const cwd = tmp('ops-gitignore-fifo-');
+  try {
+    const mk = spawnSync('mkfifo', [join(cwd, '.gitignore')]);
+    assert.equal(mk.status, 0, 'mkfifo available on POSIX');
+    const r = runCli(['ops', 'setup', '--backend', 'local', '--name', 'acme'], cwd);
+    assert.notEqual(r.status, 0);
+    assert.match(`${r.stdout}${r.stderr}`, /cannot read \.gitignore/);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
   }
 });
 
@@ -554,6 +605,230 @@ test('validate mode (postgres-s3): re-run reports backendInfo + passing role inv
     assert.equal(second.roleInvariants?.ok, true);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
+    await h.close();
+  }
+});
+
+test('validate mode (postgres-s3) finding 4: re-running setup over a v1 workspace applies 002 and enables run-ledger ops', pgOpts, async () => {
+  const h = await makeDb();
+  const cwd = tmp('ops-v1-upgrade-');
+  const v1dir = mkdtempSync(join(tmpdir(), 'roster-ops-v1only-'));
+  copyFileSync(join(opsSchemaDir('roster_ops'), '001_init.sql'), join(v1dir, '001_init.sql'));
+  const pool = new pg.Pool({ connectionString: h.url, max: 4 });
+  try {
+    const ws = randomUUID();
+    const name = 'acme';
+    // Materialize a genuine #318 v1 workspace: hitl (only 001 exists) + roster_ops
+    // 001 ONLY — no run-ledger tables/columns/views.
+    await runMigrations(pool, opsSchemaDir('hitl'), HITL_MIGRATION_TARGET);
+    await runMigrations(pool, v1dir, ROSTER_OPS_MIGRATION_TARGET);
+    const declExists = await pool.query(
+      `SELECT 1 FROM information_schema.tables WHERE table_schema='roster_ops' AND table_name='artifact_declarations'`,
+    );
+    assert.equal(declExists.rowCount, 0, 'v1: no artifact_declarations table yet');
+    const v1meta = (await pool.query(`SELECT component_version FROM roster_ops.meta WHERE singleton`)).rows[0] as { component_version: number };
+    assert.equal(v1meta.component_version, 1, 'v1 workspace reports roster_ops v1');
+
+    // Claim the binding + marker exactly as #318 setup did.
+    const tuple = {
+      bucket: 'acme-ops',
+      region: null,
+      endpoint: null,
+      forcePathStyle: false,
+      markerSha256: workspaceMarkerSha256({ workspaceId: ws, name }),
+    };
+    await stampPending(pool, { workspaceId: ws, workspaceName: name, objects: tuple });
+    const store = new MemoryFileStore();
+    const put = await store.put(WORKSPACE_MARKER_KEY, workspaceMarkerBody({ workspaceId: ws, name }), {
+      ifNoneMatch: '*',
+      contentType: 'application/json',
+    });
+    await recordMarkerEtag(pool, { workspaceId: ws, markerEtag: put.etag || null });
+    await finalizeBinding(pool, { workspaceId: ws });
+    const { runtimeUrl } = await createRuntimeRole(h);
+
+    // The persistence.yaml a #318 workspace ships.
+    mkdirSync(join(cwd, 'roster'), { recursive: true });
+    writeFileSync(
+      join(cwd, 'roster', 'persistence.yaml'),
+      [
+        'version: 1',
+        'workspace:',
+        `  id: ${ws}`,
+        `  name: ${name}`,
+        'backend: postgres-s3',
+        'postgres:',
+        '  database: dedicated',
+        'objects:',
+        '  bucket: acme-ops',
+        '  region: null',
+        '  endpoint: null',
+        '  force_path_style: false',
+      ].join('\n') + '\n',
+    );
+
+    const env = { ROSTER_OPS_ADMIN_URL: h.url, ROSTER_OPS_URL: runtimeUrl } as NodeJS.ProcessEnv;
+
+    // Re-run `roster ops setup` (validate mode) — must upgrade v1 → v2.
+    const result = await runSetup({ cwd, env, files: store, adminFiles: store });
+    assert.equal(result.status, 'validated');
+    assert.ok(result.migrations.includes('002_run_ledger.sql'), `002 must be applied; got ${JSON.stringify(result.migrations)}`);
+
+    // The DB is now v2.
+    const v2meta = (await pool.query(`SELECT component_version, objects_component_version FROM roster_ops.meta WHERE singleton`)).rows[0] as {
+      component_version: number;
+      objects_component_version: number;
+    };
+    assert.equal(v2meta.component_version, 2);
+    assert.equal(v2meta.objects_component_version, 2);
+
+    // Run-ledger operations now WORK (previously capability-gated + unusable).
+    const resolved = await resolveOpsBackend(cwd, { env, files: store });
+    assert.equal(resolved.state, 'postgres-s3');
+    if (resolved.state !== 'postgres-s3') return;
+    try {
+      const bytes = Buffer.from('post-upgrade artifact bytes');
+      const art = await resolved.backend.artifacts.putArtifact(
+        { filename: 'a.txt', contentType: 'text/plain', runId: 'r1' },
+        bytes,
+        { runId: 'r1', declaringAgent: 'writer', role: 'produced' },
+      );
+      assert.equal(art.blobOutcome, 'committed', 'the blob commits against the upgraded schema');
+      assert.equal(art.declarationOutcome, 'committed', 'the declaration commits against the upgraded schema');
+      const decls = await resolved.backend.artifacts.getByRun('r1');
+      assert.equal(decls.length, 1);
+      assert.equal(decls[0]!.declaringAgent, 'writer');
+    } finally {
+      await resolved.close();
+    }
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(v1dir, { recursive: true, force: true });
+    await pool.end().catch(() => {});
+    await h.close();
+  }
+});
+
+test('validate mode (postgres-s3) finding 4: setup REFUSES to migrate a DB stamped for a DIFFERENT workspace (before any mutation)', pgOpts, async () => {
+  const h = await makeDb();
+  const cwd = tmp('ops-swapped-admin-');
+  const v1dir = mkdtempSync(join(tmpdir(), 'roster-ops-v1swap-'));
+  copyFileSync(join(opsSchemaDir('roster_ops'), '001_init.sql'), join(v1dir, '001_init.sql'));
+  const pool = new pg.Pool({ connectionString: h.url, max: 4 });
+  try {
+    const wsA = randomUUID(); // the workspace the DB actually belongs to
+    const wsB = randomUUID(); // the workspace the local config claims (swapped admin URL)
+    const name = 'acme';
+    // A genuine #318 v1 workspace stamped + finalized for workspace A.
+    await runMigrations(pool, opsSchemaDir('hitl'), HITL_MIGRATION_TARGET);
+    await runMigrations(pool, v1dir, ROSTER_OPS_MIGRATION_TARGET);
+    const tuple = {
+      bucket: 'acme-ops',
+      region: null,
+      endpoint: null,
+      forcePathStyle: false,
+      markerSha256: workspaceMarkerSha256({ workspaceId: wsA, name }),
+    };
+    await stampPending(pool, { workspaceId: wsA, workspaceName: name, objects: tuple });
+    const store = new MemoryFileStore();
+    const put = await store.put(WORKSPACE_MARKER_KEY, workspaceMarkerBody({ workspaceId: wsA, name }), {
+      ifNoneMatch: '*',
+      contentType: 'application/json',
+    });
+    await recordMarkerEtag(pool, { workspaceId: wsA, markerEtag: put.etag || null });
+    await finalizeBinding(pool, { workspaceId: wsA });
+    const { runtimeUrl } = await createRuntimeRole(h);
+
+    // The local config claims workspace B, but ROSTER_OPS_ADMIN_URL points at A's DB.
+    mkdirSync(join(cwd, 'roster'), { recursive: true });
+    writeFileSync(
+      join(cwd, 'roster', 'persistence.yaml'),
+      [
+        'version: 1',
+        'workspace:',
+        `  id: ${wsB}`,
+        `  name: ${name}`,
+        'backend: postgres-s3',
+        'postgres:',
+        '  database: dedicated',
+        'objects:',
+        '  bucket: acme-ops',
+        '  region: null',
+        '  endpoint: null',
+        '  force_path_style: false',
+      ].join('\n') + '\n',
+    );
+    const env = { ROSTER_OPS_ADMIN_URL: h.url, ROSTER_OPS_URL: runtimeUrl } as NodeJS.ProcessEnv;
+
+    // Re-run setup (validate mode) — the binding check must refuse BEFORE migrating.
+    await assert.rejects(runSetup({ cwd, env, files: store, adminFiles: store }), /belongs to workspace/);
+
+    // No mutation happened: the DB is still v1 (002 was never applied).
+    const declExists = await pool.query(
+      `SELECT 1 FROM information_schema.tables WHERE table_schema='roster_ops' AND table_name='artifact_declarations'`,
+    );
+    assert.equal(declExists.rowCount, 0, 'the foreign DB was NOT migrated (refused before any mutation)');
+    const meta = (await pool.query(`SELECT component_version FROM roster_ops.meta WHERE singleton`)).rows[0] as { component_version: number };
+    assert.equal(meta.component_version, 1, 'the foreign DB stays v1');
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(v1dir, { recursive: true, force: true });
+    await pool.end().catch(() => {});
+    await h.close();
+  }
+});
+
+test('fresh setup (postgres-s3) finding 3: REFUSES to migrate a DB finalized for a DIFFERENT workspace (before any mutation)', pgOpts, async () => {
+  const h = await makeDb();
+  const cwd = tmp('ops-fresh-foreign-');
+  const v1dir = mkdtempSync(join(tmpdir(), 'roster-ops-v1fresh-'));
+  copyFileSync(join(opsSchemaDir('roster_ops'), '001_init.sql'), join(v1dir, '001_init.sql'));
+  const pool = new pg.Pool({ connectionString: h.url, max: 4 });
+  try {
+    const wsA = randomUUID(); // the workspace the DB actually belongs to
+    const name = 'acme';
+    // A genuine #318 v1 workspace finalized for A (hitl 001 + roster_ops 001 only)
+    // on the empty DB makeDb() created.
+    await runMigrations(pool, opsSchemaDir('hitl'), HITL_MIGRATION_TARGET);
+    await runMigrations(pool, v1dir, ROSTER_OPS_MIGRATION_TARGET);
+    const tuple = {
+      bucket: 'acme-ops',
+      region: null,
+      endpoint: null,
+      forcePathStyle: false,
+      markerSha256: workspaceMarkerSha256({ workspaceId: wsA, name }),
+    };
+    await stampPending(pool, { workspaceId: wsA, workspaceName: name, objects: tuple });
+    const store = new MemoryFileStore();
+    const put = await store.put(WORKSPACE_MARKER_KEY, workspaceMarkerBody({ workspaceId: wsA, name }), {
+      ifNoneMatch: '*',
+      contentType: 'application/json',
+    });
+    await recordMarkerEtag(pool, { workspaceId: wsA, markerEtag: put.etag || null });
+    await finalizeBinding(pool, { workspaceId: wsA });
+    const { runtimeUrl } = await createRuntimeRole(h);
+    const env = { ROSTER_OPS_ADMIN_URL: h.url, ROSTER_OPS_URL: runtimeUrl } as NodeJS.ProcessEnv;
+
+    // NO persistence.yaml in cwd → the FRESH (created) path: a NEW random workspace
+    // id with the admin URL swapped onto A's finalized v1 DB. The preflight must
+    // refuse BEFORE runOpsMigrations upgrades A to v2 (the sibling of the
+    // existing-config guard).
+    await assert.rejects(runSetup(pgSetupOpts(cwd, env, store)), /belongs to workspace/);
+
+    // A's DB was NOT migrated: still v1, no run-ledger table.
+    const declExists = await pool.query(
+      `SELECT 1 FROM information_schema.tables WHERE table_schema='roster_ops' AND table_name='artifact_declarations'`,
+    );
+    assert.equal(declExists.rowCount, 0, 'the foreign DB was NOT migrated (refused before any mutation)');
+    const meta = (await pool.query(`SELECT component_version FROM roster_ops.meta WHERE singleton`)).rows[0] as { component_version: number };
+    assert.equal(meta.component_version, 1, 'the foreign DB stays v1');
+    // A's binding is untouched.
+    const binding = await bindingState(h);
+    assert.deepEqual(binding, { workspaceId: wsA, state: 'finalized' });
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(v1dir, { recursive: true, force: true });
+    await pool.end().catch(() => {});
     await h.close();
   }
 });

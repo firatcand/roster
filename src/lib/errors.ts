@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { invalidFunctionNameMessage, isFunctionName } from './workspace-path.ts';
 
 export const EXIT_OK = 0;
 export const EXIT_ERROR = 1;
@@ -70,6 +71,27 @@ export function invalidFunctionError(fn: string): RosterError {
     header: `${chalk.red.bold('roster:')} unknown function ${chalk.yellow(`'${fn}'`)}`,
     body: `  No roster/${fn}/ directory exists in this workspace.`,
     remedy: `  Run ${chalk.bold('roster review')} with no argument to walk all functions.`,
+    exitCode: EXIT_ERROR,
+  });
+}
+
+// The MUTATING half of the round-11 finding-1 boundary (`schedule install`,
+// which creates roster/<fn>/ rather than resolving an existing one). Names a
+// bad SHAPE and a diverted TARGET separately: the first is a typo, the second
+// is a planted symlink that only a filesystem repair fixes.
+export function functionOutsideRosterError(fn: string, cwd: string): RosterError {
+  if (!isFunctionName(fn)) {
+    return new RosterError({
+      header: `${chalk.red.bold('roster:')} ${invalidFunctionNameMessage(fn)}`,
+      body: `  A function is a directory under ${chalk.bold('roster/')}, so its name is a path segment — traversal ('..', '/') and non-kebab names are refused.`,
+      remedy: `  Use a kebab-case function name (e.g. ${chalk.bold('gtm')}, ${chalk.bold('product-ops')}).`,
+      exitCode: EXIT_ERROR,
+    });
+  }
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} function ${chalk.yellow(`'${fn}'`)} resolves outside the roster registry`,
+    body: `  ${cwd}/roster/${fn} does not resolve beneath ${cwd}/roster — a parent directory is a symlink pointing elsewhere.`,
+    remedy: `  Replace the symlinked directory with a real one, then re-run.`,
     exitCode: EXIT_ERROR,
   });
 }
