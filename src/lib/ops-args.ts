@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 export type ParsedOpsArgs =
   | {
       kind: 'ok';
@@ -88,7 +89,7 @@ export function parseOpsArgs(args: readonly string[]): ParsedOpsArgs {
     } else if (arg === '--cwd') {
       const v = value(arg, i);
       if (typeof v !== 'string') return v;
-      cwd = v;
+      cwd = resolve(v);
       i++;
     } else {
       return { kind: 'err', message: `unknown flag '${arg}' for 'ops setup'` };

@@ -1,5 +1,6 @@
 import {
   InvalidRecordError,
+  type ArtifactDeclaration,
   type ArtifactMeta,
   type ArtifactRecord,
   type Cursor,
@@ -11,6 +12,17 @@ import {
   type RunFilter,
   type RunSummary,
 } from './contracts.ts';
+import {
+  canonicalRunEventId,
+  correlationColumn,
+  dedupRunEvents,
+  normalizeStoredEventPayload,
+  runEventStableHash,
+  trackCanonicalStableHash,
+  type RunEventObservations,
+  type RunEventPayload,
+} from './run-events.ts';
+import type { DeclarationObservations, DeclarationSemantic } from './artifact-declarations.ts';
 import type { LocalOutbox, OutboxEntryState } from './outbox.ts';
 
 // Overlay-only reads: the ONE implementation the degraded backend (resolve.ts)
@@ -24,8 +36,9 @@ import type { LocalOutbox, OutboxEntryState } from './outbox.ts';
 // queued: true envelope).
 
 type HitlRequestPayload = Omit<HitlRequestEnvelope, 'id' | 'workspaceId' | 'seq' | 'createdAt' | 'queued'>;
-type RunEventPayload = Pick<RunEventEnvelope, 'runId' | 'dedupeKey' | 'type' | 'data'>;
-type ArtifactPayload = { digest: string; size: number; meta: ArtifactMeta };
+// Content-only hashed blob payload; meta rides as a store observation.
+type ArtifactPayload = { digest: string; size: number };
+type ArtifactObservations = { meta: ArtifactMeta };
 
 const DEFAULT_OVERLAY_LIMIT = 100;
 
@@ -83,8 +96,32 @@ function queuedHitlEnvelope(workspaceId: string, e: OutboxEntryState): HitlReque
 }
 
 function queuedRunEvent(workspaceId: string, e: OutboxEntryState): RunEventEnvelope {
-  const p = e.payload as RunEventPayload;
-  return { ...p, id: e.entryId, workspaceId, seq: null, createdAt: e.enqueuedAt, queued: true };
+  // v1→v2 normalize a queued (#318) payload before exposing it (finding: queued
+  // v1 run events read kind=undefined).
+  const p = normalizeStoredEventPayload(e.payload);
+  const obs = (e.observations ?? null) as RunEventObservations | null;
+  return {
+    id: e.entryId,
+    workspaceId,
+    runId: p.runId,
+    kind: p.kind,
+    dedupeKey: p.dedupeKey,
+    data: p.data,
+    agent: p.agent ?? null,
+    skill: p.skill ?? null,
+    trigger: p.trigger ?? null,
+    parentRunId: p.parentRunId ?? null,
+    originTaskId: p.originTaskId ?? null,
+    correlationId: correlationColumn(p.kind, p.dedupeKey),
+    source: obs?.source ?? 'unverified',
+    pid: obs?.pid ?? null,
+    startedAt: obs?.startedAt ?? null,
+    endedAt: obs?.endedAt ?? null,
+    sanitizedReport: obs?.sanitizedReport ?? null,
+    seq: null,
+    createdAt: e.enqueuedAt,
+    queued: true,
+  };
 }
 
 function hitlFilterMatches(p: HitlRequestPayload, filter?: HitlRequestFilter): boolean {
@@ -139,7 +176,10 @@ export function overlayRunGet(
   workspaceId: string,
   runId: string,
 ): { runId: string; events: RunEventEnvelope[] } | null {
-  const events = runsOverlay(outbox, runId).map((e) => queuedRunEvent(workspaceId, e));
+  const events = dedupRunEvents(
+    workspaceId,
+    runsOverlay(outbox, runId).map((e) => queuedRunEvent(workspaceId, e)),
+  );
   return events.length === 0 ? null : { runId, events };
 }
 
@@ -156,18 +196,27 @@ export function overlayRunsList(
   const anchors = outbox.overlayGroupAnchors('runs', (e) =>
     e.kind === 'run-event' ? (e.payload as RunEventPayload).runId : null,
   );
-  const byRun = new Map<string, { pos: OverlayPosition; item: RunSummary }>();
+  // Count CANONICAL event identities per run, not physical outbox entries
+  // (finding: a queued v1 run-start + its v2 retry share a canonical id and
+  // getRun collapses them via dedupRunEvents, but this summary path counted each
+  // physical row, so degraded/allow-partial listRuns reported events=2 while
+  // getRun returned 1). Group by canonicalRunEventId so both agree.
+  // canonical: cid -> stable hash — same-id/different-payload conflicts raise here
+  // too (Rev4 R3-4), matching getRun's dedupRunEvents.
+  const byRun = new Map<string, { pos: OverlayPosition; canonical: Map<string, string>; item: RunSummary }>();
   for (const e of runsOverlay(outbox, filter.runId)) {
-    const p = e.payload as RunEventPayload;
-    const existing = byRun.get(p.runId);
+    const np = normalizeStoredEventPayload(e.payload);
+    const cid = canonicalRunEventId(workspaceId, np);
+    const existing = byRun.get(np.runId);
     if (existing) {
-      existing.item.events += 1;
+      trackCanonicalStableHash(existing.canonical, cid, runEventStableHash(np));
       existing.item.lastEventAt = Math.max(existing.item.lastEventAt, e.enqueuedAt);
     } else {
-      byRun.set(p.runId, {
-        pos: anchors.get(p.runId) ?? positionOf(e),
+      byRun.set(np.runId, {
+        pos: anchors.get(np.runId) ?? positionOf(e),
+        canonical: new Map([[cid, runEventStableHash(np)]]),
         item: {
-          runId: p.runId,
+          runId: np.runId,
           workspaceId,
           firstSeq: 0,
           lastSeq: 0,
@@ -179,6 +228,7 @@ export function overlayRunsList(
       });
     }
   }
+  for (const s of byRun.values()) s.item.events = s.canonical.size;
   const after = cursor?.overlay ?? null;
   const eligible = [...byRun.values()]
     .sort((a, b) =>
@@ -208,14 +258,16 @@ function queuedArtifactRecord(outbox: LocalOutbox, workspaceId: string, digest: 
     .find((e) => e.kind === 'artifact' && (e.payload as ArtifactPayload).digest === digest);
   if (hit === undefined) return null;
   const p = hit.payload as ArtifactPayload;
+  const obs = (hit.observations ?? {}) as Partial<ArtifactObservations>;
   return {
     digest: p.digest,
     size: p.size,
-    meta: p.meta,
+    meta: obs.meta ?? { filename: 'artifact', contentType: 'application/octet-stream', runId: null },
     workspaceId,
     createdAt: hit.enqueuedAt,
     seq: null,
     queued: true,
+    objectVersionId: null,
   };
 }
 
@@ -244,4 +296,46 @@ export function overlayArtifactHead(outbox: LocalOutbox, workspaceId: string, di
   if (record === null) return null;
   queuedArtifactBytes(outbox, digest); // assert the staging invariant before answering head
   return record;
+}
+
+function queuedDeclaration(workspaceId: string, e: OutboxEntryState): ArtifactDeclaration {
+  const p = e.payload as DeclarationSemantic;
+  const obs = (e.observations ?? {}) as Partial<DeclarationObservations>;
+  return {
+    id: e.entryId,
+    workspaceId,
+    runId: p.runId,
+    declaringAgent: p.declaringAgent,
+    role: p.role,
+    kind: p.kind,
+    digest: p.digest ?? null,
+    provider: p.provider ?? null,
+    externalId: p.externalId ?? null,
+    externalUrl: p.externalUrl ?? null,
+    artifactType: p.artifactType ?? null,
+    mediaType: p.mediaType ?? null,
+    provenance: p.provenance ?? null,
+    verified: obs.verified ?? false,
+    versionState: obs.versionState ?? null,
+    sanitizedText: obs.sanitizedText ?? null,
+    createdAt: e.enqueuedAt,
+    seq: null,
+    queued: true,
+  };
+}
+
+export function overlayDeclarationsByRun(outbox: LocalOutbox, workspaceId: string, runId: string): ArtifactDeclaration[] {
+  return outbox
+    .overlayOnly('artifacts')
+    .filter((e) => e.kind === 'artifact-declaration' && (e.payload as DeclarationSemantic).runId === runId)
+    .map((e) => queuedDeclaration(workspaceId, e));
+}
+
+export function overlayDeclarationGet(
+  outbox: LocalOutbox,
+  workspaceId: string,
+  id: string,
+): ArtifactDeclaration | null {
+  const hit = outbox.overlayOnly('artifacts').find((e) => e.kind === 'artifact-declaration' && e.entryId === id);
+  return hit === undefined ? null : queuedDeclaration(workspaceId, hit);
 }

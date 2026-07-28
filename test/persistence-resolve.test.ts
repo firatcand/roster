@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import pg from 'pg';
 import {
   LegacyFilesAdapter,
+  adminObjectEnv,
   drainOutbox,
   opsRootFor,
   resolveOpsBackend,
@@ -237,7 +238,7 @@ test('resolve: postgres-s3 with unreachable DB → degraded; spoolable writes qu
 
     const req = await resolved.backend.hitl.createRequest(hitlInput());
     assert.equal(req.outcome, 'queued');
-    const run = await resolved.backend.runs.appendEvent({ runId: 'r1', dedupeKey: 'k1', type: 'started', data: null });
+    const run = await resolved.backend.runs.appendEvent({ runId: 'r1', kind: 'run-start', data: null });
     assert.equal(run.outcome, 'queued');
     const bytes = randomBytes(64);
     const art = await resolved.backend.artifacts.putArtifact(
@@ -279,7 +280,7 @@ test('resolve: degraded allowPartial reads serve the queued overlay, flagged par
     assert.equal(resolved.state, 'degraded');
     if (resolved.state !== 'degraded') return;
     const req = await resolved.backend.hitl.createRequest(hitlInput({ title: 'queued offline' }));
-    const run = await resolved.backend.runs.appendEvent({ runId: 'r1', dedupeKey: 'k1', type: 'started', data: null });
+    const run = await resolved.backend.runs.appendEvent({ runId: 'r1', kind: 'run-start', data: null });
     const bytes = randomBytes(48);
     const art = await resolved.backend.artifacts.putArtifact(
       { filename: 'a.bin', contentType: 'application/octet-stream', runId: 'r1' },
@@ -368,7 +369,7 @@ test('resolve: degraded partial listings honor limit + cursor (paginate the queu
       await resolved.backend.hitl.createRequest(hitlInput({ contentHash: sha256Hex(`draft-${i}`) }));
       const rid = `run-${i}`;
       runIds.push(rid);
-      await resolved.backend.runs.appendEvent({ runId: rid, dedupeKey: 'k', type: 'started', data: null });
+      await resolved.backend.runs.appendEvent({ runId: rid, kind: 'run-start', data: null });
     }
 
     // hitl: limit 1 must return 1 item + a cursor, and pagination must reach all N.
@@ -418,9 +419,9 @@ test('resolve finding 5: degraded listRuns is cursor-stable when a run head even
     if (resolved.state !== 'degraded') return;
 
     // Run R has two queued events (producerSeq 1, 2); run S one (producerSeq 3).
-    const r1 = await resolved.backend.runs.appendEvent({ runId: 'R', dedupeKey: 'k1', type: 'started', data: null });
-    await resolved.backend.runs.appendEvent({ runId: 'R', dedupeKey: 'k2', type: 'step', data: null });
-    await resolved.backend.runs.appendEvent({ runId: 'S', dedupeKey: 'k3', type: 'started', data: null });
+    const r1 = await resolved.backend.runs.appendEvent({ runId: 'R', kind: 'run-start', data: null });
+    await resolved.backend.runs.appendEvent({ runId: 'R', kind: 'tool-call', correlationId: 'k2', data: null });
+    await resolved.backend.runs.appendEvent({ runId: 'S', kind: 'run-start', data: null });
 
     // Page 1 (limit 1): R is returned (its anchor = producerSeq 1, sorts first).
     const page1 = await resolved.backend.runs.listRuns({ limit: 1 }, undefined, { allowPartial: true });
@@ -507,7 +508,7 @@ test('resolve: future hitl version — hitl operations refuse per-component, run
     assert.equal(resolved.skew.length, 1);
     assert.match(resolved.skew[0]!, /hitl/);
     // A future hitl version still allows runs.appendEvent (the exact finding).
-    const run = await resolved.backend.runs.appendEvent({ runId: 'r1', dedupeKey: 'k1', type: 'started', data: null });
+    const run = await resolved.backend.runs.appendEvent({ runId: 'r1', kind: 'run-start', data: null });
     assert.equal(run.outcome, 'queued');
     // hitl writes AND reads refuse with the skew, before any queueing.
     await assert.rejects(resolved.backend.hitl.createRequest(hitlInput()), VersionSkewError);
@@ -549,6 +550,9 @@ test('capability gate: missing required capability refuses BEFORE the store meth
       putArtifact: record('artifacts.putArtifact'),
       getArtifact: record('artifacts.getArtifact'),
       head: record('artifacts.head'),
+      putExternal: record('artifacts.putExternal'),
+      getByRun: record('artifacts.getByRun'),
+      getDeclaration: record('artifacts.getDeclaration'),
     },
   } as unknown as OpsBackend;
   // roster_ops offers NO capabilities: every runs/artifacts/outbox op refuses.
@@ -558,7 +562,7 @@ test('capability gate: missing required capability refuses BEFORE the store meth
     objects: { version: 1 },
   });
   const gated = withCapabilityGate(stub, info);
-  await assert.rejects(gated.runs.appendEvent({ runId: 'r', dedupeKey: 'k', type: 't', data: null }), VersionSkewError);
+  await assert.rejects(gated.runs.appendEvent({ runId: 'r', kind: 'run-start', data: null }), VersionSkewError);
   await assert.rejects(
     gated.artifacts.putArtifact({ filename: 'a', contentType: 'b', runId: null }, Buffer.from('x')),
     VersionSkewError,
@@ -574,6 +578,13 @@ test('capability gate: missing required capability refuses BEFORE the store meth
   await assert.rejects(gated.runs.count(), VersionSkewError);
   await assert.rejects(gated.artifacts.getArtifact(sha256Hex('x')), VersionSkewError);
   await assert.rejects(gated.artifacts.head(sha256Hex('x')), VersionSkewError);
+  // #323 declaration surface is gated too.
+  await assert.rejects(gated.artifacts.getByRun('r'), VersionSkewError);
+  await assert.rejects(gated.artifacts.getDeclaration('some-id'), VersionSkewError);
+  await assert.rejects(
+    gated.artifacts.putExternal({ runId: 'r', declaringAgent: 'a', provider: 'notion', externalId: 'e1' }),
+    VersionSkewError,
+  );
   assert.deepEqual(calls, [], 'no gated store method may run when the capability assert fails');
   // A satisfied requirement reaches the store (and the stub then throws its own error).
   await assert.rejects(gated.hitl.createRequest(hitlInput()), /store method must not be reached/);
@@ -869,7 +880,7 @@ test('writeThrough preflight: marker GET returning AccessDenied AFTER resolution
       // Healthy resolution done; now the marker GET starts denying (IAM drift).
       denying.denyGet = true;
       await assert.rejects(
-        resolved.backend.runs.appendEvent({ runId: 'r1', dedupeKey: 'k1', type: 'step', data: null }),
+        resolved.backend.runs.appendEvent({ runId: 'r1', kind: 'tool-call', correlationId: 'k1', data: null }),
         (err) => {
           assert.ok(!(err instanceof BackendUnavailableError), 'a denied preflight must not silently degrade');
           return true;
@@ -889,7 +900,7 @@ test('writeThrough preflight: marker GET returning AccessDenied AFTER resolution
       assert.equal(queued.length, 1);
       assert.ok(queued.every((e) => e.failure === null));
       denying.denyGet = false;
-      const healed = await resolved.backend.runs.appendEvent({ runId: 'r1', dedupeKey: 'k2', type: 'step', data: null });
+      const healed = await resolved.backend.runs.appendEvent({ runId: 'r1', kind: 'tool-call', correlationId: 'k2', data: null });
       assert.equal(healed.outcome, 'committed');
     } finally {
       await resolved.close();
@@ -917,7 +928,7 @@ test('writeThrough preflight finding 3: a marker GET transport blip (ECONNRESET)
       // failure, the PG row would commit with the marker UNVERIFIED. It must
       // instead QUEUE — silently (round-2: transport ⇒ queue, never a hard
       // error), and never commit a row while the marker went unverified.
-      const res = await resolved.backend.runs.appendEvent({ runId: 'r1', dedupeKey: 'k1', type: 'step', data: null });
+      const res = await resolved.backend.runs.appendEvent({ runId: 'r1', kind: 'tool-call', correlationId: 'k1', data: null });
       assert.equal(res.outcome, 'queued', 'transport-unverified marker ⇒ silent queue, not a commit');
       const probe = new pg.Client({ connectionString: h.url });
       await probe.connect();
@@ -932,7 +943,7 @@ test('writeThrough preflight finding 3: a marker GET transport blip (ECONNRESET)
       assert.ok(queued.every((e) => e.failure === null && e.attempts === 0), 'a transport skip consumes nothing');
       // Restoring connectivity heals: the queued write drains and commits.
       flaky.transportGet = false;
-      const healed = await resolved.backend.runs.appendEvent({ runId: 'r1', dedupeKey: 'k2', type: 'step', data: null });
+      const healed = await resolved.backend.runs.appendEvent({ runId: 'r1', kind: 'tool-call', correlationId: 'k2', data: null });
       assert.equal(healed.outcome, 'committed');
       // One run 'r1', both events committed (the queued k1 drained + the new k2).
       assert.deepEqual(await resolved.backend.runs.count(), { committed: 1, queued: 0, partial: false });
@@ -964,7 +975,7 @@ test('writeThrough preflight: a marker swapped AFTER resolution refuses the writ
 
       // Ordinary store writeThrough (NOT the drain helper) must refuse.
       await assert.rejects(
-        resolved.backend.runs.appendEvent({ runId: 'r1', dedupeKey: 'k1', type: 'step', data: null }),
+        resolved.backend.runs.appendEvent({ runId: 'r1', kind: 'tool-call', correlationId: 'k1', data: null }),
         WorkspaceMismatchError,
       );
       const bytes = randomBytes(64);
@@ -995,8 +1006,8 @@ test('writeThrough preflight: a marker swapped AFTER resolution refuses the writ
       await w.store.put(WORKSPACE_MARKER_KEY, original.body);
       const healed = await resolved.backend.runs.appendEvent({
         runId: 'r1',
-        dedupeKey: 'k2',
-        type: 'step',
+        kind: 'tool-call',
+        correlationId: 'k2',
         data: null,
       });
       assert.equal(healed.outcome, 'committed');
@@ -1101,4 +1112,192 @@ test('resolve: gitignore rule is present in a set-up workspace', async () => {
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
+});
+
+// ── finding 2: adminObjectEnv builds the admin triple from ONE source ──────────
+
+test('adminObjectEnv: admin key/secret present → AWS_* carry the admin identity', () => {
+  const env = {
+    AWS_ACCESS_KEY_ID: 'RUNTIME_KEY',
+    AWS_SECRET_ACCESS_KEY: 'RUNTIME_SECRET',
+    ROSTER_OPS_ADMIN_AWS_ACCESS_KEY_ID: 'ADMIN_KEY',
+    ROSTER_OPS_ADMIN_AWS_SECRET_ACCESS_KEY: 'ADMIN_SECRET',
+  } as NodeJS.ProcessEnv;
+  const out = adminObjectEnv(env);
+  assert.equal(out.AWS_ACCESS_KEY_ID, 'ADMIN_KEY');
+  assert.equal(out.AWS_SECRET_ACCESS_KEY, 'ADMIN_SECRET');
+});
+
+test('adminObjectEnv: runtime STS token is NOT inherited alongside a long-lived admin key/secret', () => {
+  // A runtime temp-session token + a long-lived admin key/secret (no admin
+  // session token) must NOT produce a mixed triple: the session token is dropped.
+  const env = {
+    AWS_ACCESS_KEY_ID: 'RUNTIME_KEY',
+    AWS_SECRET_ACCESS_KEY: 'RUNTIME_SECRET',
+    AWS_SESSION_TOKEN: 'RUNTIME_TEMP_TOKEN',
+    ROSTER_OPS_ADMIN_AWS_ACCESS_KEY_ID: 'ADMIN_KEY',
+    ROSTER_OPS_ADMIN_AWS_SECRET_ACCESS_KEY: 'ADMIN_SECRET',
+  } as NodeJS.ProcessEnv;
+  const out = adminObjectEnv(env);
+  assert.equal(out.AWS_ACCESS_KEY_ID, 'ADMIN_KEY');
+  assert.equal(out.AWS_SECRET_ACCESS_KEY, 'ADMIN_SECRET');
+  assert.equal(out.AWS_SESSION_TOKEN, undefined, 'the runtime session token must not bleed into the admin identity');
+});
+
+test('adminObjectEnv: admin session token rides ONLY when the admin channel supplies it', () => {
+  const env = {
+    AWS_ACCESS_KEY_ID: 'RUNTIME_KEY',
+    AWS_SECRET_ACCESS_KEY: 'RUNTIME_SECRET',
+    AWS_SESSION_TOKEN: 'RUNTIME_TEMP_TOKEN',
+    ROSTER_OPS_ADMIN_AWS_ACCESS_KEY_ID: 'ADMIN_KEY',
+    ROSTER_OPS_ADMIN_AWS_SECRET_ACCESS_KEY: 'ADMIN_SECRET',
+    ROSTER_OPS_ADMIN_AWS_SESSION_TOKEN: 'ADMIN_TEMP_TOKEN',
+  } as NodeJS.ProcessEnv;
+  const out = adminObjectEnv(env);
+  assert.equal(out.AWS_SESSION_TOKEN, 'ADMIN_TEMP_TOKEN');
+});
+
+test('adminObjectEnv: falls back to the AWS_* triple (session token intact) when no admin pair', () => {
+  const env = {
+    AWS_ACCESS_KEY_ID: 'RUNTIME_KEY',
+    AWS_SECRET_ACCESS_KEY: 'RUNTIME_SECRET',
+    AWS_SESSION_TOKEN: 'RUNTIME_TEMP_TOKEN',
+  } as NodeJS.ProcessEnv;
+  const out = adminObjectEnv(env);
+  assert.equal(out.AWS_ACCESS_KEY_ID, 'RUNTIME_KEY');
+  assert.equal(out.AWS_SESSION_TOKEN, 'RUNTIME_TEMP_TOKEN', 'a single-identity fallback keeps its own session token');
+});
+
+test('adminObjectEnv: throws when neither the admin pair nor the AWS_* fallback is set', () => {
+  assert.throws(() => adminObjectEnv({} as NodeJS.ProcessEnv), /ROSTER_OPS_ADMIN_AWS_ACCESS_KEY_ID/);
+});
+
+// ── finding 5 (round 5): a PARTIAL admin pair is an error, never a silent AWS_* fallback ──
+
+test('adminObjectEnv: only the admin KEY set (secret missing) → error, does NOT fall back to AWS_*', () => {
+  const env = {
+    AWS_ACCESS_KEY_ID: 'RUNTIME_KEY',
+    AWS_SECRET_ACCESS_KEY: 'RUNTIME_SECRET',
+    ROSTER_OPS_ADMIN_AWS_ACCESS_KEY_ID: 'ADMIN_KEY',
+    // ROSTER_OPS_ADMIN_AWS_SECRET_ACCESS_KEY deliberately absent (typo/omission).
+  } as NodeJS.ProcessEnv;
+  assert.throws(() => adminObjectEnv(env), /incomplete admin object credentials|ROSTER_OPS_ADMIN_AWS_SECRET_ACCESS_KEY/);
+});
+
+test('adminObjectEnv: only the admin SECRET set (key missing) → error', () => {
+  const env = {
+    AWS_ACCESS_KEY_ID: 'RUNTIME_KEY',
+    AWS_SECRET_ACCESS_KEY: 'RUNTIME_SECRET',
+    ROSTER_OPS_ADMIN_AWS_SECRET_ACCESS_KEY: 'ADMIN_SECRET',
+  } as NodeJS.ProcessEnv;
+  assert.throws(() => adminObjectEnv(env), /incomplete admin object credentials|ROSTER_OPS_ADMIN_AWS_ACCESS_KEY_ID/);
+});
+
+test('adminObjectEnv: a lone admin SESSION token (no key/secret) → error, not an AWS_* fallback', () => {
+  const env = {
+    AWS_ACCESS_KEY_ID: 'RUNTIME_KEY',
+    AWS_SECRET_ACCESS_KEY: 'RUNTIME_SECRET',
+    ROSTER_OPS_ADMIN_AWS_SESSION_TOKEN: 'ADMIN_TEMP_TOKEN',
+  } as NodeJS.ProcessEnv;
+  assert.throws(() => adminObjectEnv(env), /incomplete admin object credentials/);
+});
+
+// ── finding 1: setup uses the ADMIN object credentials for bucket validation ──
+
+test('setup (postgres-s3): bucket validation runs with the admin object credentials, not the runtime AWS_*', pgOpts, async () => {
+  const h = await makeDb();
+  const cwd = tmp('resolve-admincreds-');
+  try {
+    const { runtimeUrl } = await createRuntimeRole(h);
+    const env = {
+      ROSTER_OPS_ADMIN_URL: h.url,
+      ROSTER_OPS_URL: runtimeUrl,
+      // Restricted runtime object creds (deny marker write + GetBucketVersioning).
+      AWS_ACCESS_KEY_ID: 'RUNTIME_RESTRICTED_KEY',
+      AWS_SECRET_ACCESS_KEY: 'RUNTIME_RESTRICTED_SECRET',
+      // Valid admin object creds (marker write + versioning).
+      ROSTER_OPS_ADMIN_AWS_ACCESS_KEY_ID: 'ADMIN_KEY',
+      ROSTER_OPS_ADMIN_AWS_SECRET_ACCESS_KEY: 'ADMIN_SECRET',
+    } as NodeJS.ProcessEnv;
+    let seenKey: string | undefined;
+    const setup = await runSetup({
+      cwd,
+      backend: 'postgres-s3',
+      database: 'dedicated',
+      bucket: 'acme-ops',
+      name: 'acme',
+      env,
+      adminFiles: new MemoryFileStore(),
+      validateBucket: async (_cfg, passedEnv) => {
+        seenKey = passedEnv.AWS_ACCESS_KEY_ID;
+        return { objectLock: false };
+      },
+    });
+    assert.equal(setup.status, 'created');
+    assert.equal(seenKey, 'ADMIN_KEY', 'bucket validation must run with the admin identity, not the restricted runtime creds');
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+    await h.close();
+  }
+});
+
+test('setup (postgres-s3): missing BOTH admin object creds and AWS_* fallback is refused', async () => {
+  const cwd = tmp('resolve-nocreds-');
+  try {
+    await assert.rejects(
+      runSetup({
+        cwd,
+        backend: 'postgres-s3',
+        database: 'dedicated',
+        bucket: 'acme-ops',
+        name: 'acme',
+        // Non-empty DB URLs so ONLY the object-cred requirement is unmet; setup
+        // refuses at requireSetupEnv before touching Postgres or S3.
+        env: { ROSTER_OPS_ADMIN_URL: 'postgresql://x@localhost/x', ROSTER_OPS_URL: 'postgresql://y@localhost/y' } as NodeJS.ProcessEnv,
+      }),
+      /ROSTER_OPS_ADMIN_AWS_ACCESS_KEY_ID/,
+    );
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+// ── finding 3: declare-artifact on a v1 backend refuses BEFORE any upload ──────
+
+test('withCapabilityGate (finding 3): putArtifact on a v1 backend throws VersionSkew with NO upload / NO blob', async () => {
+  let putCalls = 0;
+  const spyArtifacts = {
+    async putArtifact() {
+      putCalls += 1;
+      return { outcome: 'committed', id: 'x', digest: 'd', objectVersionId: 'v', declarationId: null, blobOutcome: 'committed', declarationOutcome: null } as never;
+    },
+    async getArtifact() { return null; },
+    async head() { return null; },
+    async putExternal() { return { outcome: 'committed', id: 'x' } as never; },
+    async getByRun() { return []; },
+    async getDeclaration() { return null; },
+  };
+  const noop = async () => null as never;
+  const backend = {
+    backend: 'postgres-s3' as const,
+    workspaceId: randomUUID(),
+    hitl: { createRequest: noop, getRequest: noop, listRequests: noop, appendDecision: noop, count: noop } as never,
+    runs: { appendEvent: noop, getRun: noop, listRuns: noop, count: noop } as never,
+    artifacts: spyArtifacts as never,
+  } as OpsBackend;
+  // A #318 v1 postgres backend: base caps, NO run-ledger, objects v1 (no version-id).
+  const v1 = makeBackendInfo('postgres-s3', {
+    roster_ops: { version: 1, capabilities: ['runs', 'artifacts', 'outbox', 'checkpoint'] },
+    hitl: { version: 1, capabilities: ['requests', 'decisions'] },
+    objects: { version: 1, capabilities: ['content-addressed', 'create-only'] },
+  });
+  const gated = withCapabilityGate(backend, v1);
+  await assert.rejects(
+    gated.artifacts.putArtifact({ filename: 'f', contentType: 'text/plain', runId: 'r' }, Buffer.from('hi'), {
+      runId: 'r',
+      declaringAgent: 'a',
+    }),
+    (err: unknown) => err instanceof VersionSkewError,
+  );
+  assert.equal(putCalls, 0, 'the gate fired before the store method — no object uploaded, no blob row');
 });

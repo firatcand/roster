@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import YAML from 'yaml';
 import { installCodexSchedule, type CodexInstallOpts } from '../src/lib/codex-install.ts';
 import { RosterError } from '../src/lib/errors.ts';
-import type { CrontabIO } from '../src/lib/codex-cron.ts';
+import { cronMarkerId, findMarkerBlocks, removeCronEntry, type CrontabIO } from '../src/lib/codex-cron.ts';
 
 function makeWorkspaceAndHome(): {
   cwd: string;
@@ -79,7 +79,7 @@ test('codex install (ui-handoff): writes fields doc + schedules.yaml with attest
 
     const fieldsDoc = readFileSync(result.fieldsDocPath!, 'utf8');
     assert.match(fieldsDoc, /Codex App Automation/);
-    assert.match(fieldsDoc, /Use the roster-orchestrator skill to run plan cold-outreach for agent sdr/);
+    assert.match(fieldsDoc, /Use the roster-orchestrator skill to run plan cold-outreach for agent gtm\/sdr \(schedule sdr-cold-outreach\)/);
   } finally {
     fx.cleanup();
   }
@@ -130,14 +130,19 @@ test('codex install (via-cron): writes schedules.yaml + invokes crontab IO + cre
     assert.equal(result.fieldsDocPath, null);
     assert.ok(existsSync(join(fx.cwd, 'logs', 'cron')), 'logs/cron/ should be pre-created');
     assert.equal(io.writes.length, 1);
-    assert.match(io.current, /# roster:schedule:sdr-cold-outreach:begin/);
+    // Finding 2: the marker id is function-scoped (`<function>/<schedule>`).
+    assert.match(io.current, /# roster:schedule:gtm\/sdr-cold-outreach:begin/);
     // ROS-42: cron line is now wrapped in /bin/sh -c, so the codex path's
     // single quotes are escaped via the '\'' dance.
     assert.match(io.current, / \/bin\/sh -c '/);
     assert.match(io.current, /codex'\\''/);
     // % is escaped as \% for crontab safety (codex review impl-pass).
     assert.match(io.current, /printf \\%s "\$rc" > /);
-    assert.match(io.current, /\.exit'\\''/);
+    // round-5: the exit is written to a PER-FIRE file `<exitDir>/<fireId>.exit`
+    // under a function-scoped dir; the fire id is a runtime shell var.
+    assert.match(io.current, /"\/\$fid\.exit"/);
+    assert.ok(io.current.includes('logs/cron/gtm/sdr-cold-outreach'), 'function-scoped exit dir');
+    assert.ok(io.current.includes('export ROSTER_FIRE_ID=$fid'));
 
     const yaml = YAML.parse(readFileSync(result.schedulesYamlPath, 'utf8'));
     assert.equal(yaml.schedules[0].install_mode, 'via-cron');
@@ -186,8 +191,47 @@ test('codex install (via-cron): idempotent re-run → one crontab block, action=
       codexBinaryPathOverride: '/opt/homebrew/bin/codex',
     });
     assert.equal(second.action, 'updated');
-    const beginCount = (io.current.match(/# roster:schedule:sdr-cold-outreach:begin/g) ?? []).length;
+    const beginCount = (io.current.match(/# roster:schedule:gtm\/sdr-cold-outreach:begin/g) ?? []).length;
     assert.equal(beginCount, 1);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// ── Finding 2: same-named schedules across functions are INDEPENDENT cron entries ──
+
+test('codex install (via-cron, finding 2): gtm/nightly then ops/nightly → BOTH markers present + active; removing gtm/nightly leaves ops/nightly intact', () => {
+  const fx = makeWorkspaceAndHome();
+  try {
+    const io = inMemoryCrontabIO();
+    const install = (functionName: string) =>
+      installCodexSchedule({
+        ...baseOpts(fx.cwd, fx.home),
+        functionName,
+        name: 'nightly',
+        installMode: 'via-cron',
+        crontabIO: io,
+        codexBinaryPathOverride: '/opt/homebrew/bin/codex',
+      });
+
+    install('gtm');
+    const second = install('ops');
+    // The second install must NOT have replaced the first (the round-5 bug):
+    // action=created (a distinct block), not updated.
+    assert.equal(second.action, 'created', 'ops/nightly is a NEW block, not a replacement of gtm/nightly');
+
+    // BOTH function-scoped markers exist, each active with its own cron line.
+    assert.equal(findMarkerBlocks(io.current, cronMarkerId('gtm', 'nightly')).length, 1);
+    assert.equal(findMarkerBlocks(io.current, cronMarkerId('ops', 'nightly')).length, 1);
+    assert.ok(io.current.includes('logs/cron/gtm/nightly'), 'gtm fire dir present');
+    assert.ok(io.current.includes('logs/cron/ops/nightly'), 'ops fire dir present');
+
+    // Removing gtm/nightly leaves ops/nightly's cron entry fully intact.
+    const r = removeCronEntry(io, cronMarkerId('gtm', 'nightly'), { id: 'nightly', registeredFunctions: ['gtm', 'ops'] });
+    assert.equal(r.removed, true);
+    assert.equal(findMarkerBlocks(io.current, cronMarkerId('gtm', 'nightly')).length, 0, 'gtm/nightly removed');
+    assert.equal(findMarkerBlocks(io.current, cronMarkerId('ops', 'nightly')).length, 1, "ops/nightly's cron survives");
+    assert.ok(io.current.includes('logs/cron/ops/nightly'), "ops/nightly's fire dir survives");
   } finally {
     fx.cleanup();
   }

@@ -1,8 +1,7 @@
 import chalk from 'chalk';
-import { chmodSync, existsSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync, type Stats } from 'node:fs';
+import { chmodSync, existsSync, readdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import YAML from 'yaml';
 import { auditTool, type ItemStatus, type ToolAuditResult } from '../lib/audit.ts';
 import { allTools, detectTools, type ToolKey } from '../lib/tools.ts';
 import {
@@ -36,7 +35,7 @@ import {
   type SchedulingDriftAuditResult,
   type StaleFireAudit,
 } from '../lib/doctor-scheduling-drift.ts';
-import { scheduleFileSchema } from '../lib/schedule-schema.ts';
+import { loadSchedules } from '../lib/schedule-read.ts';
 import { isWindows } from '../lib/platform.ts';
 import {
   auditFounderSkillsDrift,
@@ -458,44 +457,14 @@ function renderFixSection(outcome: FixOutcome): string[] {
 // Lightweight loader for prompt-leak audit. Yields {name, tool} pairs from
 // every valid schedules.yaml in the workspace, ignoring malformed files
 // (already surfaced by validateSchedulesInCwd in the Scheduling section).
+//
+// Round-9 finding 1: this used to re-implement the walk on a plain
+// readFileSync, which made `roster doctor` BLOCK FOREVER on a FIFO planted at
+// roster/<fn>/schedules.yaml — the one command a user runs when the workspace
+// looks broken. It now shares loadSchedules' hardened bounded no-follow read;
+// hostile shapes are skipped here and reported by the Scheduling section.
 function listAllScheduleEntries(cwd: string): Array<{ name: string; tool: 'claude' | 'codex' }> {
-  const root = join(cwd, 'roster');
-  let fns: string[];
-  try {
-    fns = readdirSync(root);
-  } catch {
-    return [];
-  }
-  const out: Array<{ name: string; tool: 'claude' | 'codex' }> = [];
-  for (const fn of fns) {
-    const fnDir = join(root, fn);
-    let st: Stats;
-    try {
-      st = statSync(fnDir);
-    } catch {
-      continue;
-    }
-    if (!st.isDirectory()) continue;
-    const schedulesPath = join(fnDir, 'schedules.yaml');
-    let raw: string;
-    try {
-      raw = readFileSync(schedulesPath, 'utf8');
-    } catch {
-      continue;
-    }
-    let parsed: unknown;
-    try {
-      parsed = YAML.parse(raw);
-    } catch {
-      continue;
-    }
-    const valid = scheduleFileSchema.safeParse(parsed);
-    if (!valid.success) continue;
-    for (const entry of valid.data.schedules) {
-      out.push({ name: entry.name, tool: entry.tool });
-    }
-  }
-  return out;
+  return loadSchedules(cwd).map(({ entry }) => ({ name: entry.name, tool: entry.tool }));
 }
 
 function renderSafetySection(audit: SafetyAuditResult): string[] {
@@ -707,6 +676,10 @@ function renderSchedulingDriftSection(audit: SchedulingDriftAuditResult): string
       lines.push(`  ${chalk.red('✗')} ${item.name.padEnd(20)} ${chalk.red('DRIFT')} ${chalk.dim('(crontab line differs from expected)')}`);
     } else if (item.reason === 'orphan-marker-block') {
       lines.push(`  ${chalk.red('✗')} ${item.name.padEnd(20)} ${chalk.red('DRIFT')} ${chalk.dim('(orphan marker block, no registered entry)')}`);
+    } else if (item.reason === 'ambiguous-legacy-marker') {
+      lines.push(
+        `  ${chalk.red('✗')} ${item.name.padEnd(20)} ${chalk.red('DRIFT')} ${chalk.dim(`(bare legacy marker claimed by ${item.competingFunctions.join(', ')} — re-install each to scope it)`)}`,
+      );
     }
   }
 

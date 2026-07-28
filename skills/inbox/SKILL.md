@@ -38,7 +38,7 @@ Use that root as `<root>` for every command below (pass it explicitly with `--cw
    - `on approve → <frontMatter.target_on_approve>` (or warn `⚠ no target_on_approve — can't be approved, only rejected/deferred`)
    - the first ~6 lines of the body — read it yourself from `<path>` (you have Read access; `--json` returns front-matter only).
 
-4. **Collect decisions.** Ask the user what to do, accepting free-form replies like "approve 1 and 3, reject 2, leave the rest." Map each to approve / reject / defer. If the user is unsure, summarize what approve (moves the item to its `target_on_approve`) vs reject (deletes it) vs defer (leaves it for later) does.
+4. **Collect decisions.** Ask the user what to do, accepting free-form replies like "approve 1 and 3, reject 2, leave the rest." Map each to approve / reject / defer. If the user is unsure, summarize what approve (moves the item to its `target_on_approve`) vs reject (deletes it) vs defer (leaves it for later) does. For an error-class item (`error-<id>.md`, synthesized by `roster pending sync` from immutable failed-fire evidence), **reject is the durable skip**: `roster review --reject` also writes an acknowledgement sentinel (`pending/acknowledged/error-<id>`) so the next sync does not re-create the item from the same evidence — a hand-`rm` alone would come back.
 
 5. **Apply**, one item at a time, using its `id`:
    - approve → `roster review --approve <id> --cwd <root> --json`

@@ -1,3 +1,6 @@
+import { resolve } from 'node:path';
+import { invalidFunctionNameMessage, isFunctionName } from './workspace-path.ts';
+
 export type ReviewArgs =
   | {
       kind: 'ok';
@@ -27,7 +30,7 @@ export function parseReviewArgs(args: readonly string[]): ReviewArgs {
     } else if (arg === '--cwd') {
       const v = args[i + 1];
       if (v === undefined || v.startsWith('-')) return { kind: 'err', message: '--cwd requires a value' };
-      cwd = v;
+      cwd = resolve(v);
       i++;
     } else if (arg === '--approve') {
       const v = args[i + 1];
@@ -55,8 +58,8 @@ export function parseReviewArgs(args: readonly string[]): ReviewArgs {
   }
 
   const fn = positional[0];
-  if (fn !== undefined && !/^[a-z][a-z0-9-]*$/.test(fn)) {
-    return { kind: 'err', message: `invalid function name '${fn}' (must match [a-z][a-z0-9-]*)` };
+  if (fn !== undefined && !isFunctionName(fn)) {
+    return { kind: 'err', message: invalidFunctionNameMessage(fn) };
   }
 
   return { kind: 'ok', ...(fn !== undefined ? { fn } : {}), json, silent, ...(cwd !== undefined ? { cwd } : {}), ...(approve !== undefined ? { approve } : {}), ...(reject !== undefined ? { reject } : {}) };

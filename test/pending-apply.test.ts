@@ -9,9 +9,15 @@ import {
   resolveItemBySelector,
   approveItem,
   rejectItem,
-  targetWithinWorkspace,
-  workspaceRelative,
 } from '../src/lib/pending-apply.ts';
+import { resolveWorkspaceRelativePath, targetWithinWorkspace, workspaceRelative } from '../src/lib/workspace-path.ts';
+
+// Round-13 finding 1: a front-matter `target_on_approve` is the ONE
+// caller-authored WORKSPACE-RELATIVE input, so it is probed through the explicit
+// relative flavor; targetWithinWorkspace itself now requires an absolute path.
+function relativeTargetRefused(target: string, root: string): boolean {
+  return resolveWorkspaceRelativePath(target, root).status === 'refused';
+}
 
 function item(root: string, fn: string, filename: string, frontMatter: Record<string, unknown>): PendingItem {
   const dir = join(root, 'roster', fn, 'pending');
@@ -81,7 +87,7 @@ test('approveItem: target escapes workspace (../ and absolute) → fail, untouch
       assert.ok(!res.ok, `expected refusal for ${bad}`);
       assert.ok(existsSync(a.path));
     }
-    assert.equal(targetWithinWorkspace('../x', root), null);
+    assert.equal(relativeTargetRefused('../x', root), true);
     assert.equal(targetWithinWorkspace('/x', root), null);
   });
 });
@@ -110,7 +116,7 @@ test('Codex 2nd-pass: approve refuses a target under a symlinked dir escaping th
       assert.ok(!res.ok, 'must refuse to move through a symlinked dir');
       assert.ok(existsSync(a.path), 'source untouched');
       assert.ok(!existsSync(join(escape, 'a.md')), 'nothing written into the escape target');
-      assert.equal(targetWithinWorkspace('gtm/approved/a.md', root), null);
+      assert.equal(relativeTargetRefused('gtm/approved/a.md', root), true);
     });
   } finally {
     rmSync(escape, { recursive: true, force: true });
@@ -120,7 +126,23 @@ test('Codex 2nd-pass: approve refuses a target under a symlinked dir escaping th
 test('rejectItem: deletes the file', () => {
   withRoot((root) => {
     const a = item(root, 'gtm', 'a.md', {});
-    rejectItem(a);
+    rejectItem(a, root);
     assert.ok(!existsSync(a.path));
+  });
+});
+
+test('rejectItem (round-7 finding 8): an error-class item leaves an acknowledgement sentinel so sync cannot resurrect it', () => {
+  withRoot((root) => {
+    const a = item(root, 'gtm', 'error-deadbeef.md', {});
+    rejectItem(a, root);
+    assert.ok(!existsSync(a.path));
+    assert.ok(
+      existsSync(join(root, 'roster', 'gtm', 'pending', 'acknowledged', 'error-deadbeef')),
+      'the sentinel marks the evidence as acknowledged',
+    );
+    // A non-error item leaves no sentinel.
+    const b = item(root, 'gtm', 'manual-note.md', {});
+    rejectItem(b, root);
+    assert.ok(!existsSync(join(root, 'roster', 'gtm', 'pending', 'acknowledged', 'manual-note')));
   });
 });

@@ -1,12 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pg from 'pg';
 import {
   runOpsMigrations,
+  opsSchemaDir,
   HITL_MIGRATION_TARGET,
   ROSTER_OPS_MIGRATION_TARGET,
 } from '../src/lib/persistence/postgres/migrate.ts';
@@ -37,6 +38,7 @@ import {
   workspaceMarkerSha256,
 } from '../src/lib/persistence/objects.ts';
 import { MemoryFileStore } from '../src/lib/persistence/s3-core.ts';
+import { sealRunEvent } from '../src/lib/persistence/run-events.ts';
 import {
   BackendUnavailableError,
   ConflictError,
@@ -45,6 +47,7 @@ import {
   VersionSkewError,
   WorkspaceMismatchError,
   canonicalJson,
+  computeRecordId,
   sha256Hex,
   type Cursor,
 } from '../src/lib/persistence/contracts.ts';
@@ -57,6 +60,7 @@ import {
   type OutboxRecord,
   type RemoteTarget,
 } from '../src/lib/persistence/outbox.ts';
+import { resolveOpsBackend } from '../src/lib/persistence/resolve.ts';
 import { RosterError } from '../src/lib/errors.ts';
 
 // #318 stage 4 PG integration: migrations, the binding protocol, per-physical-
@@ -174,20 +178,21 @@ test('pg: migrations apply fresh and re-run as a no-op for both schemas', opts, 
   try {
     const first = await runOpsMigrations(h.pool);
     assert.deepEqual(first.hitl.applied, ['001_init.sql']);
-    assert.deepEqual(first.roster_ops.applied, ['001_init.sql']);
+    assert.deepEqual(first.roster_ops.applied, ['001_init.sql', '002_run_ledger.sql']);
     const second = await runOpsMigrations(h.pool);
     assert.deepEqual(second.hitl.applied, []);
     assert.deepEqual(second.hitl.skipped, ['001_init.sql']);
     assert.deepEqual(second.roster_ops.applied, []);
-    assert.deepEqual(second.roster_ops.skipped, ['001_init.sql']);
+    assert.deepEqual(second.roster_ops.skipped, ['001_init.sql', '002_run_ledger.sql']);
 
     assert.notEqual(HITL_MIGRATION_TARGET.advisoryLockKey, ROSTER_OPS_MIGRATION_TARGET.advisoryLockKey);
     const hitlMeta = await metaRow(h, 'hitl');
     assert.equal(hitlMeta.component_version, 1);
     assert.equal(hitlMeta.workspace_id, null);
+    // #323 bumps roster_ops + objects to v2 (the run-ledger migration).
     const opsMeta = await metaRow(h, 'roster_ops');
-    assert.equal(opsMeta.component_version, 1);
-    assert.equal(opsMeta.objects_component_version, 1);
+    assert.equal(opsMeta.component_version, 2);
+    assert.equal(opsMeta.objects_component_version, 2);
   } finally {
     await h.close();
   }
@@ -441,6 +446,53 @@ test('pg: first query cannot precede verification (checkout-wrapper path) and pe
   }
 });
 
+// ---------------- finding 5: v1 artifact reads never execute v2-only SQL ------
+
+test('finding 5: getArtifact/head on a finalized v1 PG backend read version-less, not undefined_column', opts, async () => {
+  const h = await makeDb(false); // no auto-migrate: build a genuine v1 backend
+  const ws = randomUUID();
+  const v1Dir = mkdtempSync(join(tmpdir(), 'roster-ops-v1b-'));
+  try {
+    copyFileSync(join(opsSchemaDir('roster_ops'), '001_init.sql'), join(v1Dir, '001_init.sql'));
+    // hitl fully (001) + roster_ops v1 ONLY (001, no 002) → a finalized v1 DB
+    // whose artifacts table has NO object_version_id column.
+    await runOpsMigrations(h.pool, { roster_ops: v1Dir });
+    const opsMeta = await metaRow(h, 'roster_ops');
+    assert.equal(opsMeta.component_version, 1, 'the backend is genuinely roster_ops v1');
+    await stampAndFinalize(h, ws);
+
+    const bytes = Buffer.from('v1 backend artifact bytes');
+    const digest = sha256Hex(bytes);
+    await h.pool.query(
+      `INSERT INTO roster_ops.artifacts (id, workspace_id, digest, size, meta, created_at)
+       VALUES ('blob1', $1::uuid, $2, $3, $4::jsonb, 1)`,
+      [ws, digest, bytes.byteLength, JSON.stringify({ filename: 'v1.txt', contentType: 'text/plain', runId: null })],
+    );
+    const objects = memObjects();
+    await objects.putIfAbsent({ prefix: 'artifacts', segments: [digest] }, bytes);
+
+    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    try {
+      // The gate ALLOWS getArtifact/head on a v1 backend (base `artifacts`). With
+      // opsVersion=1 the read must NOT select the v2-only object_version_id column
+      // (before the fix this failed with `undefined_column`).
+      const backend = createPgBackend({ pool, objects, opsVersion: 1 });
+      const got = await backend.artifacts.getArtifact(digest);
+      assert.ok(got, 'the v1 blob reads back (not a SQL column error)');
+      assert.ok(got!.bytes.equals(bytes), 'bytes are digest-verified and returned');
+      assert.equal(got!.record.objectVersionId, null, 'a v1 read is version-less');
+      const head = await backend.artifacts.head(digest); // sibling read path
+      assert.ok(head);
+      assert.equal(head!.objectVersionId, null);
+    } finally {
+      await pool.end();
+    }
+  } finally {
+    rmSync(v1Dir, { recursive: true, force: true });
+    await h.close();
+  }
+});
+
 // ---------------- row-stamp invariant ----------------
 
 test('pg: auditRowStamps passes on own rows and flags foreign workspace_ids', opts, async () => {
@@ -460,7 +512,7 @@ test('pg: auditRowStamps passes on own rows and flags foreign workspace_ids', op
         body: 'b',
         expiresAt: null,
       });
-      await backend.runs.appendEvent({ runId: 'r1', dedupeKey: 'k1', type: 'step', data: null });
+      await backend.runs.appendEvent({ runId: 'r1', kind: 'tool-call', correlationId: 'k1', data: null });
       await backend.artifacts.putArtifact(
         { filename: 'a.txt', contentType: 'text/plain', runId: null },
         Buffer.from('bytes'),
@@ -472,9 +524,19 @@ test('pg: auditRowStamps passes on own rows and flags foreign workspace_ids', op
          VALUES ('foreign', $1::uuid, 'r', 'k', 'step', '{}'::jsonb, 0)`,
         [randomUUID()],
       );
+      // #323: artifact_declarations is a stamped table too — a foreign row is flagged.
+      await h.pool.query(
+        `INSERT INTO roster_ops.artifact_declarations
+           (id, workspace_id, run_id, declaring_agent, role, kind, digest, provenance, created_at)
+         VALUES ('foreign-decl', $1::uuid, 'r', 'a', 'produced', 'internal', $2, '{}'::jsonb, 0)`,
+        [randomUUID(), sha256Hex('d')],
+      );
       const report = await auditRowStamps(pool, ws);
       assert.equal(report.ok, false);
-      assert.deepEqual(report.violations, [{ table: 'roster_ops.run_events', foreignRows: 1 }]);
+      assert.deepEqual(report.violations, [
+        { table: 'roster_ops.run_events', foreignRows: 1 },
+        { table: 'roster_ops.artifact_declarations', foreignRows: 1 },
+      ]);
     } finally {
       await pool.end();
     }
@@ -521,6 +583,14 @@ test('pg: dedicated runtime role — can append events, cannot touch meta or mut
          VALUES ('ar1', $1::uuid, $2, 1, '{}'::jsonb, 0)`,
         [ws, sha256Hex('y')],
       );
+      // #323: the runtime INSERTs declarations (append-only), including the
+      // append-value version_state/verified columns.
+      await rt.query(
+        `INSERT INTO roster_ops.artifact_declarations
+           (id, workspace_id, run_id, declaring_agent, role, kind, digest, provenance, verified, version_state, created_at)
+         VALUES ('decl1', $1::uuid, 'r', 'sdr', 'produced', 'internal', $2, '{}'::jsonb, true, 'verified', 0)`,
+        [ws, sha256Hex('y')],
+      );
       await rt.query(
         `INSERT INTO roster_ops.delivery_ledger (workspace_id, namespace, record_id, payload_hash)
          VALUES ($1::uuid, 'runs', 'ev1', $2)`,
@@ -530,6 +600,9 @@ test('pg: dedicated runtime role — can append events, cannot touch meta or mut
       await rt.query(`SELECT * FROM hitl.meta`);
       await rt.query(`SELECT * FROM roster_ops.meta`);
       await rt.query(`SELECT * FROM hitl.schema_migrations`);
+      // positive: SELECT the sanitized projection views (safe index inputs).
+      await rt.query(`SELECT run_id, agent, status, sanitized_report FROM roster_ops.run_index`);
+      await rt.query(`SELECT run_id, artifact_type, media_type, external_url_host, sanitized_text FROM roster_ops.artifact_index`);
 
       // negative: meta immutability
       await assert.rejects(rt.query(`INSERT INTO hitl.meta (singleton, component_version) VALUES (false, 9)`), /permission denied/);
@@ -541,6 +614,12 @@ test('pg: dedicated runtime role — can append events, cannot touch meta or mut
       await assert.rejects(rt.query(`DELETE FROM hitl.requests`), /permission denied/);
       await assert.rejects(rt.query(`DELETE FROM roster_ops.delivery_ledger`), /permission denied/);
       await assert.rejects(rt.query(`TRUNCATE roster_ops.run_events`), /permission denied/);
+      // #323: declarations are append-only — the runtime cannot flip verified /
+      // version_state (that is the admin-repair path) or delete a declaration.
+      await assert.rejects(rt.query(`UPDATE roster_ops.artifact_declarations SET verified = false`), /permission denied/);
+      await assert.rejects(rt.query(`UPDATE roster_ops.artifact_declarations SET version_state = 'verified'`), /permission denied/);
+      await assert.rejects(rt.query(`DELETE FROM roster_ops.artifact_declarations`), /permission denied/);
+      await assert.rejects(rt.query(`TRUNCATE roster_ops.artifact_declarations`), /permission denied/);
       // negative: no DDL, no sequence resets
       await assert.rejects(rt.query(`CREATE TABLE hitl.evil (id int)`), /permission denied/);
       await assert.rejects(rt.query(`CREATE TABLE roster_ops.evil (id int)`), /permission denied/);
@@ -1077,7 +1156,9 @@ test('pg: invariant checker flags ownership and superuser', opts, async () => {
 // ---------------- delivery ledger / PgRemoteTarget ----------------
 
 function mkRecord(workspaceId: string, overrides: Partial<OutboxRecord> = {}): OutboxRecord {
-  const payload = overrides.payload ?? { runId: 'r1', dedupeKey: 'k1', type: 'step', data: { n: 1 } };
+  // Default to a properly SEALED run-event payload so the run-event
+  // materialization (insertDataRow) sees the {runId, kind, dedupeKey, ...} shape.
+  const payload = overrides.payload ?? sealRunEvent(workspaceId, { runId: 'r1', kind: 'tool-call', correlationId: 'k1', data: { n: 1 } }).payload;
   return {
     id: overrides.id ?? sha256Hex(`rec-${JSON.stringify(payload)}`),
     workspaceId,
@@ -1090,6 +1171,8 @@ function mkRecord(workspaceId: string, overrides: Partial<OutboxRecord> = {}): O
     producerSeq: 1,
     enqueuedAt: 1_700_000_000_000,
     artifact: null,
+    observations: null,
+    objectVersionId: null,
     ...overrides,
   };
 }
@@ -1113,7 +1196,7 @@ test('pg: delivery ledger — committed, identical-hash duplicate, different-has
       assert.equal(await target.deliver(record), 'duplicate');
       assert.equal((await h.pool.query(`SELECT count(*)::int AS n FROM roster_ops.run_events`)).rows[0]!.n, 1);
 
-      const tampered = mkRecord(ws, { id: record.id, payload: { runId: 'r1', dedupeKey: 'k1', type: 'step', data: { n: 999 } } });
+      const tampered = mkRecord(ws, { id: record.id, payload: { runId: 'r1', kind: 'tool-call', correlationId: 'k1', data: { n: 999 } } });
       await assert.rejects(target.deliver(tampered), (err) => {
         assert.ok(err instanceof ConflictError);
         assert.equal(err.id, record.id);
@@ -1181,13 +1264,13 @@ test('pg: a run with 1 committed + 1 queued event shows 2 in BOTH getRun and lis
       // Commit 1 event on run R with NO outbox (straight to PG) — models
       // another producer's already-delivered event.
       const direct = createPgBackend({ pool, objects, now: () => clock.t });
-      const c1 = await direct.runs.appendEvent({ runId: 'R', dedupeKey: 'k-committed', type: 'step', data: { n: 1 } });
+      const c1 = await direct.runs.appendEvent({ runId: 'R', kind: 'tool-call', correlationId: 'k-committed', data: { n: 1 } });
       assert.equal(c1.outcome, 'committed');
 
       // Read through a backend wired with an outbox carrying 1 queued event on
       // the SAME run (this producer's undelivered spool).
       const reader = createPgBackend({ pool, objects, outbox, now: () => clock.t });
-      const q = runEventParts(ws, { runId: 'R', dedupeKey: 'k-queued', type: 'step', data: { n: 2 } });
+      const q = runEventParts(ws, { runId: 'R', kind: 'tool-call', correlationId: 'k-queued', data: { n: 2 } }, { now: clock.t, pid: 'test' });
       outbox.enqueue({ namespace: 'runs', id: q.id, kind: 'run-event', payload: q.payload });
 
       const run = await reader.runs.getRun('R');
@@ -1204,15 +1287,254 @@ test('pg: a run with 1 committed + 1 queued event shows 2 in BOTH getRun and lis
       assert.deepEqual(await reader.runs.count(), { committed: 1, queued: 0, partial: false });
 
       // Same-id / different-hash queued event on an already-committed record must
-      // SURFACE as a Conflict (parked), never be hidden by committed-id filtering.
-      const collide = runEventParts(ws, { runId: 'R', dedupeKey: 'k-committed', type: 'step', data: { n: 999 } });
+      // SURFACE as a Conflict — durably parked AND raised by the read. Round-6
+      // finding 7: listRuns now raises the SAME ConflictError getRun does for
+      // this divergence (previously it completed silently after parking).
+      const collide = runEventParts(ws, { runId: 'R', kind: 'tool-call', correlationId: 'k-committed', data: { n: 999 } }, { now: clock.t, pid: 'test' });
       assert.equal(collide.id, c1.id, 'same run/dedupeKey → same record id');
       outbox.enqueue({ namespace: 'runs', id: collide.id, kind: 'run-event', payload: collide.payload });
-      await reader.runs.listRuns({}); // triggers overlay union-by-id+hash
+      await assert.rejects(() => reader.runs.listRuns({}), ConflictError, 'listRuns raises the divergence');
+      await assert.rejects(() => reader.runs.getRun('R'), ConflictError, 'consistent with getRun');
       const parked = [...outbox.fold().entries.values()].find((e) => e.entryId === collide.id);
       assert.ok(parked, 'the colliding entry must be tracked');
       assert.equal(parked.status, 'failed-permanent', 'a same-id/different-hash conflict is parked, never hidden');
       assert.equal(parked.failure?.kind, 'conflict');
+    } finally {
+      await pool.end();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await h.close();
+  }
+});
+
+// ---------------- R6 finding 4: listRuns surfaces committed canonical conflicts (local↔PG parity) ----------------
+
+test('pg (R6 finding 4): listRuns surfaces a v1/v2 committed canonical conflict the SAME as getRun; a benign retry still collapses', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  try {
+    await stampAndFinalize(h, ws);
+    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    try {
+      const backend = createPgBackend({ pool, objects: memObjects() });
+
+      async function seedV1(runId: string, phase: string): Promise<void> {
+        // A REAL v1 (#318) run-start: physical id under the LITERAL kind:'run-event'
+        // scheme, payload uses `type` (not `kind`) and stores {phase}.
+        const v1Id = computeRecordId(ws, 'runs', { kind: 'run-event', runId, dedupeKey: 'start' });
+        await h.pool.query(
+          `INSERT INTO roster_ops.run_events (id, workspace_id, run_id, dedupe_key, type, payload, created_at)
+           VALUES ($1, $2::uuid, $3, 'start', 'run-start', $4::jsonb, 0)`,
+          [v1Id, ws, runId, JSON.stringify({ runId, dedupeKey: 'start', type: 'run-start', data: { phase } })],
+        );
+      }
+
+      // Conflict run: v1 {phase:'old'} + a v2 replay {phase:'new'} — same canonical
+      // id, DIFFERENT stable payload. getRun raises (dedupRunEvents); the SQL
+      // COUNT(DISTINCT (type,dedupe_key)) summary previously returned a clean
+      // one-event count → parity break. listRuns must now raise the SAME conflict.
+      await seedV1('r-conflict', 'old');
+      await backend.runs.appendEvent({ runId: 'r-conflict', kind: 'run-start', data: { phase: 'new' } });
+
+      // Benign run: v1 {phase:'same'} + a v2 replay {phase:'same'} — same canonical
+      // id AND identical stable payload → a true retry that must collapse to ONE
+      // event, NEVER a false ConflictError (the candidate detector fires on ANY
+      // physical>distinct, so this proves the benign path is not over-eager).
+      await seedV1('r-benign', 'same');
+      await backend.runs.appendEvent({ runId: 'r-benign', kind: 'run-start', data: { phase: 'same' } });
+
+      // Parity anchor: getRun raises for the conflict run.
+      await assert.rejects(() => backend.runs.getRun('r-conflict'), ConflictError);
+      // The fix: listRuns raises the SAME conflict (scoped and unscoped).
+      await assert.rejects(() => backend.runs.listRuns({ runId: 'r-conflict' }), ConflictError);
+      await assert.rejects(() => backend.runs.listRuns({}), ConflictError);
+
+      // The benign retry still collapses to ONE event in both getRun and listRuns.
+      const benignRun = await backend.runs.getRun('r-benign');
+      assert.ok(benignRun);
+      assert.equal(benignRun.events.length, 1, 'benign v1+v2 retry collapses to one event in getRun');
+      const benignList = await backend.runs.listRuns({ runId: 'r-benign' });
+      const summary = benignList.items.find((r) => r.runId === 'r-benign');
+      assert.ok(summary);
+      assert.equal(summary.events, 1, 'benign v1+v2 retry counts as ONE canonical event in listRuns (no false conflict)');
+    } finally {
+      await pool.end();
+    }
+  } finally {
+    await h.close();
+  }
+});
+
+// ---------------- round-6 finding 7: the listRuns committed/queued overlay merge compares stable hashes ----------------
+
+test('pg (round-6 finding 7): a QUEUED event sharing a committed canonical id with a DIFFERENT stable payload makes listRuns raise ConflictError (not silently suppress)', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  const dir = mkdtempSync(join(tmpdir(), 'roster-pg-r6f7-'));
+  try {
+    await stampAndFinalize(h, ws);
+    const clock = { t: 1_700_000_000_000 };
+    const ledger = new LocalLedger({ opsRoot: join(dir, 'ops'), workspaceId: ws, now: () => ++clock.t });
+    const outbox = new LocalOutbox({ ledger, now: () => clock.t, rng: () => 0 });
+    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    const { runEventParts } = await import('../src/lib/persistence/postgres/stores.ts');
+    try {
+      // Committed v1 run-start {phase:'old'}: physical id under the LITERAL
+      // 'run-event' scheme, so it does NOT collide with the v2 id — only the
+      // CANONICAL id (kind, runId, dedupeKey) matches the queued retry below.
+      const v1Id = computeRecordId(ws, 'runs', { kind: 'run-event', runId: 'r-div', dedupeKey: 'start' });
+      await h.pool.query(
+        `INSERT INTO roster_ops.run_events (id, workspace_id, run_id, dedupe_key, type, payload, created_at)
+         VALUES ($1, $2::uuid, $3, 'start', 'run-start', $4::jsonb, 0)`,
+        [v1Id, ws, 'r-div', JSON.stringify({ runId: 'r-div', dedupeKey: 'start', type: 'run-start', data: { phase: 'old' } })],
+      );
+      const reader = createPgBackend({ pool, objects: memObjects(), outbox, now: () => clock.t });
+      // Queued v2 retry with a DIVERGENT stable payload.
+      const q = runEventParts(ws, { runId: 'r-div', kind: 'run-start', data: { phase: 'new' } }, { now: clock.t, pid: 'test' });
+      assert.notEqual(q.id, v1Id, 'distinct physical ids — the overlay id/hash union cannot catch this pair');
+      outbox.enqueue({ namespace: 'runs', id: q.id, kind: 'run-event', payload: q.payload });
+
+      // getRun raises (the parity anchor) — and listRuns must raise the SAME
+      // conflict instead of silently suppressing the queued event by canonical id.
+      await assert.rejects(() => reader.runs.getRun('r-div'), ConflictError);
+      await assert.rejects(() => reader.runs.listRuns({}), ConflictError);
+      await assert.rejects(() => reader.runs.listRuns({ runId: 'r-div' }), ConflictError);
+    } finally {
+      await pool.end();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await h.close();
+  }
+});
+
+test('pg (round-6 finding 7): a queued BENIGN retry of a committed v1 event (identical stable payload) still merges to one event, no false conflict', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  const dir = mkdtempSync(join(tmpdir(), 'roster-pg-r6f7b-'));
+  try {
+    await stampAndFinalize(h, ws);
+    const clock = { t: 1_700_000_000_000 };
+    const ledger = new LocalLedger({ opsRoot: join(dir, 'ops'), workspaceId: ws, now: () => ++clock.t });
+    const outbox = new LocalOutbox({ ledger, now: () => clock.t, rng: () => 0 });
+    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    const { runEventParts } = await import('../src/lib/persistence/postgres/stores.ts');
+    try {
+      const v1Id = computeRecordId(ws, 'runs', { kind: 'run-event', runId: 'r-same', dedupeKey: 'start' });
+      await h.pool.query(
+        `INSERT INTO roster_ops.run_events (id, workspace_id, run_id, dedupe_key, type, payload, created_at)
+         VALUES ($1, $2::uuid, $3, 'start', 'run-start', $4::jsonb, 0)`,
+        [v1Id, ws, 'r-same', JSON.stringify({ runId: 'r-same', dedupeKey: 'start', type: 'run-start', data: { phase: 'same' } })],
+      );
+      const reader = createPgBackend({ pool, objects: memObjects(), outbox, now: () => clock.t });
+      const q = runEventParts(ws, { runId: 'r-same', kind: 'run-start', data: { phase: 'same' } }, { now: clock.t, pid: 'test' });
+      outbox.enqueue({ namespace: 'runs', id: q.id, kind: 'run-event', payload: q.payload });
+
+      const list = await reader.runs.listRuns({});
+      const summary = list.items.find((r) => r.runId === 'r-same');
+      assert.ok(summary, 'the run appears');
+      assert.equal(summary.events, 1, 'the queued benign retry is suppressed by matching stable hash — counted once');
+    } finally {
+      await pool.end();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await h.close();
+  }
+});
+
+// ── round-7 finding 1: the committed↔queued arbiter is watermark-INDEPENDENT ──
+//
+// The committed-side canonical map was bounded by the pagination watermark, so a
+// committed row that landed ABOVE it (an outage recovering mid-pagination) was
+// invisible to the arbiter: listRuns reported a clean one-event queued summary
+// while getRun raised the ConflictError. Identity/divergence is not a snapshot
+// concern — the arbiter now reads every committed row of the runs that carry
+// queued events, exactly as getRun and readRunThrough do.
+
+test('pg (round-7 finding 1): a committed row landing ABOVE the pagination watermark is still arbitrated against its queued retry', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  const dir = mkdtempSync(join(tmpdir(), 'roster-pg-r7f1-'));
+  try {
+    await stampAndFinalize(h, ws);
+    const clock = { t: 1_700_000_000_000 };
+    const ledger = new LocalLedger({ opsRoot: join(dir, 'ops'), workspaceId: ws, now: () => ++clock.t });
+    const outbox = new LocalOutbox({ ledger, now: () => clock.t, rng: () => 0 });
+    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    const { runEventParts } = await import('../src/lib/persistence/postgres/stores.ts');
+    try {
+      // One committed anchor run so page 1 fills its limit and freezes a watermark.
+      const direct = createPgBackend({ pool, objects: memObjects(), now: () => clock.t });
+      await direct.runs.appendEvent({ runId: 'r-anchor', kind: 'run-start', data: { n: 1 } });
+
+      const reader = createPgBackend({ pool, objects: memObjects(), outbox, now: () => clock.t });
+      // r-div has ONLY a queued v2 retry when the cursor is minted.
+      const q = runEventParts(ws, { runId: 'r-div', kind: 'run-start', data: { phase: 'new' } }, { now: clock.t, pid: 'test' });
+      outbox.enqueue({ namespace: 'runs', id: q.id, kind: 'run-event', payload: q.payload });
+
+      const page1 = await reader.runs.listRuns({ limit: 1 });
+      assert.deepEqual(page1.items.map((i) => i.runId), ['r-anchor']);
+      assert.ok(page1.cursor, 'the queued run is carried to page 2');
+
+      // The outage heals mid-pagination: r-div's DIVERGENT v1 row commits at a
+      // seq ABOVE the frozen watermark.
+      const v1Id = computeRecordId(ws, 'runs', { kind: 'run-event', runId: 'r-div', dedupeKey: 'start' });
+      await h.pool.query(
+        `INSERT INTO roster_ops.run_events (id, workspace_id, run_id, dedupe_key, type, payload, created_at)
+         VALUES ($1, $2::uuid, $3, 'start', 'run-start', $4::jsonb, 0)`,
+        [v1Id, ws, 'r-div', JSON.stringify({ runId: 'r-div', dedupeKey: 'start', type: 'run-start', data: { phase: 'old' } })],
+      );
+
+      // Parity anchor: getRun raises for the divergence.
+      await assert.rejects(() => reader.runs.getRun('r-div'), ConflictError);
+      // The fix: page 2 raises the SAME conflict instead of a clean summary.
+      await assert.rejects(() => reader.runs.listRuns({ limit: 1 }, page1.cursor!), ConflictError);
+      await assert.rejects(() => reader.runs.listRuns({ runId: 'r-div' }), ConflictError);
+    } finally {
+      await pool.end();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await h.close();
+  }
+});
+
+test('pg (round-7 finding 1): a BENIGN retry of a row committed above the watermark still merges to one event (no false conflict)', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  const dir = mkdtempSync(join(tmpdir(), 'roster-pg-r7f1b-'));
+  try {
+    await stampAndFinalize(h, ws);
+    const clock = { t: 1_700_000_000_000 };
+    const ledger = new LocalLedger({ opsRoot: join(dir, 'ops'), workspaceId: ws, now: () => ++clock.t });
+    const outbox = new LocalOutbox({ ledger, now: () => clock.t, rng: () => 0 });
+    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    const { runEventParts } = await import('../src/lib/persistence/postgres/stores.ts');
+    try {
+      const direct = createPgBackend({ pool, objects: memObjects(), now: () => clock.t });
+      await direct.runs.appendEvent({ runId: 'r-anchor', kind: 'run-start', data: { n: 1 } });
+
+      const reader = createPgBackend({ pool, objects: memObjects(), outbox, now: () => clock.t });
+      const q = runEventParts(ws, { runId: 'r-same', kind: 'run-start', data: { phase: 'same' } }, { now: clock.t, pid: 'test' });
+      outbox.enqueue({ namespace: 'runs', id: q.id, kind: 'run-event', payload: q.payload });
+
+      const page1 = await reader.runs.listRuns({ limit: 1 });
+      assert.deepEqual(page1.items.map((i) => i.runId), ['r-anchor']);
+      assert.ok(page1.cursor);
+
+      const v1Id = computeRecordId(ws, 'runs', { kind: 'run-event', runId: 'r-same', dedupeKey: 'start' });
+      await h.pool.query(
+        `INSERT INTO roster_ops.run_events (id, workspace_id, run_id, dedupe_key, type, payload, created_at)
+         VALUES ($1, $2::uuid, $3, 'start', 'run-start', $4::jsonb, 0)`,
+        [v1Id, ws, 'r-same', JSON.stringify({ runId: 'r-same', dedupeKey: 'start', type: 'run-start', data: { phase: 'same' } })],
+      );
+
+      const page2 = await reader.runs.listRuns({ limit: 1 }, page1.cursor!);
+      const summary = page2.items.find((r) => r.runId === 'r-same');
+      assert.ok(summary, 'the run still appears exactly once');
+      assert.equal(summary.events, 1, 'the identical-payload retry dedups — no false conflict, no double count');
     } finally {
       await pool.end();
     }
@@ -1266,10 +1588,10 @@ test('pg finding 6: getRequest surfaces + parks a queued same-id/different-hash 
   }
 });
 
-test('pg finding 6: artifact head + getArtifact surface a queued same-digest/different-meta conflict', opts, async () => {
+test('pg finding 4: identical bytes with DIFFERENT meta DEDUP to one blob (content-only identity) — no queued conflict', opts, async () => {
   const h = await makeDb();
   const ws = randomUUID();
-  const dir = mkdtempSync(join(tmpdir(), 'roster-pg-f6-art-'));
+  const dir = mkdtempSync(join(tmpdir(), 'roster-pg-f4-art-'));
   try {
     await stampAndFinalize(h, ws);
     const clock = { t: 1_700_000_000_000 };
@@ -1284,16 +1606,28 @@ test('pg finding 6: artifact head + getArtifact surface a queued same-digest/dif
       const committed = await direct.artifacts.putArtifact({ filename: 'a.txt', contentType: 'text/plain', runId: null }, bytes);
       assert.equal(committed.outcome, 'committed');
 
-      // Same digest (same bytes → same id) but DIFFERENT meta → different hash.
+      // Same bytes → same id. Under content-only identity the meta is a store
+      // observation (NOT hashed), so a re-put with DIFFERENT meta derives the
+      // SAME payload hash — a clean DUPLICATE, never a ConflictError (finding:
+      // blob identity must not include run metadata).
       const reader = createPgBackend({ pool, objects, outbox, now: () => clock.t });
       const q = artifactParts(ws, { filename: 'DIFFERENT.txt', contentType: 'text/plain', runId: null }, bytes);
       assert.equal(q.digest, committed.digest, 'same bytes → same digest');
-      outbox.enqueueArtifact({ namespace: 'artifacts', id: q.id, kind: 'artifact', payload: q.payload }, bytes);
+      assert.equal(q.id, committed.id, 'same bytes → same content-only blob id');
+      assert.equal(payloadHashOf(q.payload), payloadHashOf(artifactParts(ws, { filename: 'a.txt', contentType: 'text/plain', runId: null }, bytes).payload), 'meta is excluded from the hash → identical payload hash');
+      outbox.enqueueArtifact(
+        { namespace: 'artifacts', id: q.id, kind: 'artifact', payload: q.payload, observations: q.observations },
+        bytes,
+      );
 
-      await assert.rejects(reader.artifacts.head(committed.digest), ConflictError);
-      await assert.rejects(reader.artifacts.getArtifact(committed.digest), ConflictError);
-      const parked = outbox.fold().entries.get(q.id);
-      assert.ok(parked && parked.status === 'failed-permanent' && parked.failure?.kind === 'conflict');
+      // The point reads return the committed row normally — NO conflict surfaced.
+      const head = await reader.artifacts.head(committed.digest);
+      assert.ok(head, 'head returns the committed blob (no conflict)');
+      const got = await reader.artifacts.getArtifact(committed.digest);
+      assert.ok(got, 'getArtifact returns the committed blob (no conflict)');
+      // The queued entry is a clean duplicate on overlay — never parked as conflict.
+      const overlaid = outbox.overlay('artifacts', [{ id: committed.id, payloadHash: payloadHashOf(q.payload) }]);
+      assert.equal(overlaid.conflicts.length, 0, 'no conflict — same id + same hash is a duplicate');
     } finally {
       await pool.end();
     }
@@ -1320,9 +1654,9 @@ test('pg finding 5: listRuns yields each run exactly once when a run event acks 
     try {
       const reader = createPgBackend({ pool, objects, outbox, now: () => clock.t });
       // All queued (offline). S first (anchor seq1); R twice (seq2, seq3).
-      const s = runEventParts(ws, { runId: 'S', dedupeKey: 'ks', type: 'started', data: null });
-      const r2 = runEventParts(ws, { runId: 'R', dedupeKey: 'k2', type: 'started', data: null });
-      const r3 = runEventParts(ws, { runId: 'R', dedupeKey: 'k3', type: 'step', data: null });
+      const s = runEventParts(ws, { runId: 'S', kind: 'run-start', data: null }, { now: clock.t, pid: 'test' });
+      const r2 = runEventParts(ws, { runId: 'R', kind: 'run-start', data: null }, { now: clock.t, pid: 'test' });
+      const r3 = runEventParts(ws, { runId: 'R', kind: 'tool-call', correlationId: 'k3', data: null }, { now: clock.t, pid: 'test' });
       outbox.enqueue({ namespace: 'runs', id: s.id, kind: 'run-event', payload: s.payload });
       outbox.enqueue({ namespace: 'runs', id: r2.id, kind: 'run-event', payload: r2.payload });
       outbox.enqueue({ namespace: 'runs', id: r3.id, kind: 'run-event', payload: r3.payload });
@@ -1360,6 +1694,524 @@ test('pg finding 5: listRuns yields each run exactly once when a run event acks 
         if (++guard > 20) assert.fail('pagination did not terminate');
       }
       assert.deepEqual(seen.sort(), ['R', 'S'], 'each run appears exactly once across the whole pagination');
+    } finally {
+      await pool.end();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await h.close();
+  }
+});
+
+test('pg (round-7 finding 4): a run queued at page 1 that FULLY commits+acks before page 2 is still returned exactly once', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  const dir = mkdtempSync(join(tmpdir(), 'roster-pg-r7f4-'));
+  try {
+    await stampAndFinalize(h, ws);
+    const clock = { t: 1_700_000_000_000 };
+    const ledger = new LocalLedger({ opsRoot: join(dir, 'ops'), workspaceId: ws, now: () => ++clock.t });
+    const outbox = new LocalOutbox({ ledger, now: () => clock.t, rng: () => 0 });
+    const objects = memObjects();
+    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    const { runEventParts } = await import('../src/lib/persistence/postgres/stores.ts');
+    try {
+      const reader = createPgBackend({ pool, objects, outbox, now: () => clock.t });
+      // Both runs queued (offline); watermark at page 1 is 0.
+      const s = runEventParts(ws, { runId: 'S', kind: 'run-start', data: null }, { now: clock.t, pid: 'test' });
+      const r = runEventParts(ws, { runId: 'R', kind: 'run-start', data: null }, { now: clock.t, pid: 'test' });
+      outbox.enqueue({ namespace: 'runs', id: s.id, kind: 'run-event', payload: s.payload });
+      outbox.enqueue({ namespace: 'runs', id: r.id, kind: 'run-event', payload: r.payload });
+
+      const page1 = await reader.runs.listRuns({ limit: 1 });
+      assert.deepEqual(page1.items.map((x) => x.runId), ['S']);
+      assert.ok(page1.cursor !== null);
+
+      // FULL drain between pages: every queued event commits (at seq > 0) and
+      // acks — R is no longer pending AND its committed rows sit above the
+      // frozen watermark. Pre-fix R vanished from the traversal entirely.
+      await outbox.drain(reader.remote, { objects: new S3ObjectTarget(objects) });
+      assert.equal(outbox.fold().entries.get(s.id)!.status, 'acked');
+      assert.equal(outbox.fold().entries.get(r.id)!.status, 'acked');
+
+      const page2 = await reader.runs.listRuns({ limit: 10 }, page1.cursor!);
+      assert.deepEqual(page2.items.map((x) => x.runId), ['R'], 'the frozen cursor reads R through by id');
+      assert.equal(page2.items[0]!.events, 1, 'the read-through summary counts canonical events');
+
+      // Whole traversal (limit 1 per page): each run exactly once, terminates.
+      const seen: string[] = [];
+      let cursor: Cursor | null = null;
+      let guard = 0;
+      do {
+        const page: Awaited<ReturnType<typeof reader.runs.listRuns>> = await reader.runs.listRuns({ limit: 1 }, cursor ?? undefined);
+        for (const x of page.items) seen.push(x.runId);
+        cursor = page.cursor;
+        if (++guard > 20) assert.fail('pagination did not terminate');
+      } while (cursor !== null);
+      const counts = new Map<string, number>();
+      for (const id of seen) counts.set(id, (counts.get(id) ?? 0) + 1);
+      assert.deepEqual([...counts.entries()].sort(), [['R', 1], ['S', 1]], 'no omission, no duplication');
+    } finally {
+      await pool.end();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await h.close();
+  }
+});
+
+test('pg (round-7 finding 3): a conflicting queued retry on a run OUTSIDE the requested page still raises ConflictError (after the page)', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  const dir = mkdtempSync(join(tmpdir(), 'roster-pg-r7f3a-'));
+  try {
+    await stampAndFinalize(h, ws);
+    const clock = { t: 1_700_000_000_000 };
+    const ledger = new LocalLedger({ opsRoot: join(dir, 'ops'), workspaceId: ws, now: () => ++clock.t });
+    const outbox = new LocalOutbox({ ledger, now: () => clock.t, rng: () => 0 });
+    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    const { runEventParts } = await import('../src/lib/persistence/postgres/stores.ts');
+    try {
+      // Committed: 'a-first' (seq 1, clean) then a v1-form 'z-div' (seq 2) whose
+      // physical id differs from the v2 id — only the CANONICAL id collides with
+      // the queued retry, so the overlay id/hash union cannot catch it.
+      const direct = createPgBackend({ pool, objects: memObjects(), now: () => clock.t });
+      await direct.runs.appendEvent({ runId: 'a-first', kind: 'run-start', data: { phase: 'ok' } });
+      const v1Id = computeRecordId(ws, 'runs', { kind: 'run-event', runId: 'z-div', dedupeKey: 'start' });
+      await h.pool.query(
+        `INSERT INTO roster_ops.run_events (id, workspace_id, run_id, dedupe_key, type, payload, created_at)
+         VALUES ($1, $2::uuid, $3, 'start', 'run-start', $4::jsonb, 0)`,
+        [v1Id, ws, 'z-div', JSON.stringify({ runId: 'z-div', dedupeKey: 'start', type: 'run-start', data: { phase: 'old' } })],
+      );
+      const reader = createPgBackend({ pool, objects: memObjects(), outbox, now: () => clock.t });
+      const q = runEventParts(ws, { runId: 'z-div', kind: 'run-start', data: { phase: 'DIVERGENT' } }, { now: clock.t, pid: 'test' });
+      assert.notEqual(q.id, v1Id, 'distinct physical ids — only the canonical check can see the divergence');
+      outbox.enqueue({ namespace: 'runs', id: q.id, kind: 'run-event', payload: q.payload });
+
+      // Page 1 (limit 1) contains only 'a-first' — z-div is BEYOND the page.
+      // Pre-fix the check ran only for in-page items, so this call completed
+      // silently and the divergence was discarded at the committed-run skip.
+      await assert.rejects(() => reader.runs.listRuns({ limit: 1 }), ConflictError, 'off-page divergence must still raise');
+    } finally {
+      await pool.end();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await h.close();
+  }
+});
+
+test('pg (round-7 finding 3): a conflicting queued retry on a run BEFORE the requested page (already returned) still raises ConflictError', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  const dir = mkdtempSync(join(tmpdir(), 'roster-pg-r7f3b-'));
+  try {
+    await stampAndFinalize(h, ws);
+    const clock = { t: 1_700_000_000_000 };
+    const ledger = new LocalLedger({ opsRoot: join(dir, 'ops'), workspaceId: ws, now: () => ++clock.t });
+    const outbox = new LocalOutbox({ ledger, now: () => clock.t, rng: () => 0 });
+    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    const { runEventParts } = await import('../src/lib/persistence/postgres/stores.ts');
+    try {
+      // v1-form 'a-div' at seq 1, clean 'b-second' at seq 2.
+      const v1Id = computeRecordId(ws, 'runs', { kind: 'run-event', runId: 'a-div', dedupeKey: 'start' });
+      await h.pool.query(
+        `INSERT INTO roster_ops.run_events (id, workspace_id, run_id, dedupe_key, type, payload, created_at)
+         VALUES ($1, $2::uuid, $3, 'start', 'run-start', $4::jsonb, 0)`,
+        [v1Id, ws, 'a-div', JSON.stringify({ runId: 'a-div', dedupeKey: 'start', type: 'run-start', data: { phase: 'old' } })],
+      );
+      const direct = createPgBackend({ pool, objects: memObjects(), now: () => clock.t });
+      await direct.runs.appendEvent({ runId: 'b-second', kind: 'run-start', data: { phase: 'ok' } });
+
+      const reader = createPgBackend({ pool, objects: memObjects(), outbox, now: () => clock.t });
+      // Page 1 BEFORE any divergence exists — clean, returns 'a-div'.
+      const page1 = await reader.runs.listRuns({ limit: 1 });
+      assert.deepEqual(page1.items.map((x) => x.runId), ['a-div']);
+      assert.ok(page1.cursor !== null);
+
+      // NOW a divergent retry of the already-returned 'a-div' is queued.
+      const q = runEventParts(ws, { runId: 'a-div', kind: 'run-start', data: { phase: 'DIVERGENT' } }, { now: clock.t, pid: 'test' });
+      outbox.enqueue({ namespace: 'runs', id: q.id, kind: 'run-event', payload: q.payload });
+
+      // Page 2 contains only 'b-second' — a-div is BEFORE the page and will
+      // never re-enter items. Pre-fix its conflicting retry was silently
+      // discarded; the divergence must raise here.
+      await assert.rejects(() => reader.runs.listRuns({ limit: 10 }, page1.cursor!), ConflictError);
+    } finally {
+      await pool.end();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await h.close();
+  }
+});
+
+test('pg (round-7 finding 6): a v1 blob with NULL object_version_id redeclared while the store returns a VersionId is NOT marked verified', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  try {
+    await stampAndFinalize(h, ws);
+    const bytes = Buffer.from('v1 blob, versionless row, round-7 finding 6');
+    const digest = sha256Hex(bytes);
+    const meta = { filename: 'old.md', contentType: 'text/markdown', runId: 'run-old' };
+    const id = computeRecordId(ws, 'artifacts', { kind: 'artifact', digest });
+    // A REAL v1 blob row (object_version_id NULL) + its delivery-ledger row, so
+    // the v2 re-put dedups the row instead of inserting a fresh one.
+    const v1Hash = sha256Hex(canonicalJson({ digest, size: bytes.byteLength, meta }));
+    await h.pool.query(
+      `INSERT INTO roster_ops.artifacts (id, workspace_id, digest, size, meta, created_at)
+       VALUES ($1, $2::uuid, $3, $4, $5::jsonb, 0)`,
+      [id, ws, digest, bytes.byteLength, JSON.stringify(meta)],
+    );
+    await h.pool.query(
+      `INSERT INTO roster_ops.delivery_ledger (workspace_id, namespace, record_id, payload_hash)
+       VALUES ($1::uuid, 'artifacts', $2, $3)`,
+      [ws, id, v1Hash],
+    );
+    const objects = memObjects(); // fresh store: putIfAbsent WILL return a VersionId for the object
+    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    try {
+      const backend = createPgBackend({ pool, objects });
+      const put = await backend.artifacts.putArtifact(
+        { filename: 'new.md', contentType: 'text/markdown', runId: 'run-new' },
+        bytes,
+        { runId: 'run-new', declaringAgent: 'writer', role: 'produced' },
+      );
+      assert.equal(put.blobOutcome, 'committed', 'the v1 row dedups');
+      // The op DID observe a VersionId (it stored/found the latest object) — but
+      // the committed ROW records none, and the row is the verification
+      // authority: reads pin to the row's version (NULL → latest fallback), so
+      // blessing the declaration against the op's observation verifies the
+      // wrong thing.
+      assert.equal(put.objectVersionId, null, 'the result reports the ROW authority, not the latest-object observation');
+      const decl = (
+        await h.pool.query(`SELECT version_state FROM roster_ops.artifact_declarations WHERE id = $1`, [put.declarationId])
+      ).rows[0] as { version_state: string };
+      assert.equal(decl.version_state, 'unverified', 'only the explicit admin repair may bless a versionless row');
+      const blob = (
+        await h.pool.query(`SELECT object_version_id FROM roster_ops.artifacts WHERE workspace_id = $1::uuid AND digest = $2`, [ws, digest])
+      ).rows[0] as { object_version_id: string | null };
+      assert.equal(blob.object_version_id, null, 'the committed row is untouched (admin repair is the only writer)');
+    } finally {
+      await pool.end();
+    }
+  } finally {
+    await h.close();
+  }
+});
+
+test('pg finding 13: a healthy outbox artifact write returns a VersionId → declaration version_state=verified (no repair)', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  const dir = mkdtempSync(join(tmpdir(), 'roster-pg-f13-'));
+  try {
+    await stampAndFinalize(h, ws);
+    const clock = { t: 1_700_000_000_000 };
+    const ledger = new LocalLedger({ opsRoot: join(dir, 'ops'), workspaceId: ws, now: () => ++clock.t });
+    const outbox = new LocalOutbox({ ledger, now: () => clock.t, rng: () => 0 });
+    const objects = memObjects();
+    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    try {
+      // The healthy write-through path (outbox drains immediately).
+      const backend = createPgBackend({ pool, objects, outbox, now: () => clock.t });
+      const bytes = randomBytes(48);
+      const res = await backend.artifacts.putArtifact(
+        { filename: 'r.md', contentType: 'text/markdown', runId: 'run-13' },
+        bytes,
+        { runId: 'run-13', declaringAgent: 'writer', role: 'produced' },
+      );
+      assert.equal(res.blobOutcome, 'committed');
+      assert.equal(res.declarationOutcome, 'committed');
+      // The immutable VersionId is threaded back (was discarded before the fix).
+      assert.ok(res.objectVersionId !== null, 'putArtifact surfaces the drained object version id');
+      // The blob row records the version…
+      const blob = (await pool.query(`SELECT object_version_id FROM roster_ops.artifacts WHERE digest = $1`, [res.digest])).rows[0] as { object_version_id: string | null };
+      assert.equal(blob.object_version_id, res.objectVersionId);
+      // …and the declaration is version_state='verified' WITHOUT any admin repair.
+      const decl = (await pool.query(`SELECT version_state FROM roster_ops.artifact_declarations WHERE id = $1`, [res.declarationId])).rows[0] as { version_state: string };
+      assert.equal(decl.version_state, 'verified', 'a normal artifact needs no repair to be verified');
+    } finally {
+      await pool.end();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await h.close();
+  }
+});
+
+// ── round-7 finding 5: an OFFLINE artifact converges to version_state=verified ──
+//
+// A declaration queued during an outage snapshots version_state='unverified'
+// (the immutable object version cannot be observed yet). On drain the blob
+// commits WITH its objectVersionId, but the declaration used to materialize from
+// the stale observation and stay 'unverified' forever — a silently unconverged
+// artifact that only an operator-initiated repair would fix. The declaration now
+// derives its verified state at ORDERED materialization (its blob commits first
+// in the same namespace), and doctor reports any residual.
+
+test('pg (round-7 finding 5): an artifact queued OFFLINE drains to version_state=verified without any repair', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  const dir = mkdtempSync(join(tmpdir(), 'roster-pg-r7f5-'));
+  try {
+    await stampAndFinalize(h, ws);
+    const clock = { t: 1_700_000_000_000 };
+    const ledger = new LocalLedger({ opsRoot: join(dir, 'ops'), workspaceId: ws, now: () => ++clock.t });
+    const outbox = new LocalOutbox({ ledger, now: () => clock.t, rng: () => 0 });
+    const objects = memObjects();
+    const livePool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    const deadPool = new BoundPool({ connectionString: 'postgresql://nobody@127.0.0.1:9/nope', workspaceId: ws });
+    try {
+      const dead = createPgBackend({ pool: deadPool, objects, outbox, now: () => clock.t });
+      const live = createPgBackend({ pool: livePool, objects, outbox, now: () => clock.t });
+
+      const bytes = randomBytes(32);
+      const queued = await dead.artifacts.putArtifact(
+        { filename: 'offline.md', contentType: 'text/markdown', runId: 'run-off' },
+        bytes,
+        { runId: 'run-off', declaringAgent: 'writer', role: 'produced' },
+      );
+      assert.equal(queued.outcome, 'queued');
+      assert.equal(queued.declarationOutcome, 'queued');
+
+      clock.t += 120_000; // past the transient-failure backoff
+      const report = await outbox.drain(live.remote, { objects: new S3ObjectTarget(objects) });
+      assert.equal(report.namespaces.artifacts?.remaining ?? 0, 0, 'the artifact namespace fully drains');
+
+      const blob = (
+        await livePool.query(`SELECT object_version_id FROM roster_ops.artifacts WHERE digest = $1`, [queued.digest])
+      ).rows[0] as { object_version_id: string | null };
+      assert.ok(blob.object_version_id !== null, 'the drained blob records its immutable version');
+      const decl = (
+        await livePool.query(`SELECT version_state FROM roster_ops.artifact_declarations WHERE id = $1`, [
+          queued.declarationId,
+        ])
+      ).rows[0] as { version_state: string };
+      assert.equal(decl.version_state, 'verified', 'convergence is not left for a manual repair');
+    } finally {
+      await livePool.end();
+      await deadPool.end();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await h.close();
+  }
+});
+
+test('pg (round-7 finding 5): the DEGRADED backend spool converges the same way (sibling path parity)', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  const cwd = mkdtempSync(join(tmpdir(), 'roster-pg-r7f5c-'));
+  try {
+    await stampAndFinalize(h, ws);
+    // The store a REAL outage uses: resolveOpsBackend returns the degraded
+    // backend (it never reaches PG), so its spool is the sibling of the healthy
+    // write-through path above and must carry the same version-pending marker.
+    mkdirSync(join(cwd, 'roster'), { recursive: true });
+    writeFileSync(
+      join(cwd, 'roster', 'persistence.yaml'),
+      [
+        'version: 1',
+        'workspace:',
+        `  id: ${ws}`,
+        '  name: acme',
+        'backend: postgres-s3',
+        'postgres:',
+        '  database: dedicated',
+        'objects:',
+        '  bucket: acme-ops',
+        '  region: null',
+        '  endpoint: null',
+        '  force_path_style: false',
+      ].join('\n') + '\n',
+    );
+    const files = new MemoryFileStore();
+    const resolved = await resolveOpsBackend(cwd, {
+      env: { ROSTER_OPS_URL: 'postgresql://nobody@127.0.0.1:9/nope' } as NodeJS.ProcessEnv,
+      files,
+    });
+    assert.equal(resolved.state, 'degraded');
+    if (resolved.state !== 'degraded') return;
+    const queued = await resolved.backend.artifacts.putArtifact(
+      { filename: 'degraded.md', contentType: 'text/markdown', runId: 'run-deg' },
+      randomBytes(24),
+      { runId: 'run-deg', declaringAgent: 'writer', role: 'produced' },
+    );
+    assert.equal(queued.outcome, 'queued');
+
+    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    try {
+      const objects = new CreateOnlyFileStore(files);
+      const live = createPgBackend({ pool, objects, outbox: resolved.outbox });
+      await resolved.outbox.drain(live.remote, { objects: new S3ObjectTarget(objects) });
+      const decl = (
+        await pool.query(`SELECT version_state FROM roster_ops.artifact_declarations WHERE id = $1`, [
+          queued.declarationId,
+        ])
+      ).rows[0] as { version_state: string };
+      assert.equal(decl.version_state, 'verified', 'the degraded spool converges without a manual repair too');
+    } finally {
+      await pool.end();
+    }
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+    await h.close();
+  }
+});
+
+test('pg (round-7 finding 5): a drained declaration whose blob row has NO version id stays unverified (never falsely blessed)', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  const dir = mkdtempSync(join(tmpdir(), 'roster-pg-r7f5b-'));
+  try {
+    await stampAndFinalize(h, ws);
+    // A REAL v1 blob row (object_version_id NULL) + its delivery-ledger row, so
+    // the queued blob DEDUPS on drain and the row keeps its NULL version. The
+    // drained declaration must NOT be blessed against an object version the ROW
+    // does not record (the round-7 finding 6 authority rule).
+    const bytes = Buffer.from('v1 versionless row + an offline redeclare');
+    const digest = sha256Hex(bytes);
+    const meta = { filename: 'old.md', contentType: 'text/markdown', runId: 'run-old' };
+    const blobId = computeRecordId(ws, 'artifacts', { kind: 'artifact', digest });
+    const v1Hash = sha256Hex(canonicalJson({ digest, size: bytes.byteLength, meta }));
+    await h.pool.query(
+      `INSERT INTO roster_ops.artifacts (id, workspace_id, digest, size, meta, created_at)
+       VALUES ($1, $2::uuid, $3, $4, $5::jsonb, 0)`,
+      [blobId, ws, digest, bytes.byteLength, JSON.stringify(meta)],
+    );
+    await h.pool.query(
+      `INSERT INTO roster_ops.delivery_ledger (workspace_id, namespace, record_id, payload_hash)
+       VALUES ($1::uuid, 'artifacts', $2, $3)`,
+      [ws, blobId, v1Hash],
+    );
+    const clock = { t: 1_700_000_000_000 };
+    const ledger = new LocalLedger({ opsRoot: join(dir, 'ops'), workspaceId: ws, now: () => ++clock.t });
+    const outbox = new LocalOutbox({ ledger, now: () => clock.t, rng: () => 0 });
+    const objects = memObjects();
+    const livePool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    const deadPool = new BoundPool({ connectionString: 'postgresql://nobody@127.0.0.1:9/nope', workspaceId: ws });
+    try {
+      const dead = createPgBackend({ pool: deadPool, objects, outbox, now: () => clock.t });
+      const live = createPgBackend({ pool: livePool, objects, outbox, now: () => clock.t });
+      const queued = await dead.artifacts.putArtifact(meta, bytes, {
+        runId: 'run-old',
+        declaringAgent: 'writer',
+        role: 'produced',
+      });
+      assert.equal(queued.outcome, 'queued');
+      clock.t += 120_000;
+      await outbox.drain(live.remote, { objects: new S3ObjectTarget(objects) });
+
+      const blob = (
+        await livePool.query(`SELECT object_version_id FROM roster_ops.artifacts WHERE digest = $1`, [digest])
+      ).rows[0] as { object_version_id: string | null };
+      assert.equal(blob.object_version_id, null, 'the v1 row is untouched — admin repair is its only writer');
+      const decl = (
+        await livePool.query(`SELECT version_state FROM roster_ops.artifact_declarations WHERE id = $1`, [
+          queued.declarationId,
+        ])
+      ).rows[0] as { version_state: string };
+      assert.equal(decl.version_state, 'unverified', 'no version id on the ROW → no blessing on drain either');
+    } finally {
+      await livePool.end();
+      await deadPool.end();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await h.close();
+  }
+});
+
+test('pg finding 14: declare-artifact with an invalid role writes NO blob and queues NO upload', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  const dir = mkdtempSync(join(tmpdir(), 'roster-pg-f14-'));
+  try {
+    await stampAndFinalize(h, ws);
+    const clock = { t: 1_700_000_000_000 };
+    const ledger = new LocalLedger({ opsRoot: join(dir, 'ops'), workspaceId: ws, now: () => ++clock.t });
+    const outbox = new LocalOutbox({ ledger, now: () => clock.t, rng: () => 0 });
+    const objects = memObjects();
+    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    try {
+      const backend = createPgBackend({ pool, objects, outbox, now: () => clock.t });
+      const bytes = randomBytes(32);
+      const digest = sha256Hex(bytes);
+      await assert.rejects(
+        backend.artifacts.putArtifact({ filename: 'x', contentType: 'text/plain', runId: 'r' }, bytes, {
+          runId: 'r',
+          declaringAgent: 'a',
+          role: 'nope' as never,
+        }),
+        InvalidRecordError,
+      );
+      // No object was uploaded and nothing was queued (validation ran first).
+      assert.equal(await objects.head({ prefix: 'artifacts', segments: [digest] }), null, 'no object uploaded');
+      assert.equal(outbox.fold().entries.size, 0, 'no queued blob/upload');
+      const blobRows = await pool.query(`SELECT 1 FROM roster_ops.artifacts WHERE workspace_id = $1::uuid`, [ws]);
+      assert.equal(blobRows.rowCount, 0, 'no blob row committed');
+    } finally {
+      await pool.end();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await h.close();
+  }
+});
+
+test('pg finding 16: getDeclaration/getByRun surface a committed-vs-queued same-id declaration conflict', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  const dir = mkdtempSync(join(tmpdir(), 'roster-pg-f16-'));
+  try {
+    await stampAndFinalize(h, ws);
+    const clock = { t: 1_700_000_000_000 };
+    const objects = memObjects();
+    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    const { externalDeclarationParts } = await import('../src/lib/persistence/artifact-declarations.ts');
+    try {
+      // Machine A commits an external declaration directly → it lands in PG.
+      const direct = createPgBackend({ pool, objects, now: () => clock.t });
+      const committed = await direct.artifacts.putExternal({
+        runId: 'run-x',
+        declaringAgent: 'agent-1',
+        role: 'used',
+        provider: 'github',
+        externalId: 'issue-7',
+        externalUrl: 'https://github.com/a',
+      });
+      assert.equal(committed.outcome, 'committed');
+      // Machine B (a SEPARATE outbox) queues a CONFLICTING declaration: SAME
+      // identity (same run/agent/role/ref), DIFFERENT payload (a different url).
+      const ledgerB = new LocalLedger({ opsRoot: join(dir, 'opsB'), workspaceId: ws, now: () => ++clock.t });
+      const outboxB = new LocalOutbox({ ledger: ledgerB, now: () => clock.t, rng: () => 0 });
+      const conflicting = externalDeclarationParts(ws, {
+        runId: 'run-x',
+        declaringAgent: 'agent-1',
+        role: 'used',
+        provider: 'github',
+        externalId: 'issue-7',
+        externalUrl: 'https://github.com/b',
+      });
+      assert.equal(conflicting.id, committed.id, 'same declaration identity');
+      outboxB.enqueue({
+        namespace: 'artifacts',
+        id: conflicting.id,
+        kind: 'artifact-declaration',
+        payload: conflicting.payload,
+        observations: conflicting.observations,
+      });
+      const readerB = createPgBackend({ pool, objects, outbox: outboxB, now: () => clock.t });
+      // getByRun surfaces (parks) the conflict — the conflicting entry appears
+      // rather than being silently dropped by a committed-id filter.
+      const byRun = await readerB.artifacts.getByRun('run-x');
+      assert.ok(
+        byRun.some((d) => d.id === conflicting.id && d.queued),
+        'getByRun surfaces the queued conflicting declaration',
+      );
+      // getDeclaration must NOT silently return the committed row — it surfaces
+      // the conflict as a ConflictError.
+      await assert.rejects(readerB.artifacts.getDeclaration(conflicting.id), ConflictError);
     } finally {
       await pool.end();
     }
@@ -1428,10 +2280,11 @@ test('pg: backendInfo from the two meta tables; future component refuses before 
     assert.equal(info.backend, 'postgres-s3');
     assert.equal(info.components.hitl.version, 1);
     assert.deepEqual([...info.components.hitl.capabilities], ['requests', 'decisions']);
-    assert.equal(info.components.roster_ops.version, 1);
-    assert.deepEqual([...info.components.roster_ops.capabilities], ['runs', 'artifacts', 'outbox', 'checkpoint']);
-    assert.equal(info.components.objects.version, 1);
-    assert.deepEqual([...info.components.objects.capabilities], ['content-addressed', 'create-only']);
+    // #323: roster_ops + objects migrate to v2 (run-ledger + object versioning).
+    assert.equal(info.components.roster_ops.version, 2);
+    assert.deepEqual([...info.components.roster_ops.capabilities], ['runs', 'artifacts', 'outbox', 'checkpoint', 'run-ledger']);
+    assert.equal(info.components.objects.version, 2);
+    assert.deepEqual([...info.components.objects.capabilities], ['content-addressed', 'create-only', 'version-id', 'list-prefix']);
     assertBackendSupported(info);
 
     // admin-authored skew: a future hitl version must refuse before writes
@@ -1491,7 +2344,7 @@ test('pg: stores writeThrough the outbox — queued offline, drained in order, o
         expiresAt: null,
       });
       assert.equal(second.outcome, 'queued');
-      const evt = await dead.runs.appendEvent({ runId: 'r1', dedupeKey: 'k1', type: 'step', data: null });
+      const evt = await dead.runs.appendEvent({ runId: 'r1', kind: 'tool-call', correlationId: 'k1', data: null });
       assert.equal(evt.outcome, 'queued');
       const art = await dead.artifacts.putArtifact(
         { filename: 'a.bin', contentType: 'application/octet-stream', runId: 'r1' },
@@ -1695,5 +2548,473 @@ test('pg store finding 4: a transport partial listing paginates the overlay (cur
     assert.equal(ids.size, 150, 'every queued record surfaces exactly once across the pages');
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── finding 1: queued retries must not conflict on store observations ────────
+
+test('finding 1: a run-start re-enqueued with a new pid/started_at is idempotent (QUEUED path); a changed STABLE field conflicts', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  const dir = mkdtempSync(join(tmpdir(), 'roster-f1-'));
+  try {
+    await stampAndFinalize(h, ws);
+    const ledger = new LocalLedger({ opsRoot: join(dir, 'ops'), workspaceId: ws });
+    const outbox = new LocalOutbox({ ledger });
+    const { runEventParts } = await import('../src/lib/persistence/postgres/stores.ts');
+
+    // Two seals of the SAME stable run-start with DIFFERENT observations (pid/now).
+    const a = runEventParts(ws, { runId: 'r1', kind: 'run-start', data: null }, { now: 1000, pid: 'pid-A' });
+    const b = runEventParts(ws, { runId: 'r1', kind: 'run-start', data: null }, { now: 2000, pid: 'pid-B' });
+    assert.equal(a.id, b.id, 'same stable inputs → same id');
+    assert.equal(payloadHashOf(a.payload), payloadHashOf(b.payload), 'pid/started_at are NOT in the payload hash');
+    assert.notEqual((a.observations as { pid: string }).pid, (b.observations as { pid: string }).pid);
+
+    outbox.enqueue({ namespace: 'runs', id: a.id, kind: 'run-event', payload: a.payload, observations: a.observations });
+    // The retry with new observations must NOT throw a ConflictError on the queued path.
+    assert.doesNotThrow(() =>
+      outbox.enqueue({ namespace: 'runs', id: b.id, kind: 'run-event', payload: b.payload, observations: b.observations }),
+    );
+    // First-write observations win (idempotent ledger replay).
+    const entry = outbox.fold().entries.get(a.id);
+    assert.equal((entry!.observations as { pid: string }).pid, 'pid-A');
+
+    // A changed STABLE field (agent) shares the id but differs in the hashed
+    // payload → a genuine ConflictError.
+    const c = runEventParts(ws, { runId: 'r1', kind: 'run-start', data: null, agent: 'gtm.sdr' }, { now: 1000, pid: 'pid-A' });
+    assert.equal(c.id, a.id, 'agent is not part of the id');
+    assert.notEqual(payloadHashOf(c.payload), payloadHashOf(a.payload), 'agent IS a hashed stable field');
+    assert.throws(
+      () => outbox.enqueue({ namespace: 'runs', id: c.id, kind: 'run-event', payload: c.payload, observations: c.observations }),
+      ConflictError,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await h.close();
+  }
+});
+
+test('finding 1: a run-start re-appended with a new pid is idempotent (DIRECT path); a changed STABLE field conflicts', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  try {
+    await stampAndFinalize(h, ws);
+    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    try {
+      const clock = { t: 1000 };
+      const bA = createPgBackend({ pool, objects: memObjects(), now: () => clock.t, pid: () => 'pid-A' });
+      const first = await bA.runs.appendEvent({ runId: 'r1', kind: 'run-start', data: null });
+      assert.equal(first.outcome, 'committed');
+
+      // Same stable run-start, DIFFERENT pid/clock → idempotent duplicate (no conflict).
+      clock.t = 5000;
+      const bB = createPgBackend({ pool, objects: memObjects(), now: () => clock.t, pid: () => 'pid-B' });
+      const replay = await bB.runs.appendEvent({ runId: 'r1', kind: 'run-start', data: null });
+      assert.equal(replay.outcome, 'committed');
+      assert.equal(replay.id, first.id, 'same id — a clean idempotent replay');
+      // The stored observations are the FIRST write's (pid-A / started_at 1000).
+      const stored = await bA.runs.getRun('r1');
+      const start = stored!.events.find((e) => e.kind === 'run-start')!;
+      assert.equal(start.pid, 'pid-A');
+      assert.equal(start.startedAt, 1000);
+
+      // A changed STABLE field (agent) on the same id → ConflictError.
+      await assert.rejects(
+        bA.runs.appendEvent({ runId: 'r1', kind: 'run-start', data: null, agent: 'gtm.sdr' }),
+        ConflictError,
+      );
+    } finally {
+      await pool.end();
+    }
+  } finally {
+    await h.close();
+  }
+});
+
+// ── finding 2: the DB rejects forged trust / verification state ──────────────
+
+test('finding 2: run_events CHECK rejects a raw host-attested INSERT; artifact_declarations CHECK rejects external verified=true', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  try {
+    await stampAndFinalize(h, ws);
+    // A raw runtime INSERT cannot forge the host-attested trust level.
+    await assert.rejects(
+      h.pool.query(
+        `INSERT INTO roster_ops.run_events (id, workspace_id, run_id, dedupe_key, type, payload, source, created_at)
+         VALUES ('forged', $1::uuid, 'r', 'k', 'run-start', '{}'::jsonb, 'host-attested', 0)`,
+        [ws],
+      ),
+      /run_events_source_check|check constraint/,
+    );
+    // cli/agent/unverified are accepted.
+    await h.pool.query(
+      `INSERT INTO roster_ops.run_events (id, workspace_id, run_id, dedupe_key, type, payload, source, created_at)
+       VALUES ('ok', $1::uuid, 'r', 'k', 'run-start', '{}'::jsonb, 'cli', 0)`,
+      [ws],
+    );
+    // An external declaration cannot forge verified=true.
+    await assert.rejects(
+      h.pool.query(
+        `INSERT INTO roster_ops.artifact_declarations
+           (id, workspace_id, run_id, declaring_agent, role, kind, provider, external_id, provenance, verified, created_at)
+         VALUES ('extv', $1::uuid, 'r', 'a', 'produced', 'external', 'github', 'pr-1', '{}'::jsonb, true, 0)`,
+        [ws],
+      ),
+      /check constraint/,
+    );
+    // An internal declaration MAY be verified=true (digest-verified by the store).
+    await h.pool.query(
+      `INSERT INTO roster_ops.artifact_declarations
+         (id, workspace_id, run_id, declaring_agent, role, kind, digest, provenance, verified, created_at)
+       VALUES ('intv', $1::uuid, 'r', 'a', 'produced', 'internal', $2, '{}'::jsonb, true, 0)`,
+      [ws, sha256Hex('bytes')],
+    );
+  } finally {
+    await h.close();
+  }
+});
+
+// ── finding 6: projections never leak a secret-shaped identifier / prose ─────
+
+test('finding 6: a planted secret as run_id, agent, and sanitized_report never appears verbatim in run_index/artifact_index', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  const secret = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
+  try {
+    await stampAndFinalize(h, ws);
+    // Raw runtime INSERTs planting the secret in every projected field + the
+    // DB-owned sanitized_report column (the trigger scrubs it).
+    await h.pool.query(
+      `INSERT INTO roster_ops.run_events (id, workspace_id, run_id, dedupe_key, type, payload, source, agent, sanitized_report, created_at)
+       VALUES ('r1', $1::uuid, $2, 'report', 'report', '{}'::jsonb, 'agent', $2, $3, 0)`,
+      [ws, secret, `token ${secret} here`],
+    );
+    await h.pool.query(
+      `INSERT INTO roster_ops.artifact_declarations
+         (id, workspace_id, run_id, declaring_agent, role, kind, digest, artifact_type, media_type, provenance, sanitized_text, created_at)
+       VALUES ('d1', $1::uuid, $2, 'a', 'produced', 'internal', $3, $2, $2, '{}'::jsonb, $4, 0)`,
+      [ws, secret, sha256Hex('x'), `see ${secret}`],
+    );
+
+    const runIdx = await h.pool.query(`SELECT run_id, agent, sanitized_report FROM roster_ops.run_index WHERE workspace_id = $1::uuid`, [ws]);
+    const runRow = runIdx.rows[0] as { run_id: string; agent: string; sanitized_report: string };
+    assert.ok(!runRow.run_id.includes(secret), 'run_index run_id is sentinel-normalized');
+    assert.match(runRow.run_id, /^legacy-/);
+    assert.ok(!runRow.agent.includes(secret), 'run_index agent is sentinel-normalized');
+    assert.ok(!runRow.sanitized_report.includes(secret), 'run_index sanitized_report is scrubbed');
+
+    const artIdx = await h.pool.query(`SELECT run_id, artifact_type, media_type, sanitized_text FROM roster_ops.artifact_index WHERE workspace_id = $1::uuid`, [ws]);
+    const artRow = artIdx.rows[0] as { run_id: string; artifact_type: string | null; media_type: string | null; sanitized_text: string };
+    assert.ok(!artRow.run_id.includes(secret), 'artifact_index run_id is sentinel-normalized');
+    assert.equal(artRow.artifact_type, null, 'a secret-shaped artifact_type is nulled');
+    assert.ok(!artRow.sanitized_text.includes(secret), 'artifact_index sanitized_text is scrubbed');
+  } finally {
+    await h.close();
+  }
+});
+
+test('finding 6: the backfill normalizer (safe_ident) sentinels a secret-shaped OR charset-invalid runId, passes a safe one', opts, async () => {
+  // safe_ident is the exact function the v1→v2 backfill applies to meta.runId
+  // (roster_ops.safe_ident(coalesce(a.meta->>'runId','unknown'))) AND the second
+  // defensive layer in the views. A secret SHAPE (even when charset-valid) and a
+  // charset-invalid value both normalize to a deterministic sentinel; a safe id
+  // passes through unchanged.
+  const h = await makeDb();
+  try {
+    const q = await h.pool.query(`SELECT
+      roster_ops.safe_ident('ghp_abcdefghijklmnopqrstuvwxyz0123456789') AS ghp,
+      roster_ops.safe_ident('AKIAIOSFODNN7EXAMPLE') AS akia,
+      roster_ops.safe_ident('deadbeefdeadbeefdeadbeefdeadbeef') AS hex,
+      roster_ops.safe_ident('has spaces') AS invalid,
+      roster_ops.safe_ident('run-2026-07-23.gtm:sdr') AS safe,
+      roster_ops.safe_ident(NULL) AS nul`);
+    const r = q.rows[0] as Record<string, string | null>;
+    for (const key of ['ghp', 'akia', 'hex', 'invalid']) {
+      assert.match(r[key]!, /^legacy-[0-9a-f]{12}$/, `${key} sentinels`);
+    }
+    assert.equal(r.safe, 'run-2026-07-23.gtm:sdr', 'a safe identifier passes through');
+    assert.equal(r.nul, null, 'null → null');
+  } finally {
+    await h.close();
+  }
+});
+
+// ── finding 7: a v1 artifact outbox entry drains into blob + declaration ──────
+
+test('finding 7: a v1 artifact outbox entry (meta in payload) drains into a blob AND a synthesized declaration', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  const dir = mkdtempSync(join(tmpdir(), 'roster-f7-'));
+  try {
+    await stampAndFinalize(h, ws);
+    const ledger = new LocalLedger({ opsRoot: join(dir, 'ops'), workspaceId: ws });
+    const outbox = new LocalOutbox({ ledger });
+    const objects = memObjects();
+    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    try {
+      const backend = createPgBackend({ pool, objects, outbox });
+      const bytes = Buffer.from('v1 artifact bytes');
+      const digest = sha256Hex(bytes);
+      // A v1 (#318) combined artifact outbox entry: meta lives INSIDE the payload,
+      // and there is no declaration entry.
+      const { computeRecordId } = await import('../src/lib/persistence/contracts.ts');
+      const id = computeRecordId(ws, 'artifacts', { kind: 'artifact', digest });
+      outbox.enqueueArtifact(
+        {
+          namespace: 'artifacts',
+          id,
+          kind: 'artifact',
+          payload: { digest, size: bytes.byteLength, meta: { filename: 'old', contentType: 'text/plain', runId: 'run-legacy' } },
+        },
+        bytes,
+      );
+      // Drain it into PG.
+      await outbox.drain(backend.remote, { objects: new S3ObjectTarget(objects) });
+
+      const blob = await h.pool.query(`SELECT digest, meta FROM roster_ops.artifacts WHERE workspace_id = $1::uuid AND digest = $2`, [ws, digest]);
+      assert.equal(blob.rows.length, 1, 'the blob materialized (v1 meta preserved)');
+      assert.equal((blob.rows[0] as { meta: { runId: string } }).meta.runId, 'run-legacy');
+      const decl = await h.pool.query(
+        `SELECT declaring_agent, role, digest, run_id FROM roster_ops.artifact_declarations WHERE workspace_id = $1::uuid AND digest = $2`,
+        [ws, digest],
+      );
+      assert.equal(decl.rows.length, 1, 'the v1 outbox entry also synthesized a declaration');
+      assert.equal((decl.rows[0] as { declaring_agent: string }).declaring_agent, 'legacy');
+      assert.equal((decl.rows[0] as { run_id: string }).run_id, 'run-legacy');
+    } finally {
+      await pool.end();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await h.close();
+  }
+});
+
+// ── round-3 findings: v1 blob dedup, VersionId recovery, SQL scrub, canonical
+//    counts, admin-mutation binding + positive confirmation ─────────────────────
+
+test('finding 1: a v2 putArtifact of a REAL v1 blob\'s identical bytes does NOT conflict (delivery-ledger dedups the blob on digest)', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  try {
+    await stampAndFinalize(h, ws);
+    const { computeRecordId } = await import('../src/lib/persistence/contracts.ts');
+    const bytes = Buffer.from('v1 pg blob identical bytes');
+    const digest = sha256Hex(bytes);
+    const meta = { filename: 'old.md', contentType: 'text/markdown', runId: 'run-old' };
+    const id = computeRecordId(ws, 'artifacts', { kind: 'artifact', digest });
+    // A REAL v1 blob: the artifacts row (meta in the row) + a delivery-ledger row
+    // whose payload hash covers {digest,size,meta} (the #318 content hash).
+    const v1Hash = sha256Hex(canonicalJson({ digest, size: bytes.byteLength, meta }));
+    await h.pool.query(
+      `INSERT INTO roster_ops.artifacts (id, workspace_id, digest, size, meta, created_at)
+       VALUES ($1, $2::uuid, $3, $4, $5::jsonb, 0)`,
+      [id, ws, digest, bytes.byteLength, JSON.stringify(meta)],
+    );
+    await h.pool.query(
+      `INSERT INTO roster_ops.delivery_ledger (workspace_id, namespace, record_id, payload_hash)
+       VALUES ($1::uuid, 'artifacts', $2, $3)`,
+      [ws, id, v1Hash],
+    );
+    const objects = memObjects();
+    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    try {
+      const backend = createPgBackend({ pool, objects }); // direct path, no outbox
+      // A NEW run declares IDENTICAL bytes through v2 — the delivery-ledger sees the
+      // same record_id with a DIFFERENT payload hash; before the fix this was a
+      // ConflictError (and parked the queue on the outbox path).
+      const put = await backend.artifacts.putArtifact(
+        { filename: 'new.md', contentType: 'text/markdown', runId: 'run-new' },
+        bytes,
+        { runId: 'run-new', declaringAgent: 'writer', role: 'produced' },
+      );
+      assert.equal(put.digest, digest);
+      assert.equal(put.blobOutcome, 'committed', 'the already-present v1 blob dedups — no conflict');
+      assert.ok(put.declarationId, 'the new declaration is added on top of the existing blob');
+      const blobs = await h.pool.query(
+        `SELECT count(*)::int AS n FROM roster_ops.artifacts WHERE workspace_id = $1::uuid AND digest = $2`,
+        [ws, digest],
+      );
+      assert.equal((blobs.rows[0] as { n: number }).n, 1, 'exactly one blob row (deduped by digest, first meta wins)');
+      const decls = await backend.artifacts.getByRun('run-new');
+      assert.equal(decls.length, 1);
+      assert.equal(decls[0]!.declaringAgent, 'writer');
+    } finally {
+      await pool.end();
+    }
+  } finally {
+    await h.close();
+  }
+});
+
+test('finding 6: healthy same-content reuse recovers the committed VersionId → the second run\'s declaration is verified (no repair)', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  const dir = mkdtempSync(join(tmpdir(), 'roster-f6r-'));
+  try {
+    await stampAndFinalize(h, ws);
+    const clock = { t: 1_700_000_000_000 };
+    const ledger = new LocalLedger({ opsRoot: join(dir, 'ops'), workspaceId: ws, now: () => ++clock.t });
+    const outbox = new LocalOutbox({ ledger, now: () => clock.t, rng: () => 0 });
+    const objects = memObjects();
+    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    try {
+      const backend = createPgBackend({ pool, objects, outbox, now: () => clock.t });
+      const bytes = randomBytes(40);
+      // Run A stores the bytes (healthy write-through drains immediately).
+      const a = await backend.artifacts.putArtifact(
+        { filename: 'a.md', contentType: 'text/markdown', runId: 'run-A' },
+        bytes,
+        { runId: 'run-A', declaringAgent: 'writer', role: 'produced' },
+      );
+      assert.ok(a.objectVersionId, 'run A captured the immutable version');
+      const declA = (await pool.query(`SELECT version_state FROM roster_ops.artifact_declarations WHERE id = $1`, [a.declarationId])).rows[0] as { version_state: string };
+      assert.equal(declA.version_state, 'verified');
+
+      // Run B declares IDENTICAL bytes. The blob entry is already ACKED, so the
+      // drain delivers nothing new (empty deliveredVersions); before the fix run B's
+      // declaration was left version_state='unverified'.
+      const b = await backend.artifacts.putArtifact(
+        { filename: 'b.md', contentType: 'text/markdown', runId: 'run-B' },
+        bytes,
+        { runId: 'run-B', declaringAgent: 'reviewer', role: 'used' },
+      );
+      assert.equal(b.digest, a.digest);
+      assert.equal(b.objectVersionId, a.objectVersionId, 'run B recovers the SAME committed object version');
+      const declB = (await pool.query(`SELECT version_state FROM roster_ops.artifact_declarations WHERE id = $1`, [b.declarationId])).rows[0] as { version_state: string };
+      assert.equal(declB.version_state, 'verified', "run B's declaration is verified without any admin repair");
+    } finally {
+      await pool.end();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await h.close();
+  }
+});
+
+test('finding 2: the SQL scrub redacts QUOTED assignment values (with spaces) — no tail leaks into run_index / artifact_index', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  try {
+    await stampAndFinalize(h, ws);
+    // Raw-insert (bypassing the TS sanitizer) secret-class values that are QUOTED
+    // and contain SPACES. The BEFORE INSERT trigger scrub must redact the WHOLE
+    // quoted span; before the fix only the first token was replaced, leaking the tail.
+    const report = "password: \"correct horse battery staple\" then api_key: 'multi word secret value'";
+    await h.pool.query(
+      `INSERT INTO roster_ops.run_events (id, workspace_id, run_id, dedupe_key, type, payload, sanitized_report, created_at)
+       VALUES ('ev-scrub', $1::uuid, 'run-scrub', 'report', 'report', '{}'::jsonb, $2, 0)`,
+      [ws, report],
+    );
+    const idx = (await h.pool.query(
+      `SELECT sanitized_report FROM roster_ops.run_index WHERE workspace_id = $1::uuid AND run_id = 'run-scrub'`,
+      [ws],
+    )).rows[0] as { sanitized_report: string };
+    assert.ok(!idx.sanitized_report.includes('horse battery staple'), `no double-quoted tail leaks: ${idx.sanitized_report}`);
+    assert.ok(!idx.sanitized_report.includes('multi word secret value'), `no single-quoted tail leaks: ${idx.sanitized_report}`);
+    assert.ok(idx.sanitized_report.includes('[REDACTED]'), 'the quoted values are redacted');
+
+    // Same for the artifact declaration sanitized_text projection.
+    const declText = 'token: "abc def ghi jkl"';
+    await h.pool.query(
+      `INSERT INTO roster_ops.artifact_declarations
+         (id, workspace_id, run_id, declaring_agent, role, kind, digest, provenance, verified, version_state, sanitized_text, created_at)
+       VALUES ('decl-scrub', $1::uuid, 'run-scrub', 'sdr', 'produced', 'internal', $2, '{}'::jsonb, true, 'verified', $3, 0)`,
+      [ws, sha256Hex('scrub-bytes'), declText],
+    );
+    const aidx = (await h.pool.query(
+      `SELECT sanitized_text FROM roster_ops.artifact_index WHERE workspace_id = $1::uuid AND run_id = 'run-scrub'`,
+      [ws],
+    )).rows[0] as { sanitized_text: string };
+    assert.ok(!aidx.sanitized_text.includes('abc def ghi jkl'), `no tail in artifact_index: ${aidx.sanitized_text}`);
+    assert.ok(aidx.sanitized_text.includes('[REDACTED]'));
+  } finally {
+    await h.close();
+  }
+});
+
+test('finding 2 (real API, PG): appendEvent report with a JSON {password} object → run_index has no secret', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  try {
+    await stampAndFinalize(h, ws);
+    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    try {
+      const backend = createPgBackend({ pool, objects: memObjects() });
+      const secret = 'correct horse battery staple';
+      // The real write path: a report whose data is a credential OBJECT. The TS
+      // sanitizer runs at write; the DB trigger is the second layer. Neither may
+      // leak the quoted-key JSON value into the safe projection view.
+      await backend.runs.appendEvent({ runId: 'r-json-pw', kind: 'report', data: { password: secret } });
+      const idx = (await pool.query(
+        `SELECT sanitized_report FROM roster_ops.run_index WHERE run_id = 'r-json-pw'`,
+      )).rows[0] as { sanitized_report: string };
+      assert.ok(idx.sanitized_report !== null, 'the report projected a sanitized column');
+      assert.ok(!idx.sanitized_report.includes(secret), `run_index leaked the JSON password: ${idx.sanitized_report}`);
+      assert.ok(idx.sanitized_report.includes('[REDACTED]'));
+    } finally {
+      await pool.end();
+    }
+  } finally {
+    await h.close();
+  }
+});
+
+test('finding 8: PG listRuns counts CANONICAL events — a v1 run-start + v2 retry is ONE event', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  try {
+    await stampAndFinalize(h, ws);
+    const { computeRecordId } = await import('../src/lib/persistence/contracts.ts');
+    // A REAL v1 run-start row: LITERAL 'run-event' id scheme, payload.type.
+    const v1Id = computeRecordId(ws, 'runs', { kind: 'run-event', runId: 'r-cnt', dedupeKey: 'start' });
+    await h.pool.query(
+      `INSERT INTO roster_ops.run_events (id, workspace_id, run_id, dedupe_key, type, payload, created_at)
+       VALUES ($1, $2::uuid, 'r-cnt', 'start', 'run-start', $3::jsonb, 0)`,
+      [v1Id, ws, JSON.stringify({ runId: 'r-cnt', dedupeKey: 'start', type: 'run-start', data: null })],
+    );
+    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
+    try {
+      const backend = createPgBackend({ pool, objects: memObjects() });
+      await backend.runs.appendEvent({ runId: 'r-cnt', kind: 'run-start', data: null }); // v2 retry (distinct physical id)
+      const run = await backend.runs.getRun('r-cnt');
+      assert.equal(run!.events.length, 1, 'getRun collapses the v1 record + its v2 retry to one event');
+      const page = await backend.runs.listRuns({});
+      const summary = page.items.find((s) => s.runId === 'r-cnt');
+      assert.ok(summary);
+      assert.equal(summary.events, 1, 'run list shows 1 canonical event, not 2 physical rows');
+    } finally {
+      await pool.end();
+    }
+  } finally {
+    await h.close();
+  }
+});
+
+test('finding 4: repair bless on a no-op (blob/declarations absent on this DB) ERRORS — never a false success', opts, async () => {
+  const h = await makeDb();
+  const ws = randomUUID();
+  try {
+    await stampAndFinalize(h, ws);
+    const { PgRunLedgerSource } = await import('../src/lib/persistence/run-repair.ts');
+    const source = new PgRunLedgerSource({ db: h.pool, workspaceId: ws, objects: memObjects(), admin: h.pool });
+    // No artifacts row and no declarations for this digest → bless changes 0 rows.
+    await assert.rejects(source.bless(sha256Hex('absent-blob'), 'v-any'), /changed 0 rows/i);
+  } finally {
+    await h.close();
+  }
+});
+
+test('finding 4: the admin-mutation binding guard refuses a DB stamped for a DIFFERENT workspace (repair path)', opts, async () => {
+  const h = await makeDb();
+  const wsA = randomUUID();
+  const wsB = randomUUID();
+  try {
+    await stampAndFinalize(h, wsA); // the DB belongs to A
+    // verbRepair verifies the admin connection's binding this way BEFORE fillVersionIds.
+    await assert.rejects(verifyBinding(h.pool, wsB), WorkspaceMismatchError);
+  } finally {
+    await h.close();
   }
 });

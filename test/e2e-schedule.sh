@@ -173,8 +173,8 @@ echo "===> 6. Assert crontab line content"
 assert_contains "$CRONTAB_FILE" "env -i"                                "crontab line contains 'env -i' wrapper"
 assert_contains "$CRONTAB_FILE" "shell_environment_policy.inherit=core" "crontab line passes shell_environment_policy.inherit=core"
 # Roster-managed block markers:
-assert_contains "$CRONTAB_FILE" "# roster:schedule:sdr-cold-outreach:begin" "crontab has roster begin marker"
-assert_contains "$CRONTAB_FILE" "# roster:schedule:sdr-cold-outreach:end"   "crontab has roster end marker"
+assert_contains "$CRONTAB_FILE" "# roster:schedule:gtm/sdr-cold-outreach:begin" "crontab has roster begin marker"
+assert_contains "$CRONTAB_FILE" "# roster:schedule:gtm/sdr-cold-outreach:end"   "crontab has roster end marker"
 # Cron expression (escaped for grep regex):
 assert_contains "$CRONTAB_FILE" "0 9 \* \* 1-5"                              "crontab line includes the cron expression"
 # Forwarded env vars only:
@@ -199,7 +199,7 @@ HOME="$FAKE_HOME" \
 # ── 8. Assert crontab cleanup ─────────────────────────────────────────────
 echo ""
 echo "===> 8. Assert crontab cleanup"
-assert_not_contains "$CRONTAB_FILE" "# roster:schedule:sdr-cold-outreach" "begin/end markers removed from crontab"
+assert_not_contains "$CRONTAB_FILE" "# roster:schedule:gtm/sdr-cold-outreach" "begin/end markers removed from crontab"
 assert_not_contains "$CRONTAB_FILE" "shell_environment_policy.inherit=core" "cron line removed from crontab"
 
 # Summary

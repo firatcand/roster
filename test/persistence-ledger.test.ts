@@ -22,10 +22,14 @@ import { join } from 'node:path';
 import {
   LocalLedger,
   MAX_RECORD_BYTES,
+  atomicWriteFileSync,
   ledgerFsSeams,
   tryReclaimStaleLock,
+  writeBlobSync,
+  writeFileCreateOnlySync,
   type LedgerRecord,
 } from '../src/lib/persistence/local/ledger.ts';
+import { listScheduleRuns, writeScheduleRunId } from '../src/lib/schedule-state.ts';
 import { createLocalBackend } from '../src/lib/persistence/local/stores.ts';
 import {
   BackendUnavailableError,
@@ -479,7 +483,9 @@ test('meta: minted once with producer identity; corrupt or foreign meta refuses 
     assert.equal(meta.workspaceId, env.ws);
     assert.equal(meta.configVersion, 1);
     assert.match(meta.producerId, /^[0-9a-f-]{36}$/);
-    assert.deepEqual(meta.componentVersions, { hitl: 1, roster_ops: 1, objects: 1 });
+    // The local backend implements the #323 run ledger unconditionally, so it
+    // mints roster_ops/objects at v2 (finding: local mints v1).
+    assert.deepEqual(meta.componentVersions, { hitl: 1, roster_ops: 2, objects: 2 });
     writeFileSync(metaPath, 'garbage{');
     assert.throws(() => openLedger(env).append('events', { id: 'y', kind: 'test', payload: {} }), InvalidRecordError);
     writeFileSync(metaPath, JSON.stringify({ ...meta, workspaceId: randomUUID() }));
@@ -981,5 +987,192 @@ test('stale-lock reclaim: the dead lock is renamed aside (never restored) and a 
     assert.equal(res.record.seq, 2);
   } finally {
     cleanup(env);
+  }
+});
+
+// #323 finding 2 (real API, local backend): a report whose data is a JSON
+// credential object must have its secret redacted in the stored sanitized
+// projection — the value the future semantic-index job reads.
+test('local real-API (finding 2): appendEvent report with a {password} object stores no secret in the projection', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'roster-sanitize-api-'));
+  try {
+    const ws = randomUUID();
+    const opsRoot = join(dir, '.roster', 'ops');
+    const backend = createLocalBackend({ opsRoot, workspaceId: ws });
+    const secret = 'correct horse battery staple';
+    await backend.runs.appendEvent({ runId: 'r-report', kind: 'report', data: { password: secret } });
+    const run = await backend.runs.getRun('r-report');
+    assert.ok(run);
+    const report = run!.events.find((e) => e.kind === 'report');
+    assert.ok(report, 'the report event exists');
+    assert.equal(report!.source, 'agent', 'agent-authored prose');
+    assert.ok(report!.sanitizedReport !== null, 'a sanitized projection was stored');
+    assert.ok(!report!.sanitizedReport!.includes(secret), `the projection must not leak the JSON password\ngot: ${report!.sanitizedReport}`);
+    assert.ok(report!.sanitizedReport!.includes('[REDACTED]'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── round-6 finding 10: the replacing atomic writer cleans up its .tmp-* on failure ──
+
+test('atomicWriteFileSync (round-6 finding 10): a rename failure leaves NO .tmp-* stragglers and rethrows the original error', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'roster-atomic-cleanup-'));
+  const realRename = ledgerFsSeams.renameRaw;
+  try {
+    ledgerFsSeams.renameRaw = () => {
+      throw Object.assign(new Error('EIO: injected rename failure'), { code: 'EIO' });
+    };
+    assert.throws(
+      () => atomicWriteFileSync(join(dir, 'target.json'), '{"a":1}\n'),
+      /injected rename failure/,
+    );
+    assert.deepEqual(
+      readdirSync(dir).filter((f) => f.startsWith('.tmp-')),
+      [],
+      'the staged tmp file must be unlinked on failure',
+    );
+    assert.equal(existsSync(join(dir, 'target.json')), false, 'no partial target either');
+  } finally {
+    ledgerFsSeams.renameRaw = realRename;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writeFileCreateOnlySync (round-6 findings 5+9+10, round-7 finding 3, round-8 finding 2): create-only contract, tmp cleanup, fail-closed publish', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'roster-createonly-'));
+  const realLink = ledgerFsSeams.linkRaw;
+  const realRenameSeam = ledgerFsSeams.renameRaw;
+  const realCreateExclusive = ledgerFsSeams.createExclusiveRaw;
+  try {
+    // Happy path: the file lands with the exact bytes.
+    writeFileCreateOnlySync(dir, 'one.run-id', '{"runId":"a"}\n');
+    assert.equal(readFileSync(join(dir, 'one.run-id'), 'utf8'), '{"runId":"a"}\n');
+
+    // Create-only: a second write to the same name is a ConflictError, and the
+    // original bytes survive untouched.
+    assert.throws(() => writeFileCreateOnlySync(dir, 'one.run-id', '{"runId":"b"}\n'), ConflictError);
+    assert.equal(readFileSync(join(dir, 'one.run-id'), 'utf8'), '{"runId":"a"}\n');
+
+    // A symlink squatting on the target is "exists" too — never followed.
+    const victim = join(dir, 'victim.txt');
+    writeFileSync(victim, 'precious');
+    symlinkSync(victim, join(dir, 'planted.run-id'));
+    assert.throws(() => writeFileCreateOnlySync(dir, 'planted.run-id', '{"runId":"x"}\n'), ConflictError);
+    assert.equal(readFileSync(victim, 'utf8'), 'precious', 'the symlink target is never truncated');
+
+    // Injected publish failure (the atomic link): surfaced as
+    // BackendUnavailableError, no tmp left.
+    ledgerFsSeams.linkRaw = () => {
+      throw Object.assign(new Error('EIO: injected link failure'), { code: 'EIO' });
+    };
+    assert.throws(() => writeFileCreateOnlySync(dir, 'two.run-id', '{"runId":"c"}\n'), BackendUnavailableError);
+    assert.deepEqual(readdirSync(dir).filter((f) => f.startsWith('.tmp-')), [], 'tmp cleaned up on failure');
+    assert.equal(existsSync(join(dir, 'two.run-id')), false);
+
+    // A target that appears mid-write (the concurrent-create race) is a
+    // ConflictError from link's EEXIST — never a replacing publish.
+    ledgerFsSeams.linkRaw = (from: string, to: string) => {
+      writeFileSync(to, 'winner');
+      realLink(from, to);
+    };
+    assert.throws(() => writeFileCreateOnlySync(dir, 'three.run-id', '{"runId":"d"}\n'), ConflictError);
+    assert.equal(readFileSync(join(dir, 'three.run-id'), 'utf8'), 'winner', 'the concurrent winner is never clobbered');
+    assert.deepEqual(readdirSync(dir).filter((f) => f.startsWith('.tmp-')), [], 'the loser cleans up its tmp');
+
+    // ── round-8 finding 2: a link-less filesystem FAILS CLOSED ────────────────
+    //
+    // The old fallback was lstat-then-REPLACING-rename, which reopened the
+    // publication race the hard link closed: on a FUSE/network mount two starts
+    // for one fire could both pass the lstat and both rename, the later silently
+    // rebinding the name to another run (so the exit signal closes the WRONG
+    // run). The publish now retries with an O_CREAT|O_EXCL create AT THE FINAL
+    // NAME — still genuinely exclusive — and NEVER renames.
+    ledgerFsSeams.linkRaw = () => {
+      throw Object.assign(new Error('EPERM: hard links unsupported'), { code: 'EPERM' });
+    };
+    const renameCalls = { n: 0 };
+    ledgerFsSeams.renameRaw = (from: string, to: string) => {
+      renameCalls.n += 1;
+      realRenameSeam(from, to);
+    };
+    writeFileCreateOnlySync(dir, 'four.run-id', '{"runId":"e"}\n');
+    assert.equal(readFileSync(join(dir, 'four.run-id'), 'utf8'), '{"runId":"e"}\n');
+    assert.equal(renameCalls.n, 0, 'the create-once publish NEVER degrades to a replacing rename');
+    assert.deepEqual(readdirSync(dir).filter((f) => f.startsWith('.tmp-')), [], 'no tmp straggler on the exclusive-create path');
+    // The blob writer shares the core, so it publishes the same way.
+    writeBlobSync(dir, 'blob-nolink', Buffer.from('bytes'));
+    assert.equal(readFileSync(join(dir, 'blob-nolink'), 'utf8'), 'bytes');
+    assert.equal(renameCalls.n, 0);
+
+    // Same link-less filesystem, but a concurrent writer takes the name DURING
+    // the write: the exclusive create loses with EEXIST → ConflictError. The old
+    // rename fallback would have replaced the winner here.
+    ledgerFsSeams.linkRaw = (_from: string, to: string) => {
+      writeFileSync(to, 'winner');
+      throw Object.assign(new Error('EPERM: hard links unsupported'), { code: 'EPERM' });
+    };
+    assert.throws(() => writeFileCreateOnlySync(dir, 'five.run-id', '{"runId":"f"}\n'), ConflictError);
+    assert.equal(readFileSync(join(dir, 'five.run-id'), 'utf8'), 'winner', 'the concurrent winner is never replaced');
+    assert.equal(renameCalls.n, 0, 'and still no rename');
+    assert.deepEqual(readdirSync(dir).filter((f) => f.startsWith('.tmp-')), [], 'the loser cleans up its tmp');
+
+    // Neither primitive available: refuse with an actionable error naming the
+    // filesystem limitation — publish nothing rather than degrade.
+    ledgerFsSeams.linkRaw = () => {
+      throw Object.assign(new Error('EOPNOTSUPP: hard links unsupported'), { code: 'EOPNOTSUPP' });
+    };
+    ledgerFsSeams.createExclusiveRaw = () => {
+      throw Object.assign(new Error('EACCES: exclusive create refused'), { code: 'EACCES' });
+    };
+    assert.throws(
+      () => writeFileCreateOnlySync(dir, 'six.run-id', '{"runId":"g"}\n'),
+      (err: unknown) =>
+        err instanceof BackendUnavailableError &&
+        /link\(2\)/.test((err as Error).message) &&
+        /EOPNOTSUPP/.test((err as Error).message) &&
+        /replacing rename/.test((err as Error).message),
+    );
+    assert.equal(existsSync(join(dir, 'six.run-id')), false, 'fail closed — nothing is published');
+    assert.equal(renameCalls.n, 0);
+    assert.deepEqual(readdirSync(dir).filter((f) => f.startsWith('.tmp-')), [], 'and no tmp straggler');
+  } finally {
+    ledgerFsSeams.linkRaw = realLink;
+    ledgerFsSeams.renameRaw = realRenameSeam;
+    ledgerFsSeams.createExclusiveRaw = realCreateExclusive;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Round-8 finding 2 end-to-end: the fire↔run binding stays create-once even on a
+// filesystem that cannot hard-link. Two starts for the SAME fire id: the second
+// must be refused, never silently rebound.
+test('writeScheduleRunId (round-8 finding 2): create-once survives a link-less filesystem — no silent rebind', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'roster-nolink-fire-'));
+  const realLink = ledgerFsSeams.linkRaw;
+  const realRenameSeam = ledgerFsSeams.renameRaw;
+  const renameCalls = { n: 0 };
+  try {
+    ledgerFsSeams.linkRaw = () => {
+      throw Object.assign(new Error('ENOSYS: hard links unsupported'), { code: 'ENOSYS' });
+    };
+    ledgerFsSeams.renameRaw = (from: string, to: string) => {
+      renameCalls.n += 1;
+      realRenameSeam(from, to);
+    };
+    writeScheduleRunId(cwd, 'gtm', 'sdr', 'run-A', 'fidZ', 1_000);
+    assert.throws(
+      () => writeScheduleRunId(cwd, 'gtm', 'sdr', 'run-B', 'fidZ', 2_000),
+      (err: unknown) => err instanceof ConflictError && /run-A/.test((err as Error).message),
+      'the second run cannot take a bound fire id',
+    );
+    const runs = listScheduleRuns(cwd, 'gtm', 'sdr');
+    assert.deepEqual(runs.map((r) => r.runId), ['run-A']);
+    assert.equal(runs[0]!.firedAt, 1_000, 'the first write owns the staleness anchor');
+    assert.equal(renameCalls.n, 0, 'the sidecar is never published through a replacing rename');
+  } finally {
+    ledgerFsSeams.linkRaw = realLink;
+    ledgerFsSeams.renameRaw = realRenameSeam;
+    rmSync(cwd, { recursive: true, force: true });
   }
 });

@@ -3,11 +3,13 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, existsSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import YAML from 'yaml';
+import { spawnSync } from 'node:child_process';
 import { proposeStatusMap, runTaskSetup } from '../src/lib/tasks/setup.ts';
+import { loadTrackerConfig } from '../src/lib/tasks/context.ts';
 import { parseTrackerConfig } from '../src/lib/tasks/tracker-schema.ts';
 import { RosterError } from '../src/lib/errors.ts';
 import type { StatusOption } from '../src/lib/tasks/adapters/types.ts';
@@ -191,4 +193,48 @@ test('runTaskSetup warns when the board has no unique-id property', async () => 
     assert.ok(res.warnings.some((w) => /unique-id/.test(w)));
     assert.equal(res.config.unique_id_property, undefined);
   });
+});
+
+// ── round-13 class sweep: roster/tracker.yaml joins the hardened readers ──────
+//
+// The confinement check was already there (round-10), but the READ itself was a
+// raw readFileSync: a FIFO planted at roster/tracker.yaml blocked `roster task`
+// forever and a symlinked file was followed to another workspace's board
+// credentials. It now goes through the same bounded no-follow reader as every
+// other roster/<…> registry file, with this module's own RosterError taxonomy.
+
+const posixOnly = process.platform === 'win32' ? 'POSIX only (symlinks/mkfifo)' : false;
+
+test('loadTrackerConfig: a FIFO at roster/tracker.yaml is refused, never blocking the read', { skip: posixOnly }, () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'roster-tracker-fifo-'));
+  try {
+    mkdirSync(join(cwd, 'roster'), { recursive: true });
+    const mk = spawnSync('mkfifo', [join(cwd, 'roster', 'tracker.yaml')]);
+    assert.equal(mk.status, 0, 'mkfifo available on POSIX');
+    assert.throws(
+      () => loadTrackerConfig(cwd),
+      (e: unknown) => e instanceof RosterError && /unreadable/.test((e as RosterError).header),
+    );
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('loadTrackerConfig: a symlinked roster/tracker.yaml is refused, never followed', { skip: posixOnly }, () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'roster-tracker-link-'));
+  const foreign = mkdtempSync(join(tmpdir(), 'roster-tracker-foreign-'));
+  try {
+    mkdirSync(join(cwd, 'roster'), { recursive: true });
+    writeFileSync(join(foreign, 'tracker.yaml'), 'version: 1\n', 'utf8');
+    symlinkSync(join(foreign, 'tracker.yaml'), join(cwd, 'roster', 'tracker.yaml'));
+    assert.throws(
+      () => loadTrackerConfig(cwd),
+      // The component walk refuses the symlinked FINAL component before the
+      // reader is ever reached — the round-12 boundary, unchanged.
+      (e: unknown) => e instanceof RosterError && /resolves outside the workspace/.test((e as RosterError).header),
+    );
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(foreign, { recursive: true, force: true });
+  }
 });

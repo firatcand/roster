@@ -5,10 +5,15 @@ import {
   WorkspaceMismatchError,
   sha256Hex,
 } from './contracts.ts';
-import { ConditionalWriteFailed, type FileStore, type S3StoreConfig } from './s3-core.ts';
+import {
+  ConditionalWriteFailed,
+  type FileStore,
+  type ObjectListPage,
+  type S3StoreConfig,
+} from './s3-core.ts';
 import { assertSafeSegment } from './safe-path.ts';
 import { RosterError, EXIT_ERROR } from '../errors.ts';
-import type { ObjectTarget } from './outbox.ts';
+import type { ObjectTarget, ObjectDeliverResult } from './outbox.ts';
 
 // Dedicated-bucket, create-only object layer (#318 section F, owner decision
 // 6). CreateOnlyObjectStore is compile-time separated from brain's deletable
@@ -41,18 +46,35 @@ export function opsObjectKey(ref: OpsObjectRef): string {
   return `${ref.prefix}/${ref.segments.join('/')}`;
 }
 
-export type PutIfAbsentResult = { outcome: 'stored' | 'exists'; etag: string };
-export type ObjectGetResult = { body: Buffer; etag: string };
-export type ObjectHeadResult = { size: number; etag: string };
+// objectVersionId is a STORE-ASSIGNED OBSERVATION of the immutable bytes (S3
+// x-amz-version-id; MemoryFileStore synthesizes one). It is REQUIRED (nullable)
+// on this ops-facing contract — the ops object store is always backed by a real
+// versioned store — and stage 2's ArtifactStore records it on the PG row. It is
+// NEVER added to any outbox payload hash or delivery-ledger dedup key (#323), so
+// a queued artifact write survives delivery with its recorded version unchanged.
+export type PutIfAbsentResult = { outcome: 'stored' | 'exists'; etag: string; objectVersionId: string | null };
+export type ObjectGetResult = { body: Buffer; etag: string; objectVersionId: string | null };
+export type ObjectHeadResult = { size: number; etag: string; objectVersionId: string | null };
+
+// (key, version) pairs from a prefix listing — repair/doctor only (via the
+// list-capable admin/read resolver; see resolveObjectAdmin, resolve.ts). Keys
+// are full object keys (e.g. 'artifacts/<digest>').
+export type ObjectListEntry = { key: string; versionId: string | null };
+export type ObjectListResult = { items: ObjectListEntry[]; cursor: string | null };
 
 export interface CreateOnlyObjectStore {
   putIfAbsent(ref: OpsObjectRef, bytes: Uint8Array, opts?: { contentType?: string }): Promise<PutIfAbsentResult>;
-  get(ref: OpsObjectRef): Promise<ObjectGetResult | null>;
-  head(ref: OpsObjectRef): Promise<ObjectHeadResult | null>;
+  // An optional recorded versionId fetches that exact immutable version.
+  get(ref: OpsObjectRef, versionId?: string | null): Promise<ObjectGetResult | null>;
+  head(ref: OpsObjectRef, versionId?: string | null): Promise<ObjectHeadResult | null>;
   // The marker sits at the bucket root (outside the data prefixes); runtime
   // creds hold read-only access to exactly this key for resolution-time
   // verification. Exposed as its own method so no caller ever builds the key.
   getMarker(): Promise<ObjectGetResult | null>;
+  // Paginated (key, versionId) enumeration under one ops prefix — used ONLY by
+  // repair/doctor through the admin/read resolver (the runtime IAM still has no
+  // bucket-wide list). Stage 1 defines it; the admin resolver is wired later.
+  listPrefix(prefix: OpsObjectPrefix, cursor?: string | null): Promise<ObjectListResult>;
 }
 
 export class CreateOnlyFileStore implements CreateOnlyObjectStore {
@@ -71,7 +93,7 @@ export class CreateOnlyFileStore implements CreateOnlyObjectStore {
     const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
     try {
       const res = await this.files.put(key, buf, { ifNoneMatch: '*', contentType: opts.contentType });
-      return { outcome: 'stored', etag: res.etag };
+      return { outcome: 'stored', etag: res.etag, objectVersionId: res.objectVersionId ?? null };
     } catch (err) {
       if (!(err instanceof ConditionalWriteFailed)) throw err;
       const existing = await this.files.get(key);
@@ -81,7 +103,7 @@ export class CreateOnlyFileStore implements CreateOnlyObjectStore {
         );
       }
       if (sha256Hex(existing.body) === sha256Hex(buf)) {
-        return { outcome: 'exists', etag: existing.etag };
+        return { outcome: 'exists', etag: existing.etag, objectVersionId: existing.objectVersionId ?? null };
       }
       throw new ConflictError(
         key,
@@ -90,17 +112,32 @@ export class CreateOnlyFileStore implements CreateOnlyObjectStore {
     }
   }
 
-  async get(ref: OpsObjectRef): Promise<ObjectGetResult | null> {
-    return await this.files.get(opsObjectKey(ref));
+  async get(ref: OpsObjectRef, versionId?: string | null): Promise<ObjectGetResult | null> {
+    const res = await this.files.get(opsObjectKey(ref), versionId);
+    return res === null ? null : { body: res.body, etag: res.etag, objectVersionId: res.objectVersionId ?? null };
   }
 
-  async head(ref: OpsObjectRef): Promise<ObjectHeadResult | null> {
-    const res = await this.files.head(opsObjectKey(ref));
-    return res === null ? null : { size: res.size, etag: res.etag };
+  async head(ref: OpsObjectRef, versionId?: string | null): Promise<ObjectHeadResult | null> {
+    const res = await this.files.head(opsObjectKey(ref), versionId);
+    return res === null ? null : { size: res.size, etag: res.etag, objectVersionId: res.objectVersionId ?? null };
   }
 
   async getMarker(): Promise<ObjectGetResult | null> {
-    return await this.files.get(WORKSPACE_MARKER_KEY);
+    const res = await this.files.get(WORKSPACE_MARKER_KEY);
+    return res === null ? null : { body: res.body, etag: res.etag, objectVersionId: res.objectVersionId ?? null };
+  }
+
+  async listPrefix(prefix: OpsObjectPrefix, cursor?: string | null): Promise<ObjectListResult> {
+    if (!(OPS_OBJECT_PREFIXES as readonly string[]).includes(prefix)) {
+      throw new InvalidRecordError(
+        `'${String(prefix)}' is not an ops object prefix (expected ${OPS_OBJECT_PREFIXES.join(' | ')})`,
+      );
+    }
+    if (typeof this.files.listPrefix !== 'function') {
+      throw new BackendUnavailableError('the underlying object store does not support prefix listing');
+    }
+    const page: ObjectListPage = await this.files.listPrefix(`${prefix}/`, { cursor });
+    return { items: page.items.map((e) => ({ key: e.key, versionId: e.versionId })), cursor: page.cursor };
   }
 }
 
@@ -218,7 +255,7 @@ export class S3ObjectTarget implements ObjectTarget {
     this.store = store;
   }
 
-  async deliver(digest: string, bytes: Buffer): Promise<'stored' | 'exists'> {
+  async deliver(digest: string, bytes: Buffer): Promise<ObjectDeliverResult> {
     if (!SHA256_HEX_RE.test(digest)) {
       throw new InvalidRecordError('artifact digest must be a full-length lowercase sha256 hex digest');
     }
@@ -228,7 +265,9 @@ export class S3ObjectTarget implements ObjectTarget {
     const res = await this.store.putIfAbsent({ prefix: 'artifacts', segments: [digest] }, bytes, {
       contentType: 'application/octet-stream',
     });
-    return res.outcome;
+    // 'exists' returns the already-stored (first-write) immutable version — a
+    // crash-after-object-before-row replay recovers the SAME recorded version.
+    return { outcome: res.outcome, objectVersionId: res.objectVersionId ?? null };
   }
 }
 

@@ -1,16 +1,19 @@
 import { existsSync, readdirSync, readFileSync, statSync, type Stats } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import {
+  cronMarkerId,
   defaultCrontabIO,
   findMarkerBlocks,
   getMarkerStrings,
+  legacyMarkerIsAmbiguous,
+  legacyMarkerOwnedBy,
   renderCronLine,
   resolveCodexBinaryPath,
   type CrontabIO,
 } from './codex-cron.ts';
-import { loadSchedules } from './schedule-read.ts';
+import { functionsRegisteringSchedule, loadSchedules } from './schedule-read.ts';
 import { buildOrchestratorPrompt } from './schedule-install.ts';
-import { exitPathFor, eventsPathFor, logPathFor, readExitRecord } from './cron-exit-log.ts';
+import { exitDirFor, eventsPathFor, logPathFor, listExitRecords } from './cron-exit-log.ts';
 import { detectStale, findMostRecentRun, readStateMd } from './schedule-state.ts';
 
 // =====================================================================
@@ -21,6 +24,10 @@ type DriftItem =
   | { name: string; status: 'fail'; reason: 'registered-but-no-marker'; functionName: string }
   | { name: string; status: 'fail'; reason: 'cron-line-mismatch'; functionName: string; expected: string; actual: string }
   | { name: string; status: 'fail'; reason: 'orphan-marker-block' }
+  // A bare pre-#323 marker whose schedule name is claimed by more than one
+  // function (round-7 finding 2). Report-only: doctor never mutates, and the
+  // block must NOT be attributed to any of the claimants.
+  | { name: string; status: 'fail'; reason: 'ambiguous-legacy-marker'; functionName: string; competingFunctions: string[] }
   | { name: string; status: 'ok'; functionName: string };
 
 export type CronDriftAudit = {
@@ -110,11 +117,55 @@ export function auditCronDrift(opts: CronDriftOpts): CronDriftAudit {
   }
 
   const content = r.content;
-  const registeredNames = new Set(entries.map(({ entry }) => entry.name));
+  // The marker ids consumed by a registered entry (the function-scoped id, or the
+  // legacy bare-name id when tolerating a pre-#323 install) — used for orphan
+  // detection so a legacy marker matched by an entry is NOT also flagged orphan.
+  const consumedMarkerIds = new Set<string>();
   const items: DriftItem[] = [];
 
   for (const { entry, functionName } of entries) {
-    const blocks = findMarkerBlocks(content, entry.name);
+    // The marker is function-scoped (finding 2): gtm/nightly and ops/nightly are
+    // independent blocks. Prefer the scoped id; tolerate a legacy bare-schedule-
+    // name marker from a pre-#323 single-function install (re-install migrates it)
+    // ONLY when the block's own content proves it belongs to THIS function, and
+    // consume each legacy marker for at most ONE registration (round-6 finding 8:
+    // two same-named schedules in different functions previously both counted a
+    // single bare marker as clean).
+    const scopedId = cronMarkerId(functionName, entry.name);
+    let markerId = scopedId;
+    let blocks = findMarkerBlocks(content, scopedId);
+    let ambiguousLegacy: string[] | null = null;
+    if (blocks.length === 0) {
+      const legacyBlocks = findMarkerBlocks(content, entry.name);
+      if (legacyBlocks.length > 0) {
+        // Round-7 finding 2: a bare marker whose name TWO functions register is
+        // unattributable. Report the ambiguity instead of claiming the block for
+        // whichever registration the content heuristic happens to match.
+        const claimants = functionsRegisteringSchedule(workspacePath, entry.name);
+        if (legacyMarkerIsAmbiguous({ id: entry.name, registeredFunctions: claimants })) {
+          ambiguousLegacy = claimants;
+        } else if (
+          !consumedMarkerIds.has(entry.name) &&
+          legacyMarkerOwnedBy(content, entry.name, functionName, entry.name)
+        ) {
+          markerId = entry.name;
+          blocks = legacyBlocks;
+        }
+      }
+    }
+    if (ambiguousLegacy !== null) {
+      // The bare marker is consumed by NO registration, so it is not also
+      // reported as an orphan — the ambiguity finding is the actionable one.
+      consumedMarkerIds.add(entry.name);
+      items.push({
+        name: entry.name,
+        status: 'fail',
+        reason: 'ambiguous-legacy-marker',
+        functionName,
+        competingFunctions: ambiguousLegacy,
+      });
+      continue;
+    }
     if (blocks.length === 0) {
       items.push({
         name: entry.name,
@@ -124,6 +175,7 @@ export function auditCronDrift(opts: CronDriftOpts): CronDriftAudit {
       });
       continue;
     }
+    consumedMarkerIds.add(markerId);
     if (codexBinaryPath === null) {
       // Can't re-render to byte-compare; settle for "marker present" check.
       items.push({ name: entry.name, status: 'ok', functionName });
@@ -133,14 +185,14 @@ export function auditCronDrift(opts: CronDriftOpts): CronDriftAudit {
       cron: entry.cron,
       workspacePath,
       codexBinaryPath,
-      prompt: buildOrchestratorPrompt(entry.agent, entry.plan),
-      logPath: logPathFor(workspacePath, entry.name),
-      exitPath: exitPathFor(workspacePath, entry.name),
+      prompt: buildOrchestratorPrompt(functionName, entry.agent, entry.plan, entry.name),
+      logPath: logPathFor(workspacePath, functionName, entry.name),
+      exitDir: exitDirFor(workspacePath, functionName, entry.name),
       ...(entry.capture_events === true
-        ? { eventsPath: eventsPathFor(workspacePath, entry.name) }
+        ? { eventsPath: eventsPathFor(workspacePath, functionName, entry.name) }
         : {}),
     });
-    const actual = extractActualCronLine(content, entry.name);
+    const actual = extractActualCronLine(content, markerId);
     if (actual !== expected) {
       items.push({
         name: entry.name,
@@ -155,10 +207,10 @@ export function auditCronDrift(opts: CronDriftOpts): CronDriftAudit {
     }
   }
 
-  // Orphan markers: marker blocks in crontab whose name is NOT in any
-  // registered schedule.
+  // Orphan markers: marker blocks in crontab whose id was NOT consumed by any
+  // registered schedule (scoped or legacy).
   for (const name of listMarkerNames(content)) {
-    if (!registeredNames.has(name)) {
+    if (!consumedMarkerIds.has(name)) {
       items.push({ name, status: 'fail', reason: 'orphan-marker-block' });
     }
   }
@@ -307,7 +359,7 @@ export function auditStaleFires(opts: StaleFireAuditOpts): StaleFireAudit {
   function stateFor(functionName: string) {
     const cached = stateCache.get(functionName);
     if (cached !== undefined) return cached;
-    const state = readStateMd(join(cwd, 'roster', functionName, 'state.md'));
+    const state = readStateMd(join(cwd, 'roster', functionName, 'state.md'), cwd);
     stateCache.set(functionName, state);
     return state;
   }
@@ -320,13 +372,20 @@ export function auditStaleFires(opts: StaleFireAuditOpts): StaleFireAudit {
     let exitMtimeMs: number | undefined;
     let failed: { exitCode: number | null; firedAtUtc: string } | undefined;
     if (entry.tool === 'codex' && entry.install_mode === 'via-cron') {
-      const exitRecord = readExitRecord(exitPathFor(cwd, entry.name));
-      if (exitRecord !== null) {
-        exitMtimeMs = exitRecord.mtimeMs;
-        if (exitRecord.exitCode !== null && exitRecord.exitCode !== 0) {
+      // Per-fire exit files: the most-recent one is this schedule's last fire.
+      const records = listExitRecords(cwd, functionName, entry.name);
+      let latest: (typeof records)[number] | undefined;
+      for (const rec of records) {
+        if (latest === undefined || rec.mtimeMs > latest.mtimeMs) latest = rec;
+      }
+      if (latest !== undefined) {
+        exitMtimeMs = latest.mtimeMs;
+        // Round-7 finding 9: exitCode null (present-but-malformed evidence) is
+        // failure evidence, aligned with pending-sync — rendered as exit '?'.
+        if (latest.exitCode !== 0) {
           failed = {
-            exitCode: exitRecord.exitCode,
-            firedAtUtc: new Date(exitRecord.mtimeMs).toISOString(),
+            exitCode: latest.exitCode,
+            firedAtUtc: new Date(latest.mtimeMs).toISOString(),
           };
         }
       }

@@ -27,6 +27,16 @@ src/lib/persistence/**
 src/commands/ops.ts
 data/ops/schema/**
 
+# Run + artifact ledger (#323) — trust taxonomy, sealed provenance, sanitized
+# index projections, and the admin-only version-id repair (mutates users' ops DB)
+src/commands/run.ts
+src/lib/run-args.ts
+src/lib/persistence/run-events.ts
+src/lib/persistence/run-compose.ts
+src/lib/persistence/run-repair.ts
+src/lib/persistence/sanitize-index.ts
+src/lib/persistence/artifact-declarations.ts
+
 # npm publish allowlist + release CI (wrong = ships secrets or breaks install)
 package.json
 .github/workflows/**

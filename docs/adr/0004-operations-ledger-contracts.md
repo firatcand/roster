@@ -87,6 +87,22 @@ against both backends.
 - **Artifacts are create-only content-addressed.** `putArtifact(meta, bytes)`
   is put-if-absent keyed by sha256 digest; replay verifies the existing digest.
   There is no delete anywhere in the interface.
+- **Local create-once publication fails closed.** The shared local writer
+  (blobs, outbox spool bytes, per-fire sidecars, the pending-sync acknowledged
+  marker) stages a same-dir `O_EXCL` tmp, fsyncs it, and publishes with
+  `link(2)` — atomic create-if-absent, so a concurrent writer loses with
+  `EEXIST` instead of being clobbered. On a filesystem that cannot hard-link it
+  re-publishes with an `O_CREAT|O_EXCL` create at the final name (still
+  exclusive) and, if even that is impossible, **refuses** with an error naming
+  the limitation. It never degrades to a replacing `rename(2)`: rename would let
+  two writers both "create" one name, silently rebinding a fire id to another
+  run so the exit signal closes the wrong one.
+- **Local reads apply one integrity standard.** `getArtifact` *and* `head` read
+  the digest path through its descriptor (`O_NOFOLLOW` + `fstat` regular-file
+  check) and verify `sha256 == digest`. `head` is what run reconstruction uses,
+  so `run show` can never report an artifact `resolved` that `getArtifact`
+  would reject — corrupt bytes, a directory, or a symlink at the blob path fail
+  both identically.
 
 ## Strict 1:1 binding protocol (`postgres/binding.ts`)
 
@@ -246,6 +262,15 @@ nothing in the runtime path mutates it).
   version refuses with "upgrade the CLI"; a below-floor version with "migrate
   the backend". Unknown *extra* capabilities are ignored (forward-compat);
   only missing required ones refuse.
+- The gate covers operations that bypass the store wrappers too. `run doctor`
+  and `run repair --fill-version-ids` issue v2-only declaration/version SQL on
+  the runtime pool and enumerate the bucket through the admin object store, so
+  they carry their own requirements (`runs.doctor` / `runs.repair` →
+  `roster_ops: run-ledger` + `objects: content-addressed, version-id,
+  list-prefix`), asserted **before any admin credential is resolved and before
+  any SQL is issued**. A supported v1 postgres-s3 backend therefore gets the
+  same actionable `VersionSkewError` as every other run-ledger operation rather
+  than a raw missing-relation database error.
 - The local mirror is checked first (offline) during postgres-s3 resolution: a
   future version in `meta.json` refuses before any remote traffic.
 - `persistence.yaml` itself is versioned separately: a future `version` errors
@@ -270,6 +295,115 @@ states: `legacy` (no config — read-only adapter over today's pending files),
 - HITL decisions fail closed in every degraded path (`BackendUnavailableError`,
   never spooled) — an approval must be verifiable against the live store at
   decision time.
+
+## Run + artifact ledger (#323)
+
+The run + artifact ledger (`roster run`; migration `roster_ops/002`, schema v2)
+builds the queryable, cross-machine-reconstructable run record on top of the v1
+`RunStore`/`ArtifactStore` contracts. It is opt-in — legacy workspaces without
+`persistence.yaml` never see it.
+
+- **Event kinds (closed set).** `run-start`, `run-end`, `tool-call`,
+  `tool-result`, `error`, `retry`, `resumed`, `approval-ref`, `report`,
+  `artifact-declared`. The generic `roster run event` verb emits ONLY
+  `error`/`retry`/`resumed`/`approval-ref`; lifecycle + `tool-*` come from the
+  dedicated verbs (or the #322 hook), `report`/`artifact-declared` from their own
+  verbs. Every repeatable kind requires a caller `--correlation-id`; singletons
+  (`run-start`/`run-end`/`report`) carry a fixed dedupe key.
+- **Trust taxonomy (a LEVEL, not a caller claim).** `source ∈
+  {host-attested, cli, agent, unverified}`, stamped by the write **path**, never
+  from caller `--data`. `host-attested` is #322's hook channel only (#323 never
+  mints it); the `roster run` CLI stamps `cli`; agent `report` prose is `agent`;
+  a missing/legacy value reads `unverified`. The composer promotes a **lifecycle
+  fact** (start/end/exit) from `cli` or `host-attested`, but a **"successful
+  external action"** ONLY from `host-attested` + a correlated tool result — a
+  `cli`/`agent` claim renders *declared, unverified*. Agent prose is never parsed
+  for success. Provenance is sealed OUTSIDE the payload hash, so a retry with a
+  new pid/timestamp is idempotent (same id + hash) and duration is derived at
+  read (`ended_at − started_at`).
+- **Artifact identity split.** A **content blob** (bytes, keyed by digest, dedup
+  once) is distinct from an **artifact declaration** (a run declares it
+  produced/used a reference). Declaration id =
+  `sha256(workspace_id, run_id, declaring_agent, role, ref)` where `ref` = digest
+  (internal) or `provider:external_id` (external) — `role` is in the id, so a
+  produced + a used declaration of the same reference by the same run/agent are
+  two rows. External declarations carry no digest and stay `verified=false` until
+  a #322 host-attested correlation (never caller-supplied, never runtime-mutated).
+- **Blob identity is content-only.** The blob record's hashed payload is
+  `{digest, size}` — run/provenance/filename/contentType metadata lives on the
+  DECLARATION, never the blob — so two runs declaring identical bytes derive the
+  SAME id AND hash (one blob row, dedup) and never `ConflictError`. `meta` rides
+  as a store observation (first-write-wins).
+- **Trust is unforgeable at the DB.** `source` is NOT a caller field — the store
+  stamps it from the write path (`report`→`agent`, else `cli`). `host-attested`
+  is #322's channel, produced by NO #323 path and REJECTED by a run_events CHECK,
+  so a raw runtime INSERT cannot forge a trusted lifecycle or host-attested
+  success. External declarations are CHECK-constrained to `verified=false`. The
+  composer promotes an external SUCCESS only from a host-attested result carrying
+  an explicit structured `{ok:true}`/`success:true` and no error — it fails closed
+  on `{ok:false}` and on any unknown shape.
+- **objectVersionId is a store observation.** `put`/`get`/`head`/`listPrefix`
+  surface the S3 `x-amz-version-id`; it is never in any payload hash or
+  delivery-ledger dedup key, so a queued write survives delivery with its
+  recorded version unchanged — the drain threads the delivered version onto the
+  artifact row, and reads fetch that EXACT recorded version (not "latest"). The
+  runtime object IAM has no bucket-wide list; repair/doctor's `listPrefix` +
+  version reads go through a DISTINCT admin/read credential provider
+  (`resolveObjectAdmin` → `ROSTER_OPS_ADMIN_AWS_*`), and the least-privilege
+  matrix grants runtime `s3:GetObjectVersion` (exact-version reads) and admin
+  `s3:ListBucketVersions`/`s3:GetObjectVersion` (repair listing + hash-verify).
+  Filling a missing/legacy `object_version_id` is an explicit admin verb
+  (`roster run repair --fill-version-ids`) — the SOLE updater of
+  `object_version_id`/`version_state`; it hash-verifies the candidate version's
+  bytes against the digest BEFORE blessing and updates the blob + its declarations
+  in ONE transaction (re-repairable if interrupted). A read never mutates.
+- **The report cap is the PORTABLE raw limit (128 KiB).** `roster run report`
+  advertises a raw input cap of `131072` bytes and enforces it BY THE READ (an
+  over-cap file is refused from its stat; an over-cap pipe is abandoned one byte
+  past the cap, never buffered whole just to be rejected). The number is derived,
+  not chosen: the local JSONL backend applies a 1 MiB limit to the ENTIRE
+  serialized record, and that record carries the report JSON-escaped (worst case
+  6 bytes per input byte — a control byte becomes `\u00XX`), plus the sanitized
+  index projection (≤ `MAX_INDEX_TEXT`, escaped by the same factor), plus the
+  sealed envelope + hash chain. `6·131072 + 6·16384 + envelope < 1048576`, so a
+  report at exactly the advertised cap is storable on EVERY backend for ANY byte
+  sequence — the advertised limit is achievable end-to-end rather than a reader
+  cap that a downstream record limit silently overrides. Larger output has its
+  own path: `declare-artifact` (deliberately uncapped, digest-verified).
+- **Workspace-tree reads are realpath-confined.** `O_NOFOLLOW` protects only a
+  path's FINAL component, so every walker over `roster/<fn>/…` and
+  `logs/cron/<fn>/…` resolves its DIRECTORIES through the shared workspace
+  boundary (`workspace-path.ts`) before reading or mutating: a symlinked
+  `roster/gtm/pending` can no longer make `roster review --reject` unlink a file
+  in another repository, and a symlinked `roster/gtm` can no longer make
+  `schedule install`/`remove` read and rewrite a foreign `schedules.yaml`. A
+  refused path keeps its caller's contract — an actionable error where one
+  exists, skip-with-report where the contract is skip-malformed.
+- **Index policy (safe inputs only).** A shared TypeScript sanitizer redacts
+  secret shapes (env/key-token/bearer/userinfo-URL/JWT/PEM/GitHub/Slack/AWS) at
+  **write time**; only its output lands in `run_events.sanitized_report` /
+  `artifact_declarations.sanitized_text`. A defensive admin-owned BEFORE INSERT
+  trigger re-scrubs those DB-owned columns so even a raw runtime INSERT cannot
+  land unredacted secret text (the runtime has no TRIGGER privilege to bypass it).
+  The SQL views `run_index` / `artifact_index` expose ONLY validated identifiers +
+  those internally-produced sanitized columns (never raw payload/provenance/
+  digest/full URL) — projected `run_id`/`agent` failing the strict charset OR
+  matching a secret SHAPE (ghp_/AKIA/xox/sk-/JWT/long-hex, even when charset-valid)
+  normalize to a `legacy-<sha12>` sentinel, at write/backfill time and again
+  defensively in the views. This delivers safe **index inputs**; **semantic-search
+  retrieval (embedding + brain wiring) is deferred** (owner decision 2) as a
+  tracked follow-up to #323.
+- **Reliability.** Deterministic ids give idempotent replay; `diagnoseRunLedger`
+  detects declaration-without-blob, orphan blob (via `listPrefix`), digest
+  mismatch (bounded deep re-hash), object-version mismatch, run-end-without-start,
+  dangling `parent_run_id`, missing legacy version ids, and a residual
+  `declaration-version-unverified` — read-only. Outages spool run events through
+  the #318 outbox (run events ARE spoolable, unlike HITL decisions) and converge
+  on drain: a declaration spooled while its blob was queued carries a
+  version-PENDING marker, and ordered materialization (blob first in the same
+  namespace) derives `version_state='verified'` from the committed blob row, so a
+  healed outage needs no operator repair. A declaration written on the direct
+  path is never re-derived — there the committed ROW is the authority.
 
 ## Rejected alternatives
 

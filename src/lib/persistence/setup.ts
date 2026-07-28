@@ -1,4 +1,4 @@
-import { closeSync, fsyncSync, lstatSync, openSync, readFileSync, unlinkSync, writeSync, mkdirSync, realpathSync } from 'node:fs';
+import { closeSync, fsyncSync, lstatSync, openSync, unlinkSync, writeSync, mkdirSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve as resolvePath } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -13,13 +13,16 @@ import {
   type PersistenceConfig,
 } from './config-schema.ts';
 import { sha256Hex } from './contracts.ts';
+import { describeEvidenceFailure, readEvidenceFileSync } from '../evidence-read.ts';
 import { LocalLedger, atomicWriteFileSync, pidAlive, tryReclaimStaleLock } from './local/ledger.ts';
 import { BRAIN_ENV_BINDING, OPS_ENV_BINDING, withPoolClient, type RoleEnvBinding } from './pool.ts';
-import { runOpsMigrations } from './postgres/migrate.ts';
+import { pendingOpsMigrations, runOpsMigrations } from './postgres/migrate.ts';
 import {
+  assertBootstrapEligible,
   finalizeBinding,
   recordMarkerEtag,
   stampPending,
+  verifyBinding,
   type CanonicalObjectTuple,
 } from './postgres/binding.ts';
 import {
@@ -44,7 +47,7 @@ import {
   type SetupJournalObjects,
   type SetupPhase,
 } from './setup-journal.ts';
-import { opsRootFor, resolveOpsBackend } from './resolve.ts';
+import { adminObjectEnv, classifyAdminObjectCreds, opsRootFor, resolveOpsBackend } from './resolve.ts';
 
 // `roster ops setup` engine (#318 section J). Roll-forward-only: every phase's
 // operation is idempotent and arbitrated at the remote (DB stamp transaction,
@@ -54,23 +57,30 @@ import { opsRootFor, resolveOpsBackend } from './resolve.ts';
 
 export const OPS_GITIGNORE_LINE = '/.roster/ops/';
 
+// Byte caps for the two small workspace/OS-temp files this module reads through
+// the hardened bounded reader. Generous for any legitimate file, small enough
+// that a planted runaway one is refused instead of loaded.
+const MAX_GITIGNORE_BYTES = 256 * 1024;
+const MAX_SETUP_LOCK_BYTES = 4 * 1024;
+
 // ---------- gitignore (first side effect; independent of init's marker block) ----------
 
 export function ensureOpsGitignore(cwd: string): 'appended' | 'present' {
   const path = join(cwd, '.gitignore');
-  let current = '';
-  try {
-    current = readFileSync(path, 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw new RosterError({
-        header: 'roster: cannot read .gitignore',
-        body: `  ${path}: ${(err as Error).message}`,
-        remedy: '  Fix filesystem permissions and re-run.',
-        exitCode: EXIT_ERROR,
-      });
-    }
+  // Same hardened bounded reader as the rest of the persistence surface
+  // (round-13 finding 2 sweep): .gitignore is workspace state, so a planted FIFO
+  // must not block `ops setup` and a symlink must not be read through. The
+  // append below already refuses to REPLACE a non-regular file.
+  const read = readEvidenceFileSync(path, MAX_GITIGNORE_BYTES);
+  if (read.state === 'malformed') {
+    throw new RosterError({
+      header: 'roster: cannot read .gitignore',
+      body: `  ${path} is ${describeEvidenceFailure(read.reason, MAX_GITIGNORE_BYTES)}.`,
+      remedy: '  Replace it with a regular file inside the workspace and re-run.',
+      exitCode: EXIT_ERROR,
+    });
   }
+  const current = read.state === 'ok' ? read.content : '';
   if (current.split('\n').some((line) => line.trim() === OPS_GITIGNORE_LINE)) return 'present';
   const sep = current === '' || current.endsWith('\n') ? '' : '\n';
   atomicWriteFileSync(path, `${current}${sep}${OPS_GITIGNORE_LINE}\n`);
@@ -118,12 +128,20 @@ export function acquireSetupLock(cwd: string): SetupLock {
           exitCode: EXIT_ERROR,
         });
       }
+      // The lock lives in the world-writable OS temp dir, so its holder record
+      // is read no-follow / non-blocking / capped — a planted FIFO there would
+      // otherwise hang every `ops setup` for this workspace. An unreadable or
+      // hostile shape simply means "holder unknown", the existing path that
+      // defers to tryReclaimStaleLock below.
       let holderPid: number | null = null;
-      try {
-        const parsed = JSON.parse(readFileSync(lockPath, 'utf8')) as { pid?: unknown };
-        if (typeof parsed.pid === 'number') holderPid = parsed.pid;
-      } catch {
-        holderPid = null;
+      const held = readEvidenceFileSync(lockPath, MAX_SETUP_LOCK_BYTES);
+      if (held.state === 'ok') {
+        try {
+          const parsed = JSON.parse(held.content) as { pid?: unknown };
+          if (typeof parsed.pid === 'number') holderPid = parsed.pid;
+        } catch {
+          holderPid = null;
+        }
       }
       if (holderPid !== null && pidAlive(holderPid)) {
         throw lockHeldError(lockPath, `pid ${holderPid}`);
@@ -227,6 +245,9 @@ export type SetupResult = {
   backendInfo: BackendInfo | null;
   roleInvariants: OpsRoleReport | null;
   orphaned: OrphanReport | null;
+  // Migrations applied by this run (the v1→v2 upgrade path when re-running setup
+  // over an existing postgres-s3 workspace). Empty when nothing was pending.
+  migrations: string[];
 };
 
 // ---------- parameter resolution ----------
@@ -450,8 +471,16 @@ function requireSetupEnv(params: EffectiveParams, opts: SetupOptions, env: NodeJ
   if (typeof adminUrl !== 'string' || adminUrl.length === 0) missing.push(binding.admin);
   if (typeof runtimeUrl !== 'string' || runtimeUrl.length === 0) missing.push(binding.runtime);
   if (opts.adminFiles === undefined) {
-    for (const v of ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY']) {
-      if (!env[v]) missing.push(v);
+    // The bucket claim + versioning probe are ADMIN operations — they need the
+    // admin object credentials (ROSTER_OPS_ADMIN_AWS_*), falling back to AWS_*
+    // only when the admin pair is COMPLETELY unset (finding: setup passed the
+    // restricted runtime AWS_* and failed with AccessDenied against valid admin
+    // creds). Route through the SHARED partial-pair rule (classifyAdminObjectCreds)
+    // so a partially-set admin pair (key-only, secret-only, lone token) is an
+    // actionable error here too — not a silent AWS_* fall-through (finding: setup
+    // bypassed the strict rule adminObjectEnv already enforced on the resolve path).
+    if (classifyAdminObjectCreds(env) === 'aws-fallback' && !(env.AWS_ACCESS_KEY_ID && env.AWS_SECRET_ACCESS_KEY)) {
+      missing.push('ROSTER_OPS_ADMIN_AWS_ACCESS_KEY_ID + ROSTER_OPS_ADMIN_AWS_SECRET_ACCESS_KEY (admin object creds — or the AWS_* pair as a single-identity fallback)');
     }
   }
   if (missing.length > 0) throw missingEnvError(missing);
@@ -546,6 +575,20 @@ function s3ConfigOf(params: EffectiveParams): S3StoreConfig {
   return { bucket: o.bucket, region: o.region, endpoint: o.endpoint, forcePathStyle: o.force_path_style };
 }
 
+// The object credentials setup uses for its ADMIN operations (marker claim +
+// GetBucketVersioning): the distinct admin pair when present (dropping any
+// runtime STS bleed), else the AWS_* pair (single-identity fallback), else the
+// raw env untouched. Routes through the SHARED partial-pair rule
+// (classifyAdminObjectCreds) so a PARTIALLY-set admin pair throws here too
+// (finding: setup fell back to AWS_* when only one admin var was set —
+// requireSetupEnv already rejects it before this runs, but the two callers must
+// share the one helper). For the aws-fallback branch this stays non-throwing on
+// a missing AWS_* pair (requireSetupEnv confirmed creds exist, and this is
+// eagerly evaluated as an argument even when a test injects validateBucket).
+function setupObjectEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return classifyAdminObjectCreds(env) === 'admin-pair' ? adminObjectEnv(env) : env;
+}
+
 async function defaultValidateBucket(cfg: S3StoreConfig, env: NodeJS.ProcessEnv): Promise<{ objectLock: boolean }> {
   await verifyBucketVersioning(cfg, env);
   return { objectLock: await detectObjectLockCapability(cfg, env) };
@@ -588,6 +631,51 @@ function writeConfigFile(cwd: string, config: PersistenceConfig): string {
 
 // ---------- validate mode (existing config, no --new-identity) ----------
 
+// Re-running `roster ops setup` over an existing configured postgres-s3
+// workspace runs any PENDING migrations (the v1→v2 run-ledger upgrade) with the
+// ADMIN url, then reapplies the runtime grants (idempotent — REVOKE ALL + GRANT
+// picks up new tables/views/sequences) and re-gates the role. Without this an
+// existing #318 v1 workspace stayed capability-gated and unusable after the CLI
+// upgrade (finding: the existing-config branch only validated). Returns the
+// migrations it applied for --json.
+async function upgradeExistingPostgres(
+  config: Extract<PersistenceConfig, { backend: 'postgres-s3' }>,
+  env: NodeJS.ProcessEnv,
+): Promise<{ migrations: string[]; roleInvariants: OpsRoleReport }> {
+  const binding = envBindingForDatabase(config.postgres.database);
+  const adminUrl = env[binding.admin];
+  const runtimeUrl = env[binding.runtime];
+  const missing: string[] = [];
+  if (typeof adminUrl !== 'string' || adminUrl.length === 0) missing.push(binding.admin);
+  if (typeof runtimeUrl !== 'string' || runtimeUrl.length === 0) missing.push(binding.runtime);
+  if (missing.length > 0) throw missingEnvError(missing);
+
+  const adminPool = new pg.Pool({ connectionString: adminUrl!, max: 2 });
+  try {
+    // Verify the DB behind the admin URL actually belongs to the CONFIGURED
+    // workspace BEFORE any mutation (finding: a swapped admin URL ran migrations
+    // + grants against a foreign workspace's database before runtime resolution
+    // could reject it). The #318 binding stamp (workspace_id, finalized) exists on
+    // a v1 DB, so this refuses BEFORE the v1→v2 migration touches a foreign DB.
+    await verifyBinding(adminPool, config.workspace.id);
+    const pending = await pendingOpsMigrations(adminPool);
+    await runOpsMigrations(adminPool);
+    const roleOpt = runtimeRoleFromUrl(runtimeUrl!);
+    const gate = await withPoolClient(adminPool, async (client) => {
+      const ensured = await ensureOpsRuntimeRole(
+        client,
+        config.postgres.database,
+        roleOpt !== undefined ? { role: roleOpt } : {},
+      );
+      return { role: ensured.role, report: await checkOpsRoleInvariants(client, ensured.role) };
+    });
+    if (!gate.report.ok) throw roleGateError(gate.role, gate.report);
+    return { migrations: [...pending.hitl, ...pending.roster_ops], roleInvariants: gate.report };
+  } finally {
+    await adminPool.end().catch(() => {});
+  }
+}
+
 async function validateExisting(opts: SetupOptions, env: NodeJS.ProcessEnv): Promise<SetupResult> {
   const loaded = loadPersistenceConfig(opts.cwd);
   if (loaded.state === 'legacy-implicit') {
@@ -605,6 +693,15 @@ async function validateExisting(opts: SetupOptions, env: NodeJS.ProcessEnv): Pro
     opts,
   );
   const gitignore = ensureOpsGitignore(opts.cwd);
+  // v1→v2 upgrade FIRST (admin url): run pending migrations + reapply grants so
+  // the subsequent runtime resolution sees the upgraded (v2) schema and the
+  // run-ledger operations are usable. postgres-s3 only; local trees upgrade
+  // themselves on the next ledger write (the code IS v2).
+  let migrations: string[] = [];
+  if (config.backend === 'postgres-s3') {
+    const up = await upgradeExistingPostgres(config, env);
+    migrations = up.migrations;
+  }
   const resolved = await resolveOpsBackend(opts.cwd, {
     env,
     ...(opts.files !== undefined ? { files: opts.files } : opts.adminFiles !== undefined ? { files: opts.adminFiles } : {}),
@@ -649,6 +746,7 @@ async function validateExisting(opts: SetupOptions, env: NodeJS.ProcessEnv): Pro
     backendInfo: resolved.info,
     roleInvariants,
     orphaned: null,
+    migrations,
   };
 }
 
@@ -769,6 +867,15 @@ export async function runSetup(opts: SetupOptions): Promise<SetupResult> {
       const adminPool = new pg.Pool({ connectionString: urls!.adminUrl, max: 2 });
       try {
         boundary('db-stamped-pending', 'begin');
+        // Preflight the existing stamp BEFORE any migration (finding: the fresh
+        // path ran runOpsMigrations before stampPending, so a swapped admin URL
+        // pointing at another workspace's finalized v1 DB was upgraded to v2 —
+        // its metadata mutated — before the stamp could reject it). A DB already
+        // finalized/pending for a different workspace is refused here, unmutated;
+        // an empty/unstamped DB (or one already stamped for this workspace)
+        // proceeds. The existing-config + repair paths already guard via
+        // verifyBinding; this closes the sibling fresh/new-identity path.
+        await assertBootstrapEligible(adminPool, params.id);
         await runOpsMigrations(adminPool);
         await stampPending(adminPool, {
           workspaceId: params.id,
@@ -779,7 +886,9 @@ export async function runSetup(opts: SetupOptions): Promise<SetupResult> {
         advance('db-stamped-pending');
 
         boundary('bucket-claimed', 'begin');
-        const adminFiles = opts.adminFiles ?? (await createS3FileStore(s3ConfigOf(params), env));
+        // The marker claim is an admin write — use the admin object credentials
+        // (finding: setup claimed the marker with the restricted runtime creds).
+        const adminFiles = opts.adminFiles ?? (await createS3FileStore(s3ConfigOf(params), setupObjectEnv(env)));
         const claim = await claimWorkspaceMarker(adminFiles, { workspaceId: params.id, name: params.name });
         // Cross-check the claimed marker's actual sha256 against the digest
         // stamped into the DB tuple (db-stamped-pending). They must agree — an
@@ -813,7 +922,10 @@ export async function runSetup(opts: SetupOptions): Promise<SetupResult> {
         if (!gate.report.ok) throw roleGateError(gate.role, gate.report);
         roleInvariants = gate.report;
         await proveRuntimeUrl(urls!.runtimeUrl, envBindingForDatabase(params.database!).runtime, params.id);
-        const bucketCheck = await (opts.validateBucket ?? defaultValidateBucket)(s3ConfigOf(params), env);
+        // GetBucketVersioning + Object Lock detection are admin reads — use the
+        // admin object credentials (finding: bucket validation used the runtime
+        // creds, which the least-privilege IAM policy denies these operations).
+        const bucketCheck = await (opts.validateBucket ?? defaultValidateBucket)(s3ConfigOf(params), setupObjectEnv(env));
         if (bucketCheck.objectLock) {
           await adminPool.query(
             `UPDATE roster_ops.meta
@@ -862,6 +974,9 @@ export async function runSetup(opts: SetupOptions): Promise<SetupResult> {
       backendInfo,
       roleInvariants,
       orphaned,
+      // The fresh pipeline applies migrations inline (db-stamped-pending); the
+      // upgrade-report field is for the validate-mode v1→v2 path.
+      migrations: [],
     };
   } finally {
     lock.release();

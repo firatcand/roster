@@ -3,6 +3,7 @@
 // schedule-resolve (silent + throws on unreadable). Negative control per case noted.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -28,9 +29,23 @@ function seed(cwd: string, fn: string, body: string): void {
   writeFileSync(join(dir, 'schedules.yaml'), body, 'utf8');
 }
 
-test('listFunctionDirs: only=<x> short-circuits without touching fs', () => {
-  // negative control: passing undefined would enumerate roster/ instead.
-  assert.deepEqual(listFunctionDirs('/nonexistent', 'gtm'), ['gtm']);
+// Round-11 finding 1 RETIRED the old "short-circuits without touching fs"
+// contract: returning `only` verbatim is exactly what let `--function
+// ../archive` name a registry outside roster/. The short-circuit is now
+// confinement-checked — it still skips the enumeration, but the one function it
+// names must be a kebab-case directory that really resolves beneath roster/.
+test('listFunctionDirs: only=<x> is validated + confined beneath roster/', () => {
+  assert.deepEqual(listFunctionDirs('/nonexistent', 'gtm'), [], 'no workspace → no registry');
+  const cwd = ws();
+  try {
+    mkdirSync(join(cwd, 'roster', 'gtm'), { recursive: true });
+    mkdirSync(join(cwd, 'archive'), { recursive: true });
+    // negative control: passing undefined would enumerate roster/ instead.
+    assert.deepEqual(listFunctionDirs(cwd, 'gtm'), ['gtm']);
+    assert.deepEqual(listFunctionDirs(cwd, '../archive'), [], 'traversal names no registry');
+    assert.deepEqual(listFunctionDirs(cwd, 'Gtm'), [], 'non-kebab names no registry');
+    assert.deepEqual(listFunctionDirs(cwd, 'absent'), [], 'a missing function names no registry');
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
 test('listFunctionDirs: missing roster/ → []', () => {
@@ -127,3 +142,26 @@ test('readScheduleEntries: unreadable existing path → throws (silent) / warns+
     assert.match(warnings[0]!, /cannot read/);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
+
+// Round-8 finding 1 sweep: the schedules.yaml registry lives in the workspace an
+// agent can write, so its read is hardened too — a planted FIFO reads as an
+// unreadable file instead of blocking every schedule reader forever.
+test(
+  'readScheduleEntries (round-8 finding 1 sweep): a FIFO at schedules.yaml is unreadable, not a hang',
+  { timeout: 5000, skip: process.platform === 'win32' ? 'POSIX only' : false },
+  () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'roster-sched-fifo-'));
+    try {
+      mkdirSync(join(cwd, 'roster', 'gtm'), { recursive: true });
+      const mk = spawnSync('mkfifo', [join(cwd, 'roster', 'gtm', 'schedules.yaml')]);
+      assert.equal(mk.status, 0, 'mkfifo available on POSIX');
+      const warnings: string[] = [];
+      assert.deepEqual(readScheduleEntries(cwd, 'gtm', warnings), []);
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0]!, /cannot read/);
+      assert.throws(() => readScheduleEntries(cwd, 'gtm'), /cannot read/);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  },
+);

@@ -60,15 +60,20 @@ test('backendInfo: shape — backend + per-component version and capabilities', 
   try {
     new LocalLedger({ opsRoot: env.opsRoot, workspaceId: env.ws }).meta();
     const info = localBackendInfo(env.opsRoot, env.ws);
+    // The local backend implements the #323 run ledger unconditionally, so it
+    // mints + reports roster_ops/objects at v2 (finding: local mints v1).
     assert.deepEqual(info, {
       backend: 'local',
       components: {
-        roster_ops: { version: 1, capabilities: ['runs', 'artifacts', 'outbox', 'checkpoint'] },
+        roster_ops: { version: 2, capabilities: ['runs', 'artifacts', 'outbox', 'checkpoint', 'run-ledger'] },
         hitl: { version: 1, capabilities: ['requests', 'decisions'] },
-        objects: { version: 1, capabilities: ['content-addressed', 'create-only'] },
+        objects: { version: 2, capabilities: ['content-addressed', 'create-only', 'version-id', 'list-prefix'] },
       },
     });
     assert.doesNotThrow(() => assertBackendSupported(info));
+    // The run-ledger operation gates pass on a local workspace.
+    assert.doesNotThrow(() => assertOperationSupported(info, 'runs.appendEvent'));
+    assert.doesNotThrow(() => assertOperationSupported(info, 'artifacts.getByRun'));
   } finally {
     cleanup(env);
   }
@@ -186,7 +191,10 @@ test('meta: a component the meta predates defaults to version 1; non-integer ver
   try {
     writeMeta(env, { hitl: 1, roster_ops: 1 }); // no 'objects' key (older tree)
     const info = localBackendInfo(env.opsRoot, env.ws);
-    assert.equal(info.components.objects.version, 1);
+    // A missing/older component is clamped UP to the local code floor (the local
+    // backend implements v2 unconditionally — finding: local mints v1).
+    assert.equal(info.components.objects.version, 2);
+    assert.equal(info.components.roster_ops.version, 2);
     assert.doesNotThrow(() => assertBackendSupported(info));
     writeMeta(env, { hitl: 1, roster_ops: 1.5, objects: 1 });
     assert.throws(() => localBackendInfo(env.opsRoot, env.ws), InvalidRecordError);
@@ -197,9 +205,9 @@ test('meta: a component the meta predates defaults to version 1; non-integer ver
 
 test('capabilities: unknown EXTRA capabilities are ignored (forward-compat); missing REQUIRED ones refuse by name', () => {
   const extra = makeBackendInfo('postgres-s3', {
-    roster_ops: { version: 1, capabilities: ['runs', 'artifacts', 'outbox', 'checkpoint', 'x-future-frobnicate'] },
+    roster_ops: { version: 2, capabilities: ['runs', 'artifacts', 'outbox', 'checkpoint', 'run-ledger', 'x-future-frobnicate'] },
     hitl: { version: 1, capabilities: ['requests', 'decisions', 'x-batch-decide'] },
-    objects: { version: 1 },
+    objects: { version: 2, capabilities: ['content-addressed', 'create-only', 'version-id', 'list-prefix', 'x-cold-storage'] },
   });
   assert.doesNotThrow(() => assertOperationSupported(extra, 'hitl.appendDecision'));
   assert.doesNotThrow(() => assertOperationSupported(extra, 'runs.appendEvent'));
@@ -278,6 +286,63 @@ test('meta: config version in meta.json is reported meta-first (read-only) — r
     localBackendInfo(env.opsRoot, env.ws);
     localBackendInfo(env.opsRoot, env.ws);
     assert.equal(readFileSync(path, 'utf8'), before);
+  } finally {
+    cleanup(env);
+  }
+});
+
+// ── finding: capability gates authorize v2 SQL against a v1 backend ──────────
+
+test('finding 8: a v1 roster_ops backend refuses the run-ledger operations with VersionSkewError (not a SQL error)', () => {
+  // A postgres backend still at #318 v1: base caps, NO run-ledger. Its run-event
+  // + declaration SQL needs v2 columns/tables, so the gate must refuse BEFORE the
+  // query with an actionable skew error rather than letting a missing-column /
+  // missing-relation SQL error escape.
+  const v1 = makeBackendInfo('postgres-s3', {
+    roster_ops: { version: 1, capabilities: ['runs', 'artifacts', 'outbox', 'checkpoint'] },
+    hitl: { version: 1, capabilities: ['requests', 'decisions'] },
+    objects: { version: 1, capabilities: ['content-addressed', 'create-only'] },
+  });
+  for (const op of [
+    'runs.appendEvent',
+    'runs.getRun',
+    'runs.listRuns',
+    // putArtifact writes object_version_id (v2) + optionally the v2 declaration
+    // table, so it too is gated on run-ledger (finding 3): declare-artifact must
+    // refuse on a v1 backend BEFORE any object upload, not after partial persist.
+    'artifacts.putArtifact',
+    'artifacts.putExternal',
+    'artifacts.getByRun',
+    'artifacts.getDeclaration',
+  ] as const) {
+    assert.throws(
+      () => assertOperationSupported(v1, op),
+      (err: unknown) => err instanceof VersionSkewError && /run-ledger|version-id/.test((err as Error).message),
+      `${op} must refuse on a v1 backend`,
+    );
+  }
+  // a bare-blob GET + a v1 hitl op remain available on v1.
+  assert.doesNotThrow(() => assertOperationSupported(v1, 'artifacts.getArtifact'));
+  assert.doesNotThrow(() => assertOperationSupported(v1, 'hitl.createRequest'));
+});
+
+test('finding 8: a local tree minted at v1 is upgraded to v2 on next access (meta rewrite) so run-ledger ops pass', () => {
+  const env = makeEnv();
+  try {
+    // Simulate a #318 tree: meta.json records roster_ops v1.
+    writeMeta(env, { roster_ops: 1, hitl: 1, objects: 1 });
+    // localBackendInfo clamps up (the code IS v2).
+    const info = localBackendInfo(env.opsRoot, env.ws);
+    assert.equal(info.components.roster_ops.version, 2, 'v1 tree reports v2 (code floor)');
+    assert.doesNotThrow(() => assertOperationSupported(info, 'runs.appendEvent'));
+
+    // ledger.meta() rewrites the stored meta.json to v2 (the local "migration").
+    new LocalLedger({ opsRoot: env.opsRoot, workspaceId: env.ws }).meta();
+    const raw = JSON.parse(readFileSync(join(env.opsRoot, env.ws, 'meta.json'), 'utf8')) as {
+      componentVersions: Record<string, number>;
+    };
+    assert.equal(raw.componentVersions.roster_ops, 2, 'stored meta.json upgraded to v2');
+    assert.equal(raw.componentVersions.objects, 2);
   } finally {
     cleanup(env);
   }

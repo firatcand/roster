@@ -1,8 +1,9 @@
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import YAML from 'yaml';
 import chalk from 'chalk';
 import { RosterError, EXIT_ERROR } from '../errors.ts';
+import { targetWithinWorkspace } from '../workspace-path.ts';
+import { describeEvidenceFailure, readEvidenceFileSync } from '../evidence-read.ts';
 import { NotionAdapter } from './adapters/notion.ts';
 import type {
   AssignedScope,
@@ -54,22 +55,43 @@ function rosterError(header: string, body: string, remedy: string): RosterError 
   });
 }
 
+const MAX_TRACKER_YAML_BYTES = 256 * 1024;
+
 export function trackerConfigPath(cwd: string): string {
   return join(cwd, 'roster', 'tracker.yaml');
 }
 
 export function loadTrackerConfig(cwd: string): TrackerConfig {
   const path = trackerConfigPath(cwd);
-  let raw: string;
-  try {
-    raw = readFileSync(path, 'utf8');
-  } catch {
+  // Round-10 finding 1: a symlinked `roster/` would point this at a foreign
+  // workspace's tracker credentials + board mapping.
+  if (targetWithinWorkspace(path, cwd) === null) {
+    throw rosterError(
+      'roster/tracker.yaml resolves outside the workspace',
+      `  ${path} escapes ${cwd} — a parent directory is a symlink pointing elsewhere.`,
+      '  Replace the symlinked directory with a real one, then re-run.',
+    );
+  }
+  // Same hardened bounded reader as every other roster/<…> registry file: a
+  // planted FIFO must not hang `roster task`, a symlinked tracker.yaml must not
+  // be followed to another workspace's board credentials, and a runaway file is
+  // refused rather than loaded.
+  const read = readEvidenceFileSync(path, MAX_TRACKER_YAML_BYTES);
+  if (read.state === 'missing') {
     throw rosterError(
       'no roster/tracker.yaml found',
       `  Looked for ${path}`,
       `  Run ${chalk.bold('roster task setup --data-source <id>')} to configure it.`,
     );
   }
+  if (read.state === 'malformed') {
+    throw rosterError(
+      'roster/tracker.yaml is unreadable',
+      `  ${path} is ${describeEvidenceFailure(read.reason, MAX_TRACKER_YAML_BYTES)}.`,
+      '  Replace it with a regular file inside the workspace, then re-run.',
+    );
+  }
+  const raw = read.content;
   let parsed: unknown;
   try {
     parsed = YAML.parse(raw);

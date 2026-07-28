@@ -28,7 +28,7 @@ export function buildListReport(cwd: string, now: Date = new Date()): ListReport
     if (entries.length === 0) continue;
 
     const stateMdPath = join(workspacePath, 'roster', functionName, 'state.md');
-    const state = readStateMd(stateMdPath);
+    const state = readStateMd(stateMdPath, workspacePath);
     if (state.malformedCount > 0) {
       warnings.push(
         `roster/${functionName}/state.md: ${state.malformedCount} malformed line${state.malformedCount === 1 ? '' : 's'} (skipped)`,

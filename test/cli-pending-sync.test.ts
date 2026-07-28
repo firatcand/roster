@@ -41,9 +41,10 @@ function writeMinimalCodexSchedule(cwd: string) {
   );
 }
 
-function writeExitOne(cwd: string, name: string) {
-  mkdirSync(join(cwd, 'logs', 'cron'), { recursive: true });
-  writeFileSync(join(cwd, 'logs', 'cron', `${name}.exit`), '1', 'utf8');
+function writeExitOne(cwd: string, name: string, fn = 'gtm', fireId = 'fire0') {
+  const dir = join(cwd, 'logs', 'cron', fn, name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${fireId}.exit`), '1', 'utf8');
 }
 
 test('cli: roster pending sync --json --cwd <tmp> on empty workspace → ok, inspected=0', () => {

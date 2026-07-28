@@ -44,6 +44,7 @@ import { realInstaller } from '../lib/founder-skills/installer.ts';
 import { executeHooksInstall } from '../commands/hooks.ts';
 import { executeMigrateCodexSkills, executeMigrateFromAgentTeam } from '../commands/migrate.ts';
 import { runTask } from '../commands/task.ts';
+import { runRun } from '../commands/run.ts';
 import { executeOpsSetup } from '../commands/ops.ts';
 import { parseOpsArgs } from '../lib/ops-args.ts';
 import { parseBrainArgs } from '../lib/brain-args.ts';
@@ -82,7 +83,7 @@ import {
   workspaceRequiredError,
 } from '../lib/errors.ts';
 
-type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'second-opinion' | 'hooks' | 'migrate' | 'pending' | 'skills' | 'upgrade' | 'update' | 'brain' | 'task' | 'ops';
+type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'second-opinion' | 'hooks' | 'migrate' | 'pending' | 'skills' | 'upgrade' | 'update' | 'brain' | 'task' | 'ops' | 'run';
 const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'install',
   'init',
@@ -99,6 +100,7 @@ const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'brain',
   'task',
   'ops',
+  'run',
 ]);
 
 // Display a path under home as `~/foo`; otherwise if it's under cwd, show
@@ -140,7 +142,7 @@ function printHelp(version: string): void {
     `  roster skills update [--latest]  ${chalk.dim('Re-sync from the manifest (lock records result), or bump pinned refs to newest tags')}`,
     `  roster review [function]     ${chalk.dim('Review unread decisions (HITL); --json to list, --approve/--reject <id|path> to apply')}`,
     `  roster second-opinion <files|--stdin|--diff>  ${chalk.dim('Ask a DIFFERENT AI CLI (codex|gemini|claude) for a structured review')}`,
-    `  roster pending sync          ${chalk.dim('Synthesize HITL items from failed-fire signals (.exit + STALE)')}`,
+    `  roster pending sync          ${chalk.dim('Synthesize HITL items from failed-fire signals (.exit incl. malformed evidence + STALE); skip an item durably via roster review --reject (writes an acknowledgement sentinel — a plain rm is re-created from the evidence)')}`,
     `  roster task setup            ${chalk.dim('Map your Notion board to canonical task states → roster/tracker.yaml (--data-source, --yes, --json)')}`,
     `  roster task list             ${chalk.dim('Show the claimable pool + your in-flight tasks (--json)')}`,
     `  roster task status [sel]     ${chalk.dim('Stage-grouped digest + needs-your-attention, or one task\'s stage (--json)')}`,
@@ -158,6 +160,7 @@ function printHelp(version: string): void {
     `  roster brain reindex [--yes]  ${chalk.dim('Backfill embeddings for active chunks missing/stale vectors (--since, --model; admin URL)')}`,
     `  roster brain gc [--yes]      ${chalk.dim('Prune superseded fact/chunk versions older than retention (default 2y; --older-than; admin URL)')}`,
     `  roster ops setup             ${chalk.dim('Configure the workspace operations backend: --backend local|postgres-s3 (--database, --bucket, --new-identity, --json, --yes)')}`,
+    `  roster run <verb>            ${chalk.dim('Run + artifact ledger: start|end|event|report|declare-artifact|show|list|doctor|repair (--run, --json, --allow-partial)')}`,
     `  roster migrate from-agent-team <dir>  ${chalk.dim('Migrate a legacy agent-team workspace into roster')}`,
     `  roster migrate codex-skills  ${chalk.dim('Copy legacy .codex/skills into Codex-native .agents/skills')}`,
     '',
@@ -569,7 +572,7 @@ function runMigrate(args: readonly string[]): number {
   });
 }
 
-function runPending(args: readonly string[]): number {
+async function runPending(args: readonly string[]): Promise<number> {
   const parsed = parsePendingArgs(args);
   if (parsed.kind === 'err') {
     throw new RosterError({
@@ -579,7 +582,7 @@ function runPending(args: readonly string[]): number {
       exitCode: EXIT_ERROR,
     });
   }
-  return executePendingSync({
+  return await executePendingSync({
     cwd: parsed.cwd ?? process.cwd(),
     silent: parsed.silent,
     json: parsed.json,
@@ -930,19 +933,35 @@ async function main(): Promise<number> {
     if (first === 'update') return await runUpdate(rest);
     if (first === 'hooks') return await runHooks(rest);
     if (first === 'migrate') return runMigrate(rest);
-    if (first === 'pending') return runPending(rest);
+    if (first === 'pending') return await runPending(rest);
     if (first === 'brain') return await runBrain(rest);
     if (first === 'task') return await runTask(rest);
     if (first === 'ops') return await runOps(rest);
+    if (first === 'run') return await runRun(rest);
   }
 
   throw unknownCommandError(first);
 }
 
+// process.exit() DISCARDS whatever is still queued on an async stdout/stderr —
+// and stdout is async whenever it is a pipe (`roster run show --json | jq`, a
+// spawned CLI in a script). A ~130 KiB `--json` payload was therefore delivered
+// TRUNCATED at the pipe buffer, i.e. as invalid JSON. Writing an empty chunk and
+// exiting from its completion callback drains the queue first; exiting is still
+// explicit, so a lingering handle can never hold the CLI open.
+function exitAfterFlush(code: number): void {
+  let pending = 2;
+  const done = (): void => {
+    if (--pending === 0) process.exit(code);
+  };
+  process.stdout.write('', done);
+  process.stderr.write('', done);
+}
+
 main()
-  .then((code) => process.exit(code))
+  .then(exitAfterFlush)
   .catch((err: unknown) => {
     const rosterErr = isRosterError(err) ? err : unexpectedError(err);
     renderError(rosterErr, { debug: debugMode });
-    process.exit(rosterErr.exitCode);
+    exitAfterFlush(rosterErr.exitCode);
   });

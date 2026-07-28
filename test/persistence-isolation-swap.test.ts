@@ -178,8 +178,8 @@ async function setupWorkspace(name: string): Promise<Workspace> {
       const appended: import('../src/lib/persistence/contracts.ts').WriteOutcome =
         await resolved.backend.runs.appendEvent({
           runId: `run-${name}`,
-          dedupeKey: `step-${i}`,
-          type: 'step',
+          kind: 'tool-call',
+          correlationId: `step-${i}`,
           data: { i },
         });
       assert.equal(appended.outcome, 'committed');

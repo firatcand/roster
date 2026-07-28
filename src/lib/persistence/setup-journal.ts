@@ -1,8 +1,17 @@
-import { readFileSync, unlinkSync } from 'node:fs';
+import { unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { RosterError, EXIT_ERROR } from '../errors.ts';
+import { describeEvidenceFailure, readEvidenceFileSync } from '../evidence-read.ts';
 import { isUuidV4 } from './config-schema.ts';
-import { atomicWriteFileSync, ensureOwnedDir } from './local/ledger.ts';
+import {
+  atomicWriteFileSync,
+  confinedLedgerDir,
+  ensureOwnedDir,
+  ledgerBoundaryFor,
+} from './local/ledger.ts';
+
+// The journal is small JSON; a legitimate one is a few hundred bytes.
+const MAX_JOURNAL_BYTES = 64 * 1024;
 
 // The `roster ops setup` crash/race journal (#318 section J). Lives at the
 // FIXED path .roster/ops/setup-journal.json — outside the per-UUID tree, so it
@@ -68,17 +77,22 @@ function corruptJournalError(path: string, detail: string): RosterError {
 }
 
 export function readSetupJournal(cwd: string): SetupJournal | null {
+  const opsRoot = opsRootPath(cwd);
+  // Round-12 finding 2 (same class): the journal decides which backend and
+  // which workspace identity setup resumes into, so a symlinked `.roster` or
+  // `.roster/ops` must never divert this read to a foreign tree — and a planted
+  // FIFO must not block it. Component-wise confinement + the hardened bounded
+  // reader, exactly like the ledger meta.
+  if (confinedLedgerDir(opsRoot, ledgerBoundaryFor(opsRoot)) === 'absent') return null;
   const path = setupJournalPath(cwd);
-  let raw: string;
-  try {
-    raw = readFileSync(path, 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw corruptJournalError(path, `unreadable: ${(err as Error).message}`);
+  const read = readEvidenceFileSync(path, MAX_JOURNAL_BYTES);
+  if (read.state === 'missing') return null;
+  if (read.state === 'malformed') {
+    throw corruptJournalError(path, `unreadable: ${describeEvidenceFailure(read.reason, MAX_JOURNAL_BYTES)}`);
   }
   let parsed: SetupJournal;
   try {
-    parsed = JSON.parse(raw) as SetupJournal;
+    parsed = JSON.parse(read.content) as SetupJournal;
   } catch {
     throw corruptJournalError(path, 'not valid JSON');
   }

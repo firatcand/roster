@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   BackendUnavailableError,
@@ -19,10 +18,13 @@ import {
   LocalLedger,
   assertRegularFileIfExists,
   atomicWriteFileSync,
+  confinedLedgerDir,
   fsyncDir,
+  readRegularFileSync,
   writeBlobSync,
   type LedgerRecord,
 } from './local/ledger.ts';
+import { readEvidenceFileSync } from '../evidence-read.ts';
 import { classifyDeliveryError, mayDegradeToPartial } from './error-classify.ts';
 
 // Durable local outbox (#318 section G) on top of the stage-2 ledger engine.
@@ -51,6 +53,11 @@ export const DEFAULT_BACKOFF_MAX_MS = 60_000;
 export const DEFAULT_JITTER_RATIO = 0.2;
 export const DEFAULT_MAX_SPOOL_BYTES = 256 * 1024 * 1024;
 
+// checkpoint.json is small derived metadata (a producer id + one integer per
+// namespace + a checksum), so it shares the ledger's small-JSON-sidecar cap —
+// NOT the artifact policy the spool bytes use.
+const MAX_CHECKPOINT_BYTES = 64 * 1024;
+
 // The record a drain delivers to the remote store. producerId/producerSeq
 // disambiguate cross-producer interleaving at the server; the server-side
 // delivery ledger (stage 4, section E) dedups by (workspace, namespace, id)
@@ -70,6 +77,16 @@ export type OutboxRecord = {
   producerSeq: number;
   enqueuedAt: number;
   artifact: { digest: string; size: number } | null;
+  // #323 store-assigned observations that ride alongside the record (run-event
+  // trust/lifecycle columns, declaration verified/version/sanitized columns,
+  // artifact meta). NEVER part of payloadHash — a queued write survives delivery
+  // unchanged and a retry dedups. Null for records that carry none.
+  observations: unknown;
+  // The immutable object version id observed when the drain delivered this
+  // record's spooled bytes to the object target — threaded onto the artifact row
+  // (finding: VersionId discarded on queued writes). NEVER hashed. Null for a
+  // non-artifact record or a store that supplies no version.
+  objectVersionId: string | null;
 };
 
 export type DeliverResult = 'committed' | 'duplicate';
@@ -93,9 +110,13 @@ export interface RemoteTarget {
 // delivery before the index record ever reaches the RemoteTarget, so a
 // committed index row always implies readable, digest-verified bytes.
 // Content-addressed and idempotent: 'exists' when the digest is already
-// stored; throws ConflictError if stored bytes mismatch the digest.
+// stored; throws ConflictError if stored bytes mismatch the digest. The result
+// carries the immutable objectVersionId of the delivered bytes so the drain can
+// thread it as a NON-HASHED observation onto the materialized artifact row
+// (finding: VersionId discarded on queued writes).
+export type ObjectDeliverResult = { outcome: 'stored' | 'exists'; objectVersionId: string | null };
 export interface ObjectTarget {
-  deliver(digest: string, bytes: Buffer): Promise<'stored' | 'exists'>;
+  deliver(digest: string, bytes: Buffer): Promise<ObjectDeliverResult>;
 }
 
 export class SpoolQuotaError extends PersistenceError {
@@ -118,6 +139,9 @@ export type OutboxEntryState = {
   namespace: OutboxTargetNamespace;
   kind: string;
   payload: unknown;
+  // #323: store-assigned observations spooled alongside the record (excluded
+  // from payloadHash). Null for records that carry none.
+  observations: unknown;
   payloadHash: string;
   spoolDigest: string | null;
   spoolSize: number;
@@ -160,6 +184,10 @@ export type EnqueueInput = {
   id: string;
   kind: string;
   payload: unknown;
+  // #323: store-assigned observations that must survive delivery unchanged but
+  // are NOT part of the payload hash (source/pid/timestamps, declaration
+  // verified/version/sanitized). Omit for records without observations.
+  observations?: unknown;
 };
 
 export type EnqueueResult = { outcome: 'queued'; id: string; producerSeq: number };
@@ -275,6 +303,17 @@ export class LocalOutbox {
     return join(this.ledger.treeDir, 'spool');
   }
 
+  // Round-13 finding 2: the spool is agent-writable ledger state like every
+  // other directory in the tree, but its READERS never confined it — so a
+  // planted `.roster/ops/<workspaceId>/spool -> <elsewhere>` diverted
+  // `run show --allow-partial` and the drain to foreign bytes (and the lstat
+  // guard even chmod'd the foreign file). Same read-only component walk the
+  // ledger's own reads use, same taxonomy: 'absent' means nothing is staged, a
+  // link or a non-directory throws.
+  private confinedSpoolDir(): 'absent' | 'present' {
+    return confinedLedgerDir(this.spoolDir(), this.ledger.boundary);
+  }
+
   private checkpointPath(): string {
     return join(this.ledger.namespaceDir(OUTBOX_NAMESPACE), 'checkpoint.json');
   }
@@ -294,6 +333,12 @@ export class LocalOutbox {
             namespace: p.namespace,
             kind: p.kind,
             payload: p.payload,
+            // Observations ride in the ledger record's SEPARATE field (excluded
+            // from its checksum), NOT inside the checksummed EnqueuedPayload — so
+            // a re-enqueue with new observations (new pid/timestamp) is an
+            // idempotent ledger replay, not a ConflictError (finding: queued
+            // retries conflict on observations).
+            observations: rec.observations ?? null,
             payloadHash: p.payloadHash,
             spoolDigest: p.spoolDigest,
             spoolSize: p.spoolSize,
@@ -455,7 +500,19 @@ export class LocalOutbox {
       namespace: input.namespace,
       entryId: input.id,
     });
-    const res = this.ledger.append(OUTBOX_NAMESPACE, { id: eventId, kind: 'outbox-enqueued', payload });
+    // Observations ride in the ledger record's dedicated `observations` field,
+    // which the ledger EXCLUDES from the record checksum (which covers `payload`
+    // only). So the outbox-enqueued ledger record's idempotency is keyed on the
+    // stable payload alone — a re-enqueue of the same id with different
+    // observations (new pid/started_at) dedups (first-write-wins) instead of
+    // throwing ConflictError. The server dedup key (payloadHash) already excludes
+    // observations too.
+    const res = this.ledger.append(OUTBOX_NAMESPACE, {
+      id: eventId,
+      kind: 'outbox-enqueued',
+      payload,
+      ...(input.observations !== undefined ? { observations: input.observations } : {}),
+    });
     return { outcome: 'queued', id: input.id, producerSeq: res.record.producerSeq };
   }
 
@@ -465,7 +522,12 @@ export class LocalOutbox {
     this.ledger.ensureDir(dir);
     const path = join(dir, digest);
     if (assertRegularFileIfExists(path) !== null) {
-      if (sha256Hex(readFileSync(path)) !== digest) {
+      // Descriptor-verified re-read (the artifact/blob policy, shared with the
+      // local artifact store): O_NOFOLLOW + O_NONBLOCK + an fstat regular-file
+      // re-proof, so a shape swapped in after the lstat above can neither hang
+      // the stage nor divert it. Content bound stays the DIGEST, not a byte cap.
+      const existing = readRegularFileSync(path);
+      if (existing === null || sha256Hex(existing) !== digest) {
         throw new ConflictError(digest, 'spooled artifact bytes do not match their digest');
       }
       // Orphan re-adoption (crash after staging, before enqueue): re-fsync the
@@ -480,9 +542,10 @@ export class LocalOutbox {
   // Digest-verified spool access for queued-overlay artifact reads: null when
   // no bytes are staged under this digest.
   spoolBytes(digest: string): Buffer | null {
+    if (this.confinedSpoolDir() === 'absent') return null;
     const path = join(this.spoolDir(), digest);
-    if (assertRegularFileIfExists(path) === null) return null;
-    const bytes = readFileSync(path);
+    const bytes = readRegularFileSync(path);
+    if (bytes === null) return null;
     if (sha256Hex(bytes) !== digest) {
       throw new InvalidRecordError(`spooled artifact at ${path} does not match its digest`);
     }
@@ -491,11 +554,8 @@ export class LocalOutbox {
 
   private readSpool(entry: OutboxEntryState): Buffer {
     const path = join(this.spoolDir(), entry.spoolDigest!);
-    assertRegularFileIfExists(path);
-    let bytes: Buffer;
-    try {
-      bytes = readFileSync(path);
-    } catch {
+    const bytes = this.confinedSpoolDir() === 'absent' ? null : readRegularFileSync(path);
+    if (bytes === null) {
       throw new InvalidRecordError(
         `outbox entry ${entry.entryId} references spooled bytes missing at ${path} — the staging invariant is broken`,
       );
@@ -508,7 +568,7 @@ export class LocalOutbox {
 
   // ---------- drain ----------
 
-  private recordOf(entry: OutboxEntryState): OutboxRecord {
+  private recordOf(entry: OutboxEntryState, objectVersionId: string | null): OutboxRecord {
     // entry.payload is already the plain snapshot value (toJSON resolved at
     // enqueue), so canonicalJson here is deterministic and byte-identical to
     // the canonical the payloadHash was computed from — no re-invocation risk.
@@ -524,6 +584,8 @@ export class LocalOutbox {
       producerSeq: entry.producerSeq,
       enqueuedAt: entry.enqueuedAt,
       artifact: entry.spoolDigest !== null ? { digest: entry.spoolDigest, size: entry.spoolSize } : null,
+      observations: entry.observations,
+      objectVersionId,
     };
   }
 
@@ -569,7 +631,19 @@ export class LocalOutbox {
     return { namespaces, checkpointWarning: null };
   }
 
-  async drain(target: RemoteTarget, opts: { objects?: ObjectTarget; namespace?: OutboxTargetNamespace } = {}): Promise<DrainReport> {
+  async drain(
+    target: RemoteTarget,
+    opts: {
+      objects?: ObjectTarget;
+      namespace?: OutboxTargetNamespace;
+      // Populated (entryId → observed objectVersionId) for every artifact entry
+      // this drain delivers, so the write-through path can thread the immutable
+      // version back onto the caller's put result (finding: a healthy outbox
+      // artifact write left its declaration version_state='unverified' because
+      // the drained VersionId was never returned to putArtifact).
+      deliveredVersions?: Map<string, string | null>;
+    } = {},
+  ): Promise<DrainReport> {
     const fold = this.fold();
     const report: DrainReport = { namespaces: {}, checkpointWarning: null };
     const names = (Object.keys(fold.namespaces) as OutboxTargetNamespace[])
@@ -637,12 +711,18 @@ export class LocalOutbox {
           payload: { entryId: entry.entryId, attempt, at: this.now() } satisfies AttemptPayload,
         });
         try {
+          let objectVersionId: string | null = null;
           if (entry.spoolDigest !== null) {
             // Object-first / index-last: bytes are confirmed at the object
-            // target before the index record is delivered.
-            await opts.objects!.deliver(entry.spoolDigest, this.readSpool(entry));
+            // target before the index record is delivered. The observed
+            // immutable version is threaded onto the artifact row (non-hashed).
+            const objRes = await opts.objects!.deliver(entry.spoolDigest, this.readSpool(entry));
+            objectVersionId = objRes.objectVersionId;
+            // Record the observed immutable version so the write-through path can
+            // thread it onto the caller's put result (finding: VersionId not returned).
+            opts.deliveredVersions?.set(entry.entryId, objectVersionId);
           }
-          const result = await target.deliver(this.recordOf(entry));
+          const result = await target.deliver(this.recordOf(entry, objectVersionId));
           if (result !== 'committed' && result !== 'duplicate') {
             throw new InvalidRecordError(`remote target returned invalid result '${String(result)}'`);
           }
@@ -757,18 +837,27 @@ export class LocalOutbox {
     bytes: Uint8Array,
     target: RemoteTarget,
     opts: { objects: ObjectTarget },
-  ): Promise<WriteOutcome & { digest: string }> {
+  ): Promise<WriteOutcome & { digest: string; objectVersionId: string | null }> {
     const { digest } = this.enqueueArtifact(input, bytes);
-    const outcome = await this.settle(input, target, opts);
-    return { ...outcome, digest };
+    // Capture the immutable version observed when THIS entry's bytes are drained
+    // to the object target, so a healthy write-through returns a version the
+    // caller can record as version_state='verified' (finding: VersionId discarded).
+    const deliveredVersions = new Map<string, string | null>();
+    const outcome = await this.settle(input, target, opts, deliveredVersions);
+    return { ...outcome, digest, objectVersionId: deliveredVersions.get(input.id) ?? null };
   }
 
   private async settle(
     input: EnqueueInput,
     target: RemoteTarget,
     opts: { objects?: ObjectTarget },
+    deliveredVersions?: Map<string, string | null>,
   ): Promise<WriteOutcome> {
-    const report = await this.drain(target, { namespace: input.namespace, objects: opts.objects });
+    const report = await this.drain(target, {
+      namespace: input.namespace,
+      objects: opts.objects,
+      ...(deliveredVersions ? { deliveredVersions } : {}),
+    });
     const entry = this.fold().entries.get(input.id);
     if (entry?.status === 'acked') return { outcome: 'committed', id: input.id };
     // The durable queue entry is preserved above (enqueue appended it; a halt
@@ -893,16 +982,22 @@ export class LocalOutbox {
     return { ...body, checksum: this.checkpointChecksum(body) };
   }
 
+  // Round-13 finding 2: this was a raw blocking readFileSync over an unconfined
+  // directory, so a FIFO at outbox/checkpoint.json HUNG the next drain after its
+  // remote commits, and a symlink there let a foreign file stand in for our
+  // derived state. Now: the namespace dir is component-confined and the file goes
+  // through the shared hardened bounded reader (O_NOFOLLOW + O_NONBLOCK + fstat
+  // regular-file + cap). Every refusal is `null` — the existing "discard and
+  // recompute from the segments" path, since the checkpoint is never truth.
   private readCheckpointFile(): OutboxCheckpoint | null {
-    let raw: string;
-    try {
-      raw = readFileSync(this.checkpointPath(), 'utf8');
-    } catch {
+    if (confinedLedgerDir(this.ledger.namespaceDir(OUTBOX_NAMESPACE), this.ledger.boundary) === 'absent') {
       return null;
     }
+    const read = readEvidenceFileSync(this.checkpointPath(), MAX_CHECKPOINT_BYTES);
+    if (read.state !== 'ok') return null;
     let parsed: OutboxCheckpoint;
     try {
-      parsed = JSON.parse(raw) as OutboxCheckpoint;
+      parsed = JSON.parse(read.content) as OutboxCheckpoint;
     } catch {
       return null;
     }

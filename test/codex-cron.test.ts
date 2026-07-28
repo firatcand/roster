@@ -1,12 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   shellQuote,
   renderCronLine,
   upsertCronEntry,
   findMarkerBlocks,
   getMarkerStrings,
+  legacyMarkerIsAmbiguous,
+  legacyMarkerOwnedBy,
   removeCronEntry,
+  cronMarkerId,
   type CrontabIO,
 } from '../src/lib/codex-cron.ts';
 import { RosterError } from '../src/lib/errors.ts';
@@ -140,30 +146,38 @@ test('renderCronLine: workspace with apostrophe is escaped correctly', () => {
 
 // ── renderCronLine: ROS-42 wrapped form with exit-code capture ────────────
 
-test('renderCronLine: exitPath set → wraps in /bin/sh -c, captures $?', () => {
+test('renderCronLine: exitDir set → wraps in /bin/sh -c, mints a per-fire id, captures $?', () => {
   const line = renderCronLine({
     cron: '0 9 * * 1-5',
     workspacePath: '/Users/firat/my-roster',
     codexBinaryPath: '/opt/homebrew/bin/codex',
     prompt: 'Use the roster-orchestrator skill',
     logPath: '/Users/firat/my-roster/logs/cron/sdr.log',
-    exitPath: '/Users/firat/my-roster/logs/cron/sdr.exit',
+    exitDir: '/Users/firat/my-roster/logs/cron/gtm/sdr',
   });
   // env prefix unchanged
   assert.match(line, /^0 9 \* \* 1-5 \/usr\/bin\/env -i HOME="\$HOME" /);
   // /bin/sh -c wraps the inner command
   assert.match(line, / \/bin\/sh -c '/);
+  // the per-fire dir is created before the exit write
+  assert.ok(line.includes('mkdir -p'));
+  // a per-fire id is minted from /dev/urandom (hex, spaces/newlines stripped)
+  assert.match(line, /fid=\$\(od -An -N8 -tx1 \/dev\/urandom/);
+  // …with a $$-<epoch> fallback (the % of date +%s is cron-escaped to \%s)
+  assert.ok(line.includes('fid=$$-$(date +\\%s)'));
+  // …and exported to the codex process so `roster run start` records the match
+  assert.ok(line.includes('export ROSTER_FIRE_ID=$fid'));
   // inner: codex exec + redirect + rc capture + exit. The `%` in printf gets
   // escaped to `\%` by escapeCronPercent so cron doesn't treat it as the
-  // stdin sentinel — cron strips the backslash before /bin/sh sees it, so
-  // the actual shell still sees `printf %s`.
+  // stdin sentinel — cron strips the backslash before /bin/sh sees it.
   assert.match(line, /printf \\%s "\$rc"/);
   assert.match(line, /exit "\$rc"/);
-  // exit path is embedded
-  assert.ok(line.includes("'/Users/firat/my-roster/logs/cron/sdr.exit'"));
+  // the exit is written to a PER-FIRE file `<exitDir>/<fireId>.exit`
+  assert.ok(line.includes("'/Users/firat/my-roster/logs/cron/gtm/sdr'"));
+  assert.ok(line.includes('"/$fid.exit"'));
 });
 
-test('renderCronLine: exitPath unset → legacy un-wrapped form (byte-exact backwards-compat)', () => {
+test('renderCronLine: exitDir unset → legacy un-wrapped form (byte-exact backwards-compat)', () => {
   const line = renderCronLine({
     cron: '0 9 * * 1-5',
     workspacePath: '/work',
@@ -185,7 +199,7 @@ test('renderCronLine: eventsPath set → adds --json, splits stdout/stderr redir
     codexBinaryPath: '/usr/local/bin/codex',
     prompt: 'p',
     logPath: '/w/log',
-    exitPath: '/w/exit',
+    exitDir: '/w/exit',
     eventsPath: '/w/events.jsonl',
   });
   // --json present in inner script (note: single quotes are escaped as '\'' by
@@ -233,7 +247,7 @@ test('renderCronLine: wrapped form parses as valid POSIX shell', () => {
     codexBinaryPath: '/opt/homebrew/bin/codex',
     prompt: 'Use the roster-orchestrator skill to run plan cold for agent sdr',
     logPath: '/Users/firat/my-roster/logs/cron/sdr.log',
-    exitPath: '/Users/firat/my-roster/logs/cron/sdr.exit',
+    exitDir: '/Users/firat/my-roster/logs/cron/gtm/sdr',
   });
   const r = shellParses(line);
   assert.ok(r.ok, `sh -n rejected the rendered line:\n${r.stderr}\nline:\n${line}`);
@@ -246,7 +260,7 @@ test('renderCronLine: wrapped form with apostrophe path parses', () => {
     codexBinaryPath: '/opt/homebrew/bin/codex',
     prompt: "Run plan that's important",
     logPath: "/tmp/firat's-test/log",
-    exitPath: "/tmp/firat's-test/exit",
+    exitDir: "/tmp/firat's-test/exit",
   });
   const r = shellParses(line);
   assert.ok(r.ok, `sh -n rejected the apostrophe-path line:\n${r.stderr}`);
@@ -259,11 +273,386 @@ test('renderCronLine: events form parses', () => {
     codexBinaryPath: '/usr/local/bin/codex',
     prompt: 'p',
     logPath: '/w/log',
-    exitPath: '/w/exit',
+    exitDir: '/w/exit',
     eventsPath: '/w/events.jsonl',
   });
   const r = shellParses(line);
   assert.ok(r.ok, `sh -n rejected the events-form line:\n${r.stderr}`);
+});
+
+// ── renderCronLine: byte-exact GOLDEN (should-fix 6) ──────────────────────
+//
+// A COMPLETE hardcoded golden string of the full wrapped line — NOT derived from
+// renderCronLine, so the renderer and auditCronDrift's re-render cannot drift
+// together silently (the fire id is resolved at runtime as `$fid`, so the
+// rendered string is fully deterministic). String.raw preserves the literal
+// backslashes (`\%`, the `'\''` single-quote dances) byte-for-byte.
+
+const GOLDEN_WRAPPED_LINE = String.raw`0 9 * * 1-5 /usr/bin/env -i HOME="$HOME" PATH='/opt/homebrew/bin:/usr/bin:/bin' CODEX_HOME="$HOME/.codex" /bin/sh -c 'mkdir -p '\''/w/logs/cron/gtm/sdr'\''; fid=$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -dc 0-9a-f); [ -n "$fid" ] || fid=$$-$(date +\%s); export ROSTER_FIRE_ID=$fid; '\''/opt/homebrew/bin/codex'\'' exec -C '\''/w'\'' -c shell_environment_policy.inherit=core '\''p'\'' >> '\''/w/logs/cron/gtm/sdr.log'\'' 2>&1 ; rc=$?; rm -f '\''/w/logs/cron/gtm/sdr'\''"/$fid.exit" 2>/dev/null; ( set -C; printf \%s "$rc" > '\''/w/logs/cron/gtm/sdr'\''"/$fid.exit" ) 2>/dev/null; exit "$rc"'`;
+
+test('renderCronLine (should-fix 6): the full wrapped line byte-exactly matches the golden string', () => {
+  const line = renderCronLine({
+    cron: '0 9 * * 1-5',
+    workspacePath: '/w',
+    codexBinaryPath: '/opt/homebrew/bin/codex',
+    prompt: 'p',
+    logPath: '/w/logs/cron/gtm/sdr.log',
+    exitDir: '/w/logs/cron/gtm/sdr',
+  });
+  assert.equal(line, GOLDEN_WRAPPED_LINE);
+});
+
+// ── renderCronLine: symlink-proof exit write (round-6 finding 1) ───────────
+//
+// The sandboxed agent knows the fire id (ROSTER_FIRE_ID / the .run-id sidecar)
+// and could plant a symlink at `<exitDir>/<fid>.exit` — the old plain `>`
+// redirect FOLLOWED it and truncated any same-user file. The wrapper now
+// `rm -f`s the path and creates under `set -C` (noclobber → O_CREAT|O_EXCL,
+// which never follows a symlink); if the create fails, it exits SILENTLY with
+// codex's rc — a missing exit file is the fail-closed outcome (stale path).
+
+test('renderCronLine (round-6 finding 1): the rendered tail uses rm -f + set -C noclobber, never a bare > redirect', () => {
+  const line = renderCronLine({
+    cron: '0 9 * * 1-5',
+    workspacePath: '/w',
+    codexBinaryPath: '/opt/homebrew/bin/codex',
+    prompt: 'p',
+    logPath: '/w/logs/cron/gtm/sdr.log',
+    exitDir: '/w/logs/cron/gtm/sdr',
+  });
+  // Planted-entry removal precedes the write.
+  assert.ok(line.includes(`; rc=$?; rm -f '\\''/w/logs/cron/gtm/sdr'\\''"/$fid.exit" 2>/dev/null; `), line);
+  // The write happens ONLY inside a noclobber subshell (O_CREAT|O_EXCL).
+  assert.ok(line.includes(`( set -C; printf \\%s "$rc" > '\\''/w/logs/cron/gtm/sdr'\\''"/$fid.exit" ) 2>/dev/null; exit "$rc"'`), line);
+  // No sentinel/fallback write path remains for an attacker to steer.
+  assert.ok(!line.includes('111'));
+  assert.ok(!line.includes('exit-evidence'));
+});
+
+// Reverse the outer shellQuote (inner.replace(' → '\'')) and the cron %-escape
+// to recover the EXACT inner script bytes /bin/sh executes at fire time, so the
+// behavioral tests below exercise the real rendered tail, not a re-typed copy.
+function innerScriptOf(line: string): string {
+  const m = line.match(/ \/bin\/sh -c '(.*)'$/s);
+  assert.ok(m, `no /bin/sh -c wrapper in: ${line}`);
+  return m![1]!.split(`'\\''`).join(`'`).replace(/\\%/g, '%');
+}
+
+function exitWriteTailOf(line: string): string {
+  const inner = innerScriptOf(line);
+  const idx = inner.indexOf('; rc=$?;');
+  assert.ok(idx >= 0, `no rc-capture tail in inner script: ${inner}`);
+  return inner.slice(idx + '; rc=$?;'.length);
+}
+
+test('renderCronLine (round-6 finding 1): a planted symlink at the exit path is NOT followed — the victim file survives, the exit lands', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'roster-cron-symlink-'));
+  try {
+    const exitDir = join(dir, 'exit');
+    mkdirSync(exitDir, { recursive: true });
+    const victim = join(dir, 'victim.txt');
+    writeFileSync(victim, 'precious bytes');
+    symlinkSync(victim, join(exitDir, 'attackfid.exit')); // the attacker's plant
+    const line = renderCronLine({
+      cron: '0 9 * * *',
+      workspacePath: dir,
+      codexBinaryPath: '/usr/bin/true',
+      prompt: 'p',
+      logPath: join(dir, 'run.log'),
+      exitDir,
+    });
+    // Execute the REAL rendered tail with the fire id + rc pinned.
+    const r = _spawnSync('/bin/sh', ['-c', `fid=attackfid; rc=0;${exitWriteTailOf(line)}`], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(readFileSync(victim, 'utf8'), 'precious bytes', 'the symlink target must NEVER be truncated');
+    const st = lstatSync(join(exitDir, 'attackfid.exit'));
+    assert.ok(st.isFile() && !st.isSymbolicLink(), 'the exit path is now a real file, not the planted symlink');
+    assert.equal(readFileSync(join(exitDir, 'attackfid.exit'), 'utf8'), '0', 'the exit code still lands');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('renderCronLine (round-6 finding 1): an unremovable plant (directory) → silent exit with codex rc, NO exit file (fail-closed, stale path catches it)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'roster-cron-plant-dir-'));
+  try {
+    const exitDir = join(dir, 'exit');
+    mkdirSync(join(exitDir, 'attackfid.exit'), { recursive: true }); // rm -f fails, set -C create fails
+    const line = renderCronLine({
+      cron: '0 9 * * *',
+      workspacePath: dir,
+      codexBinaryPath: '/usr/bin/true',
+      prompt: 'p',
+      logPath: join(dir, 'run.log'),
+      exitDir,
+    });
+    const r = _spawnSync('/bin/sh', ['-c', `fid=attackfid; rc=0;${exitWriteTailOf(line)}`], { encoding: 'utf8' });
+    assert.equal(r.status, 0, 'codex rc is preserved — the write failure never masquerades as a codex failure');
+    assert.equal(r.stderr, '', 'silent: no stderr noise an attacker can trigger');
+    assert.ok(lstatSync(join(exitDir, 'attackfid.exit')).isDirectory(), 'nothing was written through the plant');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('renderCronLine (round-6 finding 1): full wrapped command with a WRITABLE exit dir + SUCCEEDING codex → exit 0, evidence written', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'roster-cron-evidence-ok-'));
+  try {
+    const exitDir = join(dir, 'exit');
+    const line = renderCronLine({
+      cron: '0 9 * * *',
+      workspacePath: dir,
+      codexBinaryPath: '/usr/bin/true',
+      prompt: 'p',
+      logPath: join(dir, 'run.log'),
+      exitDir,
+    });
+    // Execute the command portion (everything after the 5 cron fields), verbatim.
+    // The cron daemon would strip the `\` from `\%`; /bin/sh reads `\%` as `%`
+    // (identical), so running the rendered line directly is faithful.
+    const cmd = line.match(/^(?:\S+\s+){5}(.*)$/s)![1]!;
+    const r = _spawnSync('/bin/sh', ['-c', cmd], { encoding: 'utf8' });
+    assert.equal(r.status, 0, `evidence written successfully → codex's own exit (0); stderr:\n${r.stderr}`);
+    const exits = readdirSync(exitDir).filter((f) => f.endsWith('.exit'));
+    assert.equal(exits.length, 1, 'exactly one per-fire exit file');
+    assert.equal(readFileSync(join(exitDir, exits[0]!), 'utf8'), '0');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('renderCronLine (round-6 finding 1): an unwritable exit dir + a SUCCEEDING codex → SILENT exit 0, no exit file (fail-closed)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'roster-cron-evidence-'));
+  try {
+    // codex stub = /bin/true (exits 0, ignores args). exitDir points at a regular
+    // FILE, so the create fails with ENOTDIR even though codex succeeded — a
+    // uid-independent way to simulate an unwritable exit dir. The wrapper exits
+    // with codex's own rc and writes nothing: the MISSING exit file is the
+    // detectable (stale-path) signal, replacing the old 111 sentinel that gave
+    // a symlink-planting agent a way to forge failures.
+    const exitDir = join(dir, 'exit-is-a-file');
+    writeFileSync(exitDir, 'not a dir');
+    const line = renderCronLine({
+      cron: '0 9 * * *',
+      workspacePath: dir,
+      codexBinaryPath: '/usr/bin/true',
+      prompt: 'p',
+      logPath: join(dir, 'run.log'),
+      exitDir,
+    });
+    const cmd = line.match(/^(?:\S+\s+){5}(.*)$/s)![1]!;
+    const r = _spawnSync('/bin/sh', ['-c', cmd], { encoding: 'utf8' });
+    assert.equal(r.status, 0, `codex rc preserved; got ${r.status}\nstderr:\n${r.stderr}`);
+    assert.equal(readFileSync(exitDir, 'utf8'), 'not a dir', 'nothing written through the bad path');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── cronMarkerId + legacy-marker migration (finding 2 backward-compat) ─────
+
+test('cronMarkerId: composes <function>/<schedule>', () => {
+  assert.equal(cronMarkerId('gtm', 'nightly'), 'gtm/nightly');
+});
+
+// A legacy bare-name block whose line PROVES ownership by embedding the
+// function-scoped channel paths (what an interim scoped-path install wrote
+// under a bare marker).
+function legacyBlockOwnedBy(fn: string, name: string): string {
+  return (
+    `# roster:schedule:${name}:begin (do not edit; managed by \`roster schedule install\`)\n` +
+    `0 0 * * * old-line >> '/w/logs/cron/${fn}/${name}.log' 2>&1\n` +
+    `# roster:schedule:${name}:end\n`
+  );
+}
+
+test('upsertCronEntry: migrates a legacy bare-name block whose content proves OUR function (backward compat)', () => {
+  const io = fakeIO(legacyBlockOwnedBy('gtm', 'nightly'));
+  const r = upsertCronEntry(io, 'gtm/nightly', 'new-line', { id: 'nightly', registeredFunctions: ['gtm'] });
+  assert.equal(r.action, 'updated');
+  // The block is now under the scoped id; the legacy bare marker is gone.
+  assert.match(io.current, /# roster:schedule:gtm\/nightly:begin/);
+  assert.equal(findMarkerBlocks(io.current, 'nightly').length, 0, 'legacy bare marker migrated away');
+  assert.ok(io.current.includes('new-line'));
+  assert.ok(!io.current.includes('old-line'));
+});
+
+test('removeCronEntry: strips a provably-owned legacy bare-name block when given the scoped id + legacy fallback', () => {
+  const io = fakeIO(legacyBlockOwnedBy('gtm', 'nightly'));
+  const r = removeCronEntry(io, 'gtm/nightly', { id: 'nightly', registeredFunctions: ['gtm'] });
+  assert.equal(r.removed, true);
+  assert.equal(io.current, '');
+});
+
+// ── round-6 finding 8: a bare legacy marker is adopted ONLY with proof ─────
+//
+// The bare marker id carries no function. Before this fix, installing or
+// removing ops/nightly adopted ANY bare 'nightly' block — including
+// gtm/nightly's LIVE one — rewriting or deleting another function's schedule.
+
+test('upsertCronEntry (round-6 finding 8): a bare legacy block belonging to ANOTHER function is refused, never rewritten', () => {
+  const io = fakeIO(legacyBlockOwnedBy('gtm', 'nightly'));
+  assert.throws(
+    () => upsertCronEntry(io, 'ops/nightly', 'ops-line', { id: 'nightly', registeredFunctions: ['ops'] }),
+    (err: unknown) => {
+      assert.ok(err instanceof RosterError);
+      assert.match(err.header, /cannot adopt legacy cron block 'nightly'/);
+      assert.match(err.body, /roster:schedule:nightly:begin/, 'the conflicting block is named');
+      assert.match(err.remedy, /crontab/);
+      return true;
+    },
+  );
+  assert.equal(io.written.length, 0, "gtm/nightly's live block is untouched");
+  assert.ok(io.current.includes('old-line'));
+});
+
+test('upsertCronEntry (round-6 finding 8): an UNPROVABLE bare legacy block (pre-scoped-paths content) is refused', () => {
+  // A genuine pre-#323 line carries only `logs/cron/<name>.log` — no function
+  // segment, so ownership cannot be proven for ANY function.
+  const unprovable =
+    '# roster:schedule:nightly:begin (do not edit; managed by `roster schedule install`)\n' +
+    "0 0 * * * codex exec >> '/w/logs/cron/nightly.log' 2>&1\n" +
+    '# roster:schedule:nightly:end\n';
+  const io = fakeIO(unprovable);
+  assert.throws(() => upsertCronEntry(io, 'gtm/nightly', 'new-line', { id: 'nightly', registeredFunctions: ['gtm'] }), RosterError);
+  assert.equal(io.written.length, 0);
+});
+
+test('removeCronEntry (round-6 finding 8): a bare legacy block belonging to ANOTHER function is refused, never deleted', () => {
+  const io = fakeIO(legacyBlockOwnedBy('gtm', 'nightly'));
+  assert.throws(
+    () => removeCronEntry(io, 'ops/nightly', { id: 'nightly', registeredFunctions: ['ops'] }),
+    (err: unknown) => {
+      assert.ok(err instanceof RosterError);
+      assert.match(err.header, /cannot adopt legacy cron block/);
+      return true;
+    },
+  );
+  assert.equal(io.written.length, 0, "gtm/nightly's live cron survives an ops/nightly remove");
+  assert.ok(io.current.includes('old-line'));
+});
+
+test('legacyMarkerOwnedBy: schedule-name boundary is pinned (gtm/night does not claim gtm/nightly paths)', () => {
+  const content = legacyBlockOwnedBy('gtm', 'nightly');
+  assert.equal(legacyMarkerOwnedBy(content, 'nightly', 'gtm', 'nightly'), true);
+  assert.equal(legacyMarkerOwnedBy(content, 'nightly', 'ops', 'nightly'), false);
+  // A hypothetical shorter name must not prefix-match the longer path.
+  const short =
+    '# roster:schedule:night:begin (managed)\n' +
+    "0 0 * * * x >> '/w/logs/cron/gtm/nightly.log' 2>&1\n" +
+    '# roster:schedule:night:end\n';
+  assert.equal(legacyMarkerOwnedBy(short, 'night', 'gtm', 'night'), false);
+});
+
+// ── round-7 finding 5: ownership parses the block's OWN path ARGUMENT, never a
+// substring of the whole line ────────────────────────────────────────────────
+
+// A foreign (ops/night) block whose WORKSPACE path happens to embed
+// `logs/cron/gtm/night`. The old unanchored substring scan matched it for
+// (gtm, night) — install/remove could then rewrite or delete the foreign block.
+function foreignBlockWithEmbeddedPath(): string {
+  return (
+    '# roster:schedule:night:begin (do not edit; managed by `roster schedule install`)\n' +
+    renderCronLine({
+      cron: '0 0 * * *',
+      workspacePath: '/tmp/logs/cron/gtm/night',
+      codexBinaryPath: '/usr/local/bin/codex',
+      prompt: 'Use the roster-orchestrator skill to run plan sweep for agent ops/janitor (schedule night)',
+      logPath: '/tmp/logs/cron/gtm/night/logs/cron/ops/night.log',
+      exitDir: '/tmp/logs/cron/gtm/night/logs/cron/ops/night',
+    }) +
+    '\n# roster:schedule:night:end\n'
+  );
+}
+
+test('legacyMarkerOwnedBy (round-7 finding 5): a foreign block whose WORKSPACE path embeds logs/cron/<fn>/<sched> is NOT adopted', () => {
+  const content = foreignBlockWithEmbeddedPath();
+  // gtm/night must NOT claim the ops/night block just because the foreign
+  // workspace path contains 'logs/cron/gtm/night'.
+  assert.equal(legacyMarkerOwnedBy(content, 'night', 'gtm', 'night'), false);
+  // The block's true owner still proves ownership via its exit-dir argument.
+  assert.equal(legacyMarkerOwnedBy(content, 'night', 'ops', 'night'), true);
+});
+
+test('upsertCronEntry/removeCronEntry (round-7 finding 5): the embedded-path foreign block is refused, never rewritten or deleted', () => {
+  const upIo = fakeIO(foreignBlockWithEmbeddedPath());
+  assert.throws(() => upsertCronEntry(upIo, 'gtm/night', 'gtm-line', { id: 'night', registeredFunctions: ['gtm'] }), RosterError);
+  assert.equal(upIo.written.length, 0, "ops/night's live block is untouched by a gtm/night install");
+
+  const rmIo = fakeIO(foreignBlockWithEmbeddedPath());
+  assert.throws(() => removeCronEntry(rmIo, 'gtm/night', { id: 'night', registeredFunctions: ['gtm'] }), RosterError);
+  assert.equal(rmIo.written.length, 0, "ops/night's live block survives a gtm/night remove");
+});
+
+test('legacyMarkerOwnedBy (round-7 finding 5): a legitimate legacy WRAPPED block (bare marker, real rendered line) is still owned', () => {
+  const line = renderCronLine({
+    cron: '0 9 * * 1-5',
+    workspacePath: '/home/u/ws',
+    codexBinaryPath: '/usr/local/bin/codex',
+    prompt: 'Use the roster-orchestrator skill to run plan cold for agent gtm/sdr (schedule nightly)',
+    logPath: '/home/u/ws/logs/cron/gtm/nightly.log',
+    exitDir: '/home/u/ws/logs/cron/gtm/nightly',
+  });
+  const content =
+    '# roster:schedule:nightly:begin (do not edit; managed by `roster schedule install`)\n' +
+    line +
+    '\n# roster:schedule:nightly:end\n';
+  assert.equal(legacyMarkerOwnedBy(content, 'nightly', 'gtm', 'nightly'), true, 'the exit-dir argument proves ownership');
+  assert.equal(legacyMarkerOwnedBy(content, 'nightly', 'ops', 'nightly'), false, 'another function cannot claim it');
+  const io = fakeIO(content);
+  const r = upsertCronEntry(io, 'gtm/nightly', 'migrated-line', { id: 'nightly', registeredFunctions: ['gtm'] });
+  assert.equal(r.action, 'updated', 'the provably-owned legacy block still migrates');
+});
+
+// ── round-7 finding 2: the legacy bare-name fallback needs a GLOBALLY UNIQUE
+// schedule name, not just a content proof ────────────────────────────────────
+
+test('upsertCronEntry (round-7 finding 2): a bare marker whose name TWO functions register is refused as ambiguous, even when the content "proves" us', () => {
+  const io = fakeIO(legacyBlockOwnedBy('gtm', 'nightly'));
+  assert.throws(
+    () => upsertCronEntry(io, 'gtm/nightly', 'new-line', { id: 'nightly', registeredFunctions: ['gtm', 'ops'] }),
+    (err: unknown) => {
+      assert.ok(err instanceof RosterError);
+      assert.match(err.header, /ambiguous legacy cron block 'nightly'/);
+      assert.match(err.body, /gtm, ops/, 'the competing functions are named');
+      assert.match(err.remedy, /roster schedule install/);
+      return true;
+    },
+  );
+  assert.equal(io.written.length, 0, 'the crontab is never rewritten under ambiguity');
+  assert.ok(io.current.includes('old-line'));
+});
+
+test('removeCronEntry (round-7 finding 2): the ambiguous bare block SURVIVES a remove', () => {
+  const io = fakeIO(legacyBlockOwnedBy('gtm', 'nightly'));
+  assert.throws(
+    () => removeCronEntry(io, 'gtm/nightly', { id: 'nightly', registeredFunctions: ['gtm', 'ops'] }),
+    (err: unknown) => {
+      assert.ok(err instanceof RosterError);
+      assert.match(err.header, /ambiguous legacy cron block/);
+      return true;
+    },
+  );
+  assert.equal(io.written.length, 0);
+  assert.ok(io.current.includes('old-line'), "the block that may be ops' live schedule is untouched");
+});
+
+test('legacyMarkerIsAmbiguous: >1 DISTINCT claimant is ambiguous; one (even repeated) is not', () => {
+  assert.equal(legacyMarkerIsAmbiguous({ id: 'nightly', registeredFunctions: ['gtm'] }), false);
+  assert.equal(legacyMarkerIsAmbiguous({ id: 'nightly', registeredFunctions: ['gtm', 'gtm'] }), false);
+  assert.equal(legacyMarkerIsAmbiguous({ id: 'nightly', registeredFunctions: [] }), false);
+  assert.equal(legacyMarkerIsAmbiguous({ id: 'nightly', registeredFunctions: ['gtm', 'ops'] }), true);
+});
+
+test('upsertCronEntry (round-7 finding 2): ambiguity does NOT gate the function-SCOPED path (the normal post-migration case)', () => {
+  const scoped =
+    '# roster:schedule:gtm/nightly:begin (do not edit; managed by `roster schedule install`)\n' +
+    'old-scoped-line\n' +
+    '# roster:schedule:gtm/nightly:end\n';
+  const io = fakeIO(scoped);
+  const r = upsertCronEntry(io, 'gtm/nightly', 'new-line', { id: 'nightly', registeredFunctions: ['gtm', 'ops'] });
+  assert.equal(r.action, 'updated', 'a scoped block never consults the legacy fallback');
+  assert.ok(io.current.includes('new-line'));
 });
 
 // ── findMarkerBlocks ──────────────────────────────────────────────────────
@@ -558,7 +947,7 @@ test('renderCronLine: % in prompt is escaped (wrapped form)', () => {
     codexBinaryPath: '/opt/homebrew/bin/codex',
     prompt: 'Use 100% effort',
     logPath: '/w/log',
-    exitPath: '/w/exit',
+    exitDir: '/w/exit',
   });
   const matches = [...line.matchAll(/(?<!\\)%/g)];
   assert.equal(matches.length, 0, `unescaped % at index ${matches[0]?.index}`);

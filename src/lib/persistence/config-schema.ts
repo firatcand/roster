@@ -1,12 +1,16 @@
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
 import chalk from 'chalk';
 import { RosterError, EXIT_ERROR } from '../errors.ts';
 import { flattenZodErrors } from '../schedule-schema.ts';
+import { targetWithinWorkspace } from '../workspace-path.ts';
+import { describeEvidenceFailure, readEvidenceFileSync } from '../evidence-read.ts';
 
 export const PERSISTENCE_YAML_VERSION = 1;
+
+// Config, not data: a legitimate persistence.yaml is a few hundred bytes.
+const MAX_PERSISTENCE_YAML_BYTES = 64 * 1024;
 
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -141,15 +145,24 @@ function futureVersionError(path: string, version: number): RosterError {
 
 export function loadPersistenceConfig(cwd: string): LoadedPersistence {
   const path = persistenceConfigPath(cwd);
-  let raw: string;
-  try {
-    raw = readFileSync(path, 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { state: 'legacy-implicit', backend: 'local', legacy: true, config: null };
-    }
-    throw configError(path, [`unreadable: ${(err as Error).message}`]);
+  // Round-10 finding 1: a symlinked `roster/` would resolve this config to a
+  // foreign workspace's file — and the backend it names decides where every
+  // subsequent write lands. Refuse loudly; falling through to legacy-implicit
+  // would silently pick a different backend than the one on disk.
+  if (targetWithinWorkspace(path, cwd) === null) {
+    throw configError(path, ['resolves outside the workspace (a symlinked path component)']);
   }
+  // Same hardened bounded reader as the rest of the sweep: a planted FIFO here
+  // would block backend resolution forever, and the file names where every
+  // subsequent write lands.
+  const read = readEvidenceFileSync(path, MAX_PERSISTENCE_YAML_BYTES);
+  if (read.state === 'missing') {
+    return { state: 'legacy-implicit', backend: 'local', legacy: true, config: null };
+  }
+  if (read.state === 'malformed') {
+    throw configError(path, [`unreadable: ${describeEvidenceFailure(read.reason, MAX_PERSISTENCE_YAML_BYTES)}`]);
+  }
+  const raw = read.content;
   let parsed: unknown;
   try {
     parsed = YAML.parse(raw);

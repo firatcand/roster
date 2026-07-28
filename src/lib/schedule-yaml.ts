@@ -1,12 +1,31 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync, unlinkSync } from 'node:fs';
+import { mkdirSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import YAML from 'yaml';
 import chalk from 'chalk';
 import { SCHEDULES_YAML_VERSION, type ScheduleEntry } from './schedule-schema.ts';
 import { RosterError, EXIT_ERROR, permissionError } from './errors.ts';
+import { MAX_SCHEDULES_YAML_BYTES } from './schedule-read.ts';
+import { describeEvidenceFailure, readWorkspaceEvidenceFileSync } from './schedule-state.ts';
+import { targetWithinWorkspace } from './workspace-path.ts';
 
-export function atomicWriteFile(absPath: string, content: string): void {
+// Every caller passes the workspace root as `boundary`. Round-10 finding 1: the
+// rename here is the WRITE half of the symlinked-ancestor hole — `roster/gtm ->
+// /elsewhere` made `schedule install` / `schedule remove` rewrite a foreign
+// schedules.yaml. mkdir + rename now happen only after the destination is
+// proven to resolve inside the workspace.
+function assertWritableInWorkspace(absPath: string, boundary: string): void {
+  if (targetWithinWorkspace(absPath, boundary) !== null) return;
+  throw new RosterError({
+    header: `${chalk.red.bold('roster:')} refusing to write outside the workspace`,
+    body: `  ${absPath} resolves outside ${boundary} — a parent directory is a symlink pointing elsewhere.`,
+    remedy: `  Replace the symlinked directory with a real one, then re-run.`,
+    exitCode: EXIT_ERROR,
+  });
+}
+
+export function atomicWriteFile(absPath: string, content: string, boundary: string): void {
+  assertWritableInWorkspace(absPath, boundary);
   const dir = absPath.slice(0, absPath.lastIndexOf(sep));
   try {
     mkdirSync(dir, { recursive: true });
@@ -15,6 +34,9 @@ export function atomicWriteFile(absPath: string, content: string): void {
     if (e.code === 'EACCES' || e.code === 'EPERM') throw permissionError(dir, e);
     throw err;
   }
+  // Re-check AFTER the mkdir: the directory chain that exists now is the one the
+  // rename will traverse, so the boundary proof must cover it.
+  assertWritableInWorkspace(absPath, boundary);
   const tmp = `${absPath}.tmp-${randomBytes(6).toString('hex')}`;
   try {
     writeFileSync(tmp, content, { encoding: 'utf8', mode: 0o644 });
@@ -31,34 +53,38 @@ export function atomicWriteFile(absPath: string, content: string): void {
   }
 }
 
-export function readExistingSchedulesDoc(path: string): { doc: YAML.Document; existedBefore: boolean } {
-  if (!existsSync(path)) {
-    const doc = new YAML.Document({
+// The registry is workspace state a sandboxed agent can write, so the upsert
+// path (schedule install / remove) reads it through the SAME hardened bounded
+// reader as the rest of the sweep (round-9 finding 1): a planted FIFO blocked
+// `roster schedule install` forever, a symlink diverted the read-modify-write
+// to a foreign file, and an oversized file was pulled wholly into memory. The
+// caller-facing error stays this module's own actionable RosterError.
+export function readExistingSchedulesDoc(
+  path: string,
+  boundary: string,
+): { doc: YAML.Document; existedBefore: boolean } {
+  const fresh = (): YAML.Document =>
+    new YAML.Document({
       version: SCHEDULES_YAML_VERSION,
       schedules: [],
     });
-    return { doc, existedBefore: false };
-  }
 
-  let content: string;
-  try {
-    content = readFileSync(path, 'utf8');
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
+  const read = readWorkspaceEvidenceFileSync(path, boundary, MAX_SCHEDULES_YAML_BYTES);
+  if (read.state === 'missing') {
+    return { doc: fresh(), existedBefore: false };
+  }
+  if (read.state === 'malformed') {
     throw new RosterError({
       header: `${chalk.red.bold('roster:')} cannot read existing schedules.yaml`,
-      body: `  ${e.code ?? e.message ?? 'unreadable'} reading ${path}`,
-      remedy: `  Fix file permissions and re-run.`,
+      body: `  ${path} is ${describeEvidenceFailure(read.reason, MAX_SCHEDULES_YAML_BYTES)}`,
+      remedy: `  Inspect and replace that path with a regular file, then re-run.`,
       exitCode: EXIT_ERROR,
     });
   }
+  const content = read.content;
 
   if (content.trim().length === 0) {
-    const doc = new YAML.Document({
-      version: SCHEDULES_YAML_VERSION,
-      schedules: [],
-    });
-    return { doc, existedBefore: true };
+    return { doc: fresh(), existedBefore: true };
   }
 
   const doc = YAML.parseDocument(content);

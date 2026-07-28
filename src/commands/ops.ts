@@ -44,6 +44,9 @@ function renderHuman(result: SetupResult): string {
     out.push(chalk.dim(`      local tree preserved at ${result.orphaned.tree}`));
     if (result.orphaned.database) out.push(chalk.dim('      its database stamp and bucket marker stay claimed (roster never unclaims)'));
   }
+  if (result.migrations.length > 0) {
+    out.push(`  ${chalk.green('✓')} applied ${result.migrations.length} pending migration(s): ${chalk.dim(result.migrations.join(', '))}`);
+  }
   out.push('');
   return out.join('\n');
 }
@@ -64,6 +67,7 @@ export async function executeOpsSetup(opts: OpsSetupCommandOptions): Promise<num
           backendInfo: result.backendInfo,
           roleInvariants: result.roleInvariants,
           orphaned: result.orphaned,
+          migrations: result.migrations,
         },
         null,
         2,

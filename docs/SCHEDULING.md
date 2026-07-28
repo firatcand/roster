@@ -42,7 +42,7 @@ Roster ships these guardrails:
 
    ```cron
    # roster-generated; do not edit by hand
-   0 9 * * MON-FRI /usr/bin/env -i HOME="$HOME" PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" CODEX_HOME="$HOME/.codex" /opt/homebrew/bin/codex exec -C "$HOME/my-roster" -c shell_environment_policy.inherit=core "Use the roster-orchestrator skill to run plan cold-outreach for agent sdr" >> "$HOME/my-roster/logs/cron/sdr-cold-outreach.log" 2>&1
+   0 9 * * MON-FRI /usr/bin/env -i HOME="$HOME" PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" CODEX_HOME="$HOME/.codex" /opt/homebrew/bin/codex exec -C "$HOME/my-roster" -c shell_environment_policy.inherit=core "Use the roster-orchestrator skill to run plan cold-outreach for agent gtm/sdr (schedule sdr-cold-outreach)" >> "$HOME/my-roster/logs/cron/sdr-cold-outreach.log" 2>&1
    ```
 
 2. **`roster doctor` checks** — see [doctor checks](#doctor-checks-for-scheduling) below. Static greps for the banned strings; env-blocklist enforcement; `~/.codex/auth.json` `auth_mode` verification; `config.toml` audit for non-default `model_provider` blocks.
@@ -282,7 +282,7 @@ Not currently supported for Codex (no Codex cloud routine primitive at parity ye
 
 1. **Symlink/dual-write integrity.** `CONTEXT.md` exists and `CLAUDE.md` / `AGENTS.md` resolve to it (symlink on mac/linux; dual-write content-equal on Windows).
 2. **`schedules.yaml` parse + schema.** All `roster/<function>/schedules.yaml` files match the schema and reference valid agents/plans.
-3. **Cron drift detection.** Every Codex `--via cron` entry in `schedules.yaml` is cross-referenced against the live crontab. Surfaces three failure modes: a registered entry with no crontab marker block, a crontab line that differs from what `renderCronLine` would emit today, and an unreadable crontab (permissions). Implemented in [ROS-38](https://linear.app/firatdogan/issue/ROS-38); see `src/lib/doctor-scheduling-drift.ts`.
+3. **Cron drift detection.** Every Codex `--via cron` entry in `schedules.yaml` is cross-referenced against the live crontab. Surfaces four failure modes: a registered entry with no crontab marker block, a crontab line that differs from what `renderCronLine` would emit today, an unreadable crontab (permissions), and an **ambiguous legacy marker** — a pre-#323 bare `# roster:schedule:<name>` block whose schedule name is registered by more than one function. A bare marker carries no function, so it is attributed to nobody: doctor reports it (and `schedule install`/`schedule remove` refuse to touch it) until each same-named schedule is re-installed under its scoped `<function>/<name>` marker. Implemented in [ROS-38](https://linear.app/firatdogan/issue/ROS-38); see `src/lib/doctor-scheduling-drift.ts`.
 4. **Codex auth pre-flight.** `~/.codex/auth.json` `auth_mode == "chatgpt"`; no API-key field; `~/.codex/config.toml` has no non-default `model_provider` override.
 5. **Banned-string scan.** Grep installed skills/templates for `claude -p`, `ANTHROPIC_API_KEY`, Agent SDK imports. Fail on match.
 6. **Env-var blocklist.** Verify generated crontab lines wrap with `env -i` and don't leak `OPENAI_API_KEY` / `CODEX_API_KEY` / `ANTHROPIC_API_KEY`.
@@ -292,6 +292,38 @@ Not currently supported for Codex (no Codex cloud routine primitive at parity ye
 10. **Duplicate registration.** Warn if the same `<agent>/<plan>` is registered on both Claude and Codex sides simultaneously.
 
 Most checks support `--fix`: e.g., re-create the missing `CLAUDE.md` symlink, chmod `.env` to `0600`, append a missing persona-injection block.
+
+---
+
+## Run-ledger correlation on a scheduled fire (opt-in, #323)
+
+When a workspace has an ops backend configured (`roster ops setup`), the
+`roster-orchestrator` skill records each scheduled fire into the run + artifact
+ledger. It is a strict opt-in: the skill checks `resolveOpsBackend` and, if the
+state is `not-configured`, skips silently — legacy workspaces behave exactly as
+before, and the human-readable `state.md` / run-log lines are unchanged either
+way.
+
+The correlation is **parent-authoritative** (the parent only ever holds the short
+subagent status, never reads the subagent markdown):
+
+1. The **parent** generates the run id before dispatch and emits
+   `roster run start --run <id> --agent <fn.agent> --trigger schedule --origin-task <plan>`
+   (source=`cli`). The agent handle uses the safe charset — a `:` or `.`
+   separator, e.g. `gtm.sdr`, never `/`, because it is projected into the safe
+   `run_index` view.
+2. The parent passes the run id into the dispatched **subagent**, which calls
+   `roster run report --run <id> --stdin` and `roster run declare-artifact
+   --run <id> …` for its own outputs (source=`agent`, always unverified prose).
+3. In a guaranteed `finally`/failure path the parent emits `roster run end
+   --run <id>` on success, or `roster run event --run <id> --kind error
+   --correlation-id <id> --data '{"detail":"…"}'` (then `run end`) on failure.
+4. The failure-observability path (`roster pending sync`) stamps the same run id
+   into the schedule state, so a delayed error event synthesized later correlates
+   to the run without any markdown discovery.
+
+See `skills/roster-orchestrator/SKILL.md` §"Run-ledger correlation" and the
+`roster run` verbs in [API.md](API.md#run--artifact-ledger-roster-run-verb).
 
 ---
 

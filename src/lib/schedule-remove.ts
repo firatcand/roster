@@ -5,9 +5,11 @@ import {
   defaultCrontabIO,
   removeCronEntry,
   getMarkerStrings,
+  cronMarkerId,
   type CrontabIO,
 } from './codex-cron.ts';
 import { resolveScheduleByName } from './schedule-resolve.ts';
+import { functionsRegisteringSchedule } from './schedule-read.ts';
 import { userCancelledRemove } from './errors.ts';
 
 export type ScheduleRemoveOpts = {
@@ -64,7 +66,7 @@ export async function executeRemove(opts: ScheduleRemoveOpts): Promise<ScheduleR
         : null;
   const logPathHint =
     installMode === 'via-cron'
-      ? join(resolved.workspacePath, 'logs', 'cron', `${resolved.entry.name}.log`)
+      ? join(resolved.workspacePath, 'logs', 'cron', resolved.functionName, `${resolved.entry.name}.log`)
       : null;
 
   const willStripCron = installMode === 'via-cron';
@@ -96,15 +98,23 @@ export async function executeRemove(opts: ScheduleRemoveOpts): Promise<ScheduleR
   let cronMarkerMissing = false;
   if (willStripCron) {
     const io = opts.crontabIO ?? defaultCrontabIO();
-    const r = removeCronEntry(io, resolved.entry.name);
+    // Function-scoped marker id (finding 2), with the bare schedule name as a
+    // legacy fallback so a pre-#323 single-function install still strips cleanly.
+    // The fallback carries the WORKSPACE-WIDE claimant list (round-7 finding 2):
+    // when two functions register this name, the bare block is unattributable and
+    // removeCronEntry refuses instead of consuming the other function's cron.
+    const r = removeCronEntry(io, cronMarkerId(resolved.functionName, resolved.entry.name), {
+      id: resolved.entry.name,
+      registeredFunctions: functionsRegisteringSchedule(resolved.workspacePath, resolved.entry.name),
+    });
     cronStripped = r.removed;
     cronMarkerMissing = !r.removed;
   }
 
-  const { doc, existedBefore } = readExistingSchedulesDoc(resolved.schedulesYamlPath);
+  const { doc, existedBefore } = readExistingSchedulesDoc(resolved.schedulesYamlPath, resolved.workspacePath);
   if (existedBefore) {
     removeEntryFromDoc(doc, resolved.entry.name);
-    atomicWriteFile(resolved.schedulesYamlPath, doc.toString());
+    atomicWriteFile(resolved.schedulesYamlPath, doc.toString(), resolved.workspacePath);
   }
 
   return {
@@ -123,7 +133,7 @@ export async function executeRemove(opts: ScheduleRemoveOpts): Promise<ScheduleR
 
 export function renderRemovePreview(result: ScheduleRemoveResult): string[] {
   const lines: string[] = [];
-  const markers = getMarkerStrings(result.name);
+  const markers = getMarkerStrings(cronMarkerId(result.functionName, result.name));
   lines.push('');
   lines.push(chalk.bold(`About to remove schedule ${chalk.yellow(`'${result.name}'`)} (${result.functionName}, ${result.tool} ${result.installMode}):`));
   lines.push('');

@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, realpathSync, renameSync, unlinkSync } from 'node:fs';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { mkdirSync, renameSync, unlinkSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { acknowledgePendingId } from './pending-sync.ts';
 import type { PendingItem } from './pending.ts';
+import { resolveWorkspaceRelativePath, targetWithinWorkspace, workspaceRelative } from './workspace-path.ts';
+import { EXIT_ERROR, RosterError } from './errors.ts';
+import chalk from 'chalk';
 
 export type ApproveResult = { ok: true; target: string } | { ok: false; reason: string };
 
@@ -10,66 +14,73 @@ export type ResolveResult =
   | { ok: false; reason: 'not-found' }
   | { ok: false; reason: 'ambiguous'; paths: string[] };
 
-export function workspaceRelative(absPath: string, cwd: string): string {
-  const rel = relative(cwd, absPath);
-  return rel === '' ? '.' : rel;
-}
-
-// Reject a target that resolves to the workspace root, an ancestor, or anywhere
-// outside the workspace. Single source of truth for the security boundary
-// (interactive walker + headless apply). Two layers:
-//   1. Lexical — no `..`, not absolute, not the root itself.
-//   2. Real-path — the deepest EXISTING ancestor of the target must resolve
-//      inside the workspace's real path, so a renameSync can never follow a
-//      symlinked directory out of the workspace (Codex 2nd-pass).
-export function targetWithinWorkspace(target: string, cwd: string): string | null {
-  const absTarget = isAbsolute(target) ? resolve(target) : resolve(cwd, target);
-  const rel = relative(resolve(cwd), absTarget);
-  if (rel === '' || rel === '.' || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) {
-    return null;
-  }
-  let realCwd: string;
-  try {
-    realCwd = realpathSync(cwd);
-  } catch {
-    return null;
-  }
-  let probe = absTarget;
-  while (!existsSync(probe)) {
-    const parent = dirname(probe);
-    if (parent === probe) return null; // walked past root without finding an existing ancestor
-    probe = parent;
-  }
-  let realProbe: string;
-  try {
-    realProbe = realpathSync(probe);
-  } catch {
-    return null;
-  }
-  if (realProbe !== realCwd && !realProbe.startsWith(realCwd + sep)) {
-    return null;
-  }
-  return absTarget;
+// Second layer under scanPending's walker confinement (round-10 finding 1): the
+// item a caller hands us must ITSELF still resolve inside the workspace before
+// anything is renamed or unlinked. The walker refuses a diverted directory, so
+// this only fires for an item that arrived some other way (a stale list, a
+// directory swapped between the scan and the apply) — but rename and unlink are
+// the destructive verbs, so they get their own check rather than trusting the
+// caller's provenance.
+function assertItemWithinWorkspace(item: PendingItem, cwd: string): void {
+  if (targetWithinWorkspace(item.path, cwd) !== null) return;
+  throw new RosterError({
+    header: `${chalk.red.bold('roster:')} refusing to act on a pending item outside the workspace`,
+    body: `  ${item.path} resolves outside ${cwd} — a parent directory is a symlink pointing elsewhere.`,
+    remedy: `  Inspect roster/${item.function}/pending (and its parents) and replace the symlink with a real directory.`,
+    exitCode: EXIT_ERROR,
+  });
 }
 
 export function approveItem(item: PendingItem, cwd: string): ApproveResult {
+  assertItemWithinWorkspace(item, cwd);
   const target = item.frontMatter['target_on_approve'];
   if (typeof target !== 'string' || target.length === 0) {
     return { ok: false, reason: 'missing target_on_approve in front-matter' };
   }
-  const absTarget = targetWithinWorkspace(target, cwd);
-  if (absTarget === null) {
-    return { ok: false, reason: `target_on_approve escapes workspace (got '${target}')` };
+  // Round-11 finding 2: existsSync FOLLOWED the final component, so a DANGLING
+  // symlink at the approve target probed as absent and the rename then replaced
+  // the link. Only a real regular file is 'already exists'; any other shape —
+  // including a symlinked ANCESTOR whose target stays inside the workspace
+  // (round-12) — is refused rather than clobbered.
+  // The one caller-authored RELATIVE input in the codebase: front matter names
+  // the destination relative to the workspace, so it resolves through the
+  // explicit workspace-relative flavor (round-13 finding 1).
+  const res = resolveWorkspaceRelativePath(target, cwd);
+  if (res.status === 'refused') {
+    return res.reason === 'outside-boundary'
+      ? { ok: false, reason: `target_on_approve escapes workspace (got '${target}')` }
+      : {
+          ok: false,
+          reason: `target is not a safe destination (symlink, special file, or diverted parent): ${target}`,
+        };
   }
-  if (existsSync(absTarget)) {
-    return { ok: false, reason: `target already exists: ${target}` };
+  if (res.status === 'ok') {
+    return res.stat.isFile()
+      ? { ok: false, reason: `target already exists: ${target}` }
+      : {
+          ok: false,
+          reason: `target is not a safe destination (symlink, special file, or diverted parent): ${target}`,
+        };
   }
+  const absTarget = res.path;
   mkdirSync(dirname(absTarget), { recursive: true });
   renameSync(item.path, absTarget);
   return { ok: true, target: workspaceRelative(absTarget, cwd) };
 }
 
-export function rejectItem(item: PendingItem): void {
+// Reject = delete, and for an error-class item (`error-<id>.md`, synthesized by
+// `roster pending sync` from immutable exit/STALE evidence) ALSO drop the
+// acknowledgement sentinel FIRST — without it the next sync re-creates the item
+// from the same evidence and the reject silently un-does itself (round-7
+// finding 8). Sentinel before unlink: if the process dies between the two, the
+// item survives but is acknowledged, so the next reject (or a manual rm)
+// finishes the job; the reverse order would resurrect the item.
+export function rejectItem(item: PendingItem, cwd: string): void {
+  assertItemWithinWorkspace(item, cwd);
+  const m = /^error-([a-f0-9]+)\.md$/.exec(item.filename);
+  if (m !== null) {
+    acknowledgePendingId(cwd, item.function, m[1]!);
+  }
   unlinkSync(item.path);
 }
 

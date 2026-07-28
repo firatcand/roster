@@ -1,8 +1,22 @@
 import { join, resolve } from 'node:path';
 import { scheduleEntrySchema, flattenZodErrors } from './schedule-schema.ts';
-import { RosterError, EXIT_ERROR } from './errors.ts';
+import { RosterError, EXIT_ERROR, functionOutsideRosterError } from './errors.ts';
 import { atomicWriteFile, readExistingSchedulesDoc, upsertEntryInDoc } from './schedule-yaml.ts';
+import { functionDirWithinRoster } from './workspace-path.ts';
 import chalk from 'chalk';
+
+// The WRITE half of the round-11 finding-1 boundary, shared by both install
+// paths (claude + codex). The schema never sees the function name — it is a
+// directory, not a field — yet it shapes the filesystem layout, so it gets the
+// same strict kebab rule the schema applies to agent/plan/name AND a
+// resolved-path check against <workspace>/roster/. atomicWriteFile only proves
+// the destination stays in the WORKSPACE, which `roster/<fn> -> ../archive`
+// satisfies while leaving the registry.
+export function assertFunctionDirWithinRoster(workspacePath: string, functionName: string): string {
+  const dir = functionDirWithinRoster(workspacePath, functionName);
+  if (dir === null) throw functionOutsideRosterError(functionName, workspacePath);
+  return dir;
+}
 
 // Tracking issue for replacing UI hand-off with programmatic install:
 // https://github.com/anthropics/claude-code/issues/41364
@@ -48,20 +62,30 @@ export function deriveScheduleName(agent: string, plan: string, override: string
 }
 
 // Contract: skills/roster-orchestrator/SKILL.md — the orchestrator parses
-// <agent> and <plan> from the prompt and refuses if either is missing.
-// (ROS-89 rewrites the orchestrator skill to land alongside this.)
-export function buildOrchestratorPrompt(agent: string, plan: string): string {
-  return `Use the roster-orchestrator skill to run plan ${plan} for agent ${agent}`;
+// <function>/<agent>, <plan>, and the schedule name from the prompt and refuses
+// if agent or plan is missing. The schedule name is carried explicitly (round-6
+// finding 3): two schedules in one function may legitimately share (agent,
+// plan), so the fired prompt must name WHICH schedule fired — the orchestrator
+// matches by name first and only falls back to the (agent, plan) pair for a
+// legacy install, requiring uniqueness there. The agent is FUNCTION-QUALIFIED
+// (round-7 finding 1): schedules.yaml entries store the BARE agent (the file is
+// already function-scoped by its path), so the prompt must carry the function —
+// it names WHICH roster/<function>/schedules.yaml to load, and it keeps a bare
+// agent name duplicated across functions (gtm/sdr vs ops/sdr) resolvable. The
+// skill strips the prefix and compares bare-to-bare against the registry.
+export function buildOrchestratorPrompt(functionName: string, agent: string, plan: string, scheduleName: string): string {
+  return `Use the roster-orchestrator skill to run plan ${plan} for agent ${functionName}/${agent} (schedule ${scheduleName})`;
 }
 
 export function renderFieldsDoc(args: {
   name: string;
   cron: string;
   workspacePath: string;
+  functionName: string;
   agent: string;
   plan: string;
 }): string {
-  const prompt = buildOrchestratorPrompt(args.agent, args.plan);
+  const prompt = buildOrchestratorPrompt(args.functionName, args.agent, args.plan, args.name);
   const allowedTools = DEFAULT_ALLOWED_TOOLS.join(', ');
   return [
     `# Claude Desktop Scheduled Task — ${args.name}`,
@@ -131,6 +155,7 @@ function renderHandoffMessage(args: {
 export function installClaudeSchedule(opts: ClaudeInstallOpts): ClaudeInstallResult {
   const resolvedName = deriveScheduleName(opts.agent, opts.plan, opts.name);
   const workspacePath = resolve(opts.cwd);
+  const functionDir = assertFunctionDirWithinRoster(workspacePath, opts.functionName);
 
   const entry: Record<string, unknown> = {
     name: resolvedName,
@@ -155,26 +180,14 @@ export function installClaudeSchedule(opts: ClaudeInstallOpts): ClaudeInstallRes
   }
   const validatedEntry = parsed.data;
 
-  // Re-validate functionName as kebab-case here. The schema doesn't see it
-  // (functionName is a directory name, not a field), but it shapes the
-  // filesystem layout, so we lock it to the same kebab rule the schema uses.
-  const KEBAB_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-  if (!KEBAB_RE.test(opts.functionName)) {
-    throw new RosterError({
-      header: `${chalk.red.bold('roster:')} invalid function name`,
-      body: `  '${opts.functionName}' is not kebab-case (lowercase letters, digits, hyphens).`,
-      remedy: `  Use a kebab-case function name (e.g., 'gtm', 'product-ops').`,
-      exitCode: EXIT_ERROR,
-    });
-  }
-
   const fieldsDocPath = join(workspacePath, '.roster', 'schedule-specs', `${resolvedName}.claude.fields.md`);
-  const schedulesYamlPath = join(workspacePath, 'roster', opts.functionName, 'schedules.yaml');
+  const schedulesYamlPath = join(functionDir, 'schedules.yaml');
 
   const fieldsDocContent = renderFieldsDoc({
     name: resolvedName,
     cron: validatedEntry.cron,
     workspacePath,
+    functionName: opts.functionName,
     agent: validatedEntry.agent,
     plan: validatedEntry.plan,
   });
@@ -197,11 +210,11 @@ export function installClaudeSchedule(opts: ClaudeInstallOpts): ClaudeInstallRes
     };
   }
 
-  const { doc } = readExistingSchedulesDoc(schedulesYamlPath);
+  const { doc } = readExistingSchedulesDoc(schedulesYamlPath, workspacePath);
   const { action } = upsertEntryInDoc(doc, validatedEntry);
 
-  atomicWriteFile(fieldsDocPath, fieldsDocContent);
-  atomicWriteFile(schedulesYamlPath, doc.toString());
+  atomicWriteFile(fieldsDocPath, fieldsDocContent, workspacePath);
+  atomicWriteFile(schedulesYamlPath, doc.toString(), workspacePath);
 
   const handoffMessage = renderHandoffMessage({
     name: resolvedName,

@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 type SkillsSubcommand = 'sync' | 'update';
 
 const SKILLS_SUBCOMMANDS: ReadonlySet<SkillsSubcommand> = new Set<SkillsSubcommand>([
@@ -60,7 +61,7 @@ export function parseSkillsArgs(args: readonly string[]): ParsedSkillsArgs {
     } else if (arg === '--cwd') {
       const v = takeValue(rest, i, '--cwd');
       if (typeof v === 'object') return { kind: 'err', message: v.err };
-      cwd = v;
+      cwd = resolve(v);
       i++;
     } else {
       return { kind: 'err', message: `unknown flag '${arg}' for 'skills ${first}'` };

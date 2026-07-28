@@ -91,6 +91,7 @@ Initial public release. Retro: [phase-1.md](retros/phase-1.md). Tool detection l
 ## Deferred
 
 - [#55](https://github.com/firatcand/roster/issues/55) — periodic re-check of the `claude://` URL scheme for a schedule-creation deep-link (passive watch on Claude Desktop releases; spike already filed in [anthropics/claude-code#41364](https://github.com/anthropics/claude-code/issues/41364)). Recurring by design — never closes; last probed 2026-07-02. (Was Linear ROS-57.)
+- **Semantic-search retrieval over the run/artifact index** — follow-up to the run + artifact ledger ([#323](https://github.com/firatcand/roster/issues/323)). #323 ships the sanitized **index inputs** (the `run_index` / `artifact_index` views over write-time-redacted reports + declaration text) but not retrieval; wiring those safe inputs into the brain's embedding + query path (`roster brain query`) is a tracked follow-up (owner decision 2). Issue to be filed at the #317 epic wrap-up.
 
 ## Out of scope
 

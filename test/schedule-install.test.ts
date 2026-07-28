@@ -57,12 +57,16 @@ test('deriveScheduleName: empty-string override is treated as no override', () =
   assert.equal(deriveScheduleName('sdr', 'cold-outreach', ''), 'sdr-cold-outreach');
 });
 
-test('buildOrchestratorPrompt: stable phrase the orchestrator parses (agent/plan)', () => {
-  // Contract: skills/roster-orchestrator/SKILL.md — both agent and plan required.
-  // ROS-80 dropped `project` from the prompt; ROS-89 rewrites the skill to match.
+test('buildOrchestratorPrompt: stable phrase the orchestrator parses (function/agent/plan/schedule)', () => {
+  // Contract: skills/roster-orchestrator/SKILL.md — agent and plan required; the
+  // schedule name rides in a `(schedule <name>)` suffix (round-6 finding 3), and
+  // the agent is FUNCTION-QUALIFIED (round-7 finding 1): the registry stores the
+  // bare agent (its file is function-scoped by path), so the prompt must name
+  // which roster/<function>/schedules.yaml to load — and keep gtm/sdr vs ops/sdr
+  // resolvable.
   assert.equal(
-    buildOrchestratorPrompt('sdr', 'cold-outreach'),
-    'Use the roster-orchestrator skill to run plan cold-outreach for agent sdr',
+    buildOrchestratorPrompt('gtm', 'sdr', 'cold-outreach', 'sdr-morning'),
+    'Use the roster-orchestrator skill to run plan cold-outreach for agent gtm/sdr (schedule sdr-morning)',
   );
 });
 
@@ -71,6 +75,7 @@ test('renderFieldsDoc: includes the six labeled fields and the prompt block', ()
     name: 'sdr-cold-outreach',
     cron: '0 9 * * 1-5',
     workspacePath: '/Users/firat/my-roster',
+    functionName: 'gtm',
     agent: 'sdr',
     plan: 'cold-outreach',
   });
@@ -80,7 +85,7 @@ test('renderFieldsDoc: includes the six labeled fields and the prompt block', ()
   assert.match(md, /Workspace path.*\/Users\/firat\/my-roster/);
   assert.match(md, /Allowed tools.*Read, Write, Bash, Task, Edit, Glob, Grep/);
   assert.match(md, /MCP servers.*\(empty/);
-  assert.match(md, /Use the roster-orchestrator skill to run plan cold-outreach for agent sdr/);
+  assert.match(md, /Use the roster-orchestrator skill to run plan cold-outreach for agent gtm\/sdr \(schedule sdr-cold-outreach\)/);
   assert.doesNotMatch(md, /on project/);
   assert.match(md, /anthropics\/claude-code#41364/);
 });

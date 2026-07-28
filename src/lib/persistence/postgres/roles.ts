@@ -17,6 +17,10 @@ export const OPS_INSERT_TABLES = [
   { schema: 'hitl', table: 'decisions', serial: true },
   { schema: 'roster_ops', table: 'run_events', serial: true },
   { schema: 'roster_ops', table: 'artifacts', serial: true },
+  // #323: the runtime INSERTs declarations (append-only — no UPDATE, so the
+  // append-value version_state/verified columns are set at insert but never
+  // mutated; the admin-repair fill-version-ids path uses admin creds).
+  { schema: 'roster_ops', table: 'artifact_declarations', serial: true },
   { schema: 'roster_ops', table: 'delivery_ledger', serial: false },
 ] as const;
 

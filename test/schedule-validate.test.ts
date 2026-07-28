@@ -329,7 +329,12 @@ if (process.platform !== 'win32') {
     }
   });
 
-  test('validate: symlinked schedules.yaml is followed', () => {
+  // Policy change (round-9 finding 1): a symlinked registry is now REFUSED, not
+  // followed. The rest of the sweep (schedule list/resolve, doctor's entry
+  // listing, pending sync) already reads roster/<fn>/schedules.yaml no-follow,
+  // so a "pass" here was the odd one out — validate would bless a registry every
+  // other reader treats as unreadable.
+  test('validate: symlinked schedules.yaml is refused, not followed', () => {
     const fix = makeFixture();
     try {
       const real = join(fix.root, 'real-schedules.yaml');
@@ -337,8 +342,9 @@ if (process.platform !== 'win32') {
       mkdirSync(join(fix.root, 'roster', 'gtm'), { recursive: true });
       symlinkSync(real, join(fix.root, 'roster', 'gtm', 'schedules.yaml'));
       const report = validateSchedulesInCwd(fix.root);
-      assert.equal(report.ok, true);
-      assert.equal(report.files[0]!.status, 'pass');
+      assert.equal(report.ok, false);
+      assert.equal(report.files[0]!.status, 'fail');
+      assert.match(report.files[0]!.errors[0]!.message, /cannot read file: not-a-regular-file/);
     } finally {
       fix.cleanup();
     }

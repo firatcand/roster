@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 export type PendingArgs =
   | { kind: 'ok'; subcommand: 'sync'; cwd: string | undefined; silent: boolean; json: boolean; dryRun: boolean }
   | { kind: 'err'; message: string };
@@ -26,7 +27,7 @@ export function parsePendingArgs(args: readonly string[]): PendingArgs {
       if (next === undefined) {
         return { kind: 'err', message: '--cwd requires a value' };
       }
-      cwd = next;
+      cwd = resolve(next);
       i++;
     } else if (arg.startsWith('-')) {
       return { kind: 'err', message: `unknown flag for pending sync: ${arg}` };
