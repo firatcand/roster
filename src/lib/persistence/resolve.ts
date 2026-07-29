@@ -16,10 +16,17 @@ import {
   type Cursor,
   type DeclarationPutResult,
   type ExternalArtifactInput,
+  type HitlDecisionEnvelope,
   type HitlDecisionInput,
+  type HitlDecisionOutcome,
+  type HitlExpiryCandidate,
+  type HitlGenerationSummary,
+  type HitlReplaceInput,
   type HitlRequestEnvelope,
   type HitlRequestFilter,
   type HitlRequestInput,
+  type HitlVersionRecord,
+  type HitlWriteOutcome,
   type HitlStore,
   type InternalDeclarationInput,
   type OpsBackend,
@@ -35,6 +42,7 @@ import {
 import { externalDeclarationParts, internalDeclarationParts } from './artifact-declarations.ts';
 import { classifyDeliveryError } from './error-classify.ts';
 import {
+  hitlExpiryOf,
   loadPersistenceConfig,
   type LocalPersistenceConfig,
   type PostgresS3PersistenceConfig,
@@ -55,8 +63,6 @@ import {
   createPgBackend,
   pgBackendInfo,
   artifactParts,
-  hitlDecisionParts,
-  hitlRequestParts,
   runEventParts,
   type PgOpsBackend,
 } from './postgres/stores.ts';
@@ -65,9 +71,6 @@ import {
   overlayArtifactHead,
   overlayDeclarationGet,
   overlayDeclarationsByRun,
-  overlayHitlCount,
-  overlayHitlGet,
-  overlayHitlList,
   overlayRunGet,
   overlayRunsCount,
   overlayRunsList,
@@ -147,10 +150,16 @@ export function withCapabilityGate(backend: OpsBackend, info: BackendInfo): OpsB
     workspaceId: backend.workspaceId,
     hitl: {
       createRequest: gate(info, 'hitl.createRequest', hitl.createRequest.bind(hitl)),
+      replaces: gate(info, 'hitl.replaces', hitl.replaces.bind(hitl)),
+      appendDecision: gate(info, 'hitl.appendDecision', hitl.appendDecision.bind(hitl)),
       getRequest: gate(info, 'hitl.getRequest', hitl.getRequest.bind(hitl)),
       listRequests: gate(info, 'hitl.listRequests', hitl.listRequests.bind(hitl)),
-      appendDecision: gate(info, 'hitl.appendDecision', hitl.appendDecision.bind(hitl)),
       count: gate(info, 'hitl.count', hitl.count.bind(hitl)),
+      listVersions: gate(info, 'hitl.listVersions', hitl.listVersions.bind(hitl)),
+      listGenerations: gate(info, 'hitl.listGenerations', hitl.listGenerations.bind(hitl)),
+      listDecisions: gate(info, 'hitl.listDecisions', hitl.listDecisions.bind(hitl)),
+      listExpiryCandidates: gate(info, 'hitl.sweepExpired', hitl.listExpiryCandidates.bind(hitl)),
+      insertSystemExpiry: gate(info, 'hitl.sweepExpired', hitl.insertSystemExpiry.bind(hitl)),
     },
     runs: {
       appendEvent: gate(info, 'runs.appendEvent', runs.appendEvent.bind(runs)),
@@ -183,45 +192,71 @@ function readsUnavailable(reason: string): never {
 // stay identical (#318 R4 finding 4). Writes spool to the outbox; HITL
 // decisions fail closed (owner decision 8).
 
+// #319 owner decision 6: HITL is FAIL-CLOSED end to end. Both writes require the
+// live store (nothing is ever spooled — the enqueue guard refuses the whole
+// namespace), and reads throw rather than answer from a partial view: there is
+// no queued HITL overlay to serve, and an approval system that reports "nothing
+// awaiting" from an incomplete picture is worse than one that admits it cannot
+// answer. `allowPartial` is deliberately not honored here.
 class DegradedHitlStore implements HitlStore {
-  private readonly workspaceId: string;
-  private readonly outbox: LocalOutbox;
   private readonly reason: string;
 
-  constructor(workspaceId: string, outbox: LocalOutbox, reason: string) {
-    this.workspaceId = workspaceId;
-    this.outbox = outbox;
+  constructor(reason: string) {
     this.reason = reason;
   }
 
-  async createRequest(input: HitlRequestInput): Promise<WriteOutcome> {
-    const { id, payload } = hitlRequestParts(this.workspaceId, input);
-    const res = this.outbox.enqueue({ namespace: 'hitl', id, kind: 'hitl-request', payload });
-    return { outcome: 'queued', id: res.id };
-  }
-
-  async getRequest(id: string, opts?: ReadOpts): Promise<HitlRequestEnvelope | null> {
-    requireReadId('id', id);
-    if (opts?.allowPartial !== true) readsUnavailable(this.reason);
-    return overlayHitlGet(this.outbox, this.workspaceId, id);
-  }
-
-  async listRequests(filter: HitlRequestFilter, cursor?: Cursor, opts?: ReadOpts): Promise<Page<HitlRequestEnvelope>> {
-    if (opts?.allowPartial !== true) readsUnavailable(this.reason);
-    return overlayHitlList(this.outbox, this.workspaceId, filter, cursor);
-  }
-
-  async appendDecision(input: HitlDecisionInput): Promise<WriteOutcome> {
-    hitlDecisionParts(this.workspaceId, input);
-    // Owner decision 8: decisions require the live store — never spooled.
+  private closed(): never {
     throw new BackendUnavailableError(
-      `HITL decisions require the live store and are never spooled — the backend is unreachable (${this.reason}); restore connectivity and retry`,
+      `HITL requires the live store and is never served from a partial view — the backend is unreachable (${this.reason}); restore connectivity and retry`,
     );
   }
 
-  async count(filter?: HitlRequestFilter, opts?: ReadOpts): Promise<CountResult> {
-    if (opts?.allowPartial !== true) readsUnavailable(this.reason);
-    return { committed: 0, queued: overlayHitlCount(this.outbox, filter), partial: true };
+  async createRequest(_input: HitlRequestInput): Promise<HitlWriteOutcome> {
+    this.closed();
+  }
+
+  async replaces(_input: HitlReplaceInput): Promise<HitlWriteOutcome> {
+    this.closed();
+  }
+
+  async appendDecision(_input: HitlDecisionInput): Promise<HitlDecisionOutcome> {
+    this.closed();
+  }
+
+  async getRequest(id: string): Promise<HitlRequestEnvelope | null> {
+    requireReadId('id', id);
+    this.closed();
+  }
+
+  async listRequests(_filter: HitlRequestFilter, _cursor?: Cursor): Promise<Page<HitlRequestEnvelope>> {
+    this.closed();
+  }
+
+  async count(_filter?: HitlRequestFilter): Promise<CountResult> {
+    this.closed();
+  }
+
+  async listVersions(id: string): Promise<HitlVersionRecord[]> {
+    requireReadId('id', id);
+    this.closed();
+  }
+
+  async listGenerations(id: string): Promise<HitlGenerationSummary[]> {
+    requireReadId('id', id);
+    this.closed();
+  }
+
+  async listDecisions(id: string): Promise<HitlDecisionEnvelope[]> {
+    requireReadId('id', id);
+    this.closed();
+  }
+
+  async listExpiryCandidates(_now: number, _limit: number): Promise<HitlExpiryCandidate[]> {
+    this.closed();
+  }
+
+  async insertSystemExpiry(_candidate: HitlExpiryCandidate, _now: number): Promise<'expired' | 'conflict'> {
+    this.closed();
   }
 }
 
@@ -720,7 +755,7 @@ async function resolvePostgresS3(
     const backend: OpsBackend = {
       backend: 'postgres-s3',
       workspaceId: ws.id,
-      hitl: new DegradedHitlStore(ws.id, outbox, reason),
+      hitl: new DegradedHitlStore(reason),
       runs: new DegradedRunStore(ws.id, outbox, reason, nowFn, pidFn),
       artifacts: new DegradedArtifactStore(ws.id, outbox, reason),
     };
@@ -831,6 +866,7 @@ async function resolvePostgresS3(
     // Pass the negotiated roster_ops version so a v1 backend's artifact reads
     // stay version-less (finding 5: v1 read must not execute v2-only SQL).
     opsVersion: info.components.roster_ops.version,
+    hitlExpiry: hitlExpiryOf(config),
     ...(opts.now ? { now: opts.now } : {}),
     ...(opts.pid ? { pid: opts.pid } : {}),
   });
@@ -878,6 +914,7 @@ export async function resolveOpsBackend(cwd: string, opts: ResolveOptions = {}):
     const backend: LocalOpsBackend = createLocalBackend({
       opsRoot: opsRootFor(cwd),
       workspaceId: config.workspace.id,
+      hitlExpiry: hitlExpiryOf(config),
       ...(opts.now ? { now: opts.now } : {}),
       ...(opts.pid ? { pid: opts.pid } : {}),
     });

@@ -28,6 +28,7 @@ import {
   type OpsBackend,
 } from '../src/lib/persistence/contracts.ts';
 import { makeBackendInfo } from '../src/lib/persistence/capabilities.ts';
+import { runEventParts } from '../src/lib/persistence/postgres/stores.ts';
 import { LocalLedger } from '../src/lib/persistence/local/ledger.ts';
 import { LocalOutbox, type DeliverResult, type OutboxRecord, type RemoteTarget } from '../src/lib/persistence/outbox.ts';
 import { WORKSPACE_MARKER_KEY, workspaceMarkerBody } from '../src/lib/persistence/objects.ts';
@@ -47,16 +48,19 @@ function tmp(prefix: string): string {
 }
 
 function hitlInput(overrides: Partial<HitlRequestInput> = {}): HitlRequestInput {
-  return {
+  const base: HitlRequestInput = {
     functionName: 'growth',
     title: 'Approve the launch post',
     action: 'publish-post',
     target: 'x.com/roster',
-    contentHash: sha256Hex('post body'),
+    contentHash: '',
     body: 'full body',
     expiresAt: null,
+    // D1: every submission states the head it observed (null = no history).
+    expectedHead: null,
     ...overrides,
   };
+  return { ...base, contentHash: overrides.contentHash ?? sha256Hex(base.body) };
 }
 
 function writePgConfig(
@@ -236,8 +240,9 @@ test('resolve: postgres-s3 with unreachable DB → degraded; spoolable writes qu
     if (resolved.state !== 'degraded') return;
     assert.match(resolved.reason, /database/);
 
-    const req = await resolved.backend.hitl.createRequest(hitlInput());
-    assert.equal(req.outcome, 'queued');
+    // #319 owner decision 6: HITL requires the live store — the whole namespace
+    // is non-spoolable, so a degraded createRequest throws and queues NOTHING.
+    await assert.rejects(resolved.backend.hitl.createRequest(hitlInput()), BackendUnavailableError);
     const run = await resolved.backend.runs.appendEvent({ runId: 'r1', kind: 'run-start', data: null });
     assert.equal(run.outcome, 'queued');
     const bytes = randomBytes(64);
@@ -248,22 +253,35 @@ test('resolve: postgres-s3 with unreachable DB → degraded; spoolable writes qu
     assert.equal(art.outcome, 'queued');
     assert.equal(art.digest, sha256Hex(bytes));
 
-    // HITL decisions are fail-closed — never spooled (owner decision 8).
     await assert.rejects(
-      resolved.backend.hitl.appendDecision({ requestId: req.id, status: 'approved', decidedBy: 'firat', note: null }),
+      resolved.backend.hitl.appendDecision({
+        requestId: sha256Hex('nope'),
+        generation: 1,
+        requestVersion: 1,
+        status: 'approved',
+        decidedBy: 'firat',
+        note: null,
+      }),
       BackendUnavailableError,
     );
-    // Reads and counts refuse rather than answering local-only.
-    await assert.rejects(resolved.backend.hitl.getRequest(req.id), BackendUnavailableError);
+    // Reads and counts refuse rather than answering local-only — and for HITL
+    // there is no allowPartial escape hatch at all (fail-closed approvals).
+    await assert.rejects(resolved.backend.hitl.getRequest(sha256Hex('nope')), BackendUnavailableError);
     await assert.rejects(resolved.backend.hitl.listRequests({}), BackendUnavailableError);
     await assert.rejects(resolved.backend.hitl.count(), BackendUnavailableError);
+    await assert.rejects(
+      resolved.backend.hitl.listRequests({}, undefined, { allowPartial: true }),
+      BackendUnavailableError,
+    );
+    await assert.rejects(resolved.backend.hitl.count(undefined, { allowPartial: true }), BackendUnavailableError);
     await assert.rejects(resolved.backend.runs.getRun('r1'), BackendUnavailableError);
     await assert.rejects(resolved.backend.runs.count(), BackendUnavailableError);
     await assert.rejects(resolved.backend.artifacts.getArtifact(art.digest), BackendUnavailableError);
 
     // The queued entries are durable in the outbox, spool bytes staged.
     const fold = resolved.outbox.fold();
-    assert.equal([...fold.entries.values()].filter((e) => e.status === 'queued').length, 3);
+    assert.equal([...fold.entries.values()].filter((e) => e.status === 'queued').length, 2);
+    assert.ok(![...fold.entries.values()].some((e) => e.namespace === 'hitl'), 'nothing HITL may be spooled');
     assert.ok(existsSync(join(opsRootFor(cwd), ws.id, 'spool', art.digest)));
   } finally {
     rmSync(cwd, { recursive: true, force: true });
@@ -279,7 +297,6 @@ test('resolve: degraded allowPartial reads serve the queued overlay, flagged par
     const resolved = await resolveOpsBackend(cwd, { env, files: new MemoryFileStore() });
     assert.equal(resolved.state, 'degraded');
     if (resolved.state !== 'degraded') return;
-    const req = await resolved.backend.hitl.createRequest(hitlInput({ title: 'queued offline' }));
     const run = await resolved.backend.runs.appendEvent({ runId: 'r1', kind: 'run-start', data: null });
     const bytes = randomBytes(48);
     const art = await resolved.backend.artifacts.putArtifact(
@@ -287,25 +304,10 @@ test('resolve: degraded allowPartial reads serve the queued overlay, flagged par
       bytes,
     );
 
-    // Without allowPartial degraded reads still throw (regression guard).
-    await assert.rejects(resolved.backend.hitl.getRequest(req.id), BackendUnavailableError);
+    // hitl has NO overlay at any opt-in level (#319): there is never a queued
+    // HITL entry to serve, so both forms fail closed.
     await assert.rejects(resolved.backend.hitl.count(), BackendUnavailableError);
-
-    // hitl: get/list/count from the overlay only, marked queued + partial.
-    const got = await resolved.backend.hitl.getRequest(req.id, { allowPartial: true });
-    assert.ok(got !== null);
-    assert.equal(got.queued, true);
-    assert.equal(got.seq, null);
-    assert.equal(got.title, 'queued offline');
-    const listed = await resolved.backend.hitl.listRequests({}, undefined, { allowPartial: true });
-    assert.equal(listed.partial, true);
-    assert.deepEqual(listed.items.map((i) => [i.id, i.queued]), [[req.id, true]]);
-    assert.deepEqual(await resolved.backend.hitl.count(undefined, { allowPartial: true }), {
-      committed: 0,
-      queued: 1,
-      partial: true,
-    });
-    assert.equal(await resolved.backend.hitl.getRequest(sha256Hex('missing'), { allowPartial: true }), null);
+    await assert.rejects(resolved.backend.hitl.count(undefined, { allowPartial: true }), BackendUnavailableError);
 
     // runs: overlay events + summaries.
     const gotRun = await resolved.backend.runs.getRun('r1', { allowPartial: true });
@@ -345,7 +347,7 @@ test('resolve: degraded point reads validate arguments (parity with local/PG)', 
     if (resolved.state !== 'degraded') return;
 
     // Empty ids and malformed digests throw before the allowPartial gate.
-    await assert.rejects(resolved.backend.hitl.getRequest('', { allowPartial: true }), InvalidRecordError);
+    await assert.rejects(resolved.backend.hitl.getRequest(''), InvalidRecordError);
     await assert.rejects(resolved.backend.runs.getRun('', { allowPartial: true }), InvalidRecordError);
     await assert.rejects(resolved.backend.artifacts.getArtifact('not-a-digest', { allowPartial: true }), InvalidRecordError);
     await assert.rejects(resolved.backend.artifacts.head('DEADBEEF', { allowPartial: true }), InvalidRecordError);
@@ -366,30 +368,13 @@ test('resolve: degraded partial listings honor limit + cursor (paginate the queu
     const N = 200;
     const runIds: string[] = [];
     for (let i = 0; i < N; i++) {
-      await resolved.backend.hitl.createRequest(hitlInput({ contentHash: sha256Hex(`draft-${i}`) }));
       const rid = `run-${i}`;
       runIds.push(rid);
       await resolved.backend.runs.appendEvent({ runId: rid, kind: 'run-start', data: null });
     }
-
-    // hitl: limit 1 must return 1 item + a cursor, and pagination must reach all N.
-    const first = await resolved.backend.hitl.listRequests({ limit: 1 }, undefined, { allowPartial: true });
-    assert.equal(first.items.length, 1, 'limit is honored, not dumped');
-    assert.ok(first.cursor !== null, 'a cursor is issued while more remain');
-    assert.equal(first.partial, true);
-    const seenHitl = new Set<string>(first.items.map((i) => i.id));
-    let cursor: Cursor | null = first.cursor;
     let guard = 0;
-    while (cursor !== null) {
-      const page: typeof first = await resolved.backend.hitl.listRequests({ limit: 7 }, cursor, { allowPartial: true });
-      assert.ok(page.items.length <= 7);
-      for (const it of page.items) seenHitl.add(it.id);
-      cursor = page.cursor;
-      if (++guard > N + 10) assert.fail('hitl pagination did not terminate');
-    }
-    assert.equal(seenHitl.size, N, 'every queued request is reachable through pagination');
 
-    // runs: same contract — limit 1 returns 1 with a cursor; drain all N runs.
+    // runs: limit 1 returns 1 with a cursor; drain all N runs.
     const rfirst = await resolved.backend.runs.listRuns({ limit: 1 }, undefined, { allowPartial: true });
     assert.equal(rfirst.items.length, 1);
     assert.ok(rfirst.cursor !== null);
@@ -535,10 +520,16 @@ test('capability gate: missing required capability refuses BEFORE the store meth
     workspaceId: randomUUID(),
     hitl: {
       createRequest: record('hitl.createRequest'),
+      replaces: record('hitl.replaces'),
+      appendDecision: record('hitl.appendDecision'),
       getRequest: record('hitl.getRequest'),
       listRequests: record('hitl.listRequests'),
-      appendDecision: record('hitl.appendDecision'),
       count: record('hitl.count'),
+      listVersions: record('hitl.listVersions'),
+      listGenerations: record('hitl.listGenerations'),
+      listDecisions: record('hitl.listDecisions'),
+      listExpiryCandidates: record('hitl.listExpiryCandidates'),
+      insertSystemExpiry: record('hitl.insertSystemExpiry'),
     },
     runs: {
       appendEvent: record('runs.appendEvent'),
@@ -558,7 +549,8 @@ test('capability gate: missing required capability refuses BEFORE the store meth
   // roster_ops offers NO capabilities: every runs/artifacts/outbox op refuses.
   const info = makeBackendInfo('local', {
     roster_ops: { version: 1, capabilities: [] },
-    hitl: { version: 1, capabilities: ['requests'] },
+    // hitl v2 offering `requests` + `state-machine` but NOT `decisions`.
+    hitl: { version: 2, capabilities: ['requests', 'state-machine'] },
     objects: { version: 1 },
   });
   const gated = withCapabilityGate(stub, info);
@@ -569,7 +561,14 @@ test('capability gate: missing required capability refuses BEFORE the store meth
   );
   // hitl offers 'requests' but not 'decisions' → decision write refuses.
   await assert.rejects(
-    gated.hitl.appendDecision({ requestId: 'x', status: 'approved', decidedBy: 'me', note: null }),
+    gated.hitl.appendDecision({
+      requestId: 'x',
+      generation: 1,
+      requestVersion: 1,
+      status: 'approved',
+      decidedBy: 'me',
+      note: null,
+    }),
     VersionSkewError,
   );
   // READS are gated too: a missing capability blocks them before the store runs.
@@ -1040,19 +1039,27 @@ test('drainOutbox: delivers queued entries after revalidating binding + marker',
     if (resolved.state !== 'postgres-s3') return;
     try {
       // Queue an entry directly (as a degraded session would have).
-      const input = hitlInput({ title: 'queued offline' });
-      const { hitlRequestParts } = await import('../src/lib/persistence/postgres/stores.ts');
-      const parts = hitlRequestParts(w.workspaceId, input);
-      resolved.outbox.enqueue({ namespace: 'hitl', id: parts.id, kind: 'hitl-request', payload: parts.payload });
+      resolved.outbox.enqueue({
+        namespace: 'runs',
+        id: sha256Hex('queued-run-event'),
+        kind: 'run-event',
+        payload: runEventParts(w.workspaceId, { runId: 'queued-run', kind: 'run-start', data: null }, { now: 1, pid: 'p' })
+          .payload,
+      });
 
       const report = await drainOutbox(resolved);
-      assert.equal(report.namespaces.hitl?.delivered, 1);
-      const count = await resolved.backend.hitl.count();
+      assert.equal(report.namespaces.runs?.delivered, 1);
+      const count = await resolved.backend.runs.count();
       assert.deepEqual(count, { committed: 1, queued: 0, partial: false });
 
       // Swap the marker → the drain path revalidates and refuses before I/O.
-      const parts2 = hitlRequestParts(w.workspaceId, hitlInput({ title: 'second', action: 'other-action' }));
-      resolved.outbox.enqueue({ namespace: 'hitl', id: parts2.id, kind: 'hitl-request', payload: parts2.payload });
+      resolved.outbox.enqueue({
+        namespace: 'runs',
+        id: sha256Hex('queued-run-event-2'),
+        kind: 'run-event',
+        payload: runEventParts(w.workspaceId, { runId: 'queued-run-2', kind: 'run-start', data: null }, { now: 1, pid: 'p' })
+          .payload,
+      });
       await w.store.del(WORKSPACE_MARKER_KEY);
       await w.store.put(WORKSPACE_MARKER_KEY, workspaceMarkerBody({ workspaceId: randomUUID(), name: 'evil' }));
       await assert.rejects(drainOutbox(resolved), WorkspaceMismatchError);
@@ -1081,8 +1088,10 @@ test('resolve: degraded workspace heals — queued entry drains once connectivit
     const offline = await resolveOpsBackend(w.cwd, { env: offlineEnv, files: w.store });
     assert.equal(offline.state, 'degraded');
     if (offline.state !== 'degraded') return;
-    const queued = await offline.backend.hitl.createRequest(hitlInput({ title: 'offline write' }));
+    const queued = await offline.backend.runs.appendEvent({ runId: 'offline-run', kind: 'run-start', data: null });
     assert.equal(queued.outcome, 'queued');
+    // ...but HITL never spools, even offline.
+    await assert.rejects(offline.backend.hitl.createRequest(hitlInput()), BackendUnavailableError);
 
     // Connectivity restored: resolve healthy, drain, observe the commit.
     const healthy = await resolvePg(w);
@@ -1090,10 +1099,10 @@ test('resolve: degraded workspace heals — queued entry drains once connectivit
     if (healthy.state !== 'postgres-s3') return;
     try {
       const report = await drainOutbox(healthy);
-      assert.equal(report.namespaces.hitl?.delivered, 1);
-      const got = await healthy.backend.hitl.getRequest(queued.id);
+      assert.equal(report.namespaces.runs?.delivered, 1);
+      const got = await healthy.backend.runs.getRun('offline-run');
       assert.ok(got !== null);
-      assert.equal(got.title, 'offline write');
+      assert.equal(got.events.length, 1);
     } finally {
       await healthy.close();
     }
@@ -1281,7 +1290,7 @@ test('withCapabilityGate (finding 3): putArtifact on a v1 backend throws Version
   const backend = {
     backend: 'postgres-s3' as const,
     workspaceId: randomUUID(),
-    hitl: { createRequest: noop, getRequest: noop, listRequests: noop, appendDecision: noop, count: noop } as never,
+    hitl: { createRequest: noop, replaces: noop, getRequest: noop, listRequests: noop, appendDecision: noop, count: noop, listVersions: noop, listGenerations: noop, listDecisions: noop, listExpiryCandidates: noop, insertSystemExpiry: noop } as never,
     runs: { appendEvent: noop, getRun: noop, listRuns: noop, count: noop } as never,
     artifacts: spyArtifacts as never,
   } as OpsBackend;

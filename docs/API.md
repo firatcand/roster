@@ -515,6 +515,12 @@ Exit codes: `0` ok, `1` error (config errors are always `1`, never `2`).
 | *configured-local* | `backend: local`. Append-only JSONL ledger active under `.roster/ops/<workspaceId>/`. |
 | *postgres-s3* | `backend: postgres-s3` + env URLs resolvable. Postgres records + dedicated-bucket objects, with a durable local outbox for outages. |
 
+**Optional config.** Beyond the fields setup writes, `persistence.yaml` accepts
+one optional block — `hitl.expiry` (HITL request TTL policy; see [HITL state
+machine](#hitl-state-machine-ops-backend)). It is not a credential and is not
+prompted for: hand-edit it when the 24h default does not fit. Everything else in
+the file is written by setup.
+
 **Environment variables** (credentials are env-only; `persistence.yaml` never
 holds secrets):
 
@@ -617,6 +623,149 @@ columns (never raw payload/provenance/digest/full URL). Semantic-search retrieva
 over that index (embedding + brain wiring) is a **deferred** follow-up.
 
 **Exit codes:** `0` ok, `1` error / not-configured / doctor findings.
+
+## HITL state machine (ops backend)
+
+The approval half of the ops backend (`hitl` schema v2 / local ledger v2). #319
+ships the schema, the shared state machine, and both store implementations —
+**there are no `roster hitl` CLI verbs yet**; they land in #320, hook-side
+approval enforcement in #322. This section documents the model those verbs will
+expose. Full protocol: [ADR-0004](adr/0004-operations-ledger-contracts.md).
+
+**Identity.** A request is keyed by the *group* it belongs to, not by its
+content: `request_key = sha256(functionName, action, target)` and
+`request_id = sha256(workspaceId, request_key)`. Within a group, `generation` and
+`version` are allocated by the store under a per-group lock. A revision is a new
+**version** of the open generation; a fresh ask after a decision is a new
+**generation**. `(request_id, generation, version)` is what a decision names.
+
+| Status | Terminal | Actionable | Meaning |
+|---|---|---|---|
+| `awaiting` | no | yes | No decision yet, not past its expiry. |
+| `deferred` | no | yes | Explicitly postponed — **stays in the queue**. |
+| `approved` | yes | no | The only status that can authorize execution. |
+| `changes-requested` | yes | no | Terminal on this version; continuation is a new version/generation. |
+| `rejected` | yes | no | |
+| `expired` | yes | no | Past `expires_at` with no decision. Reported by the projection whether or not the sweep has written the durable row. |
+| `cancelled` | yes | no | |
+
+**Sealing vs authority.** A generation is *sealed* by any terminal decision — a
+later same-key submission opens the next generation instead of reopening it. That
+governs allocation only: an **approved head is terminal and still authoritative**
+(the normal approve-then-execute path). A decision authorizes execution only when
+it is the current version of the **highest** generation, not superseded, not
+expired, and its packet still matches exactly (action, action kind, target,
+packet hash, canonicalization version, stored expiry). Authority never falls back
+to an older generation, and a legacy row whose content hash was never verified
+(`canonicalization_version = 0`) can never authorize anything.
+
+**Packet identity.** The approval packet's hash covers every field a human sees —
+action, action kind, target (+ its hash), content (inline hash or the immutable
+object reference), expiry, canonicalization version, **title**, summary,
+warnings, side effects, choices, and the attribution shown beside the ask
+(**origin run id, origin task id, requesting agent**). Editing *any* of them
+produces a new version; an existing approval is never silently reused for changed
+content or changed attribution. Audit-only observations (created_at, seq, the
+allocated generation/version) are excluded, so a true replay hashes identically.
+
+**Optimistic concurrency.** Every submission states the head it observed:
+`expectedHead: null` means "this key has no history at all", and an object means
+"exactly this head" — `{generation, version, packetHash, sealed}`. `sealed` is
+part of the fingerprint because an approval changes nothing else about a head, so
+without it a submission composed against an open request would silently open the
+next generation behind a decision the caller never saw. The store re-reads the
+head under the per-group lock and refuses a mismatch with a synchronous
+`ConflictError`. A `null` expectation is also honored idempotently when the head
+turns out to be an open, byte-identical packet — that is an at-least-once retry
+of the same ask, and it can never cross a terminal boundary.
+
+**A replaced group is closed.** `replaces` records the supersession on the
+*destination* row, so being replaced leaves the source head's fingerprint
+completely unchanged — same generation, same version, same packet hash, same
+`sealed`. An `expectedHead` read before the replace therefore still matches
+afterwards, so the store re-checks the supersession itself under the lock: any
+submission that would WRITE against a superseded head — a revision, or a new
+generation on a sealed one — is a `ConflictError`, and so is a second `replaces`
+against a source another group already superseded. Re-read and target the group
+that replaced it; there is no reopen intent. A byte-identical packet against an
+open head remains idempotent, because it writes nothing — but a `replaces` still
+owes its supersession link, so such a destination plan is upgraded to a real
+revision when the head does not already record that link, and the closure check
+is applied to that FINAL plan (otherwise `A→B`, `B→C`, `X→B` with B's own
+fingerprint and packet would resurrect B). A superseded head is
+also out of the default actionable queue (an explicit `status` filter still
+returns it — that is history, not the queue) and is never swept for expiry. On
+postgres the same closure — plus the legal `(generation, version)` next step, the
+"supersede only the current head" rule, and the refusal to revise an already
+expired head in place — is enforced by the requests trigger under the per-group
+lock, so it holds against a raw runtime `INSERT` too. Like the decisions trigger,
+it lock-then-reads, so it also refuses to run above `READ COMMITTED`, where its
+snapshot would predate the lock; the store opens every HITL transaction at that
+level explicitly.
+
+**Action taxonomy.** A closed allowlist of `editorial` actions —
+`approve-draft`, `approve-lesson`, `select-candidate`, `acknowledge-error` —
+chooses or blesses content. **Every other action, including one this CLI does not
+know, is `execution`** (fail-safe). Execution requests must carry an expiry;
+editorial ones may be open-ended. An editorial approval can never satisfy an
+execution request.
+
+**Queue reads.** Listing without a `status` filter returns the actionable set
+(`awaiting` + `deferred`); a supplied status selects exactly that effective
+status. Filtering by `functionName` matches the **normalized** identity: a stored
+value that is not a non-empty string — absent, empty, or not a string at all,
+which is only reachable through migrated pre-#319 history — is the `unknown`
+sentinel on both backends, and that is also what the envelope reports, so a
+request is always reachable through the name it answers to. Pagination is
+anchored on the request GROUP's creation position, so a revision landing while
+you page never moves a request out of (or twice into) an in-flight traversal;
+requests created after the first page are simply not part of it.
+
+**Expiry policy** — optional block in `roster/persistence.yaml`:
+
+```yaml
+hitl:
+  expiry:
+    default_ttl_ms: 86400000   # 24h — applied when a request supplies no expiry
+    min_ttl_ms: 3600000        # 1h
+    max_ttl_ms: 604800000      # 7d
+```
+
+All three are positive integer milliseconds; `min ≤ default ≤ max` is validated
+at load. A per-request expiry outside the bounds is **clamped with a warning**
+(returned on the write outcome), never refused — the request still has to reach a
+human. On a `postgres-s3` workspace the policy is resolved against the
+**database** clock (read under the group lock, with the packet re-sealed around
+the result), because that is the clock every expiry consumer uses — otherwise an
+application clock running behind the database mints a request that is already
+expired, and one running ahead mints an expiry past `max_ttl_ms`. Expiry itself
+does not depend on any background job: a request past its deadline drops out of
+the actionable queue and out of authority immediately, and a throttled sweep
+later records the durable `expired` decision for history. An expired head is also
+frozen until that decision exists: no revision may be allocated over it (which
+would hide it from the sweep forever) and the next generation opens only once the
+expiry is durable — which every store write path materializes in the same
+transaction, so a caller never has to do it by hand.
+
+**Fail-closed posture.** HITL never spools to the outage outbox (contrast run
+events, which do):
+
+| Situation | Behavior |
+|---|---|
+| `postgres-s3` workspace, database unreachable | Every HITL write **and read** throws `BackendUnavailableError`. Nothing is queued; the caller retries. |
+| Direct `outbox.enqueue` into the `hitl` namespace | Throws — the whole namespace is non-spoolable at the boundary, not by convention. |
+| `--allow-partial` on a degraded backend | Ignored for HITL. There is no queued HITL overlay, and reporting "nothing awaiting" from a partial view is worse than refusing to answer. |
+| Workspace with `backend: local` | The JSONL ledger **is** the live store: writes are synchronous to disk and either commit or throw. |
+| Stale submission (the head moved) | Synchronous `ConflictError` — re-read the head and re-plan. |
+| Second decision on a decided version | `ConflictError` (one terminal decision per version, enforced by the database). |
+
+**Upgrading an existing workspace.** `roster ops setup` re-run applies the `hitl`
+v2 migration (postgres-s3) or converts the local ledger in place, both
+idempotent and roll-forward. A legacy history that cannot be partitioned
+unambiguously — duplicate terminal decisions, orphan decisions, a decision
+stamped before its request, a same-key request created before the previous one's
+decision landed — **refuses the upgrade with a per-row report** rather than
+guessing an approval scope.
 
 ## Migrate (`roster migrate from-agent-team <dir>`)
 

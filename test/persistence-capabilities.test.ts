@@ -66,7 +66,7 @@ test('backendInfo: shape — backend + per-component version and capabilities', 
       backend: 'local',
       components: {
         roster_ops: { version: 2, capabilities: ['runs', 'artifacts', 'outbox', 'checkpoint', 'run-ledger'] },
-        hitl: { version: 1, capabilities: ['requests', 'decisions'] },
+        hitl: { version: 2, capabilities: ['requests', 'decisions', 'state-machine'] },
         objects: { version: 2, capabilities: ['content-addressed', 'create-only', 'version-id', 'list-prefix'] },
       },
     });
@@ -95,7 +95,7 @@ test('backendInfo: a tree that does not exist yet reports the CLI baseline witho
 test('skew: future roster_ops version refuses roster_ops operations with an actionable upgrade error — hitl unaffected', () => {
   const env = makeEnv();
   try {
-    writeMeta(env, { roster_ops: 99, hitl: 1, objects: 1 });
+    writeMeta(env, { roster_ops: 99, hitl: 2, objects: 1 });
     const info = localBackendInfo(env.opsRoot, env.ws);
     assert.equal(info.components.roster_ops.version, 99);
     assert.deepEqual(info.components.roster_ops.capabilities, []);
@@ -118,7 +118,8 @@ test('skew: future roster_ops version refuses roster_ops operations with an acti
 test('skew: future hitl version refuses hitl operations while runs operations proceed', () => {
   const env = makeEnv();
   try {
-    writeMeta(env, { roster_ops: 1, hitl: 2, objects: 1 });
+    // hitl 3 is beyond the supported range (#319 raised the ceiling to 2).
+    writeMeta(env, { roster_ops: 1, hitl: 3, objects: 1 });
     const info = localBackendInfo(env.opsRoot, env.ws);
     assert.throws(() => assertOperationSupported(info, 'hitl.appendDecision'), VersionSkewError);
     assert.throws(() => assertOperationSupported(info, 'hitl.createRequest'), VersionSkewError);
@@ -151,7 +152,7 @@ test('skew: below-range component version points at backend migration, not CLI u
     backend: 'postgres-s3',
     components: {
       roster_ops: { version: 0, capabilities: [] },
-      hitl: { version: 1, capabilities: ['requests', 'decisions'] },
+      hitl: { version: 2, capabilities: ['requests', 'decisions', 'state-machine'] },
       objects: { version: 1, capabilities: ['content-addressed', 'create-only'] },
     },
   };
@@ -206,7 +207,7 @@ test('meta: a component the meta predates defaults to version 1; non-integer ver
 test('capabilities: unknown EXTRA capabilities are ignored (forward-compat); missing REQUIRED ones refuse by name', () => {
   const extra = makeBackendInfo('postgres-s3', {
     roster_ops: { version: 2, capabilities: ['runs', 'artifacts', 'outbox', 'checkpoint', 'run-ledger', 'x-future-frobnicate'] },
-    hitl: { version: 1, capabilities: ['requests', 'decisions', 'x-batch-decide'] },
+    hitl: { version: 2, capabilities: ['requests', 'decisions', 'state-machine', 'x-batch-decide'] },
     objects: { version: 2, capabilities: ['content-addressed', 'create-only', 'version-id', 'list-prefix', 'x-cold-storage'] },
   });
   assert.doesNotThrow(() => assertOperationSupported(extra, 'hitl.appendDecision'));
@@ -214,7 +215,7 @@ test('capabilities: unknown EXTRA capabilities are ignored (forward-compat); mis
 
   const missing = makeBackendInfo('postgres-s3', {
     roster_ops: { version: 1 },
-    hitl: { version: 1, capabilities: ['requests'] },
+    hitl: { version: 2, capabilities: ['requests', 'state-machine'] },
     objects: { version: 1 },
   });
   assert.throws(
@@ -321,9 +322,15 @@ test('finding 8: a v1 roster_ops backend refuses the run-ledger operations with 
       `${op} must refuse on a v1 backend`,
     );
   }
-  // a bare-blob GET + a v1 hitl op remain available on v1.
+  // a bare-blob GET remains available on v1...
   assert.doesNotThrow(() => assertOperationSupported(v1, 'artifacts.getArtifact'));
-  assert.doesNotThrow(() => assertOperationSupported(v1, 'hitl.createRequest'));
+  // ...but #319 moved EVERY hitl verb behind the v2 `state-machine` capability,
+  // so a v1 hitl schema now refuses with the same actionable skew error rather
+  // than running generation/version SQL against columns that do not exist.
+  assert.throws(
+    () => assertOperationSupported(v1, 'hitl.createRequest'),
+    (err: unknown) => err instanceof VersionSkewError && /state-machine/.test((err as Error).message),
+  );
 });
 
 test('finding 8: a local tree minted at v1 is upgraded to v2 on next access (meta rewrite) so run-ledger ops pass', () => {

@@ -7,6 +7,8 @@ import { join } from 'node:path';
 import {
   loadPersistenceConfig,
   persistenceConfigPath,
+  hitlExpiryOf,
+  DEFAULT_HITL_EXPIRY_CONFIG,
   PERSISTENCE_YAML_VERSION,
   isUuidV4,
 } from '../src/lib/persistence/config-schema.ts';
@@ -274,6 +276,43 @@ test('config: postgres.database restricted to brain|dedicated', () => {
   }
 });
 
+test('config: the optional hitl.expiry block parses, defaults, and refuses incoherent bounds', () => {
+  const cwd = tmpWorkspace();
+  try {
+    // Absent → the built-in policy (24h TTL, 1h..7d bounds).
+    writeConfig(cwd, VALID_LOCAL);
+    assert.deepEqual(hitlExpiryOf(loadPersistenceConfig(cwd).config), DEFAULT_HITL_EXPIRY_CONFIG);
+
+    writeConfig(cwd, `${VALID_LOCAL}\nhitl:\n  expiry:\n    default_ttl_ms: 7200000\n    min_ttl_ms: 3600000\n    max_ttl_ms: 14400000\n`);
+    assert.deepEqual(hitlExpiryOf(loadPersistenceConfig(cwd).config), {
+      defaultTtlMs: 7_200_000,
+      minTtlMs: 3_600_000,
+      maxTtlMs: 14_400_000,
+    });
+
+    // Partial blocks fall back to the per-field defaults.
+    writeConfig(cwd, `${VALID_LOCAL}\nhitl:\n  expiry:\n    default_ttl_ms: 7200000\n`);
+    assert.deepEqual(hitlExpiryOf(loadPersistenceConfig(cwd).config), {
+      defaultTtlMs: 7_200_000,
+      minTtlMs: DEFAULT_HITL_EXPIRY_CONFIG.minTtlMs,
+      maxTtlMs: DEFAULT_HITL_EXPIRY_CONFIG.maxTtlMs,
+    });
+
+    // Incoherent bounds are a config error, not a silent clamp.
+    writeConfig(cwd, `${VALID_LOCAL}\nhitl:\n  expiry:\n    min_ttl_ms: 100000\n    max_ttl_ms: 1000\n`);
+    expectConfigError(cwd, 'hitl.expiry.min_ttl_ms');
+    writeConfig(cwd, `${VALID_LOCAL}\nhitl:\n  expiry:\n    default_ttl_ms: 999\n    min_ttl_ms: 1000\n    max_ttl_ms: 2000\n`);
+    expectConfigError(cwd, 'hitl.expiry.default_ttl_ms');
+    writeConfig(cwd, `${VALID_LOCAL}\nhitl:\n  expiry:\n    default_ttl_ms: -5\n`);
+    expectConfigError(cwd, 'hitl.expiry.default_ttl_ms');
+    // Unknown keys inside the block are rejected like everywhere else.
+    writeConfig(cwd, `${VALID_LOCAL}\nhitl:\n  expiry:\n    ttl: 5\n`);
+    expectConfigError(cwd, 'Unrecognized key');
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test('config: version constant and uuid helper exported', () => {
   assert.equal(PERSISTENCE_YAML_VERSION, 1);
   assert.equal(isUuidV4(WS_ID), true);
@@ -365,7 +404,11 @@ const localFactory: Factory = {
     const dir = mkdtempSync(join(tmpdir(), 'roster-contract-'));
     const opsRoot = join(dir, '.roster', 'ops');
     const workspaceId = randomUUID();
-    const clock = { t: 1_700_000_000_000 };
+    // #319: HITL expiry is evaluated against the REAL clock on the postgres
+    // backend (hitl.now_ms() = clock_timestamp(), inside the view + the decision
+    // trigger), so a fixed 2023 test clock would mint requests that are already
+    // expired. Both factories therefore tick from real time.
+    const clock = { t: Date.now() };
     const backend = createLocalBackend({ opsRoot, workspaceId, now: () => ++clock.t });
     return {
       backend,
@@ -434,7 +477,7 @@ const pgFactory: Factory = {
   name: 'postgres-s3',
   skip: OPS_ADMIN_URL.length > 0 ? false : 'ROSTER_OPS_TEST_ADMIN_URL not set',
   create: async () => {
-    const clock = { t: 1_700_000_000_000 };
+    const clock = { t: Date.now() };
     const primary = await makePgWorkspace(clock);
     const extras: PgWorkspace[] = [];
     return {
@@ -456,17 +499,23 @@ const pgFactory: Factory = {
 // those live in persistence-ledger.test.ts).
 const factories: Factory[] = [localFactory, pgFactory];
 
+// #319: identity is (functionName, action, target) — the CONTENT is not in the
+// key, so a changed body revises the same group. The content hash is verified
+// server-side, so the fixture always derives it from the body it ships.
 function requestInput(overrides: Partial<HitlRequestInput> = {}): HitlRequestInput {
-  return {
+  const base: HitlRequestInput = {
     functionName: 'marketing',
     title: 'Approve launch post',
     action: 'publish-post',
     target: 'blog/launch.md',
-    contentHash: sha256Hex('launch-draft-v1'),
+    contentHash: '',
     body: 'Please review the launch post draft.',
     expiresAt: null,
+    // D1: every submission states the head it observed (null = no history).
+    expectedHead: null,
     ...overrides,
   };
+  return { ...base, contentHash: overrides.contentHash ?? sha256Hex(base.body) };
 }
 
 for (const factory of factories) {
@@ -497,9 +546,25 @@ for (const factory of factories) {
     const h = await factory.create();
     try {
       const first = await h.backend.hitl.createRequest(requestInput());
-      const second = await h.backend.hitl.createRequest(requestInput());
+      // A BLIND at-least-once retry: the caller re-sends the same packet with
+      // the same "no history" expectation. `expiresAt` is packet identity and
+      // this fixture leaves it to the server, so the retry must pin the head's
+      // own deadline — a freshly derived default TTL is a genuinely different
+      // packet, and the store says so instead of silently re-versioning.
+      const head = await h.backend.hitl.getRequest(first.requestId);
+      assert.ok(head !== null);
+      const second = await h.backend.hitl.createRequest(requestInput({ expiresAt: head.expiresAt }));
       assert.equal(second.id, first.id);
       assert.equal(second.outcome, 'committed');
+      assert.equal(second.idempotent, true, 'the retry is an idempotent no-op, not a second version');
+      assert.deepEqual([second.generation, second.version], [first.generation, first.version]);
+      assert.equal((await h.backend.hitl.listVersions(first.requestId)).length, 1);
+      // ...and a retry whose packet actually DIFFERS is refused, not silently
+      // applied on top of a head the caller never read.
+      await assert.rejects(
+        h.backend.hitl.createRequest(requestInput({ expiresAt: (head.expiresAt ?? 0) + 1000 })),
+        ConflictError,
+      );
       const page = await h.backend.hitl.listRequests({});
       assert.equal(page.items.length, 1);
       assert.deepEqual(await h.backend.hitl.count(), { committed: 1, queued: 0, partial: false });
@@ -508,21 +573,49 @@ for (const factory of factories) {
     }
   });
 
-  test(t('createRequest with same identity but different payload is a ConflictError, never silent dedup'), { skip: factory.skip }, async () => {
+  test(t('a same-key packet change revises in place; a stale expectedHead conflicts synchronously'), { skip: factory.skip }, async () => {
     const h = await factory.create();
     try {
-      await h.backend.hitl.createRequest(requestInput());
+      const first = await h.backend.hitl.createRequest(requestInput());
+      assert.equal(first.generation, 1);
+      assert.equal(first.version, 1);
+      const head = await h.backend.hitl.getRequest(first.requestId);
+      assert.ok(head !== null);
+      // A revised packet is version 2 of the SAME group, never a second request.
+      // The revision states the head it observed (D1) — a DIFFERENT packet can
+      // never ride a "no history" expectation.
+      const revised = await h.backend.hitl.createRequest(
+        requestInput({
+          body: 'A revised packet.',
+          expectedHead: {
+            generation: head.generation,
+            version: head.version,
+            packetHash: head.packetHash,
+            sealed: head.sealed,
+          },
+        }),
+      );
+      assert.equal(revised.requestId, first.requestId);
+      assert.equal(revised.generation, 1);
+      assert.equal(revised.version, 2);
+      assert.equal(revised.idempotent, false);
+      // ...and a caller that still believes v1 is current is refused under the
+      // lock rather than silently forking the history.
       await assert.rejects(
-        h.backend.hitl.createRequest(requestInput({ body: 'A silently altered packet.' })),
+        h.backend.hitl.createRequest(
+          requestInput({
+            body: 'Another edit from a stale reader.',
+            expectedHead: { generation: 1, version: 1, packetHash: head.packetHash, sealed: false },
+          }),
+        ),
         ConflictError,
       );
-      // identity: (functionName, action, target, contentHash) — changing the
-      // content hash is a NEW request, not a conflict
-      const other = await h.backend.hitl.createRequest(
-        requestInput({ contentHash: sha256Hex('launch-draft-v2') }),
-      );
-      assert.equal(other.outcome, 'committed');
+      // A different TARGET is a different group.
+      const other = await h.backend.hitl.createRequest(requestInput({ target: 'blog/other.md' }));
+      assert.notEqual(other.requestId, first.requestId);
       assert.deepEqual(await h.backend.hitl.count(), { committed: 2, queued: 0, partial: false });
+      const versions = await h.backend.hitl.listVersions(first.requestId);
+      assert.deepEqual(versions.map((v) => [v.generation, v.version]), [[1, 1], [1, 2]]);
     } finally {
       await h.cleanup();
     }
@@ -533,7 +626,9 @@ for (const factory of factories) {
     try {
       const req = await h.backend.hitl.createRequest(requestInput());
       const outcome = await h.backend.hitl.appendDecision({
-        requestId: req.id,
+        requestId: req.requestId,
+        generation: req.generation,
+        requestVersion: req.version,
         status: 'approved',
         decidedBy: 'firat',
         note: null,
@@ -542,7 +637,9 @@ for (const factory of factories) {
       assert.match(outcome.id, /^[0-9a-f]{64}$/);
       await assert.rejects(
         h.backend.hitl.appendDecision({
-          requestId: req.id,
+          requestId: req.requestId,
+          generation: req.generation,
+          requestVersion: req.version,
           // deliberately illegal at runtime — awaiting is not a decision
           status: 'awaiting' as never,
           decidedBy: 'firat',
@@ -550,6 +647,13 @@ for (const factory of factories) {
         }),
         InvalidRecordError,
       );
+      // An approved head is sealed AND authoritative, and leaves the queue.
+      const decided = await h.backend.hitl.getRequest(req.requestId);
+      assert.ok(decided !== null);
+      assert.equal(decided.status, 'approved');
+      assert.equal(decided.sealed, true);
+      assert.equal(decided.authoritative, true);
+      assert.deepEqual(await h.backend.hitl.count(), { committed: 0, queued: 0, partial: false });
     } finally {
       await h.cleanup();
     }
@@ -559,7 +663,7 @@ for (const factory of factories) {
     const h = await factory.create();
     try {
       for (let i = 1; i <= 5; i++) {
-        await h.backend.hitl.createRequest(requestInput({ contentHash: sha256Hex(`draft-${i}`) }));
+        await h.backend.hitl.createRequest(requestInput({ target: `blog/draft-${i}.md` }));
       }
       const page1 = await h.backend.hitl.listRequests({ limit: 2 });
       assert.equal(page1.items.length, 2);
@@ -568,7 +672,7 @@ for (const factory of factories) {
       const watermark = page1.cursor.watermark;
       assert.ok(watermark >= 5);
       // a request created mid-pagination must NOT leak into later pages…
-      await h.backend.hitl.createRequest(requestInput({ contentHash: sha256Hex('draft-6') }));
+      await h.backend.hitl.createRequest(requestInput({ target: 'blog/draft-6.md' }));
       const page2 = await h.backend.hitl.listRequests({ limit: 2 }, page1.cursor);
       assert.equal(page2.items.length, 2);
       assert.ok(page2.cursor);
@@ -594,9 +698,7 @@ for (const factory of factories) {
     const h = await factory.create();
     try {
       await h.backend.hitl.createRequest(requestInput());
-      await h.backend.hitl.createRequest(
-        requestInput({ functionName: 'sales', contentHash: sha256Hex('other') }),
-      );
+      await h.backend.hitl.createRequest(requestInput({ functionName: 'sales' }));
       assert.deepEqual(await h.backend.hitl.count(), { committed: 2, queued: 0, partial: false });
       assert.deepEqual(await h.backend.hitl.count({ functionName: 'sales' }), {
         committed: 1,
@@ -926,7 +1028,7 @@ for (const factory of factories) {
       // same input in the sibling workspace yields a DIFFERENT id (workspace-scoped ids)
       const own = await other.hitl.createRequest(requestInput());
       const original = await h.backend.hitl.listRequests({});
-      assert.notEqual(own.id, original.items[0]!.id);
+      assert.notEqual(own.requestId, original.items[0]!.id);
     } finally {
       await h.cleanup();
     }
@@ -936,7 +1038,7 @@ for (const factory of factories) {
     const h = await factory.create();
     try {
       await h.backend.hitl.createRequest(requestInput());
-      await h.backend.hitl.createRequest(requestInput({ contentHash: sha256Hex('two') }));
+      await h.backend.hitl.createRequest(requestInput({ target: 'blog/two.md' }));
       const page = await h.backend.hitl.listRequests({ limit: 1 });
       assert.ok(page.cursor);
       const cursor: Cursor = page.cursor;

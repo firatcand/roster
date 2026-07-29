@@ -171,6 +171,7 @@ async function setupWorkspace(name: string): Promise<Workspace> {
       contentHash: sha256Hex(`${name}-draft`),
       body: 'body',
       expiresAt: null,
+      expectedHead: null,
     });
     assert.equal(req.outcome, 'committed');
     requestId = req.id;

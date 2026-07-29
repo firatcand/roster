@@ -33,14 +33,14 @@ export type BackendInfo = {
   readonly components: Readonly<Record<OpsComponent, ComponentInfo>>;
 };
 
-// The version a fresh postgres-s3 migration mints (roster_ops/objects at #323's
-// v2), and the offline default localBackendInfo reports for a tree with no
-// meta.json. The local JSONL backend keeps minting roster_ops/objects at v1 (it
-// does not implement the v2 run-ledger schema); both v1 and v2 stay in range, so
-// per-operation gates never refuse a v1 backend for a v1 operation.
+// The version a fresh postgres-s3 migration mints, and the offline default
+// localBackendInfo reports for a tree with no meta.json. #319 raises hitl to 2
+// on BOTH backends: the PG schema carries the state machine (002_state_machine.sql)
+// and the local JSONL store implements the same shared machine over its ledger,
+// so neither backend advertises a capability it does not provide.
 export const CURRENT_COMPONENT_VERSIONS: Readonly<Record<OpsComponent, number>> = {
   roster_ops: 2,
-  hitl: 1,
+  hitl: 2,
   objects: 2,
 };
 
@@ -55,7 +55,13 @@ const KNOWN_COMPONENT_CAPABILITIES: Readonly<Record<OpsComponent, Readonly<Recor
     1: ['runs', 'artifacts', 'outbox', 'checkpoint'],
     2: ['runs', 'artifacts', 'outbox', 'checkpoint', 'run-ledger'],
   },
-  hitl: { 1: ['requests', 'decisions'] },
+  // hitl v2 (#319) adds the packet/generation state machine: the request_state
+  // + request_index projections, the decision-enforcing trigger, and the
+  // sealed-generation identity columns.
+  hitl: {
+    1: ['requests', 'decisions'],
+    2: ['requests', 'decisions', 'state-machine'],
+  },
   objects: {
     1: ['content-addressed', 'create-only'],
     2: ['content-addressed', 'create-only', 'version-id', 'list-prefix'],
@@ -64,7 +70,7 @@ const KNOWN_COMPONENT_CAPABILITIES: Readonly<Record<OpsComponent, Readonly<Recor
 
 export const SUPPORTED_COMPONENT_RANGES: Readonly<Record<OpsComponent, { readonly min: number; readonly max: number }>> = {
   roster_ops: { min: 1, max: 2 },
-  hitl: { min: 1, max: 1 },
+  hitl: { min: 1, max: 2 },
   objects: { min: 1, max: 2 },
 };
 
@@ -72,11 +78,20 @@ export const SUPPORTED_COMPONENT_RANGES: Readonly<Record<OpsComponent, { readonl
 // only on the components it actually touches, so e.g. a future hitl version
 // never blocks runs.appendEvent.
 export const OPERATION_REQUIREMENTS = {
-  'hitl.createRequest': { hitl: ['requests'] },
-  'hitl.getRequest': { hitl: ['requests'] },
-  'hitl.listRequests': { hitl: ['requests'] },
-  'hitl.appendDecision': { hitl: ['decisions'] },
-  'hitl.count': { hitl: ['requests'] },
+  // #319: every HITL verb now allocates or reads generation/version identity and
+  // the sweep-independent effective status, all of which live behind the v2
+  // `state-machine` capability. A v1 backend must get an actionable
+  // VersionSkewError, never a missing-column SQL error.
+  'hitl.createRequest': { hitl: ['requests', 'state-machine'] },
+  'hitl.getRequest': { hitl: ['requests', 'state-machine'] },
+  'hitl.listRequests': { hitl: ['requests', 'state-machine'] },
+  'hitl.appendDecision': { hitl: ['decisions', 'state-machine'] },
+  'hitl.count': { hitl: ['requests', 'state-machine'] },
+  'hitl.replaces': { hitl: ['requests', 'state-machine'] },
+  'hitl.listVersions': { hitl: ['requests', 'state-machine'] },
+  'hitl.listGenerations': { hitl: ['requests', 'state-machine'] },
+  'hitl.listDecisions': { hitl: ['decisions', 'state-machine'] },
+  'hitl.sweepExpired': { hitl: ['requests', 'decisions', 'state-machine'] },
   // Run-event ops read/write the v2 provenance columns (source/agent/pid/…) and
   // are therefore gated on the v2 `run-ledger` capability, NOT the base v1 `runs`
   // (finding: capability gates authorize v2 SQL against a v1 PostgreSQL — a v1
@@ -153,7 +168,7 @@ export function makeBackendInfo(
 // (finding: local mints v1; implement the local meta upgrade). ledger.meta()
 // rewrites the stored meta.json to match on the next write; this read path never
 // under-reports a capability the code provides.
-const LOCAL_MIN_VERSIONS: Readonly<Record<OpsComponent, number>> = { roster_ops: 2, hitl: 1, objects: 2 };
+const LOCAL_MIN_VERSIONS: Readonly<Record<OpsComponent, number>> = { roster_ops: 2, hitl: 2, objects: 2 };
 
 // backendInfo() for the local backend: reads meta.json componentVersions
 // read-only (no minting). A tree that does not exist yet reports the CLI's

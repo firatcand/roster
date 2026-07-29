@@ -19,7 +19,7 @@ import {
   ftruncateSync,
 } from 'node:fs';
 import type { Stats } from 'node:fs';
-import { dirname, join, sep } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
   BackendUnavailableError,
@@ -38,6 +38,7 @@ import {
   type ConfinedPath,
 } from '../../workspace-path.ts';
 import { describeEvidenceFailure, readEvidenceFileSync } from '../../evidence-read.ts';
+import { FORMAT_FENCES, fenceMarkerPath, markerFencesLegacyWrites } from './format-fence.ts';
 
 // Append-only JSONL ledger for the local backend (#318 section D). Layout:
 //   <opsRoot>/<workspaceId>/meta.json
@@ -55,7 +56,7 @@ export const MAX_RECORD_BYTES = 1024 * 1024;
 // The component versions the local JSONL backend advertises (#323): its code
 // implements the run ledger + artifact declarations, so it mints roster_ops +
 // objects at v2. Kept in sync with capabilities.ts CURRENT_COMPONENT_VERSIONS.
-export const LOCAL_COMPONENT_VERSIONS: Readonly<Record<string, number>> = { hitl: 1, roster_ops: 2, objects: 2 };
+export const LOCAL_COMPONENT_VERSIONS: Readonly<Record<string, number>> = { hitl: 2, roster_ops: 2, objects: 2 };
 
 function needsComponentUpgrade(versions: Record<string, number> | undefined): boolean {
   if (versions === undefined) return true;
@@ -120,6 +121,11 @@ export type LedgerRecord = {
   observations?: unknown;
 };
 
+// A record as READERS see it: a physical record, plus its position inside the
+// compound envelope it arrived in (0 for a record that was written alone). The
+// physical line never carries `pos` — it is assigned at expansion.
+export type LogicalRecord = LedgerRecord & { pos: number };
+
 export type LedgerMeta = {
   configVersion: number;
   workspaceId: string;
@@ -129,6 +135,109 @@ export type LedgerMeta = {
 
 export type AppendInput = { id: string; kind: string; payload: unknown; observations?: unknown };
 export type AppendResult = { record: LedgerRecord; replayed: boolean };
+
+// ── the compound append envelope (#319 D-should-b) ───────────────────────────
+//
+// Some writes are only correct as a UNIT: a HITL revision that also materializes
+// the previous generation's expiry, or a cross-group `replaces` that records a
+// new version AND its supersession pointer. Two consecutive appends cannot give
+// that — a crash between them commits the first alone.
+//
+// So a multi-record write lands as ONE physical ledger line: a `ledger-batch`
+// record whose payload carries the record count plus each sub-record's own
+// checksum. The line is written and fsynced atomically, so the existing seal
+// protocol (an unterminated final line is torn and sealed away) rejects a torn
+// compound WHOLE — there is no shape in which half a batch is durable. Readers
+// flatten envelopes back into logical records via expandLedgerRecords, so
+// nothing downstream needs to know a record arrived in a batch.
+export const LEDGER_BATCH_KIND = 'ledger-batch';
+
+export type LedgerBatchItem = {
+  id: string;
+  kind: string;
+  checksum: string;
+  payload: unknown;
+};
+
+export type LedgerBatchPayload = { n: number; items: LedgerBatchItem[] };
+// Per-item store observations ride in the ENVELOPE's observations field, which
+// the ledger excludes from the record checksum — same rule as a single record,
+// so a replay that differs only in an observation (a fresh timestamp) still
+// dedups instead of conflicting.
+export type LedgerBatchObservations = { items: (unknown | null)[] };
+
+function isBatchPayload(payload: unknown): payload is LedgerBatchPayload {
+  if (payload === null || typeof payload !== 'object') return false;
+  const p = payload as Record<string, unknown>;
+  return typeof p.n === 'number' && Array.isArray(p.items) && p.items.length === p.n;
+}
+
+// Flatten `ledger-batch` envelopes into the logical records they carry. Every
+// item inherits the envelope's seq/ts/producer position — they were appended in
+// one atomic line, so they share an ordering position by construction. `pos` is
+// what disambiguates them: siblings share a seq, so (seq, pos) — never seq
+// alone — is the unique logical ordering key a paginating reader must advance
+// on (round-2 finding 2: a scalar seq cursor made every sibling but the last
+// one it returned permanently unreachable).
+export function expandLedgerRecords(records: readonly LedgerRecord[]): LogicalRecord[] {
+  const out: LogicalRecord[] = [];
+  for (const rec of records) {
+    if (rec.kind !== LEDGER_BATCH_KIND) {
+      out.push({ ...rec, pos: 0 });
+      continue;
+    }
+    if (!isBatchPayload(rec.payload)) {
+      throw new InvalidRecordError(`ledger batch record ${rec.id} does not carry a well-formed item list`);
+    }
+    const obs = (rec.observations ?? null) as LedgerBatchObservations | null;
+    let index = -1;
+    for (const item of rec.payload.items) {
+      index += 1;
+      if (typeof item.id !== 'string' || typeof item.kind !== 'string' || typeof item.checksum !== 'string') {
+        throw new InvalidRecordError(`ledger batch record ${rec.id} carries a malformed item`);
+      }
+      if (item.checksum !== sha256Hex(canonicalJson(item.payload))) {
+        throw new InvalidRecordError(`ledger batch record ${rec.id} item ${item.id} fails its own checksum`);
+      }
+      const itemObservations = obs !== null && Array.isArray(obs.items) ? obs.items[index] : undefined;
+      out.push({
+        id: item.id,
+        ws: rec.ws,
+        seq: rec.seq,
+        pos: index,
+        ts: rec.ts,
+        kind: item.kind,
+        payload: item.payload,
+        checksum: item.checksum,
+        prev: rec.prev,
+        producerId: rec.producerId,
+        producerSeq: rec.producerSeq,
+        ...(itemObservations !== undefined && itemObservations !== null
+          ? { observations: itemObservations }
+          : {}),
+      });
+    }
+  }
+  return out;
+}
+
+// The state one guarded batch observes, plus its single append opportunity.
+export type NamespaceBatchContext = {
+  // Logical records (batch envelopes already flattened, each carrying its
+  // position inside the envelope it arrived in).
+  records: readonly LogicalRecord[];
+  lastSeq: number;
+  append: (inputs: readonly AppendInput[]) => { records: LogicalRecord[]; replayed: boolean };
+  // The bounded variant, for a migration whose whole output would blow the
+  // per-record limit (#319 finding 9): still ONE lock acquisition, but the
+  // records land as SEVERAL atomic envelopes sized under maxRecordBytes.
+  // Deterministic record ids make a partially-written conversion resumable —
+  // a re-run re-derives the same chunks and the ledger dedups them.
+  appendChunked: (
+    inputs: readonly AppendInput[],
+    onChunk?: () => void,
+  ) => { records: LogicalRecord[]; chunks: number };
+};
 
 // Crash-matrix injection points for the durability tests; never set outside
 // tests. midWrite splits the line write in two so a SIGKILL between the halves
@@ -882,6 +991,171 @@ export class LocalLedger {
     const lock = acquirePathLock(nsDir, '.lock', this.lockTimeoutMs);
     try {
       const state = this.recoverNamespace(nsDir);
+      return this.writeLocked(nsDir, state, meta, { ...input, payload }, payloadJson, testHooks);
+    } finally {
+      releasePathLock(lock);
+    }
+  }
+
+  // fold + guard + append under ONE acquisition of the namespace lock (#319
+  // D-should-b). The guard sees the recovered state and returns the records to
+  // write; a multi-record return lands as a single atomic compound envelope. It
+  // may append AT MOST once — the point of the primitive is that the decision
+  // and the write share one lock, not that a caller can stream writes.
+  withNamespaceState<T>(namespace: string, fn: (ctx: NamespaceBatchContext) => T): T {
+    const meta = this.meta();
+    const nsDir = this.namespaceDir(namespace);
+    this.ensureDir(nsDir);
+    const lock = acquirePathLock(nsDir, '.lock', this.lockTimeoutMs);
+    try {
+      const state = this.recoverNamespace(nsDir);
+      let used = false;
+      const writeGroup = (inputs: readonly AppendInput[]): { records: LogicalRecord[]; replayed: boolean } => {
+        if (inputs.length === 0) return { records: [], replayed: false };
+        if (inputs.length === 1) {
+          const single = inputs[0]!;
+          const json = this.serializePayload(single.payload);
+          const res = this.writeLocked(nsDir, state, meta, { ...single, payload: JSON.parse(json) as unknown }, json);
+          return { records: expandLedgerRecords([res.record]), replayed: res.replayed };
+        }
+        const items: LedgerBatchItem[] = inputs.map((i) => {
+          const json = this.serializePayload(i.payload);
+          return { id: i.id, kind: i.kind, checksum: sha256Hex(json), payload: JSON.parse(json) as unknown };
+        });
+        const observations: LedgerBatchObservations = { items: inputs.map((i) => i.observations ?? null) };
+        const envelopeId = sha256Hex(
+          `${this.workspaceId}\n${namespace}\n${LEDGER_BATCH_KIND}\n${items.map((i) => i.id).join('\n')}`,
+        );
+        const envelope: LedgerBatchPayload = { n: items.length, items };
+        const json = this.serializePayload(envelope);
+        const res = this.writeLocked(
+          nsDir,
+          state,
+          meta,
+          { id: envelopeId, kind: LEDGER_BATCH_KIND, payload: JSON.parse(json) as unknown, observations },
+          json,
+        );
+        return { records: expandLedgerRecords([res.record]), replayed: res.replayed };
+      };
+      const claim = (): void => {
+        if (used) {
+          throw new InvalidRecordError('withNamespaceState: the batch context accepts exactly one append');
+        }
+        used = true;
+      };
+      const ctx: NamespaceBatchContext = {
+        records: expandLedgerRecords(state.records),
+        lastSeq: state.lastSeq,
+        append: (inputs) => {
+          claim();
+          return writeGroup(inputs);
+        },
+        appendChunked: (inputs, onChunk) => {
+          claim();
+          const written: LogicalRecord[] = [];
+          let chunks = 0;
+          for (const chunk of this.chunkInputs(inputs)) {
+            written.push(...writeGroup(chunk).records);
+            chunks += 1;
+            onChunk?.();
+          }
+          return { records: written, chunks };
+        },
+      };
+      return fn(ctx);
+    } finally {
+      releasePathLock(lock);
+    }
+  }
+
+  // Thin front door over withNamespaceState for the common "decide, then write"
+  // shape: the guard folds the state and returns both its records and a result.
+  appendValidatedBatch<T>(
+    namespace: string,
+    guard: (ctx: { records: readonly LogicalRecord[]; lastSeq: number }) => { records: AppendInput[]; result: T },
+  ): T {
+    return this.withNamespaceState(namespace, (ctx) => {
+      const decided = guard({ records: ctx.records, lastSeq: ctx.lastSeq });
+      ctx.append(decided.records);
+      return decided.result;
+    });
+  }
+
+  // Partition inputs into groups whose compound envelope stays under the record
+  // limit. Deterministic in (inputs, limit): a resumed conversion re-derives the
+  // SAME groups, so the already-written envelopes dedup by id instead of
+  // duplicating. A single input larger than the budget still goes out alone —
+  // the limit then applies to it exactly as it would to a lone append.
+  private chunkInputs(inputs: readonly AppendInput[]): AppendInput[][] {
+    // Leave room for the envelope framing (record header, per-item id/kind/
+    // checksum, JSON punctuation) so a chunk that fits the budget still fits the
+    // record limit once wrapped.
+    const budget = Math.max(1, Math.floor(this.maxRecordBytes * 0.7));
+    const out: AppendInput[][] = [];
+    let current: AppendInput[] = [];
+    let size = 0;
+    for (const input of inputs) {
+      const cost = Buffer.byteLength(this.serializePayload(input.payload), 'utf8') + input.id.length + 256;
+      if (current.length > 0 && size + cost > budget) {
+        out.push(current);
+        current = [];
+        size = 0;
+      }
+      current.push(input);
+      size += cost;
+    }
+    if (current.length > 0) out.push(current);
+    return out;
+  }
+
+  private serializePayload(payload: unknown): string {
+    if (payload === undefined) {
+      throw new InvalidRecordError('record payload is required (undefined is not JSON-serializable)');
+    }
+    let json: string;
+    try {
+      json = canonicalJson(payload);
+    } catch (err) {
+      throw new InvalidRecordError(`record payload is not JSON-serializable: ${(err as Error).message}`);
+    }
+    if (json === undefined) throw new InvalidRecordError('record payload is not JSON-serializable');
+    return json;
+  }
+
+  // The FORMAT fence (#319 finding 7). Enforced here — in the one primitive
+  // every append (single, batched, chunked) funnels through — so a writer that
+  // resolved before a namespace conversion cannot append the superseded record
+  // format afterwards and have it silently ignored by the new projection. Costs
+  // one small file read, and ONLY for a record whose kind is a fenced legacy
+  // kind; every other append pays nothing.
+  private assertFormatAllowed(nsDir: string, namespace: string, input: AppendInput): void {
+    const fence = FORMAT_FENCES.get(namespace);
+    if (fence === undefined) return;
+    const kinds =
+      input.kind === LEDGER_BATCH_KIND && isBatchPayload(input.payload)
+        ? input.payload.items.map((i) => i.kind)
+        : [input.kind];
+    if (!kinds.some((k) => fence.kinds.has(k))) return;
+    const raw = readRegularFileSync(fenceMarkerPath(nsDir, fence));
+    if (!markerFencesLegacyWrites(raw === null ? null : raw.toString('utf8'))) return;
+    throw new InvalidRecordError(
+      `record ${input.id}: the '${namespace}' namespace has been converted past its v1 record format — re-resolve the workspace backend and write the current format (a v1 record appended now would never be read again)`,
+    );
+  }
+
+  // The physical write, with the namespace lock ALREADY held and `state` already
+  // recovered. Mutates `state` so a caller holding the lock stays chain-correct.
+  private writeLocked(
+    nsDir: string,
+    state: NamespaceState,
+    meta: LedgerMeta,
+    input: AppendInput,
+    payloadJson: string,
+    testHooks?: LedgerTestHooks,
+  ): AppendResult {
+    {
+      this.assertFormatAllowed(nsDir, basename(nsDir), input);
+      const payload = input.payload;
       const checksum = sha256Hex(payloadJson);
       const existing = state.byId.get(input.id);
       if (existing) {
@@ -975,13 +1249,19 @@ export class LocalLedger {
         closeSync(fd);
       }
       if (creating) fsyncDir(nsDir);
+      // Keep the in-memory state chain-correct for any further write under this
+      // same lock acquisition (the hash chain reads `prev` from it).
+      state.records.push(record);
+      state.byId.set(record.id, record);
+      state.lastSeq = seq;
+      state.lastHash = sha256Hex(line.slice(0, -1));
+      state.tailIndex = targetIndex;
+      state.tailSealed = false;
       return { record, replayed: false };
-    } finally {
-      releasePathLock(lock);
     }
   }
 
-  scan(namespace: string): { records: LedgerRecord[]; lastSeq: number } {
+  scan(namespace: string): { records: LogicalRecord[]; lastSeq: number } {
     const nsDir = this.namespaceDir(namespace);
     // Round-12 finding 2: this checked only the FINAL namespace component, so a
     // symlinked `.roster/ops/<workspaceId>` still made the read path scan — and
@@ -993,7 +1273,9 @@ export class LocalLedger {
     const lock = acquirePathLock(nsDir, '.lock', this.lockTimeoutMs);
     try {
       const state = this.recoverNamespace(nsDir);
-      return { records: state.records, lastSeq: state.lastSeq };
+      // Compound envelopes are a WRITE-side atomicity device; every reader sees
+      // the logical records they carry.
+      return { records: expandLedgerRecords(state.records), lastSeq: state.lastSeq };
     } finally {
       releasePathLock(lock);
     }

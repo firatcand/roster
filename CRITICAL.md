@@ -37,6 +37,16 @@ src/lib/persistence/run-repair.ts
 src/lib/persistence/sanitize-index.ts
 src/lib/persistence/artifact-declarations.ts
 
+# HITL state machine (#319) — the approval authority predicate, the insert-only
+# generation/version identity, the DB-enforced decision trigger, and the local
+# v1->v2 conversion barrier (a bug here authorizes an action nobody approved)
+src/lib/persistence/hitl-machine.ts
+src/lib/persistence/hitl-store.ts
+src/lib/persistence/hitl-sweep.ts
+src/lib/persistence/hitl-local-migrate.ts
+src/lib/persistence/hitl-local-records.ts
+data/ops/schema/hitl/**
+
 # npm publish allowlist + release CI (wrong = ships secrets or breaks install)
 package.json
 .github/workflows/**

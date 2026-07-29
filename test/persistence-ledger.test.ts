@@ -485,7 +485,7 @@ test('meta: minted once with producer identity; corrupt or foreign meta refuses 
     assert.match(meta.producerId, /^[0-9a-f-]{36}$/);
     // The local backend implements the #323 run ledger unconditionally, so it
     // mints roster_ops/objects at v2 (finding: local mints v1).
-    assert.deepEqual(meta.componentVersions, { hitl: 1, roster_ops: 2, objects: 2 });
+    assert.deepEqual(meta.componentVersions, { hitl: 2, roster_ops: 2, objects: 2 });
     writeFileSync(metaPath, 'garbage{');
     assert.throws(() => openLedger(env).append('events', { id: 'y', kind: 'test', payload: {} }), InvalidRecordError);
     writeFileSync(metaPath, JSON.stringify({ ...meta, workspaceId: randomUUID() }));
