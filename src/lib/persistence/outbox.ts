@@ -42,10 +42,18 @@ export const OUTBOX_NAMESPACE = 'outbox';
 export type OutboxTargetNamespace = Exclude<OpsNamespace, 'outbox'>;
 const TARGET_NAMESPACES = OPS_NAMESPACES.filter((n): n is OutboxTargetNamespace => n !== OUTBOX_NAMESPACE);
 
-// Owner decision 8 fail-closed set: record kinds that must never be spooled.
-// Their writes require the live store; when it is down the caller gets an
-// actionable BackendUnavailableError, not a queued entry.
-export const NON_SPOOLABLE_KINDS: ReadonlySet<string> = new Set(['hitl-decision']);
+// #319 D7: the WHOLE `hitl` namespace is non-spoolable, not just decisions
+// (owner decision 8's kind-level `hitl-decision` guard is subsumed by it).
+// HITL writes require a live store (owner decision 6) — a request's generation
+// and version are allocated synchronously under the per-group lock, so a queued
+// request has no coherent identity to carry and a stale one could resurrect an
+// approval the human already superseded. Enforcing it HERE (at enqueue) rather
+// than by every store politely choosing the direct path makes it structural: a
+// hand-rolled `outbox.enqueue({namespace:'hitl', …})` throws.
+//
+// The namespace stays a valid TARGET namespace so an EXISTING pre-#319 spool can
+// still be folded and drained; only new entries are refused.
+export const NON_SPOOLABLE_NAMESPACES: ReadonlySet<string> = new Set(['hitl']);
 
 export const DEFAULT_ATTEMPT_CAP = 5;
 export const DEFAULT_BACKOFF_BASE_MS = 1_000;
@@ -477,9 +485,9 @@ export class LocalOutbox {
     if (typeof input.kind !== 'string' || input.kind.length === 0) {
       throw new InvalidRecordError('entry kind is required');
     }
-    if (NON_SPOOLABLE_KINDS.has(input.kind)) {
+    if (NON_SPOOLABLE_NAMESPACES.has(input.namespace)) {
       throw new BackendUnavailableError(
-        `'${input.kind}' records require the live store and are never spooled (owner decision 8) — restore connectivity and retry`,
+        `the '${input.namespace}' namespace requires the live store and is never spooled (owner decision 6) — restore connectivity and retry`,
       );
     }
     // Snapshot ONCE here so the ledger stores the plain (toJSON-resolved) value

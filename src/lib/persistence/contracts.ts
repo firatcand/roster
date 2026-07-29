@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { RunEventKind, RunEventSource } from './run-events.ts';
+// Type-only (erased at build): hitl-machine.ts imports VALUES from this module,
+// so anything but `import type` here would be a runtime import cycle.
+import type { HitlActionKind, HitlExpectedHead, HitlPayloadRef } from './hitl-machine.ts';
 
 // v1 store contracts for the workspace operations ledger (#318 section C).
 // Local and postgres-s3 backends implement these; one contract test suite runs
@@ -116,6 +119,12 @@ export type FrozenQueuedRun = {
 export type Cursor = {
   watermark: number;
   committed: number;
+  // The committed position INSIDE `committed`, for a backend whose ordering
+  // position is not unique on its own: the local ledger writes a compound
+  // envelope's children under ONE seq, so `committed` alone cannot say which
+  // siblings a page already returned. Absent ⇒ the whole seq was consumed
+  // (postgres, whose bigserial seq is unique per row, never sets it).
+  committedPos?: number;
   overlay: OverlayPosition | null;
   frozenQueued?: FrozenQueuedRun[];
 };
@@ -147,60 +156,215 @@ export const HITL_STATUS_VALUES = [
 export type HitlStatus = (typeof HITL_STATUS_VALUES)[number];
 export type HitlDecisionStatus = Exclude<HitlStatus, 'awaiting'>;
 
+// #319: the caller's submission. Identity (the group a revision joins) is
+// (functionName, action, target) — the content is NOT in the key, so a revised
+// packet lands as version N+1 of the SAME group instead of a stranded new row.
+// `intent` + `expectedHead` are the optimistic-concurrency pair: the store
+// re-reads the head under the per-group lock and refuses a stale submission
+// SYNCHRONOUSLY (HITL writes require a live store — owner decision 6).
+export type HitlSubmitIntent = 'auto' | 'create' | 'revise';
+
 export type HitlRequestInput = {
   functionName: string;
   title: string;
-  // Exact-approval binding: the (action, target, contentHash) triple is the
-  // request's identity — re-creating it with different title/body/expiry is a
-  // ConflictError, not a new request.
   action: string;
   target: string;
+  // Verified server-side against sha256(body): the caller's hex is checked,
+  // never trusted. For an offloaded body it is the object's digest.
   contentHash: string;
   body: string;
-  expiresAt: number | null;
+  // Absent ⇒ the expiry policy's default TTL (execution) / no expiry
+  // (editorial). A supplied value is clamped to the policy bounds.
+  expiresAt?: number | null;
+  summary?: string | null;
+  warnings?: unknown;
+  sideEffects?: unknown;
+  choices?: unknown;
+  originRunId?: string | null;
+  originTaskId?: string | null;
+  requestingAgent?: string | null;
+  intent?: HitlSubmitIntent;
+  // REQUIRED (D1): there is no "adopt whatever head you find" mode, because
+  // that mode cannot distinguish an open head from one that was approved while
+  // the caller composed its packet. `null` ⇒ "this key has no history at all"
+  // (a first creation; also satisfied idempotently when the head turns out to
+  // be an OPEN, byte-identical packet — an at-least-once retry). An object ⇒
+  // the exact head the caller read, INCLUDING its `sealed` flag (D1: the
+  // HIGHEST generation's head, sealed or not). Every generation crossing is
+  // therefore an explicit, observed decision.
+  expectedHead: HitlExpectedHead | null;
 };
 
-export type HitlRequestEnvelope = HitlRequestInput & {
+export type HitlSupersedesRef = { requestId: string; generation: number; version: number };
+
+export type HitlRequestEnvelope = {
+  // The stable logical id of the whole group: sha256(workspaceId, requestKey).
   id: string;
   workspaceId: string;
+  requestKey: string;
+  generation: number;
+  version: number;
+  functionName: string;
+  title: string;
+  action: string;
+  actionKind: HitlActionKind;
+  target: string;
+  targetHash: string;
+  packetHash: string;
+  canonicalizationVersion: number;
+  contentHash: string;
+  // null when the body lives in the object store (payloadRef).
+  body: string | null;
+  payloadRef: HitlPayloadRef | null;
+  expiresAt: number | null;
+  summary: string | null;
+  warnings: unknown;
+  sideEffects: unknown;
+  choices: unknown;
+  originRunId: string | null;
+  originTaskId: string | null;
+  requestingAgent: string | null;
+  supersedes: HitlSupersedesRef | null;
+  // The SWEEP-INDEPENDENT effective status (see hitl-machine deriveRequestState).
   status: HitlStatus;
+  // The decision-graph status ignoring expiry.
+  nodeStatus: HitlStatus;
+  terminalStatus: HitlDecisionStatus | null;
+  deferred: boolean;
+  sealed: boolean;
+  superseded: boolean;
+  authoritative: boolean;
   createdAt: number;
-  // Store-assigned once committed; null while the record is still queued in
-  // the local outbox overlay.
   seq: number | null;
-  // true when the record is served from the queued outbox overlay (not yet
-  // committed at the store); committed reads always report false.
+  // Always false: HITL never spools (owner decision 6 / D7).
   queued: boolean;
 };
 
 export type HitlDecisionInput = {
   requestId: string;
+  // Required (#319): a decision names an exact request VERSION, never "the
+  // latest" — the store and the DB trigger both refuse a non-head target.
+  generation: number;
+  requestVersion: number;
   status: HitlDecisionStatus;
   decidedBy: string;
   note: string | null;
+  feedback?: string | null;
 };
 
-export type HitlDecisionEnvelope = HitlDecisionInput & {
+export type HitlDecisionEnvelope = {
   id: string;
   workspaceId: string;
+  requestId: string;
+  generation: number;
+  requestVersion: number;
+  status: HitlDecisionStatus;
+  decidedBy: string;
+  note: string | null;
+  feedback: string | null;
+  terminal: boolean;
+  decidedAt: number;
   createdAt: number;
-  // Decisions are never queued (owner decision 8) — a committed seq is always
-  // present; when the store is down the write throws BackendUnavailableError.
-  seq: number;
+  seq: number | null;
+};
+
+// A cross-group edit (D3): the destination submission durably records that it
+// supersedes the source group's head, which makes that head non-authoritative
+// and undecidable without ever UPDATE-ing it.
+export type HitlReplaceInput = {
+  sourceRequestId: string;
+  sourceExpectedHead: HitlExpectedHead;
+  request: HitlRequestInput;
+};
+
+export type HitlVersionRecord = {
+  requestId: string;
+  requestKey: string;
+  generation: number;
+  version: number;
+  action: string;
+  actionKind: HitlActionKind;
+  target: string;
+  targetHash: string;
+  packetHash: string;
+  canonicalizationVersion: number;
+  expiresAt: number | null;
+  createdAt: number;
+  seq: number | null;
+  supersedes: HitlSupersedesRef | null;
+};
+
+export type HitlGenerationSummary = {
+  generation: number;
+  versions: number;
+  headVersion: number;
+  status: HitlStatus;
+  sealed: boolean;
+  createdAt: number;
 };
 
 export type HitlRequestFilter = {
   functionName?: string;
+  // Absent ⇒ the ACTIONABLE set (effective status awaiting | deferred).
+  // Supplied ⇒ exactly that effective status.
   status?: HitlStatus;
   limit?: number;
 };
 
+// D5: HITL commits carry the allocated identity. HITL never queues, so the
+// spoolable-store `WriteOutcome` (committed | queued) is not expressive enough
+// — `id` stays the stable request id so the generic shape still holds.
+export type HitlWriteOutcome = {
+  outcome: 'committed';
+  id: string;
+  requestId: string;
+  generation: number;
+  version: number;
+  // true when the identical packet was already the open head (no new version).
+  idempotent: boolean;
+  // Non-fatal policy notes (e.g. an expiry clamped to the configured bounds).
+  warnings: string[];
+};
+
+export type HitlDecisionOutcome = {
+  outcome: 'committed';
+  id: string;
+  requestId: string;
+  generation: number;
+  requestVersion: number;
+  status: HitlDecisionStatus;
+};
+
+// One expiry-sweep candidate: a head that is EFFECTIVELY expired (past its
+// deadline with no terminal decision) but has no durable `expired` decision yet.
+export type HitlExpiryCandidate = {
+  requestId: string;
+  requestKey: string;
+  generation: number;
+  version: number;
+  expiresAt: number;
+};
+
+// HITL is fail-closed end to end (owner decision 6): every write requires the
+// live store (the whole namespace is refused at the outbox boundary) and every
+// read either answers from the live store or throws. `ReadOpts` stays on the
+// read signatures so the shared read shape holds, but HITL IGNORES
+// `allowPartial` — there is no queued HITL overlay to serve, and an approval
+// system that reports "nothing awaiting" from a partial view is worse than one
+// that admits it cannot answer.
 export interface HitlStore {
-  createRequest(input: HitlRequestInput): Promise<WriteOutcome>;
+  createRequest(input: HitlRequestInput): Promise<HitlWriteOutcome>;
+  replaces(input: HitlReplaceInput): Promise<HitlWriteOutcome>;
+  appendDecision(input: HitlDecisionInput): Promise<HitlDecisionOutcome>;
   getRequest(id: string, opts?: ReadOpts): Promise<HitlRequestEnvelope | null>;
   listRequests(filter: HitlRequestFilter, cursor?: Cursor, opts?: ReadOpts): Promise<Page<HitlRequestEnvelope>>;
-  appendDecision(input: HitlDecisionInput): Promise<WriteOutcome>;
   count(filter?: HitlRequestFilter, opts?: ReadOpts): Promise<CountResult>;
+  listVersions(id: string): Promise<HitlVersionRecord[]>;
+  listGenerations(id: string): Promise<HitlGenerationSummary[]>;
+  listDecisions(id: string): Promise<HitlDecisionEnvelope[]>;
+  // Sweep surface (hitl-sweep.ts). Both are bounded and idempotent.
+  listExpiryCandidates(now: number, limit: number): Promise<HitlExpiryCandidate[]>;
+  insertSystemExpiry(candidate: HitlExpiryCandidate, now: number): Promise<'expired' | 'conflict'>;
 }
 
 // ---------- runs ----------

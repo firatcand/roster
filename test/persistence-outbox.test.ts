@@ -143,16 +143,16 @@ test('fold: enqueued entries appear queued in producerSeq order with producer id
   const env = makeEnv();
   try {
     const outbox = makeOutbox(env);
-    const a = outbox.enqueue({ namespace: 'hitl', id: 'h1', kind: 'hitl-request', payload: { p: 1 } });
-    const b = outbox.enqueue({ namespace: 'hitl', id: 'h2', kind: 'hitl-request', payload: { p: 2 } });
+    const a = outbox.enqueue({ namespace: 'artifacts', id: 'h1', kind: 'artifact-declaration', payload: { p: 1 } });
+    const b = outbox.enqueue({ namespace: 'artifacts', id: 'h2', kind: 'artifact-declaration', payload: { p: 2 } });
     const c = outbox.enqueue(entry('r1'));
     assert.equal(a.outcome, 'queued');
     assert.ok(a.producerSeq < b.producerSeq && b.producerSeq < c.producerSeq);
     const fold = outbox.fold();
-    const hitl = fold.namespaces.hitl!;
-    assert.deepEqual(hitl.pending.map((e) => e.entryId), ['h1', 'h2']);
-    assert.equal(hitl.parked, false);
-    assert.equal(hitl.poisonEntryId, null);
+    const artifacts = fold.namespaces.artifacts!;
+    assert.deepEqual(artifacts.pending.map((e) => e.entryId), ['h1', 'h2']);
+    assert.equal(artifacts.parked, false);
+    assert.equal(artifacts.poisonEntryId, null);
     assert.equal(fold.namespaces.runs!.pending.length, 1);
     const e1 = fold.entries.get('h1')!;
     assert.equal(e1.status, 'queued');
@@ -374,7 +374,7 @@ test('poison: transient failures retry to the attempt cap, then failed-permanent
     target.down = true;
     outbox.enqueue(entry('bad'));
     outbox.enqueue(entry('behind', 2));
-    outbox.enqueue({ namespace: 'hitl', id: 'h1', kind: 'hitl-request', payload: {} });
+    outbox.enqueue({ namespace: 'artifacts', id: 'h1', kind: 'artifact-declaration', payload: {} });
     for (let i = 0; i < 3; i++) {
       await outbox.drain(target, { namespace: 'runs' });
       env.clock.t += 100_000;
@@ -392,7 +392,7 @@ test('poison: transient failures retry to the attempt cap, then failed-permanent
     // an unaffected namespace still drains
     target.down = false;
     const report = await outbox.drain(target);
-    assert.equal(report.namespaces.hitl!.delivered, 1);
+    assert.equal(report.namespaces.artifacts!.delivered, 1);
     assert.equal(report.namespaces.runs!.delivered, 0);
     assert.equal(report.namespaces.runs!.parked, true);
     assert.equal(report.namespaces.runs!.poisonEntryId, 'bad');
@@ -728,9 +728,9 @@ test('quota: an unwritable spool surfaces as BackendUnavailableError (disk-full 
   }
 });
 
-// ---------------- fail-closed decisions (owner decision 8) ----------------
+// ---------------- fail-closed HITL (owner decision 6 / #319 D7) ----------------
 
-test('fail-closed: HITL decisions are never spooled — enqueue refuses with an actionable error', async () => {
+test('fail-closed: the whole HITL namespace is never spooled — enqueue refuses with an actionable error', async () => {
   const env = makeEnv();
   try {
     const outbox = makeOutbox(env);
@@ -745,6 +745,18 @@ test('fail-closed: HITL decisions are never spooled — enqueue refuses with an 
           { namespace: 'hitl', id: 'd1', kind: 'hitl-decision', payload: { status: 'approved' } },
           new MemoryRemoteTarget(),
         ),
+      BackendUnavailableError,
+    );
+    // #319 D7 widened the guard from the `hitl-decision` KIND to the whole
+    // `hitl` NAMESPACE: requests are live-only too, so nothing HITL-shaped can
+    // become durable in the spool.
+    assert.throws(
+      () => outbox.enqueue({ namespace: 'hitl', id: 'r1', kind: 'hitl-request', payload: {} }),
+      (err: unknown) => err instanceof BackendUnavailableError && /never spooled/.test((err as Error).message),
+    );
+    await assert.rejects(
+      () =>
+        outbox.writeThrough({ namespace: 'hitl', id: 'r1', kind: 'hitl-request', payload: {} }, new MemoryRemoteTarget()),
       BackendUnavailableError,
     );
     assert.equal(outbox.fold().entries.size, 0);
@@ -846,12 +858,12 @@ test('checkpoint: written after drain, checksummed, and reflects last-acked prod
     const target = new MemoryRemoteTarget();
     const r1 = outbox.enqueue(entry('r1'));
     const r2 = outbox.enqueue(entry('r2', 2));
-    const h1 = outbox.enqueue({ namespace: 'hitl', id: 'h1', kind: 'hitl-request', payload: {} });
+    const h1 = outbox.enqueue({ namespace: 'artifacts', id: 'h1', kind: 'artifact-declaration', payload: {} });
     await outbox.drain(target);
     assert.ok(r1.producerSeq < r2.producerSeq);
     const cp = outbox.checkpoint();
     assert.equal(cp.lastAcked.runs, r2.producerSeq);
-    assert.equal(cp.lastAcked.hitl, h1.producerSeq);
+    assert.equal(cp.lastAcked.artifacts, h1.producerSeq);
     const onDisk = JSON.parse(
       readFileSync(join(env.opsRoot, env.ws, 'outbox', 'checkpoint.json'), 'utf8'),
     ) as { checksum: string; lastAcked: Record<string, number> };

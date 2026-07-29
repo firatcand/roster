@@ -333,6 +333,63 @@ test('setup lock: live holder → loser errors immediately; stale (dead pid) loc
   }
 });
 
+test('setup re-run on a LOCAL workspace refreshes meta versions and converts hitl v1→v2', async () => {
+  const cwd = tmp('ops-local-upgrade-');
+  try {
+    const created = await runSetup({ cwd, backend: 'local', name: 'acme' });
+    assert.equal(created.status, 'created');
+    const ws = created.workspace.id;
+    const metaPath = join(opsRootFor(cwd), ws, 'meta.json');
+
+    // Simulate a #318 tree: a v1 HITL record exists, meta advertises hitl v1,
+    // and there is no #319 conversion marker. (The record is written FIRST —
+    // ledger.meta() clamps versions up on any use, so the downgrade has to be
+    // the last thing that touches the tree.)
+    const ledger = new LocalLedger({ opsRoot: opsRootFor(cwd), workspaceId: ws });
+    ledger.append('hitl', {
+      id: 'legacy-1',
+      kind: 'hitl-request',
+      payload: {
+        functionName: 'growth',
+        title: 'legacy ask',
+        action: 'publish-post',
+        target: 'x.com/roster',
+        contentHash: createHash('sha256').update('legacy body').digest('hex'),
+        body: 'legacy body',
+        expiresAt: null,
+        status: 'awaiting',
+      },
+    });
+    rmSync(join(opsRootFor(cwd), ws, 'hitl', '.hitl-v2.json'), { force: true });
+    const meta = JSON.parse(readFileSync(metaPath, 'utf8')) as { componentVersions: Record<string, number> };
+    meta.componentVersions = { hitl: 1, roster_ops: 1, objects: 1 };
+    writeFileSync(metaPath, JSON.stringify(meta, null, 2) + '\n');
+
+    const revalidated = await runSetup({ cwd, backend: 'local', name: 'acme' });
+    assert.equal(revalidated.status, 'validated');
+    assert.ok(
+      revalidated.migrations.some((m) => m.includes('hitl: local v1→v2 conversion')),
+      `expected the conversion to be reported, got ${JSON.stringify(revalidated.migrations)}`,
+    );
+    assert.ok(revalidated.migrations.some((m) => m.includes('hitl: local component version → 2')));
+    const after = JSON.parse(readFileSync(metaPath, 'utf8')) as { componentVersions: Record<string, number> };
+    assert.deepEqual(after.componentVersions, { hitl: 2, roster_ops: 2, objects: 2 });
+    assert.equal(revalidated.backendInfo?.components.hitl.version, 2);
+
+    // ...and the converted history is readable through the v2 surface.
+    const resolved = await resolveOpsBackend(cwd);
+    assert.equal(resolved.state, 'local');
+    if (resolved.state !== 'local') return;
+    assert.deepEqual(await resolved.backend.hitl.count(), { committed: 1, queued: 0, partial: false });
+
+    // A second re-run reports nothing new (idempotent).
+    const again = await runSetup({ cwd, backend: 'local', name: 'acme' });
+    assert.deepEqual(again.migrations, []);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test('setup lock: acquire + release round-trip is exclusive', () => {
   const cwd = tmp('ops-lock2-');
   try {

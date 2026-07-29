@@ -4,8 +4,6 @@ import {
   type ArtifactMeta,
   type ArtifactRecord,
   type Cursor,
-  type HitlRequestEnvelope,
-  type HitlRequestFilter,
   type OverlayPosition,
   type Page,
   type RunEventEnvelope,
@@ -35,7 +33,6 @@ import type { LocalOutbox, OutboxEntryState } from './outbox.ts';
 // `limit` and signal done. Every result is flagged partial: true (or carries a
 // queued: true envelope).
 
-type HitlRequestPayload = Omit<HitlRequestEnvelope, 'id' | 'workspaceId' | 'seq' | 'createdAt' | 'queued'>;
 // Content-only hashed blob payload; meta rides as a store observation.
 type ArtifactPayload = { digest: string; size: number };
 type ArtifactObservations = { meta: ArtifactMeta };
@@ -90,11 +87,6 @@ function overlayCursor(taken: OverlayPosition[], hasMore: boolean): Cursor | nul
   return { watermark: 0, committed: 0, overlay: taken[taken.length - 1]! };
 }
 
-function queuedHitlEnvelope(workspaceId: string, e: OutboxEntryState): HitlRequestEnvelope {
-  const p = e.payload as HitlRequestPayload;
-  return { ...p, id: e.entryId, workspaceId, seq: null, createdAt: e.enqueuedAt, queued: true };
-}
-
 function queuedRunEvent(workspaceId: string, e: OutboxEntryState): RunEventEnvelope {
   // v1→v2 normalize a queued (#318) payload before exposing it (finding: queued
   // v1 run events read kind=undefined).
@@ -124,45 +116,9 @@ function queuedRunEvent(workspaceId: string, e: OutboxEntryState): RunEventEnvel
   };
 }
 
-function hitlFilterMatches(p: HitlRequestPayload, filter?: HitlRequestFilter): boolean {
-  return (
-    (filter?.functionName === undefined || p.functionName === filter.functionName) &&
-    (filter?.status === undefined || p.status === filter.status)
-  );
-}
-
-function hitlOverlay(outbox: LocalOutbox, filter?: HitlRequestFilter): OutboxEntryState[] {
-  return outbox
-    .overlayOnly('hitl')
-    .filter((e) => e.kind === 'hitl-request' && hitlFilterMatches(e.payload as HitlRequestPayload, filter))
-    .sort(overlayOrder);
-}
-
-export function overlayHitlGet(outbox: LocalOutbox, workspaceId: string, id: string): HitlRequestEnvelope | null {
-  const hit = hitlOverlay(outbox).find((e) => e.entryId === id);
-  return hit === undefined ? null : queuedHitlEnvelope(workspaceId, hit);
-}
-
-export function overlayHitlList(
-  outbox: LocalOutbox,
-  workspaceId: string,
-  filter: HitlRequestFilter,
-  cursor: Cursor | undefined,
-): Page<HitlRequestEnvelope> {
-  const after = cursor?.overlay ?? null;
-  const eligible = hitlOverlay(outbox, filter).filter((e) => positionAfter(positionOf(e), after));
-  const limit = overlayPageLimit(filter.limit);
-  const taken = eligible.slice(0, limit);
-  return {
-    items: taken.map((e) => queuedHitlEnvelope(workspaceId, e)),
-    cursor: overlayCursor(taken.map(positionOf), eligible.length > taken.length),
-    partial: true,
-  };
-}
-
-export function overlayHitlCount(outbox: LocalOutbox, filter?: HitlRequestFilter): number {
-  return hitlOverlay(outbox, filter).length;
-}
+// The `hitl` namespace has NO overlay reader (#319 owner decision 6 / D7): HITL
+// never spools, so there is never a queued HITL entry to serve — a degraded HITL
+// read fails closed instead of answering from a partial view.
 
 function runsOverlay(outbox: LocalOutbox, runId?: string): OutboxEntryState[] {
   return outbox

@@ -75,11 +75,52 @@ const objectsSchema = z
   })
   .strict();
 
+// #319 section C: the HITL expiry policy. Optional — the defaults below are the
+// owner's decision-3 numbers (24h TTL, bounded 1h…7d). A per-request expiresAt
+// outside the bounds is CLAMPED with a warning, never refused: the request still
+// has to reach a human.
+const HITL_DEFAULT_TTL_MS = 86_400_000;
+const HITL_DEFAULT_MIN_TTL_MS = 60 * 60 * 1000;
+const HITL_DEFAULT_MAX_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+const positiveMs = (label: string) =>
+  z
+    .number({ message: `${label} must be a positive integer of milliseconds` })
+    .int({ message: 'must be an integer number of milliseconds' })
+    .positive({ message: 'must be greater than zero' });
+
+const hitlSchema = z
+  .object({
+    expiry: z
+      .object({
+        default_ttl_ms: positiveMs('default_ttl_ms').default(HITL_DEFAULT_TTL_MS),
+        min_ttl_ms: positiveMs('min_ttl_ms').default(HITL_DEFAULT_MIN_TTL_MS),
+        max_ttl_ms: positiveMs('max_ttl_ms').default(HITL_DEFAULT_MAX_TTL_MS),
+      })
+      .strict()
+      .superRefine((v, ctx) => {
+        if (v.min_ttl_ms > v.max_ttl_ms) {
+          ctx.addIssue({ code: 'custom', message: 'min_ttl_ms must not exceed max_ttl_ms', path: ['min_ttl_ms'] });
+        }
+        if (v.default_ttl_ms < v.min_ttl_ms || v.default_ttl_ms > v.max_ttl_ms) {
+          ctx.addIssue({
+            code: 'custom',
+            message: 'default_ttl_ms must fall between min_ttl_ms and max_ttl_ms',
+            path: ['default_ttl_ms'],
+          });
+        }
+      })
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 const localConfigSchema = z
   .object({
     version: versionField,
     workspace: workspaceSchema,
     backend: z.literal('local'),
+    hitl: hitlSchema,
   })
   .strict();
 
@@ -94,6 +135,7 @@ const postgresS3ConfigSchema = z
       })
       .strict(),
     objects: objectsSchema,
+    hitl: hitlSchema,
   })
   .strict();
 
@@ -101,6 +143,21 @@ export const persistenceConfigSchema = z.discriminatedUnion('backend', [
   localConfigSchema,
   postgresS3ConfigSchema,
 ]);
+
+// The store-facing shape (camelCase) resolved from the snake_case YAML block.
+export type HitlExpiryConfig = { defaultTtlMs: number; minTtlMs: number; maxTtlMs: number };
+
+export const DEFAULT_HITL_EXPIRY_CONFIG: HitlExpiryConfig = {
+  defaultTtlMs: HITL_DEFAULT_TTL_MS,
+  minTtlMs: HITL_DEFAULT_MIN_TTL_MS,
+  maxTtlMs: HITL_DEFAULT_MAX_TTL_MS,
+};
+
+export function hitlExpiryOf(config: { hitl?: { expiry?: { default_ttl_ms: number; min_ttl_ms: number; max_ttl_ms: number } } } | null): HitlExpiryConfig {
+  const raw = config?.hitl?.expiry;
+  if (raw === undefined) return DEFAULT_HITL_EXPIRY_CONFIG;
+  return { defaultTtlMs: raw.default_ttl_ms, minTtlMs: raw.min_ttl_ms, maxTtlMs: raw.max_ttl_ms };
+}
 
 export type PersistenceWorkspace = z.infer<typeof workspaceSchema>;
 export type LocalPersistenceConfig = z.infer<typeof localConfigSchema>;

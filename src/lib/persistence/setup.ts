@@ -14,7 +14,8 @@ import {
 } from './config-schema.ts';
 import { sha256Hex } from './contracts.ts';
 import { describeEvidenceFailure, readEvidenceFileSync } from '../evidence-read.ts';
-import { LocalLedger, atomicWriteFileSync, pidAlive, tryReclaimStaleLock } from './local/ledger.ts';
+import { LocalLedger, atomicWriteFileSync, pidAlive, readLedgerMeta, tryReclaimStaleLock } from './local/ledger.ts';
+import { ensureLocalHitlV2 } from './hitl-local-migrate.ts';
 import { BRAIN_ENV_BINDING, OPS_ENV_BINDING, withPoolClient, type RoleEnvBinding } from './pool.ts';
 import { pendingOpsMigrations, runOpsMigrations } from './postgres/migrate.ts';
 import {
@@ -677,6 +678,7 @@ async function upgradeExistingPostgres(
 }
 
 async function validateExisting(opts: SetupOptions, env: NodeJS.ProcessEnv): Promise<SetupResult> {
+  const now = opts.now ?? Date.now;
   const loaded = loadPersistenceConfig(opts.cwd);
   if (loaded.state === 'legacy-implicit') {
     throw setupError('internal: validate mode without a config', '', '  Report this as a roster bug.');
@@ -701,6 +703,23 @@ async function validateExisting(opts: SetupOptions, env: NodeJS.ProcessEnv): Pro
   if (config.backend === 'postgres-s3') {
     const up = await upgradeExistingPostgres(config, env);
     migrations = up.migrations;
+  } else {
+    // A local tree upgrades itself in code, but only lazily on the next write.
+    // A setup re-run is the moment to make it explicit: refresh the meta.json
+    // component versions (ledger.meta() clamps them up to the code's floor) and
+    // run the #319 hitl v1→v2 conversion under its barrier, so the workspace is
+    // usable — and capability-gated correctly — the moment setup returns.
+    const ledger = new LocalLedger({ opsRoot: opsRootFor(opts.cwd), workspaceId: config.workspace.id });
+    // READ-ONLY first: ledger.meta() performs the clamp itself, so reading
+    // through it would always observe the post-upgrade values.
+    const before =
+      readLedgerMeta(ledger.treeDir, ledger.workspaceId, ledger.boundary)?.componentVersions ?? {};
+    const converted = ensureLocalHitlV2(ledger, now());
+    if (converted.converted) migrations.push('hitl: local v1→v2 conversion');
+    const after = ledger.meta().componentVersions;
+    for (const [name, version] of Object.entries(after)) {
+      if ((before[name] ?? 1) !== version) migrations.push(`${name}: local component version → ${version}`);
+    }
   }
   const resolved = await resolveOpsBackend(opts.cwd, {
     env,

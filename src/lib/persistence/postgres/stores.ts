@@ -9,7 +9,6 @@ import {
   computeRecordId,
   sha256Hex,
   snapshotPayload,
-  HITL_STATUS_VALUES,
   type ArtifactDeclaration,
   type ArtifactMeta,
   type ArtifactPutResult,
@@ -20,11 +19,21 @@ import {
   type FrozenQueuedRun,
   type DeclarationPutResult,
   type ExternalArtifactInput,
+  type HitlDecisionEnvelope,
   type HitlDecisionInput,
+  type HitlDecisionOutcome,
+  type HitlDecisionStatus,
+  type HitlExpiryCandidate,
+  type HitlGenerationSummary,
+  type HitlReplaceInput,
   type HitlRequestEnvelope,
   type HitlRequestFilter,
   type HitlRequestInput,
+  type HitlStatus,
   type HitlStore,
+  type HitlSupersedesRef,
+  type HitlVersionRecord,
+  type HitlWriteOutcome,
   type InternalDeclarationInput,
   type OpsBackend,
   type OverlayPosition,
@@ -38,6 +47,36 @@ import {
   type WriteOutcome,
   type WriteOutcomeKind,
 } from '../contracts.ts';
+import {
+  HITL_GROUP_LOCK_MASK,
+  canDecide,
+  type HitlActionKind,
+  type HitlHead,
+} from '../hitl-machine.ts';
+import {
+  assertExpectedHead,
+  conflictFromPlan,
+  decisionId,
+  decisionRefusal,
+  encodeInlinePayload,
+  encodeStoredRef,
+  finalizeSubmissionPlan,
+  identityFieldsOf,
+  normalizeDecision,
+  payloadRefOf,
+  planFor,
+  prepareLegacySubmission,
+  prepareSubmission,
+  resealExpiry,
+  supersedesOf,
+  systemExpiryDecision,
+  systemExpiryId,
+  DEFAULT_HITL_EXPIRY_POLICY,
+  type HitlExpiryPolicy,
+  type HitlPayloadOffload,
+  type NormalizedDecision,
+  type PreparedSubmission,
+} from '../hitl-store.ts';
 import {
   canonicalRunEventId,
   correlationColumn,
@@ -72,12 +111,10 @@ import { CURRENT_COMPONENT_VERSIONS, makeBackendInfo, type BackendInfo } from '.
 import { BoundPool, type PgQueryable } from './binding.ts';
 import { S3ObjectTarget, type CreateOnlyObjectStore } from '../objects.ts';
 import { mayDegradeToPartial } from '../error-classify.ts';
+import { maybeSweep } from '../hitl-sweep.ts';
 import {
   overlayArtifactGet,
   overlayArtifactHead,
-  overlayHitlCount,
-  overlayHitlGet,
-  overlayHitlList,
   overlayRunGet,
   overlayRunsCount,
   overlayRunsList,
@@ -144,11 +181,6 @@ function positionOf(e: OutboxEntryState): OverlayPosition {
   return { producerId: e.producerId, producerSeq: e.producerSeq };
 }
 
-function positionAfter(e: OutboxEntryState, after: OverlayPosition): boolean {
-  if (e.producerId !== after.producerId) return e.producerId > after.producerId;
-  return e.producerSeq > after.producerSeq;
-}
-
 // ---------- the single write path ----------
 
 export type OpsPgRecord = {
@@ -188,68 +220,6 @@ export type ArtifactObservations = { meta: ArtifactMeta };
 // the outbox writeThrough path, AND the degraded backend (resolve.ts): every
 // producer of a given logical record derives byte-identical (id, payload), so
 // replay after an outage dedups instead of conflicting.
-
-export function hitlRequestParts(
-  workspaceId: string,
-  input: HitlRequestInput,
-): { id: string; payload: HitlRequestPayload; canonical: string } {
-  const functionName = requireString('functionName', input.functionName);
-  const title = requireString('title', input.title);
-  const action = requireString('action', input.action);
-  const target = requireString('target', input.target);
-  const contentHash = requireString('contentHash', input.contentHash);
-  if (!SHA256_HEX_RE.test(contentHash)) {
-    throw new InvalidRecordError('contentHash must be a full-length lowercase sha256 hex digest');
-  }
-  const body = requireString('body', input.body);
-  if (input.expiresAt !== null && typeof input.expiresAt !== 'number') {
-    throw new InvalidRecordError('expiresAt must be an epoch-ms number or null');
-  }
-  const id = computeRecordId(workspaceId, 'hitl', {
-    kind: 'hitl-request',
-    functionName,
-    action,
-    target,
-    contentHash,
-  });
-  const snap = snapshotPayload({
-    functionName,
-    title,
-    action,
-    target,
-    contentHash,
-    body,
-    expiresAt: input.expiresAt,
-    status: 'awaiting',
-  });
-  return { id, payload: snap.value as HitlRequestPayload, canonical: snap.canonical };
-}
-
-export function hitlDecisionParts(
-  workspaceId: string,
-  input: HitlDecisionInput,
-): { id: string; payload: HitlDecisionPayload; canonical: string } {
-  const requestId = requireString('requestId', input.requestId);
-  const status = requireString('status', input.status);
-  if (!HITL_STATUS_VALUES.includes(status as (typeof HITL_STATUS_VALUES)[number]) || status === 'awaiting') {
-    throw new InvalidRecordError(
-      `status must be a decision status (${HITL_STATUS_VALUES.filter((s) => s !== 'awaiting').join(' | ')})`,
-    );
-  }
-  const decidedBy = requireString('decidedBy', input.decidedBy);
-  if (input.note !== null && typeof input.note !== 'string') {
-    throw new InvalidRecordError('note must be a string or null');
-  }
-  const id = computeRecordId(workspaceId, 'hitl', {
-    kind: 'hitl-decision',
-    requestId,
-    status,
-    decidedBy,
-    note: input.note,
-  });
-  const snap = snapshotPayload({ requestId, status, decidedBy, note: input.note });
-  return { id, payload: snap.value as HitlDecisionPayload, canonical: snap.canonical };
-}
 
 // Seals the event (id + stable payload) via the #323 model and resolves its
 // store observations from the write-path context. Shared by the direct write
@@ -291,47 +261,129 @@ export function artifactParts(
 
 async function insertDataRow(client: pg.PoolClient, rec: OpsPgRecord): Promise<void> {
   const route = `${rec.namespace}/${rec.kind}`;
+  // The `hitl` namespace is non-spoolable (owner decision 6 / D7), so these two
+  // routes are reachable ONLY by draining a spool a pre-#319 CLI created. They
+  // allocate v2 identity server-side under the same per-group advisory lock a
+  // live write takes — a legacy entry materializes as a coherent v2 row or not
+  // at all, never as a v1-shaped orphan the state machine cannot read.
   if (route === 'hitl/hitl-request') {
-    const p = rec.payload as HitlRequestPayload;
+    // The DB clock, not the draining host's: a legacy execution request with no
+    // expiry gets its default TTL from the same clock the projection and the
+    // triggers judge it by, so a skewed drainer cannot land a row that is born
+    // expired (this path supplies packet_hash, so the fill trigger's own
+    // expiry default never runs). Read before the lock is fine — it only sets
+    // the TTL baseline; every ordering-sensitive read happens under the lock.
+    const now = await dbNowMs(client);
+    const prepared = prepareLegacySubmission(rec.workspaceId, rec.payload, rec.createdAt, now);
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1) # ${HITL_GROUP_LOCK_MASK})`, [prepared.requestKey]);
+    const head = await client.query(
+      `SELECT generation, version, packet_hash, sealed, superseded, effective_status, terminal_status
+         FROM hitl.request_state WHERE workspace_id = $1::uuid AND request_id = $2`,
+      [rec.workspaceId, prepared.requestId],
+    );
+    const headRow = head.rows[0] as Record<string, unknown> | undefined;
+    const plan = planFor(
+      {
+        head:
+          headRow === undefined
+            ? null
+            : {
+                generation: num(headRow.generation),
+                version: num(headRow.version),
+                packetHash: headRow.packet_hash as string,
+                sealed: headRow.sealed === true,
+                // A superseded group is closed to the drain too — resurrecting
+                // it here would recreate exactly the authority hole the live
+                // path now refuses (round-4 finding 1a).
+                superseded: headRow.superseded === true,
+              },
+      },
+      prepared,
+    );
+    if (plan.kind === 'conflict') throw conflictFromPlan(prepared.requestId, plan);
+    if (plan.kind === 'idempotent') return;
+    // The drain opens generations exactly like the live path does, so it owes
+    // the same durable boundary: materialize the previous generation's expiry
+    // in THIS transaction, before G+1 exists. Skipping it would leave a head
+    // the sweep can no longer discover and no durable expiry ever.
+    if (plan.kind === 'open-generation' && headRow !== undefined) {
+      await materializeHeadExpiry(
+        client,
+        rec.workspaceId,
+        {
+          requestId: prepared.requestId,
+          generation: num(headRow.generation),
+          version: num(headRow.version),
+          effectiveStatus: headRow.effective_status as HitlStatus,
+          terminalStatus: (headRow.terminal_status ?? null) as HitlDecisionStatus | null,
+          superseded: headRow.superseded === true,
+        },
+      );
+    }
     await client.query(
       `INSERT INTO hitl.requests
-         (id, workspace_id, version, action, target, content_hash, payload, status, producer_id, producer_seq, created_at)
-       VALUES ($1, $2::uuid, 1, $3, $4, $5, $6::jsonb, $7, $8::uuid, $9, $10)`,
+         (id, legacy_id, workspace_id, request_key, generation, version, action, action_kind, target, target_hash,
+          packet_hash, canonicalization_version, content_hash, payload, expires_at, sanitized_summary,
+          status, producer_id, producer_seq, created_at)
+       VALUES ($1, $19, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15,
+               'awaiting', $16::uuid, $17, $18)`,
       [
-        rec.id,
+        prepared.requestId,
         rec.workspaceId,
-        p.action,
-        p.target,
-        p.contentHash,
+        prepared.requestKey,
+        plan.generation,
+        plan.version,
+        prepared.action,
+        prepared.actionKind,
+        prepared.target,
+        prepared.targetHash,
+        prepared.packetHash,
+        prepared.canonicalizationVersion,
+        prepared.contentHash,
         rec.canonical,
-        p.status,
+        prepared.expiresAt,
+        prepared.sanitizedSummary,
         rec.producerId,
         rec.producerSeq,
         rec.createdAt,
+        // Preserve the pre-#319 spool entry id so a legacy DECISION queued
+        // alongside this request still resolves its target after the re-key.
+        rec.id,
       ],
     );
     return;
   }
   if (route === 'hitl/hitl-decision') {
     const p = rec.payload as HitlDecisionPayload;
-    const version = await client.query(
-      `SELECT COALESCE(MAX(version), 1) AS v FROM hitl.requests WHERE workspace_id = $1::uuid AND id = $2`,
+    // A legacy decision names the v1 content-addressed request id; the migration
+    // re-keyed those rows and preserved the old value in `legacy_id`.
+    const target = await client.query(
+      `SELECT id, request_key, generation, version FROM hitl.requests
+        WHERE workspace_id = $1::uuid AND (id = $2 OR legacy_id = $2)
+        ORDER BY generation DESC, version DESC LIMIT 1`,
       [rec.workspaceId, p.requestId],
     );
+    const row = target.rows[0] as Record<string, unknown> | undefined;
+    if (row === undefined) {
+      throw new InvalidRecordError(`queued HITL decision ${rec.id} references request ${p.requestId}, which does not exist`);
+    }
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1) # ${HITL_GROUP_LOCK_MASK})`, [row.request_key]);
     await client.query(
       `INSERT INTO hitl.decisions
-         (id, workspace_id, request_id, request_version, status, payload, producer_id, producer_seq, created_at)
-       VALUES ($1, $2::uuid, $3, $4, $5, $6::jsonb, $7::uuid, $8, $9)`,
+         (id, workspace_id, request_id, generation, request_version, status, payload, decided_at,
+          producer_id, producer_seq, created_at)
+       VALUES ($1, $2::uuid, $3, $4, $5, $6, $7::jsonb, $8, $9::uuid, $10, $8)`,
       [
         rec.id,
         rec.workspaceId,
-        p.requestId,
-        num((version.rows[0] as { v: unknown }).v),
+        row.id,
+        num(row.generation),
+        num(row.version),
         p.status,
         rec.canonical,
+        rec.createdAt,
         rec.producerId,
         rec.producerSeq,
-        rec.createdAt,
       ],
     );
     return;
@@ -498,7 +550,10 @@ async function insertDataRow(client: pg.PoolClient, rec: OpsPgRecord): Promise<v
 // ConflictError, never a blanket DO NOTHING. Transient pg errors propagate
 // untouched so the outbox retry policy classifies them.
 export async function applyRecord(client: pg.PoolClient, rec: OpsPgRecord): Promise<DeliverResult> {
-  await client.query('BEGIN');
+  // EXPLICIT read committed (#319 D4): the hitl decisions trigger refuses to run
+  // under a higher isolation, where its lock-then-read serialization would miss
+  // a concurrently committed terminal decision.
+  await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
   let existingHash: string | null | undefined;
   try {
     const ins = await client.query(
@@ -668,105 +723,663 @@ async function surfaceQueuedConflict(
 
 // ---------- hitl ----------
 
-function hitlEnvelopeFromRow(row: Record<string, unknown>): HitlRequestEnvelope {
-  const p = row.payload as HitlRequestPayload;
+// Everything the envelope needs: the authoritative projection (hitl.request_state)
+// joined to its own packet row. The view is one row per request GROUP — the
+// current version of the highest generation — so the join is on its identity.
+const HITL_HEAD_COLUMNS = `
+  s.request_id, s.request_key, s.generation, s.version, s.action, s.action_kind, s.target,
+  s.target_hash, s.packet_hash, s.canonicalization_version, s.expires_at, s.created_at, s.seq,
+  s.terminal_status, s.deferred, s.superseded, s.effective_status, s.sealed, s.authoritative,
+  r.content_hash, r.payload, r.payload_ref, r.summary, r.warnings, r.side_effects, r.choices,
+  r.origin_run_id, r.origin_task_id, r.requesting_agent,
+  r.supersedes_request_id, r.supersedes_generation, r.supersedes_version`;
+
+const HITL_HEAD_FROM = `
+  FROM hitl.request_state s
+  JOIN hitl.requests r
+    ON r.workspace_id = s.workspace_id AND r.id = s.request_id
+   AND r.generation = s.generation AND r.version = s.version`;
+
+// Absent `status` filter ⇒ the ACTIONABLE queue (awaiting | deferred — a
+// deferred item stays in the queue, owner decision 3). A supplied status selects
+// exactly that effective status.
+//
+// The functionName comparison goes through hitl.function_name() — the SAME
+// derivation the fill trigger keys on and functionNameOf() projects with. It
+// used to compare the RAW payload value, so a migrated row carrying
+// functionName 5 / '' / no key at all reported 'unknown' in its envelope and
+// then answered to neither 'unknown' nor its raw value: an actionable approval
+// hidden from the only queries a caller can make (round-3 finding 2).
+// A SUPERSEDED head is excluded from the DEFAULT workset (round-4 finding 1b):
+// it was replaced by another group, so there is nothing left to decide on it —
+// the same rule deriveRequestState().actionable applies on the local backend. An
+// EXPLICIT status filter still reaches it; that query is history, not the queue.
+const HITL_FILTER_SQL = `
+    AND ($fn::text IS NULL OR hitl.function_name(r.payload, r.payload_ref) = $fn)
+    AND (CASE WHEN $st::text IS NULL
+              THEN s.effective_status IN ('awaiting', 'deferred') AND NOT s.superseded
+              ELSE s.effective_status = $st END)`;
+
+function hitlFilterSql(fn: string, st: string): string {
+  return HITL_FILTER_SQL.replaceAll('$fn', fn).replaceAll('$st', st);
+}
+
+function hitlEnvelopeFromRow(workspaceId: string, row: Record<string, unknown>): HitlRequestEnvelope {
+  const ids = identityFieldsOf(row.payload ?? null, row.payload_ref ?? null);
+  const terminalStatus = (row.terminal_status ?? null) as HitlDecisionStatus | null;
+  const deferred = row.deferred === true;
   return {
-    ...p,
-    status: row.status as HitlRequestEnvelope['status'],
-    id: row.id as string,
-    workspaceId: row.workspace_id as string,
-    seq: num(row.seq),
+    id: row.request_id as string,
+    workspaceId,
+    requestKey: row.request_key as string,
+    generation: num(row.generation),
+    version: num(row.version),
+    functionName: ids.functionName,
+    title: ids.title,
+    action: row.action as string,
+    actionKind: row.action_kind as HitlActionKind,
+    target: row.target as string,
+    targetHash: row.target_hash as string,
+    packetHash: row.packet_hash as string,
+    canonicalizationVersion: num(row.canonicalization_version),
+    contentHash: row.content_hash as string,
+    body: ids.body,
+    payloadRef: row.payload_ref === null || row.payload_ref === undefined ? null : payloadRefOf(row.payload_ref),
+    expiresAt: row.expires_at === null || row.expires_at === undefined ? null : num(row.expires_at),
+    summary: (row.summary ?? null) as string | null,
+    warnings: row.warnings ?? null,
+    sideEffects: row.side_effects ?? null,
+    choices: row.choices ?? null,
+    originRunId: (row.origin_run_id ?? null) as string | null,
+    originTaskId: (row.origin_task_id ?? null) as string | null,
+    requestingAgent: (row.requesting_agent ?? null) as string | null,
+    supersedes: supersedesOf(
+      row.supersedes_request_id,
+      row.supersedes_generation === null || row.supersedes_generation === undefined
+        ? null
+        : num(row.supersedes_generation),
+      row.supersedes_version === null || row.supersedes_version === undefined ? null : num(row.supersedes_version),
+    ),
+    status: row.effective_status as HitlStatus,
+    nodeStatus: terminalStatus ?? (deferred ? 'deferred' : 'awaiting'),
+    terminalStatus,
+    deferred,
+    sealed: row.sealed === true,
+    superseded: row.superseded === true,
+    authoritative: row.authoritative === true,
     createdAt: num(row.created_at),
+    seq: num(row.seq),
     queued: false,
   };
 }
 
-function queuedHitlEnvelope(workspaceId: string, e: OutboxEntryState): HitlRequestEnvelope {
-  const p = e.payload as HitlRequestPayload;
-  return { ...p, id: e.entryId, workspaceId, seq: null, createdAt: e.enqueuedAt, queued: true };
+// SQLSTATE → the store's taxonomy. The decision trigger deliberately RAISEs with
+// unique_violation for every state refusal (prior terminal, not-head, sealed
+// generation, superseded) so a concurrent loser and an index loser are ONE case.
+function mapHitlPgError(err: unknown, what: string): never {
+  if (err instanceof PersistenceError) throw err;
+  const code = (err as { code?: string }).code;
+  const detail = (err as Error).message;
+  if (code === '23505') throw new ConflictError('hitl', detail);
+  // 23514: the expiry-direction CHECK — recording an expiry before the deadline,
+  // or a user decision after it. A live race, not a malformed request.
+  if (code === '23514') throw new ConflictError('hitl', detail);
+  // 23503: the decision names a (request, generation, version) that does not exist.
+  if (code === '23503') throw new InvalidRecordError(detail);
+  // P0001: the trigger's isolation refusal — the store always opens READ
+  // COMMITTED, so this means the server forced a higher isolation on us.
+  if (code === 'P0001') throw new InvalidRecordError(detail);
+  throw new BackendUnavailableError(`${what}: ${detail}`);
 }
 
-function hitlFilterMatches(p: HitlRequestPayload, filter?: HitlRequestFilter): boolean {
-  return (
-    (filter?.functionName === undefined || p.functionName === filter.functionName) &&
-    (filter?.status === undefined || p.status === filter.status)
+// Shared by the live store AND the legacy-spool drain in insertDataRow, so a
+// drained entry materializes the same durable rows a live write would.
+async function insertHitlDecisionRow(
+  client: pg.PoolClient,
+  workspaceId: string,
+  d: NormalizedDecision,
+  id: string,
+  now: number,
+): Promise<number> {
+  const payload = snapshotPayload({
+    requestId: d.requestId,
+    generation: d.generation,
+    requestVersion: d.requestVersion,
+    status: d.status,
+    decidedBy: d.decidedBy,
+    note: d.note,
+    feedback: d.feedback,
+  });
+  const res = await client.query(
+    `INSERT INTO hitl.decisions
+       (id, workspace_id, request_id, generation, request_version, status, payload, decided_at, feedback,
+        producer_id, producer_seq, created_at)
+     VALUES ($1, $2::uuid, $3, $4, $5, $6, $7::jsonb, $8, $9, NULL, NULL, $8)
+     ON CONFLICT (workspace_id, id) DO NOTHING`,
+    [id, workspaceId, d.requestId, d.generation, d.requestVersion, d.status, payload.canonical, now, d.feedback],
+  );
+  return res.rowCount ?? 0;
+}
+
+// The clock that DECIDED an expiry, read inside the locked transaction. Expiry
+// eligibility is evaluated by the database (hitl.request_state and the decision
+// trigger both use clock_timestamp()), so the durable audit stamp must come from
+// that same clock: stamping a system expiry with the caller's clock let a skewed
+// application write "expired at T" for a T at which the request had not yet
+// expired — a history record contradicting the decision that produced it.
+async function dbNowMs(client: pg.PoolClient): Promise<number> {
+  const res = await client.query(`SELECT hitl.now_ms() AS now_ms`);
+  return num((res.rows[0] as { now_ms: unknown }).now_ms);
+}
+
+// The expiry a generation must carry BEFORE the next one may open. Called from
+// both write paths — the live store and the pre-#319 spool drain — inside the
+// same locked transaction that inserts G+1, so an effectively-expired head can
+// never be hidden behind a new generation with no durable boundary.
+async function materializeHeadExpiry(
+  client: pg.PoolClient,
+  workspaceId: string,
+  head: {
+    requestId: string;
+    generation: number;
+    version: number;
+    effectiveStatus: HitlStatus;
+    terminalStatus: HitlDecisionStatus | null;
+    superseded: boolean;
+  },
+): Promise<void> {
+  // A superseded head takes no decision at all (the trigger RAISEs), and a
+  // superseded group can no longer open a next generation anyway — the same
+  // exclusion the candidate scan applies (finding 1c).
+  if (head.effectiveStatus !== 'expired' || head.terminalStatus !== null || head.superseded) return;
+  await insertHitlDecisionRow(
+    client,
+    workspaceId,
+    systemExpiryDecision(head.requestId, head.generation, head.version),
+    systemExpiryId(workspaceId, head.requestId, head.generation, head.version),
+    await dbNowMs(client),
   );
 }
 
+// Every head a write CLOSES owes its durable expiry first, and a `replaces`
+// closes two: the destination head that generation G+1 supersedes, and the
+// SOURCE head the supersession row cancels. Materializing only the destination's
+// lost the source's transition permanently — once the supersession row exists,
+// the decision trigger refuses every decision on that head and both backends'
+// candidate scans skip it, so nothing could ever record it (round-7 finding).
+// Ordered by request_key: the SAME deterministic sort inGroupTxn takes the two
+// group locks in and the fill trigger mirrors, so a both-expired replace writes
+// its two decisions in one order on both backends. Neither ordering constrains
+// the other — but both must precede the version row, which is why they are
+// written here rather than beside their own reads.
+function expiryOrder(head: PgHeadRow | null, source: PgHeadRow | null): PgHeadRow[] {
+  return [head, source]
+    .filter((h): h is PgHeadRow => h !== null)
+    .sort((a, b) => (a.requestKey < b.requestKey ? -1 : a.requestKey > b.requestKey ? 1 : 0));
+}
+
+type PgHeadRow = {
+  requestId: string;
+  requestKey: string;
+  generation: number;
+  version: number;
+  packetHash: string;
+  sealed: boolean;
+  // The INCOMING supersession: hitl.request_state's anti-join over
+  // requests.supersedes_* — is some other group's row pointing at THIS head?
+  superseded: boolean;
+  effectiveStatus: HitlStatus;
+  terminalStatus: HitlDecisionStatus | null;
+  // What this head row itself supersedes (the destination side of a `replaces`).
+  supersedes: HitlSupersedesRef | null;
+};
+
+// For a workspace with a database, the LIVE store is Postgres: every write is a
+// synchronous transaction under the per-group advisory lock and a DB outage is a
+// BackendUnavailableError the agent retries. Nothing here ever touches the
+// outbox — the whole `hitl` namespace is non-spoolable (owner decision 6 / D7).
 class PgHitlStore implements HitlStore {
   private readonly deps: StoreDeps;
+  private readonly objects: CreateOnlyObjectStore;
+  private readonly policy: HitlExpiryPolicy;
+  private sweeping = false;
 
-  constructor(deps: StoreDeps) {
+  constructor(deps: StoreDeps, objects: CreateOnlyObjectStore, policy: HitlExpiryPolicy) {
     this.deps = deps;
+    this.objects = objects;
+    this.policy = policy;
   }
 
-  private overlayLocalOnly(filter?: HitlRequestFilter): OutboxEntryState[] {
-    if (!this.deps.outbox) return [];
-    return this.deps.outbox
-      .overlayOnly('hitl')
-      .filter((e) => e.kind === 'hitl-request' && hitlFilterMatches(e.payload as HitlRequestPayload, filter))
-      .sort(overlayOrder);
+  // The throttled bookkeeping sweep (PLAN D). It runs AFTER the verb's own work
+  // and swallows its own failures, because nothing depends on it: the
+  // sweep-INDEPENDENT effective_status already keeps an unswept expiry out of
+  // the queue and out of authority. The re-entrancy flag keeps the sweep's own
+  // insertSystemExpiry calls from re-triggering it.
+  private async sweep(): Promise<void> {
+    if (this.sweeping) return;
+    this.sweeping = true;
+    try {
+      await maybeSweep(this, this.deps.now());
+    } finally {
+      this.sweeping = false;
+    }
   }
 
-  private async overlayAgainstCommitted(filter?: HitlRequestFilter): Promise<OutboxEntryState[]> {
-    if (!this.deps.outbox) return [];
-    const refs = await fetchCommittedRefs(this.deps, 'hitl');
-    const res = this.deps.outbox.overlay('hitl', refs);
-    return overlayEntries(res)
-      .filter((e) => e.kind === 'hitl-request' && hitlFilterMatches(e.payload as HitlRequestPayload, filter))
-      .sort(overlayOrder);
+  // #323's object port, unchanged: object-first, then the row; the immutable
+  // version id is recorded IN the packet hash, so swapping the referenced bytes
+  // invalidates the approval like any other packet edit.
+  private offload(): HitlPayloadOffload {
+    return async (bytes, digest) => {
+      const put = await this.objects.putIfAbsent({ prefix: 'hitl', segments: [digest] }, bytes, {
+        contentType: 'text/plain; charset=utf-8',
+      });
+      return { objectVersionId: put.objectVersionId, uri: null };
+    };
   }
 
-  async createRequest(input: HitlRequestInput): Promise<WriteOutcome> {
-    const { id, payload, canonical } = hitlRequestParts(this.deps.workspaceId, input);
-    if (this.deps.outbox) {
-      return await this.deps.outbox.writeThrough(
-        { namespace: 'hitl', id, kind: 'hitl-request', payload },
-        this.deps.remote,
+  private async resolveBody(row: HitlRequestEnvelope): Promise<string | null> {
+    if (row.body !== null) return row.body;
+    if (row.payloadRef === null) return null;
+    // Read BY THE RECORDED VERSION, never "latest".
+    const got = await this.objects.get(
+      { prefix: 'hitl', segments: [row.payloadRef.digest] },
+      row.payloadRef.objectVersionId,
+    );
+    if (got === null) {
+      throw new InvalidRecordError(
+        `HITL request ${row.id} references payload ${row.payloadRef.digest}, which is not in the object store`,
       );
     }
-    return await directApply(
-      this.deps,
-      {
-        namespace: 'hitl',
-        kind: 'hitl-request',
-        id,
-        workspaceId: this.deps.workspaceId,
-        payload,
-        canonical,
-        payloadHash: sha256Hex(canonical),
-        producerId: null,
-        producerSeq: null,
-        createdAt: this.deps.now(),
-      },
-      'postgres hitl.createRequest failed',
+    if (sha256Hex(got.body) !== row.payloadRef.digest) {
+      throw new InvalidRecordError(`HITL payload ${row.payloadRef.digest} bytes do not match their digest`);
+    }
+    return got.body.toString('utf8');
+  }
+
+  // Every HITL transaction: EXPLICIT read committed (the decision trigger RAISEs
+  // under a higher isolation — its lock-then-read serialization cannot see a
+  // concurrent terminal decision through a snapshot taken before the lock), then
+  // the per-group advisory lock(s) in deterministic key order so two cross-group
+  // `replaces` in opposite directions cannot deadlock. The trigger takes the SAME
+  // lock, which makes it re-entrant here, not a self-deadlock.
+  private async inGroupTxn<T>(
+    keys: readonly string[],
+    what: string,
+    fn: (client: pg.PoolClient) => Promise<T>,
+  ): Promise<T> {
+    const client = await this.deps.pool.connect().catch((err) => rethrowAsBackendError(err, what));
+    try {
+      await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
+      for (const key of [...new Set(keys)].sort()) {
+        await client.query(`SELECT pg_advisory_xact_lock(hashtext($1) # ${HITL_GROUP_LOCK_MASK})`, [key]);
+      }
+      const out = await fn(client);
+      await client.query('COMMIT');
+      return out;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      mapHitlPgError(err, what);
+    } finally {
+      client.release();
+    }
+  }
+
+  private async readHeadLocked(client: pg.PoolClient, requestId: string): Promise<PgHeadRow | null> {
+    const res = await client.query(
+      `SELECT s.request_id, s.request_key, s.generation, s.version, s.packet_hash, s.sealed,
+              s.superseded, s.effective_status, s.terminal_status,
+              r.supersedes_request_id, r.supersedes_generation, r.supersedes_version
+         FROM hitl.request_state s
+         JOIN hitl.requests r
+           ON r.workspace_id = s.workspace_id AND r.id = s.request_id
+          AND r.generation = s.generation AND r.version = s.version
+        WHERE s.workspace_id = $1::uuid AND s.request_id = $2`,
+      [this.deps.workspaceId, requestId],
+    );
+    const row = res.rows[0] as Record<string, unknown> | undefined;
+    if (row === undefined) return null;
+    return {
+      requestId: row.request_id as string,
+      requestKey: row.request_key as string,
+      generation: num(row.generation),
+      version: num(row.version),
+      packetHash: row.packet_hash as string,
+      sealed: row.sealed === true,
+      superseded: row.superseded === true,
+      effectiveStatus: row.effective_status as HitlStatus,
+      terminalStatus: (row.terminal_status ?? null) as HitlDecisionStatus | null,
+      supersedes: supersedesOf(
+        row.supersedes_request_id,
+        row.supersedes_generation === null || row.supersedes_generation === undefined
+          ? null
+          : num(row.supersedes_generation),
+        row.supersedes_version === null || row.supersedes_version === undefined ? null : num(row.supersedes_version),
+      ),
+    };
+  }
+
+  // A head may only be closed — by the NEXT generation over it, or by another
+  // group's supersession row — once its own expiry is durable: materialize it in
+  // the SAME transaction that writes the closing row, so an un-swept expiry can
+  // never be hidden behind one.
+  private async materializeExpiry(client: pg.PoolClient, head: PgHeadRow): Promise<void> {
+    await materializeHeadExpiry(client, this.deps.workspaceId, head);
+  }
+
+  private async insertDecisionRow(
+    client: pg.PoolClient,
+    d: NormalizedDecision,
+    id: string,
+    now: number,
+  ): Promise<number> {
+    return await insertHitlDecisionRow(client, this.deps.workspaceId, d, id, now);
+  }
+
+  private async insertVersionRow(
+    client: pg.PoolClient,
+    p: PreparedSubmission,
+    generation: number,
+    version: number,
+    supersedes: { requestId: string; generation: number; version: number } | null,
+    now: number,
+  ): Promise<void> {
+    await client.query(
+      `INSERT INTO hitl.requests
+         (id, workspace_id, request_key, generation, version, action, action_kind, target, target_hash,
+          packet_hash, canonicalization_version, content_hash, payload, payload_ref, expires_at,
+          summary, warnings, side_effects, choices, origin_run_id, origin_task_id, requesting_agent,
+          sanitized_summary, supersedes_request_id, supersedes_generation, supersedes_version,
+          status, producer_id, producer_seq, created_at)
+       VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9,
+               $10, $11, $12, $13::jsonb, $14::jsonb, $15,
+               $16, $17::jsonb, $18::jsonb, $19::jsonb, $20, $21, $22,
+               $23, $24, $25, $26,
+               'awaiting', NULL, NULL, $27)`,
+      [
+        p.requestId,
+        this.deps.workspaceId,
+        p.requestKey,
+        generation,
+        version,
+        p.action,
+        p.actionKind,
+        p.target,
+        p.targetHash,
+        p.packetHash,
+        p.canonicalizationVersion,
+        p.contentHash,
+        p.body === null ? null : JSON.stringify(encodeInlinePayload(p)),
+        p.payloadRef === null ? null : JSON.stringify(encodeStoredRef(p)),
+        p.expiresAt,
+        p.summary,
+        p.warnings === null ? null : JSON.stringify(p.warnings),
+        p.sideEffects === null ? null : JSON.stringify(p.sideEffects),
+        p.choices === null ? null : JSON.stringify(p.choices),
+        p.originRunId,
+        p.originTaskId,
+        p.requestingAgent,
+        p.sanitizedSummary,
+        supersedes?.requestId ?? null,
+        supersedes?.generation ?? null,
+        supersedes?.version ?? null,
+        now,
+      ],
     );
   }
 
-  async getRequest(id: string, opts?: ReadOpts): Promise<HitlRequestEnvelope | null> {
+  async createRequest(input: HitlRequestInput): Promise<HitlWriteOutcome> {
+    const prepared = await prepareSubmission(
+      this.deps.workspaceId,
+      input,
+      this.policy,
+      this.deps.now(),
+      this.offload(),
+    );
+    const out = await this.inGroupTxn([prepared.requestKey], 'postgres hitl.createRequest failed', async (client) => {
+      // The DATABASE clock, read under the group lock: the expiry policy is
+      // re-resolved (and the packet re-sealed around it) against the same clock
+      // hitl.request_state, the decision trigger and the sweep all evaluate
+      // expiry with, and it stamps created_at too. See resealExpiry.
+      const now = await dbNowMs(client);
+      const sealed = resealExpiry(prepared, this.policy, now);
+      const head = await this.readHeadLocked(client, sealed.requestId);
+      return await this.applyPlan(client, sealed, head, null, now);
+    });
+    await this.sweep();
+    return out;
+  }
+
+  async replaces(input: HitlReplaceInput): Promise<HitlWriteOutcome> {
+    const sourceRequestId = requireString('sourceRequestId', input.sourceRequestId);
+    const sourceExpected = assertExpectedHead(input.sourceExpectedHead, 'sourceExpectedHead');
+    if (sourceExpected === undefined || sourceExpected === null) {
+      throw new InvalidRecordError('sourceExpectedHead is required — a replace must name the head it cancels');
+    }
+    const prepared = await prepareSubmission(
+      this.deps.workspaceId,
+      input.request,
+      this.policy,
+      this.deps.now(),
+      this.offload(),
+    );
+    if (prepared.requestId === sourceRequestId) {
+      throw new InvalidRecordError(
+        'replaces targets a DIFFERENT request group — a same-key edit is a revision, not a supersession',
+      );
+    }
+    // request_key is immutable per row, so resolving the source's lock key
+    // BEFORE the lock is safe (the DB trigger reads it the same way).
+    const sourceKey = await this.deps.pool
+      .query(`SELECT request_key FROM hitl.requests WHERE workspace_id = $1::uuid AND id = $2 LIMIT 1`, [
+        this.deps.workspaceId,
+        sourceRequestId,
+      ])
+      .catch((err) => rethrowAsBackendError(err, 'postgres hitl.replaces failed'));
+    const sourceKeyRow = sourceKey.rows[0] as { request_key: string } | undefined;
+    if (sourceKeyRow === undefined) {
+      throw new InvalidRecordError(`HITL request ${sourceRequestId} does not exist — nothing to supersede`);
+    }
+    const out = await this.inGroupTxn(
+      [prepared.requestKey, sourceKeyRow.request_key],
+      'postgres hitl.replaces failed',
+      async (client) => {
+        const now = await dbNowMs(client);
+        const sealedSubmission = resealExpiry(prepared, this.policy, now);
+        const source = await this.readHeadLocked(client, sourceRequestId);
+        if (source === null) {
+          throw new ConflictError(sourceRequestId, 'missing-history: the source request group has no versions');
+        }
+        if (
+          source.generation !== sourceExpected.generation ||
+          source.version !== sourceExpected.version ||
+          source.packetHash !== sourceExpected.packetHash ||
+          source.sealed !== sourceExpected.sealed
+        ) {
+          throw new ConflictError(
+            sourceRequestId,
+            `stale-expected-head: the source head is generation ${source.generation} version ${source.version} (sealed: ${source.sealed}), not ${sourceExpected.generation}/${sourceExpected.version} (sealed: ${sourceExpected.sealed})`,
+          );
+        }
+        const head = await this.readHeadLocked(client, sealedSubmission.requestId);
+        return await this.applyPlan(client, sealedSubmission, head, source, now);
+      },
+    );
+    await this.sweep();
+    return out;
+  }
+
+  private async applyPlan(
+    client: pg.PoolClient,
+    prepared: PreparedSubmission,
+    head: PgHeadRow | null,
+    source: PgHeadRow | null,
+    now: number,
+  ): Promise<HitlWriteOutcome> {
+    const supersedes =
+      source === null
+        ? null
+        : { requestId: source.requestId, generation: source.generation, version: source.version };
+    const planned = planFor(
+      {
+        head:
+          head === null
+            ? null
+            : {
+                generation: head.generation,
+                version: head.version,
+                packetHash: head.packetHash,
+                sealed: head.sealed,
+                // The incoming supersession, bound into PLANNING (round-4
+                // finding 1a): a replaced head keeps its exact fingerprint, so
+                // the expectation check alone cannot tell a stale caller that
+                // its group is closed.
+                superseded: head.superseded,
+              },
+      },
+      prepared,
+    );
+    if (planned.kind === 'conflict') throw conflictFromPlan(prepared.requestId, planned);
+    // The shared finalizer owns BOTH the idempotent→revise upgrade a `replaces`
+    // owes its supersession link AND the closure re-check that upgrade demands
+    // (R5 finding 1).
+    const plan = finalizeSubmissionPlan(
+      planned,
+      head,
+      supersedes === null ? null : { requested: supersedes, recorded: head?.supersedes ?? null },
+    );
+    if (plan.kind === 'conflict') throw conflictFromPlan(prepared.requestId, plan);
+    // The SOURCE side of the same closure rule the machine applies to the
+    // destination: a head another group already replaced cannot be replaced a
+    // second time, or two destinations would each claim to cancel it. Scoped to
+    // plans that WRITE, so replaying the original replace (whose link the
+    // destination head already records) stays an idempotent no-op.
+    if (plan.kind !== 'idempotent' && source !== null && source.superseded) {
+      throw new ConflictError(
+        source.requestId,
+        'superseded-head: the source head was already superseded by another request group — re-read and target the group that replaced it',
+      );
+    }
+    const outcome: HitlWriteOutcome = {
+      outcome: 'committed',
+      id: prepared.requestId,
+      requestId: prepared.requestId,
+      generation: plan.generation,
+      version: plan.version,
+      idempotent: plan.kind === 'idempotent',
+      warnings: prepared.policyWarnings,
+    };
+    if (plan.kind === 'idempotent') return outcome;
+    for (const owed of expiryOrder(head, source)) await this.materializeExpiry(client, owed);
+    await this.insertVersionRow(client, prepared, plan.generation, plan.version, supersedes, now);
+    return outcome;
+  }
+
+  async appendDecision(input: HitlDecisionInput): Promise<HitlDecisionOutcome> {
+    const d = normalizeDecision(input);
+    const keyRes = await this.deps.pool
+      .query(`SELECT request_key FROM hitl.requests WHERE workspace_id = $1::uuid AND id = $2 LIMIT 1`, [
+        this.deps.workspaceId,
+        d.requestId,
+      ])
+      .catch((err) => rethrowAsBackendError(err, 'postgres hitl.appendDecision failed'));
+    const keyRow = keyRes.rows[0] as { request_key: string } | undefined;
+    if (keyRow === undefined) throw new InvalidRecordError(`HITL request ${d.requestId} does not exist`);
+    const out = await this.inGroupTxn(
+      [keyRow.request_key],
+      'postgres hitl.appendDecision failed (decisions require the live store and are never spooled)',
+      async (client) => {
+        const head = await this.readHeadLocked(client, d.requestId);
+        if (head === null) throw new InvalidRecordError(`HITL request ${d.requestId} does not exist`);
+        // The DB's clock, read AFTER the group lock — the same clock that
+        // decided this head's effective status (hitl.request_state) and that the
+        // decision trigger will re-check the expiry direction against. Reading
+        // the application clock here made a skewed caller refuse a decision the
+        // database considered perfectly decidable (round-3 finding 3), exactly
+        // the mismatch the system-expiry path already fixed via dbNowMs.
+        const now = await dbNowMs(client);
+        // The shared machine refuses first (same reasons, same wording as the
+        // local backend); the trigger + partial indexes are the DB-side backstop
+        // that also binds a RAW runtime INSERT.
+        const projected = await this.headForMachine(client, d.requestId);
+        const check = canDecide(projected, d.status, now);
+        if (!check.ok) throw decisionRefusal(d.requestId, check);
+        await this.insertDecisionRow(client, d, decisionId(this.deps.workspaceId, d), now);
+        return {
+          outcome: 'committed' as const,
+          id: decisionId(this.deps.workspaceId, d),
+          requestId: d.requestId,
+          generation: d.generation,
+          requestVersion: d.requestVersion,
+          status: d.status,
+        };
+      },
+    );
+    await this.sweep();
+    return out;
+  }
+
+  // The view row rendered as the machine's HitlHead so canDecide/canAuthorize
+  // read exactly the same shape on both backends.
+  private async headForMachine(client: PgQueryable, requestId: string): Promise<HitlHead> {
+    const res = await client.query(
+      `SELECT ${HITL_HEAD_COLUMNS} ${HITL_HEAD_FROM}
+        WHERE s.workspace_id = $1::uuid AND s.request_id = $2`,
+      [this.deps.workspaceId, requestId],
+    );
+    const row = res.rows[0] as Record<string, unknown> | undefined;
+    if (row === undefined) throw new InvalidRecordError(`HITL request ${requestId} does not exist`);
+    const env = hitlEnvelopeFromRow(this.deps.workspaceId, row);
+    return {
+      requestId: env.id,
+      requestKey: env.requestKey,
+      generation: env.generation,
+      version: env.version,
+      action: env.action,
+      actionKind: env.actionKind,
+      target: env.target,
+      targetHash: env.targetHash,
+      packetHash: env.packetHash,
+      canonicalizationVersion: env.canonicalizationVersion,
+      expiresAt: env.expiresAt,
+      createdAt: env.createdAt,
+      nodeStatus: env.nodeStatus,
+      status: env.status,
+      terminalStatus: env.terminalStatus,
+      deferred: env.deferred,
+      sealed: env.sealed,
+      isCurrentVersion: true,
+      isHighestGeneration: true,
+      superseded: env.superseded,
+    };
+  }
+
+  // Degraded HITL reads FAIL CLOSED (owner decision 6): there is no queued HITL
+  // overlay to serve and `allowPartial` is not offered — an approval system that
+  // answers "no pending approvals" from an incomplete view is worse than one that
+  // says it cannot answer.
+  private unavailable(err: unknown, what: string): never {
+    rethrowAsBackendError(err, what);
+  }
+
+  async getRequest(id: string): Promise<HitlRequestEnvelope | null> {
     requireString('id', id);
     try {
       const res = await this.deps.pool.query(
-        `SELECT seq, id, workspace_id::text AS workspace_id, payload, status, created_at
-           FROM hitl.requests
-          WHERE workspace_id = $1::uuid AND id = $2
-          ORDER BY version DESC LIMIT 1`,
+        `SELECT ${HITL_HEAD_COLUMNS} ${HITL_HEAD_FROM}
+          WHERE s.workspace_id = $1::uuid AND s.request_id = $2`,
         [this.deps.workspaceId, id],
       );
       const row = res.rows[0] as Record<string, unknown> | undefined;
-      // Surface a queued same-id/different-hash conflict BEFORE returning the
-      // committed (possibly stale) row — never silently hide the conflict.
-      await surfaceQueuedConflict(this.deps, 'hitl', (e) => e.kind === 'hitl-request' && e.entryId === id);
-      if (row !== undefined) return hitlEnvelopeFromRow(row);
-      const hit = this.overlayLocalOnly().find((e) => e.entryId === id);
-      return hit === undefined ? null : queuedHitlEnvelope(this.deps.workspaceId, hit);
+      if (row === undefined) return null;
+      const env = hitlEnvelopeFromRow(this.deps.workspaceId, row);
+      return { ...env, body: await this.resolveBody(env) };
     } catch (err) {
-      assertDegradableTransport(err, opts?.allowPartial, 'postgres hitl.getRequest failed');
-      return this.deps.outbox ? overlayHitlGet(this.deps.outbox, this.deps.workspaceId, id) : null;
+      this.unavailable(err, 'postgres hitl.getRequest failed');
     }
   }
 
-  async listRequests(filter: HitlRequestFilter, cursor?: Cursor, opts?: ReadOpts): Promise<Page<HitlRequestEnvelope>> {
+  async listRequests(filter: HitlRequestFilter, cursor?: Cursor): Promise<Page<HitlRequestEnvelope>> {
+    if (filter.status === undefined) await this.sweep();
     const limit = pageLimit(filter.limit);
     try {
       const watermark =
@@ -780,99 +1393,244 @@ class PgHitlStore implements HitlStore {
           ).w,
         );
       const after = cursor?.committed ?? 0;
+      // Pagination is anchored on the GROUP's creation position (the lowest seq
+      // any of its versions holds), never on its head's — a head moves when the
+      // request is revised. Both backends used to project the latest head and
+      // then apply `seq <= watermark`, so revising a request mid-traversal
+      // pushed it past the watermark and it vanished from the whole listing
+      // while a fresh listing found it (round-3 finding 4). The anchor is
+      // immutable for the life of the group, so a request that exists
+      // throughout the traversal is visited exactly once — and the watermark
+      // keeps its stated meaning: groups CREATED after page one stay out.
       const res = await this.deps.pool.query(
-        `SELECT * FROM (
-             SELECT DISTINCT ON (id)
-                    seq, id, workspace_id::text AS workspace_id, payload, status, created_at
-               FROM hitl.requests
-              WHERE workspace_id = $1::uuid AND seq <= $2
-              ORDER BY id, version DESC
-           ) latest
-          WHERE seq > $3
-            AND ($4::text IS NULL OR payload->>'functionName' = $4)
-            AND ($5::text IS NULL OR status = $5)
-          ORDER BY seq
+        `SELECT ${HITL_HEAD_COLUMNS}, a.anchor_seq ${HITL_HEAD_FROM}
+          JOIN LATERAL (
+            SELECT min(g.seq) AS anchor_seq
+              FROM hitl.requests g
+             WHERE g.workspace_id = s.workspace_id AND g.id = s.request_id
+          ) a ON true
+          WHERE s.workspace_id = $1::uuid AND a.anchor_seq <= $2 AND a.anchor_seq > $3
+          ${hitlFilterSql('$4', '$5')}
+          ORDER BY a.anchor_seq
           LIMIT $6`,
         [this.deps.workspaceId, watermark, after, filter.functionName ?? null, filter.status ?? null, limit + 1],
       );
       const rows = res.rows as Record<string, unknown>[];
       const taken = rows.slice(0, limit);
-      let items = taken.map(hitlEnvelopeFromRow);
-      const moreCommitted = rows.length > limit;
-      const committedMark = items.length > 0 ? items[items.length - 1]!.seq! : after;
-      if (moreCommitted) {
-        return { items, cursor: { watermark, committed: committedMark, overlay: null }, partial: false };
-      }
-      // Committed rows exhausted: queued overlay entries order after them,
-      // by (producerId, producerSeq) — union by id with payload-hash equality.
-      const overlayAfter = cursor?.overlay ?? null;
-      const all = await this.overlayAgainstCommitted(filter);
-      const remaining = overlayAfter === null ? all : all.filter((e) => positionAfter(e, overlayAfter));
-      const slice = remaining.slice(0, Math.max(0, limit - items.length));
-      items = items.concat(slice.map((e) => queuedHitlEnvelope(this.deps.workspaceId, e)));
-      const nextCursor: Cursor | null =
-        remaining.length > slice.length
-          ? {
-              watermark,
-              committed: committedMark,
-              overlay: slice.length > 0 ? positionOf(slice[slice.length - 1]!) : overlayAfter,
-            }
-          : null;
-      return { items, cursor: nextCursor, partial: false };
+      // A listing never fans out into object reads; `getRequest` materializes an
+      // offloaded body.
+      const items = taken.map((row) => hitlEnvelopeFromRow(this.deps.workspaceId, row));
+      const more = rows.length > limit;
+      const committedMark = taken.length > 0 ? num(taken[taken.length - 1]!.anchor_seq) : after;
+      return {
+        items,
+        cursor: more ? { watermark, committed: committedMark, overlay: null } : null,
+        partial: false,
+      };
     } catch (err) {
-      assertDegradableTransport(err, opts?.allowPartial, 'postgres hitl.listRequests failed');
-      // #318 R4 finding 4: honor cursor + limit over the queued overlay (the
-      // SAME pager the degraded backend uses) — never slice the first `limit`
-      // and signal done.
-      return this.deps.outbox
-        ? overlayHitlList(this.deps.outbox, this.deps.workspaceId, filter, cursor)
-        : { items: [], cursor: null, partial: true };
+      this.unavailable(err, 'postgres hitl.listRequests failed');
     }
   }
 
-  async appendDecision(input: HitlDecisionInput): Promise<WriteOutcome> {
-    const { id, payload, canonical } = hitlDecisionParts(this.deps.workspaceId, input);
-    // Decisions are never queued (owner decision 8): always the direct path,
-    // even when an outbox is wired — a dead store surfaces BackendUnavailable.
-    return await directApply(
-      this.deps,
-      {
-        namespace: 'hitl',
-        kind: 'hitl-decision',
-        id,
-        workspaceId: this.deps.workspaceId,
-        payload,
-        canonical,
-        payloadHash: sha256Hex(canonical),
-        producerId: null,
-        producerSeq: null,
-        createdAt: this.deps.now(),
-      },
-      'postgres hitl.appendDecision failed (decisions require the live store and are never spooled)',
-    );
-  }
-
-  async count(filter?: HitlRequestFilter, opts?: ReadOpts): Promise<CountResult> {
+  async count(filter?: HitlRequestFilter): Promise<CountResult> {
+    if (filter?.status === undefined) await this.sweep();
     try {
       const res = await this.deps.pool.query(
-        `SELECT count(*)::int AS n FROM (
-             SELECT DISTINCT ON (id) id, payload, status
-               FROM hitl.requests
-              WHERE workspace_id = $1::uuid
-              ORDER BY id, version DESC
-           ) latest
-          WHERE ($2::text IS NULL OR payload->>'functionName' = $2)
-            AND ($3::text IS NULL OR status = $3)`,
+        `SELECT count(*)::int AS n ${HITL_HEAD_FROM}
+          WHERE s.workspace_id = $1::uuid
+          ${hitlFilterSql('$2', '$3')}`,
         [this.deps.workspaceId, filter?.functionName ?? null, filter?.status ?? null],
       );
-      const committed = num((res.rows[0] as { n: unknown }).n);
-      if (!this.deps.outbox) return { committed, queued: 0, partial: false };
-      const queued = (await this.overlayAgainstCommitted(filter)).length;
-      return { committed, queued, partial: false };
+      return { committed: num((res.rows[0] as { n: unknown }).n), queued: 0, partial: false };
     } catch (err) {
-      assertDegradableTransport(err, opts?.allowPartial, 'postgres hitl.count failed');
-      return { committed: 0, queued: this.deps.outbox ? overlayHitlCount(this.deps.outbox, filter) : 0, partial: true };
+      this.unavailable(err, 'postgres hitl.count failed');
     }
+  }
+
+  async listVersions(id: string): Promise<HitlVersionRecord[]> {
+    requireString('id', id);
+    try {
+      const res = await this.deps.pool.query(
+        `SELECT id, request_key, generation, version, action, action_kind, target, target_hash, packet_hash,
+                canonicalization_version, expires_at, created_at, seq,
+                supersedes_request_id, supersedes_generation, supersedes_version
+           FROM hitl.requests
+          WHERE workspace_id = $1::uuid AND id = $2
+          ORDER BY generation, version`,
+        [this.deps.workspaceId, id],
+      );
+      return (res.rows as Record<string, unknown>[]).map((row) => ({
+        requestId: row.id as string,
+        requestKey: row.request_key as string,
+        generation: num(row.generation),
+        version: num(row.version),
+        action: row.action as string,
+        actionKind: row.action_kind as HitlActionKind,
+        target: row.target as string,
+        targetHash: row.target_hash as string,
+        packetHash: row.packet_hash as string,
+        canonicalizationVersion: num(row.canonicalization_version),
+        expiresAt: row.expires_at === null ? null : num(row.expires_at),
+        createdAt: num(row.created_at),
+        seq: num(row.seq),
+        supersedes: supersedesOf(
+          row.supersedes_request_id,
+          row.supersedes_generation === null ? null : num(row.supersedes_generation),
+          row.supersedes_version === null ? null : num(row.supersedes_version),
+        ),
+      }));
+    } catch (err) {
+      this.unavailable(err, 'postgres hitl.listVersions failed');
+    }
+  }
+
+  async listGenerations(id: string): Promise<HitlGenerationSummary[]> {
+    requireString('id', id);
+    try {
+      const res = await this.deps.pool.query(
+        `WITH heads AS (
+             SELECT DISTINCT ON (r.generation) r.generation, r.version, r.expires_at
+               FROM hitl.requests r
+              WHERE r.workspace_id = $1::uuid AND r.id = $2
+              ORDER BY r.generation, r.version DESC
+           ), counts AS (
+             SELECT generation, count(*)::int AS versions, min(created_at) AS created_at
+               FROM hitl.requests
+              WHERE workspace_id = $1::uuid AND id = $2
+              GROUP BY generation
+           )
+           SELECT c.generation, c.versions, c.created_at, h.version AS head_version, h.expires_at,
+                  hitl.now_ms() AS now_ms,
+                  t.status AS terminal_status,
+                  EXISTS (
+                    SELECT 1 FROM hitl.decisions d
+                     WHERE d.workspace_id = $1::uuid AND d.request_id = $2
+                       AND d.generation = c.generation AND d.request_version = h.version
+                       AND d.status = 'deferred'
+                  ) AS deferred
+             FROM counts c
+             JOIN heads h ON h.generation = c.generation
+             LEFT JOIN LATERAL (
+               SELECT d.status FROM hitl.decisions d
+                WHERE d.workspace_id = $1::uuid AND d.request_id = $2
+                  AND d.generation = c.generation AND d.request_version = h.version AND d.terminal
+                ORDER BY d.decided_at, d.seq LIMIT 1
+             ) t ON true
+            ORDER BY c.generation`,
+        [this.deps.workspaceId, id],
+      );
+      return (res.rows as Record<string, unknown>[]).map((row) => {
+        const terminal = (row.terminal_status ?? null) as HitlStatus | null;
+        const expiresAt = row.expires_at === null ? null : num(row.expires_at);
+        const expired = expiresAt !== null && num(row.now_ms) >= expiresAt;
+        return {
+          generation: num(row.generation),
+          versions: num(row.versions),
+          headVersion: num(row.head_version),
+          status: terminal ?? (expired ? 'expired' : row.deferred === true ? 'deferred' : 'awaiting'),
+          sealed: terminal !== null || expired,
+          createdAt: num(row.created_at),
+        };
+      });
+    } catch (err) {
+      this.unavailable(err, 'postgres hitl.listGenerations failed');
+    }
+  }
+
+  async listDecisions(id: string): Promise<HitlDecisionEnvelope[]> {
+    requireString('id', id);
+    try {
+      const res = await this.deps.pool.query(
+        `SELECT id, request_id, generation, request_version, status, terminal, payload, decided_at,
+                feedback, created_at, seq
+           FROM hitl.decisions
+          WHERE workspace_id = $1::uuid AND request_id = $2
+          ORDER BY generation, request_version, seq`,
+        [this.deps.workspaceId, id],
+      );
+      return (res.rows as Record<string, unknown>[]).map((row) => {
+        const p = (row.payload ?? {}) as { decidedBy?: unknown; note?: unknown };
+        return {
+          id: row.id as string,
+          workspaceId: this.deps.workspaceId,
+          requestId: row.request_id as string,
+          generation: num(row.generation),
+          requestVersion: num(row.request_version),
+          status: row.status as HitlDecisionStatus,
+          decidedBy: typeof p.decidedBy === 'string' ? p.decidedBy : 'unknown',
+          note: typeof p.note === 'string' ? p.note : null,
+          feedback: (row.feedback ?? null) as string | null,
+          terminal: row.terminal === true,
+          decidedAt: num(row.decided_at),
+          createdAt: num(row.created_at),
+          seq: num(row.seq),
+        };
+      });
+    } catch (err) {
+      this.unavailable(err, 'postgres hitl.listDecisions failed');
+    }
+  }
+
+  // The candidate set is the DB's own sweep-independent projection, so the
+  // caller's clock is advisory only — the view evaluates clock_timestamp().
+  async listExpiryCandidates(_now: number, limit: number): Promise<HitlExpiryCandidate[]> {
+    try {
+      const res = await this.deps.pool.query(
+        // `NOT superseded`: the decision trigger refuses EVERY decision on a
+        // superseded version, system expiry included, so such a head can never
+        // be materialized — leaving it in the workset would make each sweep
+        // re-attempt a write the database always rejects (round-4 finding 1c).
+        `SELECT request_id, request_key, generation, version, expires_at
+           FROM hitl.request_state
+          WHERE workspace_id = $1::uuid
+            AND effective_status = 'expired'
+            AND terminal_status IS NULL
+            AND NOT superseded
+          ORDER BY expires_at
+          LIMIT $2`,
+        [this.deps.workspaceId, limit],
+      );
+      return (res.rows as Record<string, unknown>[]).map((row) => ({
+        requestId: row.request_id as string,
+        requestKey: row.request_key as string,
+        generation: num(row.generation),
+        version: num(row.version),
+        expiresAt: num(row.expires_at),
+      }));
+    } catch (err) {
+      this.unavailable(err, 'postgres hitl.listExpiryCandidates failed');
+    }
+  }
+
+  // `now` is the CALLER's clock and is deliberately unused: both the eligibility
+  // decision and the durable stamp belong to the database's clock (see dbNowMs).
+  async insertSystemExpiry(candidate: HitlExpiryCandidate, _now: number): Promise<'expired' | 'conflict'> {
+    return await this.inGroupTxn([candidate.requestKey], 'postgres hitl.insertSystemExpiry failed', async (client) => {
+      const head = await this.readHeadLocked(client, candidate.requestId);
+      if (
+        head === null ||
+        head.generation !== candidate.generation ||
+        head.version !== candidate.version ||
+        head.effectiveStatus !== 'expired' ||
+        // The trigger would RAISE here; report the conflict the local backend
+        // reports instead of turning a bookkeeping pass into an error (1c).
+        head.superseded
+      ) {
+        return 'conflict' as const;
+      }
+      // Server-stamped: the DB clock decided this candidate is expired (the
+      // view's clock_timestamp()), so the DB clock — read here, after the group
+      // lock — is what the durable record carries. The deterministic id is
+      // unchanged, so concurrent sweeps still converge on ONE row instead of
+      // two differently-stamped ones.
+      const written = await this.insertDecisionRow(
+        client,
+        systemExpiryDecision(candidate.requestId, candidate.generation, candidate.version),
+        systemExpiryId(this.deps.workspaceId, candidate.requestId, candidate.generation, candidate.version),
+        await dbNowMs(client),
+      );
+      return written > 0 ? ('expired' as const) : ('conflict' as const);
+    });
   }
 }
 
@@ -1897,6 +2655,8 @@ export type PgBackendOptions = {
   // Batch revalidation composed by the factory (resolve.ts): runs once per
   // drain batch before ANY remote I/O — binding + marker verification.
   preflight?: () => Promise<void>;
+  // #319 expiry policy from roster/persistence.yaml (hitl.expiry).
+  hitlExpiry?: HitlExpiryPolicy;
 };
 
 export type PgOpsBackend = OpsBackend & { readonly remote: PgRemoteTarget };
@@ -1922,7 +2682,7 @@ export function createPgBackend(opts: PgBackendOptions): PgOpsBackend {
   return {
     backend: 'postgres-s3',
     workspaceId,
-    hitl: new PgHitlStore(deps),
+    hitl: new PgHitlStore(deps, opts.objects, opts.hitlExpiry ?? DEFAULT_HITL_EXPIRY_POLICY),
     runs: new PgRunStore(deps),
     artifacts: new PgArtifactStore(deps, opts.objects),
     remote,

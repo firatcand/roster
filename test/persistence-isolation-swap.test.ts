@@ -168,9 +168,12 @@ async function setupWorkspace(name: string): Promise<Workspace> {
       title: `post for ${name}`,
       action: 'publish-post',
       target: `${name}/launch.md`,
+      // #319 verifies contentHash against the body server-side, so the two must
+      // agree. The body stays workspace-distinct, which is the point here.
       contentHash: sha256Hex(`${name}-draft`),
-      body: 'body',
+      body: `${name}-draft`,
       expiresAt: null,
+      expectedHead: null,
     });
     assert.equal(req.outcome, 'committed');
     requestId = req.id;
@@ -202,8 +205,13 @@ test('7c isolation swap: two populated workspaces — swapped DB URLs and bucket
   try {
     const ledgerBeforeA = await ledgerCount(a.db);
     const ledgerBeforeB = await ledgerCount(b.db);
-    assert.equal(ledgerBeforeA, 4, 'alpha fully populated (1 request + 2 events + 1 artifact)');
-    assert.equal(ledgerBeforeB, 4, 'beta fully populated');
+    // The HITL request is NOT in the delivery ledger: #319 owner decision 6
+    // makes the whole hitl namespace live-only (never spooled), so only the 2
+    // run events + 1 artifact are delivered through the outbox. The request is
+    // asserted live below, so "fully populated" still means all four writes.
+    assert.equal(ledgerBeforeA, 3, 'alpha fully populated (2 events + 1 artifact; hitl is live-only)');
+    assert.equal(ledgerBeforeB, 3, 'beta fully populated');
+    assert.ok(a.requestId !== '' && b.requestId !== '', 'both workspaces committed their HITL request live');
 
     // (1) DB URLs swapped — both directions refuse at the binding.
     const aEnvWithBDb = {

@@ -29,9 +29,10 @@ import {
 import {
   PgRemoteTarget,
   createPgBackend,
-  hitlRequestParts,
   pgBackendInfo,
 } from '../src/lib/persistence/postgres/stores.ts';
+import { runEventParts } from '../src/lib/persistence/postgres/stores.ts';
+import { requestIdOf, requestKeyOf } from '../src/lib/persistence/hitl-machine.ts';
 import {
   CreateOnlyFileStore,
   S3ObjectTarget,
@@ -177,17 +178,18 @@ test('pg: migrations apply fresh and re-run as a no-op for both schemas', opts, 
   const h = await makeDb(false);
   try {
     const first = await runOpsMigrations(h.pool);
-    assert.deepEqual(first.hitl.applied, ['001_init.sql']);
+    assert.deepEqual(first.hitl.applied, ['001_init.sql', '002_state_machine.sql']);
     assert.deepEqual(first.roster_ops.applied, ['001_init.sql', '002_run_ledger.sql']);
     const second = await runOpsMigrations(h.pool);
     assert.deepEqual(second.hitl.applied, []);
-    assert.deepEqual(second.hitl.skipped, ['001_init.sql']);
+    assert.deepEqual(second.hitl.skipped, ['001_init.sql', '002_state_machine.sql']);
     assert.deepEqual(second.roster_ops.applied, []);
     assert.deepEqual(second.roster_ops.skipped, ['001_init.sql', '002_run_ledger.sql']);
 
     assert.notEqual(HITL_MIGRATION_TARGET.advisoryLockKey, ROSTER_OPS_MIGRATION_TARGET.advisoryLockKey);
+    // #319 bumps hitl to v2 (the state-machine migration).
     const hitlMeta = await metaRow(h, 'hitl');
-    assert.equal(hitlMeta.component_version, 1);
+    assert.equal(hitlMeta.component_version, 2);
     assert.equal(hitlMeta.workspace_id, null);
     // #323 bumps roster_ops + objects to v2 (the run-ledger migration).
     const opsMeta = await metaRow(h, 'roster_ops');
@@ -508,9 +510,10 @@ test('pg: auditRowStamps passes on own rows and flags foreign workspace_ids', op
         title: 'T',
         action: 'a',
         target: 't',
-        contentHash: sha256Hex('c'),
+        contentHash: sha256Hex('b'),
         body: 'b',
         expiresAt: null,
+        expectedHead: null,
       });
       await backend.runs.appendEvent({ runId: 'r1', kind: 'tool-call', correlationId: 'k1', data: null });
       await backend.artifacts.putArtifact(
@@ -562,7 +565,12 @@ test('pg: dedicated runtime role — can append events, cannot touch meta or mut
     });
     const rt = await runtimeClient(h, role, `pw-${h.suffix}`);
     try {
-      // positive: INSERT on the append tables (bigserial seq → sequence USAGE)
+      // positive: INSERT on the append tables (bigserial seq → sequence USAGE).
+      // A v1-shaped request insert is RE-KEYED onto its canonical request id
+      // (#319 finding 4), so the decision names that id, not the label the
+      // insert used.
+      const rqKey = requestKeyOf({ functionName: 'unknown', action: 'a', target: 't' });
+      const rqId = requestIdOf(ws, rqKey);
       await rt.query(
         `INSERT INTO hitl.requests (id, workspace_id, version, action, target, content_hash, payload, status, created_at)
          VALUES ('rq1', $1::uuid, 1, 'a', 't', $2, '{}'::jsonb, 'awaiting', 0)`,
@@ -570,8 +578,8 @@ test('pg: dedicated runtime role — can append events, cannot touch meta or mut
       );
       await rt.query(
         `INSERT INTO hitl.decisions (id, workspace_id, request_id, request_version, status, payload, created_at)
-         VALUES ('dc1', $1::uuid, 'rq1', 1, 'approved', '{}'::jsonb, 0)`,
-        [ws],
+         VALUES ('dc1', $1::uuid, $2, 1, 'approved', '{}'::jsonb, 0)`,
+        [ws, rqId],
       );
       await rt.query(
         `INSERT INTO roster_ops.run_events (id, workspace_id, run_id, dedupe_key, type, payload, created_at)
@@ -603,6 +611,30 @@ test('pg: dedicated runtime role — can append events, cannot touch meta or mut
       // positive: SELECT the sanitized projection views (safe index inputs).
       await rt.query(`SELECT run_id, agent, status, sanitized_report FROM roster_ops.run_index`);
       await rt.query(`SELECT run_id, artifact_type, media_type, external_url_host, sanitized_text FROM roster_ops.artifact_index`);
+      // #319: the runtime reads the two HITL projections (the actionable queue
+      // and the sanitized index) — SELECT only, and nothing was widened for them.
+      await rt.query(`SELECT request_id, generation, version, effective_status, sealed, authoritative FROM hitl.request_state`);
+      await rt.query(`SELECT request_id, request_key, action, sanitized_summary FROM hitl.request_index`);
+
+      // #319 R5 finding 2: the runtime keeps INSERT on hitl.requests, so the
+      // ALLOCATION gate has to hold against the real least-privilege role, not
+      // just the owner — and its reads (the head, the generation's decisions,
+      // hitl.head_superseded) must be executable under that role's grants.
+      // dc1 above sealed generation 1, so a revision in it is refused...
+      await assert.rejects(
+        rt.query(
+          `INSERT INTO hitl.requests (id, workspace_id, version, action, target, content_hash, payload, status, created_at)
+           VALUES ('rq1-v2', $1::uuid, 2, 'a', 't', $2, '{}'::jsonb, 'awaiting', 0)`,
+          [ws, sha256Hex('x')],
+        ),
+        /is sealed/,
+      );
+      // ...while the legal next allocation (generation 2 version 1) still lands.
+      await rt.query(
+        `INSERT INTO hitl.requests (id, workspace_id, version, generation, action, target, content_hash, payload, status, created_at)
+         VALUES ('rq1-g2', $1::uuid, 1, 2, 'a', 't', $2, '{}'::jsonb, 'awaiting', 0)`,
+        [ws, sha256Hex('x')],
+      );
 
       // negative: meta immutability
       await assert.rejects(rt.query(`INSERT INTO hitl.meta (singleton, component_version) VALUES (false, 9)`), /permission denied/);
@@ -612,6 +644,13 @@ test('pg: dedicated runtime role — can append events, cannot touch meta or mut
       // negative: append-only — no UPDATE/DELETE/TRUNCATE anywhere
       await assert.rejects(rt.query(`UPDATE hitl.requests SET status = 'approved'`), /permission denied/);
       await assert.rejects(rt.query(`DELETE FROM hitl.requests`), /permission denied/);
+      // #319 keeps the pure-INSERT posture: the state machine is insert-only, so
+      // the new identity columns need NO update grant at any grain, and the two
+      // projections stay read-only (a view UPDATE would rewrite hitl.requests).
+      await assert.rejects(rt.query(`UPDATE hitl.requests SET generation = 9`), /permission denied/);
+      await assert.rejects(rt.query(`UPDATE hitl.decisions SET status = 'approved'`), /permission denied/);
+      await assert.rejects(rt.query(`DELETE FROM hitl.decisions`), /permission denied/);
+      await assert.rejects(rt.query(`UPDATE hitl.request_state SET effective_status = 'approved'`), /(permission denied|cannot)/i);
       await assert.rejects(rt.query(`DELETE FROM roster_ops.delivery_ledger`), /permission denied/);
       await assert.rejects(rt.query(`TRUNCATE roster_ops.run_events`), /permission denied/);
       // #323: declarations are append-only — the runtime cannot flip verified /
@@ -1217,18 +1256,24 @@ test('pg: delivery ledger — committed, identical-hash duplicate, different-has
         expiresAt: null,
         status: 'awaiting',
       };
+      // #319: the hitl namespace is non-spoolable, so this route is reachable
+      // ONLY by draining a pre-#319 spool. The row lands with v2 identity
+      // allocated server-side — the legacy ENTRY id is not the request id.
       const reqId = sha256Hex('req-1');
       assert.equal(
         await target.deliver(mkRecord(ws, { namespace: 'hitl', kind: 'hitl-request', id: reqId, payload: reqPayload })),
         'committed',
       );
+      const derivedId = requestIdOf(ws, requestKeyOf({ functionName: 'ops', action: 'a', target: 't' }));
+      const reqRows = await h.pool.query(`SELECT id, generation, version, action_kind FROM hitl.requests`);
+      assert.deepEqual(reqRows.rows[0], { id: derivedId, generation: 1, version: 1, action_kind: 'execution' });
       const decPayload = { requestId: reqId, status: 'approved', decidedBy: 'firat', note: null };
       assert.equal(
         await target.deliver(mkRecord(ws, { namespace: 'hitl', kind: 'hitl-decision', id: sha256Hex('dec-1'), payload: decPayload })),
         'committed',
       );
-      const dec = await h.pool.query(`SELECT request_id, request_version, status FROM hitl.decisions`);
-      assert.deepEqual(dec.rows[0], { request_id: reqId, request_version: 1, status: 'approved' });
+      const dec = await h.pool.query(`SELECT request_id, generation, request_version, status FROM hitl.decisions`);
+      assert.deepEqual(dec.rows[0], { request_id: derivedId, generation: 1, request_version: 1, status: 'approved' });
 
       // a failed apply leaves no half-written state: ledger row count matches data rows
       const ledger = await h.pool.query(
@@ -1546,47 +1591,7 @@ test('pg (round-7 finding 1): a BENIGN retry of a row committed above the waterm
 
 // ---------------- finding 6: point reads surface queued conflicts ----------------
 
-test('pg finding 6: getRequest surfaces + parks a queued same-id/different-hash conflict (never silently returns the committed row)', opts, async () => {
-  const h = await makeDb();
-  const ws = randomUUID();
-  const dir = mkdtempSync(join(tmpdir(), 'roster-pg-f6-req-'));
-  try {
-    await stampAndFinalize(h, ws);
-    const clock = { t: 1_700_000_000_000 };
-    const ledger = new LocalLedger({ opsRoot: join(dir, 'ops'), workspaceId: ws, now: () => ++clock.t });
-    const outbox = new LocalOutbox({ ledger, now: () => clock.t, rng: () => 0 });
-    const objects = memObjects();
-    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
-    const { hitlRequestParts } = await import('../src/lib/persistence/postgres/stores.ts');
-    try {
-      const identity = { functionName: 'growth', action: 'publish', target: 'x.com/roster', contentHash: sha256Hex('c') };
-      // Commit request X 'old' straight to PG (no outbox).
-      const direct = createPgBackend({ pool, objects, now: () => clock.t });
-      const committed = await direct.hitl.createRequest({ ...identity, title: 'old', body: 'old-body', expiresAt: null });
-      assert.equal(committed.outcome, 'committed');
-
-      // Enqueue the SAME id 'new' via the outbox (same identity → same id; the
-      // different title/body → a different payload hash).
-      const reader = createPgBackend({ pool, objects, outbox, now: () => clock.t });
-      const q = hitlRequestParts(ws, { ...identity, title: 'new', body: 'new-body', expiresAt: null });
-      assert.equal(q.id, committed.id, 'same identity → same record id');
-      outbox.enqueue({ namespace: 'hitl', id: q.id, kind: 'hitl-request', payload: q.payload });
-
-      // getRequest MUST surface the conflict, not silently return 'old'.
-      await assert.rejects(reader.hitl.getRequest(committed.id), ConflictError);
-      // ...and PARK the conflicting queued entry.
-      const parked = outbox.fold().entries.get(q.id);
-      assert.ok(parked);
-      assert.equal(parked.status, 'failed-permanent');
-      assert.equal(parked.failure?.kind, 'conflict');
-    } finally {
-      await pool.end();
-    }
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-    await h.close();
-  }
-});
+// REMOVED (#319 owner decision 6): the HITL outbox overlay is gone — the whole hitl namespace is non-spoolable, so there is no queued HITL entry to surface a conflict from. The same guarantee for the spoolable namespaces is covered by the runs/artifacts conflict tests.
 
 test('pg finding 4: identical bytes with DIFFERENT meta DEDUP to one blob (content-only identity) — no queued conflict', opts, async () => {
   const h = await makeDb();
@@ -2221,54 +2226,7 @@ test('pg finding 16: getDeclaration/getByRun surface a committed-vs-queued same-
   }
 });
 
-test('pg finding 5 sweep: listRequests stays cursor-stable when a queued request acks between pages', opts, async () => {
-  const h = await makeDb();
-  const ws = randomUUID();
-  const dir = mkdtempSync(join(tmpdir(), 'roster-pg-f5-req-'));
-  try {
-    await stampAndFinalize(h, ws);
-    const clock = { t: 1_700_000_000_000 };
-    const ledger = new LocalLedger({ opsRoot: join(dir, 'ops'), workspaceId: ws, now: () => ++clock.t });
-    const outbox = new LocalOutbox({ ledger, now: () => clock.t, rng: () => 0 });
-    const objects = memObjects();
-    const pool = new BoundPool({ connectionString: h.url, workspaceId: ws });
-    const { hitlRequestParts } = await import('../src/lib/persistence/postgres/stores.ts');
-    try {
-      const reader = createPgBackend({ pool, objects, outbox, now: () => clock.t });
-      const a = hitlRequestParts(ws, { functionName: 'g', title: 'A', action: 'publish', target: 't', contentHash: sha256Hex('a'), body: 'a', expiresAt: null });
-      const b = hitlRequestParts(ws, { functionName: 'g', title: 'B', action: 'publish', target: 't', contentHash: sha256Hex('b'), body: 'b', expiresAt: null });
-      outbox.enqueue({ namespace: 'hitl', id: a.id, kind: 'hitl-request', payload: a.payload });
-      outbox.enqueue({ namespace: 'hitl', id: b.id, kind: 'hitl-request', payload: b.payload });
-
-      const page1 = await reader.hitl.listRequests({ limit: 1 });
-      assert.equal(page1.items.length, 1);
-      const firstId = page1.items[0]!.id;
-      assert.ok(page1.cursor !== null);
-
-      // Ack the first queued request (commit to PG); the other stays queued.
-      const flaky: RemoteTarget = {
-        async deliver(record: OutboxRecord): Promise<DeliverResult> {
-          if (record.id === firstId) return await reader.remote.deliver(record);
-          throw Object.assign(new Error('down'), { code: 'ECONNREFUSED' });
-        },
-      };
-      await outbox.drain(flaky);
-      assert.equal(outbox.fold().entries.get(firstId)!.status, 'acked');
-
-      // Page 2 must not re-emit the already-returned (now committed) request.
-      const page2 = await reader.hitl.listRequests({ limit: 10 }, page1.cursor!);
-      assert.ok(!page2.items.some((i) => i.id === firstId), 'the acked request must not reappear');
-
-      const seen = new Set<string>([firstId, ...page2.items.map((i) => i.id)]);
-      assert.equal(seen.size, 2, 'both requests are reachable exactly once across pagination');
-    } finally {
-      await pool.end();
-    }
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-    await h.close();
-  }
-});
+// REMOVED (#319 owner decision 6): same — HITL listings have no queued overlay to paginate.
 
 // ---------------- capabilities ----------------
 
@@ -2278,8 +2236,9 @@ test('pg: backendInfo from the two meta tables; future component refuses before 
   try {
     const info = await pgBackendInfo(h.pool);
     assert.equal(info.backend, 'postgres-s3');
-    assert.equal(info.components.hitl.version, 1);
-    assert.deepEqual([...info.components.hitl.capabilities], ['requests', 'decisions']);
+    // #319: hitl migrates to v2 (the packet/generation state machine).
+    assert.equal(info.components.hitl.version, 2);
+    assert.deepEqual([...info.components.hitl.capabilities], ['requests', 'decisions', 'state-machine']);
     // #323: roster_ops + objects migrate to v2 (run-ledger + object versioning).
     assert.equal(info.components.roster_ops.version, 2);
     assert.deepEqual([...info.components.roster_ops.capabilities], ['runs', 'artifacts', 'outbox', 'checkpoint', 'run-ledger']);
@@ -2309,7 +2268,9 @@ test('pg: stores writeThrough the outbox — queued offline, drained in order, o
   const dir = mkdtempSync(join(tmpdir(), 'roster-pg-outbox-'));
   try {
     await stampAndFinalize(h, ws);
-    const clock = { t: 1_700_000_000_000 };
+    // #319: HITL expiry is evaluated against the DB's real clock, so the store
+    // clock must track real time or every request is born expired.
+    const clock = { t: Date.now() };
     const ledger = new LocalLedger({ opsRoot: join(dir, 'ops'), workspaceId: ws, now: () => ++clock.t });
     const outbox = new LocalOutbox({ ledger, now: () => clock.t, rng: () => 0 });
     const objects = memObjects();
@@ -2321,29 +2282,53 @@ test('pg: stores writeThrough the outbox — queued offline, drained in order, o
       const live = createPgBackend({ pool: livePool, objects, outbox, now: () => clock.t });
       const dead = createPgBackend({ pool: deadPool, objects, outbox, now: () => clock.t });
 
-      // online write: committed straight through the ledger transaction
+      // online write: committed straight through the per-group transaction
       const first = await live.hitl.createRequest({
         functionName: 'ops',
         title: 'first',
         action: 'a',
         target: 't1',
-        contentHash: sha256Hex('one'),
+        contentHash: sha256Hex('b'),
         body: 'b',
         expiresAt: null,
+        expectedHead: null,
       });
       assert.equal(first.outcome, 'committed');
+      assert.equal(first.generation, 1);
+      assert.equal(first.version, 1);
 
-      // offline writes: durably queued, tri-state honest
-      const second = await dead.hitl.createRequest({
-        functionName: 'ops',
-        title: 'second',
-        action: 'a',
-        target: 't2',
-        contentHash: sha256Hex('two'),
-        body: 'b',
-        expiresAt: null,
-      });
-      assert.equal(second.outcome, 'queued');
+      // #319 owner decision 6: with the DB down, HITL fails closed — BOTH the
+      // request and the decision throw, and NOTHING lands in the outbox.
+      await assert.rejects(
+        dead.hitl.createRequest({
+          functionName: 'ops',
+          title: 'second',
+          action: 'a',
+          target: 't2',
+          contentHash: sha256Hex('b'),
+          body: 'b',
+          expiresAt: null,
+          expectedHead: null,
+        }),
+        BackendUnavailableError,
+      );
+      await assert.rejects(
+        dead.hitl.appendDecision({
+          requestId: first.requestId,
+          generation: 1,
+          requestVersion: 1,
+          status: 'approved',
+          decidedBy: 'firat',
+          note: null,
+        }),
+        BackendUnavailableError,
+      );
+      assert.ok(
+        ![...outbox.fold().entries.values()].some((e) => e.namespace === 'hitl'),
+        'the whole hitl namespace is non-spoolable — nothing may be queued',
+      );
+
+      // the spoolable namespaces still queue offline (unchanged by #319)
       const evt = await dead.runs.appendEvent({ runId: 'r1', kind: 'tool-call', correlationId: 'k1', data: null });
       assert.equal(evt.outcome, 'queued');
       const art = await dead.artifacts.putArtifact(
@@ -2353,34 +2338,13 @@ test('pg: stores writeThrough the outbox — queued offline, drained in order, o
       assert.equal(art.outcome, 'queued');
       assert.equal(art.digest, sha256Hex(Buffer.from('artifact-bytes')));
 
-      // decisions are fail-closed: never spooled, actionable error instead
-      await assert.rejects(
-        dead.hitl.appendDecision({ requestId: second.id, status: 'approved', decidedBy: 'firat', note: null }),
-        BackendUnavailableError,
-      );
-      assert.ok(![...outbox.fold().entries.values()].some((e) => e.kind === 'hitl-decision'));
-
-      // live count overlays the queued entries without double-counting
-      const count = await live.hitl.count();
-      assert.deepEqual(count, { committed: 1, queued: 1, partial: false });
+      // HITL counts are committed-only: no queued dimension exists any more.
+      assert.deepEqual(await live.hitl.count(), { committed: 1, queued: 0, partial: false });
       assert.deepEqual(await live.runs.count(), { committed: 0, queued: 1, partial: false });
 
-      // The outage window: queued records are VISIBLE in get/list, flagged
-      // queued: true with seq null — reads and counts agree.
-      const gotQueued = await live.hitl.getRequest(second.id);
-      assert.ok(gotQueued !== null, 'a queued request is visible to getRequest');
-      assert.equal(gotQueued.queued, true);
-      assert.equal(gotQueued.seq, null);
-      assert.equal(gotQueued.title, 'second');
-      const listing = await live.hitl.listRequests({});
-      assert.equal(listing.items.length, 2);
-      assert.deepEqual(
-        listing.items.map((i) => [i.title, i.queued]),
-        [['first', false], ['second', true]],
-        'queued entries order after committed rows',
-      );
-      const gotCommitted = await live.hitl.getRequest(first.id);
+      const gotCommitted = await live.hitl.getRequest(first.requestId);
       assert.ok(gotCommitted !== null && gotCommitted.queued === false && gotCommitted.seq !== null);
+      assert.equal(gotCommitted.title, 'first');
       const queuedRun = await live.runs.getRun('r1');
       assert.ok(queuedRun !== null, 'a queued run is visible to getRun');
       assert.deepEqual(queuedRun.events.map((e) => [e.dedupeKey, e.queued, e.seq]), [['k1', true, null]]);
@@ -2393,21 +2357,21 @@ test('pg: stores writeThrough the outbox — queued offline, drained in order, o
       const queuedHead = await live.artifacts.head(art.digest);
       assert.ok(queuedHead !== null && queuedHead.queued === true);
 
-      // a live write BEHIND queued entries cannot overtake them: it lands
-      // queued and the whole namespace drains in order
-      clock.t += 120_000; // past the transient-failure backoff
+      // a second live HITL write is unaffected by the queued backlog: HITL is a
+      // direct transaction and never passes through the outbox barrier.
+      clock.t += 120_000;
       const third = await live.hitl.createRequest({
         functionName: 'ops',
         title: 'third',
         action: 'a',
         target: 't3',
-        contentHash: sha256Hex('three'),
+        contentHash: sha256Hex('b'),
         body: 'b',
         expiresAt: null,
+        expectedHead: null,
       });
-      assert.equal(third.outcome, 'committed', 'the barrier drains queued entries first, then commits');
-      const hitlAfter = await live.hitl.count();
-      assert.deepEqual(hitlAfter, { committed: 3, queued: 0, partial: false });
+      assert.equal(third.outcome, 'committed');
+      assert.deepEqual(await live.hitl.count(), { committed: 2, queued: 0, partial: false });
 
       // drain the remaining namespaces object-first
       const report = await outbox.drain(live.remote, { objects: new S3ObjectTarget(objects) });
@@ -2421,22 +2385,28 @@ test('pg: stores writeThrough the outbox — queued offline, drained in order, o
       assert.deepEqual(fetched.bytes, Buffer.from('artifact-bytes'));
       assert.equal(fetched.record.meta.filename, 'a.bin');
       assert.equal(fetched.record.queued, false, 'the drained artifact flips to committed');
-      const drained = await live.hitl.getRequest(second.id);
-      assert.ok(drained !== null && drained.queued === false && drained.seq !== null, 'the drained request flips to committed');
 
-      // idempotent replay across paths: the drained request now dedups direct
+      // an identical live replay is idempotent on the OPEN head (no new version).
+      // The expiry is a PACKET field, so the replay pins the head's own expiry —
+      // re-deriving a fresh default TTL would (correctly) be a new version.
+      const head = await live.hitl.getRequest(first.requestId);
+      assert.ok(head !== null);
       const replay = await live.hitl.createRequest({
         functionName: 'ops',
-        title: 'second',
+        title: 'first',
         action: 'a',
-        target: 't2',
-        contentHash: sha256Hex('two'),
+        target: 't1',
+        contentHash: sha256Hex('b'),
         body: 'b',
-        expiresAt: null,
+        expiresAt: head.expiresAt,
+        // A blind at-least-once retry: the caller states "no history", and the
+        // open head turns out to be byte-identical — idempotent by definition.
+        expectedHead: null,
       });
       assert.equal(replay.outcome, 'committed');
-      assert.equal(replay.id, second.id);
-      assert.equal((await h.pool.query(`SELECT count(*)::int AS n FROM hitl.requests`)).rows[0]!.n, 3);
+      assert.equal(replay.idempotent, true);
+      assert.equal(replay.requestId, first.requestId);
+      assert.equal((await h.pool.query(`SELECT count(*)::int AS n FROM hitl.requests`)).rows[0]!.n, 2);
     } finally {
       await livePool.end();
       await deadPool.end();
@@ -2466,20 +2436,20 @@ function throwingBoundPool(workspaceId: string, err: unknown): BoundPool {
   } as unknown as BoundPool;
 }
 
-function queuedHitlOutbox(dir: string, workspaceId: string, count: number): LocalOutbox {
+// #319 D7: `hitl` can no longer be enqueued at all, so the degrade-semantics
+// fixtures below run over the `runs` namespace — the same overlay code path.
+function queuedRunOutbox(dir: string, workspaceId: string, count: number): LocalOutbox {
   const ledger = new LocalLedger({ opsRoot: join(dir, 'ops'), workspaceId });
   const outbox = new LocalOutbox({ ledger });
   for (let i = 0; i < count; i++) {
-    const parts = hitlRequestParts(workspaceId, {
-      functionName: 'growth',
-      title: `Approve ${i}`,
-      action: 'publish',
-      target: `x.com/roster/${i}`,
-      contentHash: sha256Hex(`body-${i}`),
-      body: `body ${i}`,
-      expiresAt: null,
+    const parts = runEventParts(workspaceId, { runId: `run-${i}`, kind: 'run-start', data: null }, { now: 1000 + i, pid: 'p' });
+    outbox.enqueue({
+      namespace: 'runs',
+      id: parts.id,
+      kind: 'run-event',
+      payload: parts.payload,
+      observations: parts.observations,
     });
-    outbox.enqueue({ namespace: 'hitl', id: parts.id, kind: 'hitl-request', payload: parts.payload });
   }
   return outbox;
 }
@@ -2488,15 +2458,14 @@ test('pg store finding 1: allowPartial reads FAIL CLOSED on unknown/halt, degrad
   const dir = mkdtempSync(join(tmpdir(), 'roster-pg-partial-'));
   try {
     const ws = randomUUID();
-    const outbox = queuedHitlOutbox(dir, ws, 1);
-    const queuedId = [...outbox.fold().entries.values()][0]!.entryId;
+    const outbox = queuedRunOutbox(dir, ws, 1);
     const build = (err: unknown) => createPgBackend({ pool: throwingBoundPool(ws, err), objects: memObjects(), outbox });
 
     // PG 42703 (undefined_column) — an UNKNOWN programming/schema defect — must
     // THROW under allowPartial, never return an overlay-only partial.
     const undef = build(Object.assign(new Error('column "nope" does not exist'), { code: '42703' }));
+    // HITL never degrades at ANY opt-in level (#319 owner decision 6).
     await assert.rejects(undef.hitl.listRequests({}, undefined, { allowPartial: true }), BackendUnavailableError);
-    await assert.rejects(undef.hitl.getRequest(queuedId, { allowPartial: true }), BackendUnavailableError);
     await assert.rejects(undef.hitl.count(undefined, { allowPartial: true }), BackendUnavailableError);
     await assert.rejects(undef.runs.listRuns({}, undefined, { allowPartial: true }), BackendUnavailableError);
     await assert.rejects(undef.runs.getRun('r1', { allowPartial: true }), BackendUnavailableError);
@@ -2505,23 +2474,23 @@ test('pg store finding 1: allowPartial reads FAIL CLOSED on unknown/halt, degrad
     await assert.rejects(undef.artifacts.head(sha256Hex('x'), { allowPartial: true }), BackendUnavailableError);
 
     // A config/auth halt (PG 42501 insufficient_privilege) likewise fails closed.
-    const halt = build(Object.assign(new Error('permission denied for table hitl.requests'), { code: '42501' }));
-    await assert.rejects(halt.hitl.listRequests({}, undefined, { allowPartial: true }), BackendUnavailableError);
+    const halt = build(Object.assign(new Error('permission denied for table roster_ops.run_events'), { code: '42501' }));
+    await assert.rejects(halt.runs.listRuns({}, undefined, { allowPartial: true }), BackendUnavailableError);
 
     // A typed semantic error rethrows as-is (never softened to a partial).
-    const skew = build(new VersionSkewError('component hitl: backend reports version 9'));
-    await assert.rejects(skew.hitl.listRequests({}, undefined, { allowPartial: true }), VersionSkewError);
+    const skew = build(new VersionSkewError('component roster_ops: backend reports version 9'));
+    await assert.rejects(skew.runs.listRuns({}, undefined, { allowPartial: true }), VersionSkewError);
     await assert.rejects(skew.runs.count(undefined, { allowPartial: true }), VersionSkewError);
 
     // A genuine transport outage (ECONNRESET) DOES degrade to the overlay-only partial.
     const down = build(Object.assign(new Error('connection reset'), { code: 'ECONNRESET' }));
-    const page = await down.hitl.listRequests({}, undefined, { allowPartial: true });
+    const page = await down.runs.listRuns({}, undefined, { allowPartial: true });
     assert.equal(page.partial, true);
     assert.equal(page.items.length, 1);
     assert.equal(page.items[0]!.queued, true);
-    const one = await down.hitl.getRequest(queuedId, { allowPartial: true });
-    assert.ok(one !== null && one.queued === true);
-    assert.deepEqual(await down.hitl.count(undefined, { allowPartial: true }), { committed: 0, queued: 1, partial: true });
+    assert.deepEqual(await down.runs.count(undefined, { allowPartial: true }), { committed: 0, queued: 1, partial: true });
+    // ...but HITL still refuses, transport outage or not.
+    await assert.rejects(down.hitl.count(undefined, { allowPartial: true }), BackendUnavailableError);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -2531,20 +2500,20 @@ test('pg store finding 4: a transport partial listing paginates the overlay (cur
   const dir = mkdtempSync(join(tmpdir(), 'roster-pg-page-'));
   try {
     const ws = randomUUID();
-    const outbox = queuedHitlOutbox(dir, ws, 150);
+    const outbox = queuedRunOutbox(dir, ws, 150);
     const down = createPgBackend({
       pool: throwingBoundPool(ws, Object.assign(new Error('connection reset'), { code: 'ECONNRESET' })),
       objects: memObjects(),
       outbox,
     });
-    const p1 = await down.hitl.listRequests({ limit: 100 }, undefined, { allowPartial: true });
+    const p1 = await down.runs.listRuns({ limit: 100 }, undefined, { allowPartial: true });
     assert.equal(p1.items.length, 100, 'first page returns the full limit');
     assert.equal(p1.partial, true);
     assert.ok(p1.cursor !== null, 'a non-null cursor signals the remaining 50 queued records are reachable');
-    const p2 = await down.hitl.listRequests({ limit: 100 }, p1.cursor!, { allowPartial: true });
+    const p2 = await down.runs.listRuns({ limit: 100 }, p1.cursor!, { allowPartial: true });
     assert.equal(p2.items.length, 50, 'the second page yields the remaining queued records');
     assert.equal(p2.cursor, null, 'and only then signals done');
-    const ids = new Set([...p1.items, ...p2.items].map((r) => r.id));
+    const ids = new Set([...p1.items, ...p2.items].map((r) => r.runId));
     assert.equal(ids.size, 150, 'every queued record surfaces exactly once across the pages');
   } finally {
     rmSync(dir, { recursive: true, force: true });
