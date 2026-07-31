@@ -122,7 +122,7 @@ The host asks Roster for the context needed for one user request and receives on
 - Optional selected plan.
 - Human request or task query.
 - Optional host-supplied step hint.
-- Token or byte budget.
+- Token budget.
 
 ### Required output
 
@@ -229,7 +229,8 @@ output_expectations:
 brain:
   read: [icp-and-messaging, previously-presented-opportunities]
   write: [discovered-opportunity, retrieval-provenance]
-approval: read-only
+effects: read-only
+approval: none
 ```
 
 ### Explicit boundary
@@ -336,9 +337,9 @@ Claude Code and Codex reliably activate the same Roster workflow without duplica
 
 ### Flow and edge cases
 
-Install generates adapters from one contract; sync and doctor verify versions and activation; migration dry-runs, fingerprints, backs up, applies, and rechecks. Partial installs, edited generated files, duplicate shadows, unsupported host capabilities, source drift after dry-run, and legacy secrets/unverified claims produce explicit stops or classifications.
+Install generates adapters from one contract; `roster update` synchronizes generated adapters and manifests, while doctor verifies versions and activation; migration dry-runs, fingerprints, backs up, applies, and rechecks. Partial installs, edited generated files, duplicate shadows, unsupported host capabilities, source drift after dry-run, and legacy secrets/unverified claims produce explicit stops or classifications.
 
-## Acceptance criteria (overall v1)
+## Acceptance criteria (overall v2)
 
 - The product exposes the documented minimal CLI and no canonical schedule, runtime-transition, generic ops/HITL, or external provider-execution commands.
 - Both hosts complete the seeded golden loop and the real Social Media Manager discovery workflow.

@@ -52,7 +52,7 @@ A vendor skill owns installation, authentication, syntax, version compatibility,
 
 Brain's own Postgres, S3, extraction, embedding, and retrieval commands are the explicit built-in exception because Brain is a Roster subsystem.
 
-## v1 scope
+## v2 scope
 
 - Sparse workspace initialization and generated host activation.
 - Hierarchical scaffolding for functions, agents, plans, subagents, guidelines, tool-use definitions, and lessons.

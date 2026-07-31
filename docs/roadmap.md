@@ -1,6 +1,6 @@
 # Roster Roadmap
 
-Public view of what's shipped, what's deferred, and what's next. Detailed task tracking lives in [GitHub Issues](https://github.com/firatcand/roster/issues); planning artifacts (`spec/`, `plans/phases.yaml`) are local-only and not in the repo. (Historical `ROS-*` references below are Linear IDs from before the tracker moved to GitHub Issues.)
+Public view of what's shipped, what's deferred, and what's next. Durable product authority lives in the tracked `spec/` documents and the tracked design snapshot in `plans/phases.yaml`, while live task status lives in [GitHub Issues](https://github.com/firatcand/roster/issues). These planning artifacts are excluded from the npm package. (Historical `ROS-*` references below are Linear IDs from before the tracker moved to GitHub Issues.)
 
 ## Released
 

@@ -337,6 +337,7 @@ phases:
       - "Optional retrieval and non-core integrations have explicit measured keep/defer/remove decisions."
       - "Both adopters complete post-migration host-led workflows and Dreamer learning through Claude Code and Codex."
       - "All release commands, package inspection, secret scan, documentation, migration notes, and second-opinion review pass."
+      - "pnpm typecheck, pnpm build, pnpm test, pnpm test:scaffold-scripts, and pnpm smoke pass."
     tasks:
       - id: "P3-T01"
         tracker_issue_id: "361"

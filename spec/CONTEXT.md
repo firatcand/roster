@@ -28,7 +28,7 @@ Roster never owns a plan compiler/reducer, current-step cursor, workflow transit
 - Sparse initialization: `roster.yaml` and short `ROSTER.md`; optional structures appear only on request.
 - Hierarchical authorship with qualified identities; flat runtime activation through one context bundle.
 - Structured plans are host-interpreted step-by-step operating guides, not prompts and not executable Roster DSLs.
-- Deterministic scaffold/discover/validate/sync/migrate commands with explicit authored/generated ownership.
+- Deterministic scaffold/discover/validate/update/migrate commands with explicit authored/generated ownership.
 
 ### Brain
 
@@ -78,7 +78,7 @@ The host supplies:
 - target function/agent and optional selected plan;
 - human request/task query;
 - optional host-selected step hint; and
-- token/byte budget.
+- token budget.
 
 Roster returns:
 

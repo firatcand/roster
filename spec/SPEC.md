@@ -265,7 +265,7 @@ Narrower definitions may add restrictions or specificity but cannot relax a broa
 - generated adapter and manifest drift checks; and
 - secret-pattern and unsafe-content checks.
 
-Validation is read-only unless the user requests an explicit scaffold, sync, or migration action.
+Validation is read-only unless the user requests an explicit scaffold, update, or migration action.
 
 ## Context request and response
 
@@ -343,7 +343,8 @@ roster context <function>/<agent>[#plan]
   [--explain]
   --json
 
-roster brain init|doctor
+roster brain init
+roster brain doctor [--repair]
 roster brain ingest|save|get|query|event|link|merge|fs
 roster brain record run|feedback|artifact|decision
 
@@ -362,6 +363,8 @@ roster plan compile
 roster tool resolve|health|route
 roster invocation describe
 ```
+
+`roster update` is the canonical synchronization verb for generated adapters and manifests. It replaces only unedited generated files and refuses edited targets unless an explicit migration contract applies.
 
 `roster dream reflect` is a host skill workflow, not a CLI verb that implies Roster invokes a model. The skill may call `dream status`, Brain queries, and candidate commands.
 
@@ -457,7 +460,7 @@ Conditional writes, content hashes, object version IDs where supported, and data
 7. Build lexical indexes; optionally build privacy-permitted embeddings.
 8. Mark ready and emit stable provenance.
 
-Retries converge. A repair command reconciles pending intents, missing objects, orphaned objects, stuck extraction, and index drift. `brain mount` and `brain fs` are confined to workspace paths by default; any external read/write requires an explicit, target-specific human-approved path grant.
+Retries converge. A host-requested `roster brain doctor --repair` reconciles pending intents, missing objects, orphaned objects, stuck extraction, and index drift. `brain ingest` and `brain fs` are confined to workspace paths by default; any external read/write requires an explicit, target-specific human-approved path grant.
 
 ## Brain retrieval
 
