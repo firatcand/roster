@@ -7,10 +7,10 @@ gate_check_command: "pnpm typecheck && pnpm build && pnpm test && pnpm test:scaf
 source:
   tracker: "github"
   project_id: "340"
-  synced_at: "2026-07-31T21:10:13.027Z"
-  spec_revision: "7213649825b6f97177e581a1dd6210fdfbd70a3d"
+  synced_at: "2026-07-31T22:27:58.484Z"
+  spec_revision: "485b986be608292fae9e68547270459b46a58cd4"
   tracker_url: "https://github.com/firatcand/roster/issues/340"
-  tracker_revision: "github:2026-07-31T21:09:44Z"
+  tracker_revision: "github:2026-07-31T22:24:16Z"
 
 phases:
   - id: "phase-1"
@@ -127,7 +127,7 @@ phases:
         acceptance:
           - "A human-style request enters each host fixture with no simulated human Roster command."
           - "Each host interprets the complete plan and fake tool-use guidance itself and produces an equivalent semantic result."
-          - "Mock portable completed-run/feedback evidence produces one durable due signal and one idempotent cited candidate."
+          - "Mock portable completed-run/feedback evidence produces one durable due signal; each host then invokes the Dreamer skill, producing one idempotent cited candidate."
           - "Simulated human promotion materializes a lesson and changes the next applicable context bundle without a Roster schedule, execution engine, or approval receipt."
 
   - id: "phase-2"
@@ -260,7 +260,7 @@ phases:
         owner_type: "backend-dev"
         acceptance:
           - "Below-threshold observations remain durable and later contribute to readiness."
-          - "Equivalent checks at the same watermark return the same status and cannot duplicate activation."
+          - "Equivalent checks at the same watermark return the same status without creating candidates or dispatching host work; the stable watermark lets host activation deduplicate safely."
           - "Status explains policy version, scope, evidence count/range, watermark, cooldown, and due/not_due reasons."
           - "No daemon, cron, polling, model invocation, candidate creation, or host next-action dispatch occurs in the status command."
 
