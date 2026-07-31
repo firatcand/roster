@@ -31,8 +31,14 @@ contributor guide; this file is the same context for Codex.
 - Test: `pnpm test`
 - Smoke (pack + install + init end-to-end): `pnpm smoke`
 - Scaffold-scripts regression: `pnpm test:scaffold-scripts`
-- **Phase gate before a PR:** `pnpm typecheck && pnpm build && pnpm test`
-  (add `pnpm test:scaffold-scripts` when the diff touches `templates/scaffold/scripts/`).
+- **Phase gate before a PR:** `pnpm typecheck && pnpm build && pnpm test && pnpm test:scaffold-scripts && pnpm smoke`
+
+## Repository authority
+- `spec/` is tracked durable product authority: BRIEF, PRD, SPEC, generated CONTEXT, and the active ephemeral decision lifecycle.
+- `spec/decisions/` holds at most the active ephemeral ADRs used by `/update-spec`; `docs/adr/` contains historical implementation records, not the active product-spec decision lifecycle.
+- `plans/phases.yaml` is a tracked design/decomposition snapshot. GitHub owns live status, assignment, sequencing, and blockers.
+- Routine tracker-state reads query GitHub and use read-only/dry-run reconciliation. Run a non-dry `forge orchestrate reconcile --pull` only when its resulting snapshot will be committed, including the one-time post-bootstrap refresh that replaces the dangling `spec_revision`.
+- npm contents are controlled by the exact `package.json#files` allowlist: `bin/`, `lib/`, `skills/`, `agents/`, `templates/`, `data/`, `README.md`, and `LICENSE`. Tracked `spec/` and `plans/` artifacts do not ship.
 
 ## Conventions
 - File names: lowercase kebab-case.

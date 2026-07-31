@@ -37,11 +37,6 @@ node_modules/
 **/.claude/settings.local.json
 **/.claude/scheduled_tasks.lock
 
-# Forge planning artifacts — internal framework design, not shipped.
-# Anchored to repo root so nested `plans/`/`spec/` (e.g. inside templates/scaffold/) are not ignored.
-/spec/
-/plans/
-
 # Forge harness state (worktrees, logs, regenerated CONTEXT.md/.version) is
 # ignored by the forge-managed block at the end of this file, which re-includes
 # the one tracked config file (.forge/settings.yaml). That block's `/.forge/*` is
