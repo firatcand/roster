@@ -1,0 +1,475 @@
+# This tracked file is a design/decomposition snapshot. GitHub owns live task
+# status, assignment, sequencing, and blockers. Query GitHub for routine state
+# reads and use read-only/dry-run reconciliation. Run a non-dry
+# `forge orchestrate reconcile --pull` only when committing the resulting snapshot.
+project: "roster-v2-context-framework"
+gate_check_command: "pnpm typecheck && pnpm build && pnpm test && pnpm test:scaffold-scripts && pnpm smoke"
+source:
+  tracker: "github"
+  project_id: "340"
+  synced_at: "2026-07-31T23:01:26.247Z"
+  spec_revision: "253ebbcf71279ac2fa58419842777a03cf95c548"
+  tracker_url: "https://github.com/firatcand/roster/issues/340"
+  tracker_revision: "github:2026-07-31T23:00:42Z"
+
+phases:
+  - id: "phase-1"
+    name: "Host-led Framework Skeleton"
+    status: "active"
+    goal: "The scaffold, context, tool-guidance, evidence, and learning loop works end-to-end with seed data while Claude Code or Codex remains the runtime."
+    gate_criteria:
+      - "The ratified product contract assigns plan interpretation, subagents, tools, approvals, retries, scheduling, and rendering to Claude Code or Codex; Roster owns scaffolding, validation, context, Brain, evidence, and learning state."
+      - "A fresh seed workspace creates only requested structures and both host fixtures discover the same qualified function, agent, structured plan, guideline, lesson, and tool-use definition."
+      - "Roster statically validates the whole plan and returns one deterministic bounded context bundle for a host-supplied task and optional step hint without a compiler, reducer, current-step cursor, or provider route."
+      - "Both hosts interpret the plan, consume the same company-use guidance and vendor skill reference, record mock portable evidence, observe a mock Dreamer due signal, and complete without Roster scheduling or execution state."
+      - "Every generated output is schema-valid, secret-free, trust-separated, workspace-confined, and within its configured budget."
+      - "pnpm typecheck, pnpm build, pnpm test, pnpm test:scaffold-scripts, and pnpm smoke pass."
+    tasks:
+      - id: "P1-T01"
+        tracker_issue_id: "343"
+        title: "Ratify the host-owned runtime contract"
+        description: "Make the approved architecture durable: Roster is the thin scaffolding, context, company Brain, evidence, and learning layer; Claude Code or Codex interprets plans and executes work. Correct the BRIEF, PRD, SPEC, CONTEXT, investigation, tracker, and Forge lifecycle mismatch before implementation begins."
+        type: "docs"
+        priority: "P0"
+        depends_on: []
+        estimate: "S"
+        owner_type: "human"
+        acceptance:
+          - "BRIEF, PRD, SPEC, CONTEXT, investigation, epic, and child task bodies agree on scaffold → resolve → host executes → record → learn."
+          - "The contract protects functions, role agents, structured plans, Brain, tool-use definitions, portable evidence, Dreamer, and thin host activation."
+          - "Plan compiler/reducer, current-step state, provider execution/router, Roster scheduling, general ops/HITL, and approval authority are explicit non-goals."
+          - "The repository either tracks the documented Forge spec authority or corrects the Forge-managed project instructions so future update-spec propagation is atomic and non-contradictory."
+
+      - id: "P1-T02"
+        tracker_issue_id: "342"
+        title: "Build sparse workspace registry and scaffolding"
+        description: "Replace eager template-tree creation with a versioned canonical registry and deterministic scaffold/discover verbs for functions, agents, plans, subagents, guidelines, tool-use definitions, and lessons. Preserve hierarchical ownership while creating optional structures only on request."
+        type: "foundation"
+        priority: "P0"
+        depends_on: ["P1-T01"]
+        estimate: "M"
+        owner_type: "backend-dev"
+        acceptance:
+          - "roster init creates only roster.yaml and short ROSTER.md; host install creates reproducible generated activation files."
+          - "roster scaffold and roster discover create/resolve qualified records, including same-named agents in different functions, without collisions."
+          - "Optional directories and state appear only on first use; no empty tree or .gitkeep forest is emitted."
+          - "Authored/generated ownership, bounded reads, atomic writes, workspace confinement, component-wise symlink safety, and actionable drift diagnostics apply consistently."
+
+      - id: "P1-T03"
+        tracker_issue_id: "344"
+        title: "Validate structured host-interpreted plans"
+        description: "Define the bounded versioned plan schema and static validation/reference-resolution path for ordered reasoning, subagent, cross-agent, nested-plan, tool, approval, and artifact guidance. Return the complete plan to the host and introduce no Roster execution grammar."
+        type: "foundation"
+        priority: "P0"
+        depends_on: ["P1-T02"]
+        estimate: "M"
+        owner_type: "backend-dev"
+        acceptance:
+          - "The schema validates purpose, inputs, ordered unique steps, expected artifacts/output guidance, completion criteria, caps, retry/condition guidance, and approval guidance."
+          - "Missing agent/subagent/nested-plan/guideline/Brain-selector/tool-use references and direct or transitive plan cycles fail before work begins."
+          - "YAML bytes, aliases, nodes, scalars, and nesting are bounded; arbitrary code, shell, hidden expressions, goto, workers, and queues are rejected."
+          - "No compiler, reducer, active plan snapshot, current-step cursor, runtime type gate, next/submit/approve protocol, or transition test is added."
+
+      - id: "P1-T04"
+        tracker_issue_id: "347"
+        title: "Define scoped workspace tool-use guidance"
+        description: "Implement workspace/function/agent/plan tool-use definitions that reference external vendor skills and describe this company's purpose, relevant capabilities, filters, business rules, expected results, approval guidance, Brain reads/writes, and evidence requirements."
+        type: "integration"
+        priority: "P0"
+        depends_on: ["P1-T02"]
+        estimate: "M"
+        owner_type: "integration"
+        acceptance:
+          - "A strict schema and most-specific-wins precedence resolve tool-use definitions and canonical skill_ref identities deterministically."
+          - "Definitions contain no raw secrets and may narrow but cannot silently relax broader safety policy."
+          - "Generated adapters map canonical skill refs to installed host-specific locations while vendor skills remain authoritative for setup, auth, syntax, parsing, compatibility, and generic best practices."
+          - "Roster validates and returns guidance only; no external provider route, health check, fallback, credential injection, child process, MCP/API/browser execution, or provider result gate is added."
+
+      - id: "P1-T05"
+        tracker_issue_id: "346"
+        title: "Resolve bounded seeded task context"
+        description: "Build the deterministic context request/response contract over seeded workspace policy, complete selected plan, approved lessons, fake Brain evidence, and scoped tool-use guidance. The host supplies the target, task, optional step hint, and budget."
+        type: "backend"
+        priority: "P0"
+        depends_on: ["P1-T03", "P1-T04"]
+        estimate: "M"
+        owner_type: "backend-dev"
+        acceptance:
+          - "Equivalent inputs produce semantically identical bundles for Claude Code and Codex with stable identities, hashes, trust classes, inclusion reasons, and budget accounting."
+          - "Required agent/plan/policy content is reserved before optional evidence; required overflow fails explicitly and optional exclusions are explained."
+          - "Authored policy, approved lessons, vendor instructions, Brain evidence, and tool output are structurally trust-separated."
+          - "The bundle contains no Roster-selected current step, prior-output binding, provider route, approval receipt, next action, or transition."
+
+      - id: "P1-T06"
+        tracker_issue_id: "349"
+        title: "Generate thin Claude Code and Codex adapters"
+        description: "Generate versioned adapters that teach both hosts the same lifecycle: discover, retrieve context, interpret the whole plan, load vendor skills, execute, record completed evidence, check Dreamer readiness, and present human decisions."
+        type: "integration"
+        priority: "P0"
+        depends_on: ["P1-T05"]
+        estimate: "M"
+        owner_type: "integration"
+        acceptance:
+          - "Generated files are reproducible, versioned, hash-identifiable, drift-detectable, and never canonical authoring sources."
+          - "Both adapters consume the same host-neutral command/data contracts and preserve trust separation."
+          - "Adapters contain no business-agent plan logic, provider secret, scheduler, reducer, approval authority, or alternate source of truth."
+          - "Fixtures report supported, advisory, missing, or drifted activation capabilities for each host."
+
+      - id: "P1-T07"
+        tracker_issue_id: "350"
+        title: "Prove the seeded host-led learning loop"
+        description: "Add the smallest end-to-end seed scenario across both host fixtures: sparse scaffold, discovery, validated structured plan, bounded context, cited fake Brain evidence, scoped fake tool use, completed evidence, Dreamer due, human-approved candidate, and next-context lesson selection."
+        type: "integration"
+        priority: "P0"
+        depends_on: ["P1-T06"]
+        estimate: "M"
+        owner_type: "qa-engineer"
+        acceptance:
+          - "A human-style request enters each host fixture with no simulated human Roster command."
+          - "Each host interprets the complete plan and fake tool-use guidance itself and produces an equivalent semantic result."
+          - "Mock portable completed-run/feedback evidence produces one durable due signal; each host then invokes the Dreamer skill, producing one idempotent cited candidate."
+          - "Simulated human promotion materializes a lesson and changes the next applicable context bundle without a Roster schedule, execution engine, or approval receipt."
+
+  - id: "phase-2"
+    name: "Real Company Context and Learning"
+    status: "blocked"
+    blocked_by: "phase-1"
+    goal: "Both adopters complete real host-interpreted work with live company Brain context, declared external tools, portable evidence, and activated Dreamer learning."
+    gate_criteria:
+      - "A selected real file, fetched medium, text, structured record, or produced artifact converges into an authorized company Brain source/version and S3 object, then returns through bounded context with immutable citations."
+      - "A real external vendor skill is selected through authored workspace tool-use guidance and executed by each host with provenance; Roster never becomes the connection or execution layer."
+      - "Completed runs, artifacts, feedback, and portable human-decision evidence have one Brain-backed authority separate from normal semantic knowledge."
+      - "Evidence creates durable Dreamer readiness, both hosts invoke reflection without a Roster schedule, and a human-approved lesson changes a later context bundle."
+      - "Adopter retrieval and end-to-end context gold sets pass required recall, exclusion, citation, determinism, latency, privacy, and at least 60 percent token-reduction thresholds."
+      - "my-roster and roster-lobu each complete a representative real host-interpreted workflow and learning cycle."
+      - "pnpm typecheck, pnpm build, pnpm test, pnpm test:scaffold-scripts, and pnpm smoke pass."
+    tasks:
+      - id: "P2-T01"
+        tracker_issue_id: "351"
+        title: "Stabilize company Brain identity and source lifecycle"
+        description: "Introduce stable company Brain spaces, explicit workspace bindings/scopes, immutable logical source versions, recoverable S3/Postgres ingest intents, privacy/trust classification, tombstones, and provenance independent of checkout paths. Preserve useful structured knowledge and graph history."
+        type: "data"
+        priority: "P0"
+        depends_on: ["P1-T07"]
+        estimate: "L"
+        owner_type: "db-architect"
+        acceptance:
+          - "File, fetched media, text, structured record, and produced-artifact ingest stores/reuses immutable bytes and converges to a recoverable current source version."
+          - "Identical retries do not duplicate current versions; changed content preserves history and checkout relocation does not change logical identity."
+          - "brain_space_id, workspace/function/agent/plan scopes, privacy, trust, actor assurance, RLS, and least-privilege roles are enforced."
+          - "Postgres/S3 partial failures resume or reconcile; absolute paths survive only as legacy locators."
+
+      - id: "P2-T02"
+        tracker_issue_id: "370"
+        title: "Build Brain extraction and indexing"
+        description: "Separate versioned extraction and indexing from source identity: current-version text/chunks, lexical indexes, privacy-permitted optional embeddings, resumable reindex, extractor/model metadata, and correct keyless behavior."
+        type: "data"
+        priority: "P0"
+        depends_on: ["P2-T01"]
+        estimate: "L"
+        owner_type: "db-architect"
+        acceptance:
+          - "Every extract/chunk points to one immutable source version and records extractor identity/version and locators."
+          - "Lexical/structured indexing works without an OpenAI key; embedding absence or failure degrades explicitly without corrupting source readiness."
+          - "Embedding permission is privacy-aware, records model/dimensions/version, and never sends secret-class content."
+          - "Reindex is resumable/idempotent and current-version filtering prevents stale chunk or vector leakage."
+
+      - id: "P2-T03"
+        tracker_issue_id: "352"
+        title: "Connect cited company Brain retrieval"
+        description: "Connect authorized current-version structured, lexical, optional embedding, and configured graph retrieval to the context resolver using one immutable citation envelope and deterministic reason codes."
+        type: "data"
+        priority: "P0"
+        depends_on: ["P2-T02", "P1-T05"]
+        estimate: "L"
+        owner_type: "backend-dev"
+        acceptance:
+          - "Default retrieval excludes superseded, tombstoned, out-of-Brain, out-of-scope, and privacy-incompatible content."
+          - "Keyword/structured retrieval remains correct when embeddings are disabled or unavailable."
+          - "Every result resolves exact source/object/extractor versions, locator, trust/privacy class, scope, and retrieval reason."
+          - "Structured entities/facts/events/edges and document extracts can coexist in one bounded context without provenance loss."
+
+      - id: "P2-T04"
+        tracker_issue_id: "353"
+        title: "Evaluate adopter retrieval quality"
+        description: "Build a non-sensitive gold set from representative my-roster and roster-lobu queries and measure current-version filtering, scopes, lexical retrieval, optional embeddings/graph expansion, citation completeness, latency, cost, privacy, and activation thresholds for advanced retrieval."
+        type: "data"
+        priority: "P0"
+        depends_on: ["P2-T03"]
+        estimate: "M"
+        owner_type: "qa-engineer"
+        acceptance:
+          - "The gold set records queries, relevant immutable source versions/structured records, explicit exclusions, and authorized scope."
+          - "Recall@k, precision/exclusion, citation completeness, latency, cost, and privacy results are reproducible."
+          - "The evaluation recommends evidence-based dispositions for trigram aliases, default embeddings, multi-hop graph, automatic edges, and hosted reranking."
+          - "No advanced retrieval feature becomes a launch requirement solely because it already exists or was previously proposed."
+
+      - id: "P2-T05"
+        tracker_issue_id: "354"
+        title: "Validate real host-executed tool use"
+        description: "Author a real Social Media Manager tool-use definition layered on an installed Exa, Bright Data, or equivalent vendor skill; prove Claude Code and Codex derive request filters, execute the external tool, and report normalized provenance while Roster only validates/resolves guidance."
+        type: "integration"
+        priority: "P0"
+        depends_on: ["P1-T04", "P1-T06"]
+        estimate: "M"
+        owner_type: "integration"
+        acceptance:
+          - "The workspace definition captures purpose, scope, relevant capability subset, business filters/rules, expected fields, Brain reads/writes, effects, and approval guidance."
+          - "The vendor skill remains authoritative for setup, auth, syntax, parsing, provider compatibility, and generic best practices."
+          - "Both hosts execute the real skill/tool and record skill revision, query/filter summary, result provenance, and artifacts without exposing secrets."
+          - "No Roster provider executor, route registry, health/fallback layer, or provider-specific business runtime is introduced."
+
+      - id: "P2-T06"
+        tracker_issue_id: "355"
+        title: "Connect live bounded context resolution"
+        description: "Replace seeded candidates with live deterministic selection across Working Directory policy, complete selected plan, approved lessons, cited company Brain evidence, and scoped tool-use guidance."
+        type: "backend"
+        priority: "P0"
+        depends_on: ["P2-T03", "P2-T05"]
+        estimate: "M"
+        owner_type: "backend-dev"
+        acceptance:
+          - "The resolver applies scope, trust, privacy, freshness, precedence, deduplication, and hard budget rules deterministically."
+          - "Required overflow, unavailable optional retrieval, stale/conflicting lessons, and hostile evidence have explicit non-corrupting behavior."
+          - "Explain output accounts for every inclusion and exclusion with stable citation and budget metadata."
+          - "The request is host supplied and no active-run, prior-output, current-step-selection, provider-route, or continuation semantics appear."
+
+      - id: "P2-T07"
+        tracker_issue_id: "356"
+        title: "Record canonical portable work evidence"
+        description: "Extract a minimal Brain-backed evidence core for completed runs, artifacts, source/tool summaries, outcomes, feedback, and action-digest-bound human decisions. Keep it separate from semantic company knowledge and delete assumptions that evidence advances execution."
+        type: "data"
+        priority: "P0"
+        depends_on: ["P2-T01", "P1-T07"]
+        estimate: "L"
+        owner_type: "backend-dev"
+        acceptance:
+          - "Completed-run evidence records host/Roster versions, agent/plan, request hash/summary, timing, outcome, citations/tools, artifacts, provenance, and feedback links without a step state machine."
+          - "Operational rows and S3 prefixes are excluded from normal embeddings and semantic retrieval unless explicitly promoted with lineage."
+          - "Equivalent replay is idempotent and conflicting replay fails without mutation."
+          - "A human-decision record is portable evidence only; the host still prompts, waits, enforces native safety, and decides execution."
+
+      - id: "P2-T08"
+        tracker_issue_id: "357"
+        title: "Compute durable Dreamer readiness"
+        description: "Derive idempotent due/not_due state from eligible completed-run and feedback evidence using versioned policies, thresholds, cooldowns, scopes, and durable watermarks. Expose status without dispatching or scheduling reflection."
+        type: "backend"
+        priority: "P0"
+        depends_on: ["P2-T07"]
+        estimate: "M"
+        owner_type: "backend-dev"
+        acceptance:
+          - "Below-threshold observations remain durable and later contribute to readiness."
+          - "Equivalent checks at the same watermark return the same status without creating candidates or dispatching host work; the stable watermark lets host activation deduplicate safely."
+          - "Status explains policy version, scope, evidence count/range, watermark, cooldown, and due/not_due reasons."
+          - "No daemon, cron, polling, model invocation, candidate creation, or host next-action dispatch occurs in the status command."
+
+      - id: "P2-T09"
+        tracker_issue_id: "358"
+        title: "Implement the host-run Dreamer lesson lifecycle"
+        description: "Rebuild Dreamer as a Roster skill that queries eligible Brain evidence, detects recurring patterns, drafts cited candidates with counterevidence, stores them idempotently, and materializes only host-confirmed lessons into scoped workspace playbooks."
+        type: "backend"
+        priority: "P0"
+        depends_on: ["P2-T03", "P2-T08"]
+        estimate: "M"
+        owner_type: "backend-dev"
+        acceptance:
+          - "Candidates cite supporting, conflicting, and counterexample runs and declare intended workspace/function/agent/plan scope."
+          - "Dreamer output cannot count as independent evidence for itself and untrusted evidence cannot inject instructions."
+          - "Create/revise/promote/reject/retire decisions are idempotent, durable, and preserve lineage."
+          - "Promotion requires human confirmation by default and writes a reviewable Git lesson selected by later context."
+
+      - id: "P2-T10"
+        tracker_issue_id: "359"
+        title: "Activate Dreamer reliably through both hosts"
+        description: "Update generated Claude Code and Codex activation so readiness is checked after evidence recording and again on the next Roster-backed interaction; when due the host invokes Dreamer and presents candidates without a Roster schedule or Slack queue."
+        type: "integration"
+        priority: "P0"
+        depends_on: ["P1-T06", "P2-T09"]
+        estimate: "M"
+        owner_type: "integration"
+        acceptance:
+          - "Both host fixtures automatically act on due status after evidence recording and recover a missed check on the next interaction."
+          - "The singular log/ versus plural logs/ mismatch and manual/schedule-only trigger paths are removed."
+          - "Repeated activation at one watermark does not create duplicate candidates or repeatedly prompt the human."
+          - "Doctor distinguishes Dreamer files existing from the complete readiness → invocation → candidate → decision activation path working."
+
+      - id: "P2-T11"
+        tracker_issue_id: "371"
+        title: "Evaluate end-to-end runtime context quality"
+        description: "Use my-roster and roster-lobu gold tasks to measure the full context bundle—not only retrieval—for required-context recall, irrelevant-context exclusion, citation completeness, deterministic selection, trust separation, latency, and token reduction."
+        type: "integration"
+        priority: "P0"
+        depends_on: ["P2-T04", "P2-T06"]
+        estimate: "M"
+        owner_type: "qa-engineer"
+        acceptance:
+          - "Gold tasks identify mandatory plan/policy/lesson/tool/Brain fragments, acceptable alternatives, and explicit exclusions."
+          - "Both hosts receive semantically equivalent bundles and every included/excluded fragment has an explanation."
+          - "The representative my-roster task uses at least 60 percent fewer tokens than the frozen eager-load baseline without losing required context."
+          - "Measured failures block adopter proof and produce targeted corrections rather than being hidden by aggregate retrieval scores."
+
+      - id: "P2-T12"
+        tracker_issue_id: "360"
+        title: "Prove real host-interpreted adopter workflows"
+        description: "Run the complete v2 loop on Social Media Manager discovery in my-roster and one distinct roster-lobu workflow through both Claude Code and Codex, with live Brain, real vendor skill use, portable evidence, Dreamer activation, human promotion, and later lesson selection."
+        type: "integration"
+        priority: "P0"
+        depends_on: ["P2-T05", "P2-T06", "P2-T07", "P2-T10", "P2-T11"]
+        estimate: "L"
+        owner_type: "qa-engineer"
+        acceptance:
+          - "Both adopters complete a real human-style task through both hosts with the host explicitly interpreting the authored YAML plan."
+          - "Real cited Brain context and real external tool provenance are present; Roster contains no business-specific executor."
+          - "Completed evidence makes Dreamer due, a human-approved candidate becomes a lesson, and the lesson affects the next applicable context."
+          - "Retrieval/context quality, secret safety, scope isolation, idempotency, and interruption recovery thresholds pass."
+
+  - id: "phase-3"
+    name: "Breaking Simplification and Launch"
+    status: "blocked"
+    blocked_by: "phase-2"
+    goal: "Remove the accidental second runtime, migrate both adopters safely, harden the actual Roster boundaries, and release the smaller v2 product."
+    gate_criteria:
+      - "Roster scheduler/cron/fire/state and general operations/HITL/queue/lease/outbox/wake-resume surfaces are absent after minimal evidence primitives are extracted."
+      - "The one-way migrator preserves authored policy and useful Brain/evidence history, removes only exact consented legacy targets, and passes frozen adopter rehearsals."
+      - "Workspace paths, company Brain isolation, S3 endpoint trust, embedding privacy, vendor skill provenance, prompt trust separation, secret handling, and human-decision boundaries pass focused security tests."
+      - "Generated adapters cannot silently drift and doctor proves the complete scaffold/context/Brain/tool/evidence/Dreamer activation path."
+      - "Optional retrieval and non-core integrations have explicit measured keep/defer/remove decisions."
+      - "Both adopters complete post-migration host-led workflows and Dreamer learning through Claude Code and Codex."
+      - "All release commands, package inspection, secret scan, documentation, migration notes, and second-opinion review pass."
+      - "pnpm typecheck, pnpm build, pnpm test, pnpm test:scaffold-scripts, and pnpm smoke pass."
+    tasks:
+      - id: "P3-T01"
+        tracker_issue_id: "361"
+        title: "Remove the Roster scheduling subsystem"
+        description: "Delete Roster schedule commands, cron writers, registries, state/fire records, stale-fire logic, schedule-derived pending behavior, migration wrappers, templates, tests, docs, and package surfaces. Host-native scheduling starts the normal host-led Roster workflow."
+        type: "backend"
+        priority: "P0"
+        depends_on: ["P2-T12"]
+        estimate: "L"
+        owner_type: "backend-dev"
+        acceptance:
+          - "No shipped CLI, template, migration, doc, test, or package file exposes Roster-owned scheduling, cron, fire/state, wake/resume, or schedule-derived pending behavior."
+          - "Dreamer and business workflows remain reachable through normal interactive or host-native scheduled sessions."
+          - "Migration targets only exact Roster-managed cron blocks with explicit consent and never changes host-native schedules."
+          - "Full gates and focused absence/package tests pass."
+
+      - id: "P3-T02"
+        tracker_issue_id: "362"
+        title: "Reduce general operations to the portable evidence core"
+        description: "Extract only the storage/idempotency/trust primitives required by P2-T07, then delete general ops queues, local sealed ledger, overlay/dual backend, outbox, leases, sweeps, inbox, setup journals, capability negotiation, polling, wake/resume, and general HITL state."
+        type: "backend"
+        priority: "P0"
+        depends_on: ["P2-T07", "P2-T12"]
+        estimate: "L"
+        owner_type: "backend-dev"
+        acceptance:
+          - "The minimal completed-run/artifact/feedback/human-decision evidence API remains portable and fully tested."
+          - "General queue, lease, outbox, overlay, local-ledger, pending inbox, Slack HITL, polling, wake/resume, and execution-receipt code and tests are absent."
+          - "Evidence cannot advance a workflow, authorize an action, or enter normal semantic retrieval without explicit promotion."
+          - "Package size, CLI, schema, migrations, and docs reflect the smaller boundary."
+
+      - id: "P3-T03"
+        tracker_issue_id: "365"
+        title: "Eliminate generated adapter and version drift"
+        description: "Consolidate host-neutral activation content, generator/protocol versions, ownership markers, source hashes, safe sync, stale-shadow detection, and edited-generated-file handling so Claude Code and Codex cannot silently run different Roster contracts."
+        type: "integration"
+        priority: "P0"
+        depends_on: ["P2-T10"]
+        estimate: "M"
+        owner_type: "integration"
+        acceptance:
+          - "Equivalent host adapters derive from one canonical contract and record generator/protocol/content versions."
+          - "Sync updates unedited generated files, refuses edited generated files, and detects duplicate or stale host shadows."
+          - "Authored files are never overwritten by regeneration and unsupported host capabilities are explicit."
+          - "Drift fixtures cover partial installs, upgrades, deleted files, edited generated content, and mixed versions."
+
+      - id: "P3-T04"
+        tracker_issue_id: "364"
+        title: "Harden Roster-owned security boundaries"
+        description: "Threat-model and test only the boundaries Roster actually owns: bounded parsing, workspace/external paths, company Brain/RLS isolation, S3 trust, retrieval/context trust, embedding privacy, tool-use definitions/vendor skill provenance, evidence/decision semantics, migrations, and secret-free outputs."
+        type: "infra"
+        priority: "P0"
+        depends_on: ["P2-T05", "P2-T06", "P2-T07", "P2-T09"]
+        estimate: "L"
+        owner_type: "security-auditor"
+        acceptance:
+          - "Every default file read/write is workspace-confined and component-wise symlink safe; external access requires an exact host-obtained grant."
+          - "RLS and least privilege prevent cross-Brain/cross-scope access and runtime schema mutation."
+          - "HTTPS/endpoint trust, object-key validation, embedding privacy, immutable vendor pins/provenance, and prompt trust separation have adversarial tests."
+          - "Secret canaries never appear in context, JSON, diagnostics, logs, migrations, artifacts, generated files, or package contents; decision evidence never bypasses host safety."
+
+      - id: "P3-T05"
+        tracker_issue_id: "368"
+        title: "Decide optional capability dispositions from evidence"
+        description: "Document measured keep/defer/remove decisions for trigram aliases, embeddings default posture, multi-hop graph, automatic edge extraction, hosted reranking, Notion task integration, second opinion, tripwire, and Gemini without treating lack of use as proof of low value."
+        type: "docs"
+        priority: "P1"
+        depends_on: ["P2-T04", "P2-T12"]
+        estimate: "S"
+        owner_type: "human"
+        acceptance:
+          - "Scaffolding, structured plans, company Brain/provenance, tool-use definitions, portable evidence, Dreamer, host activation, and doctor are explicitly protected core."
+          - "Each optional capability cites quality, latency, cost, privacy, maintenance, product-demand, and activation evidence."
+          - "Deferred issues state measurable activation thresholds and dependencies; removed surfaces have migration/archive dispositions."
+          - "The release graph includes only capabilities justified for v2."
+
+      - id: "P3-T06"
+        tracker_issue_id: "363"
+        title: "Build the one-way v2 workspace migrator"
+        description: "Implement fingerprinted dry-run/apply migration for registry paths, structured plans, tool-use definitions, Brain identity/source versions, portable evidence, lessons, host adapters, Infisical key references, schedule removal, and general-ops archival without permanent compatibility code."
+        type: "infra"
+        priority: "P0"
+        depends_on: ["P3-T01", "P3-T02", "P3-T03"]
+        estimate: "L"
+        owner_type: "backend-dev"
+        acceptance:
+          - "Dry run classifies every preserve/transform/import/archive/delete/decision action and records fingerprints, conflicts, backup, and possible secret-key locations without values."
+          - "Apply revalidates fingerprints, locks, writes atomically, resumes remote idempotency state, and emits an audit report."
+          - "Legacy logs/actors/approvals/candidates import only as legacy-unverified and absolute paths remain locators, not Brain identity."
+          - "Only exact Roster-managed cron targets are removed with consent; host-native schedules and authored edits are preserved."
+
+      - id: "P3-T07"
+        tracker_issue_id: "366"
+        title: "Build v2 activation and integrity doctor"
+        description: "Rewrite doctor around the v2 product: sparse scaffold/discovery, structured plan references, context budgets, company Brain scopes/citations/S3, vendor skills and tool-use definitions, evidence separation, Dreamer readiness and host activation, adapter drift, migration, paths, and secrets."
+        type: "integration"
+        priority: "P0"
+        depends_on: ["P3-T03", "P3-T04", "P3-T06"]
+        estimate: "M"
+        owner_type: "qa-engineer"
+        acceptance:
+          - "Doctor reports each subsystem independently with stable codes, actionable fixes, redacted detail, and JSON output."
+          - "It distinguishes Dreamer files existing from the end-to-end readiness/invocation/candidate/decision path working."
+          - "It detects broken plan/tool refs, required-context overflow, cross-scope Brain risk, unsafe S3/embedding config, semantic evidence leakage, stale adapters, and incomplete migration."
+          - "No execution dry-run, provider health, schedule fire, step transition, lease, queue, or approval-authority check remains."
+
+      - id: "P3-T08"
+        tracker_issue_id: "367"
+        title: "Rehearse adopter v2 cutover"
+        description: "Run dry-run, backup, apply, doctor, and representative post-migration host-led workflows on frozen my-roster and roster-lobu snapshots; resolve every conflict and document the production cutover/rollback procedure."
+        type: "integration"
+        priority: "P0"
+        depends_on: ["P3-T05", "P3-T06", "P3-T07"]
+        estimate: "L"
+        owner_type: "qa-engineer"
+        acceptance:
+          - "Both snapshots preserve authored plans/guidelines/lessons, useful Brain history, and reviewed tool intent without stale generated shadows."
+          - "Schedule/general-ops removal, Brain identity conversion, evidence import, Infisical references, and legacy-unverified classification match the dry run."
+          - "Claude Code and Codex complete the representative host-interpreted workflows and Dreamer learning after migration."
+          - "Backup, failure injection, idempotent rerun, rollback limits, operator checklist, and final doctor results are documented."
+
+      - id: "P3-T09"
+        tracker_issue_id: "369"
+        title: "Publish and release Roster v2"
+        description: "Publish the host-interpreted plan, bounded context, company Brain, tool-use guidance, portable evidence, Dreamer, migration, and security contracts; remove obsolete runtime/provider/schedule/ops documentation; pass release gates and ship the breaking version."
+        type: "docs"
+        priority: "P0"
+        depends_on: ["P3-T08"]
+        estimate: "L"
+        owner_type: "devops-engineer"
+        acceptance:
+          - "README, contributor docs, CLI help, schemas, examples, migration guide, security model, and package contents describe the same thin-layer product."
+          - "No canonical docs or APIs mention plan compile/reduce/next/submit/approve, external provider routing, Roster scheduling, or general ops/HITL."
+          - "Full gates, focused real integration/adversarial/migration tests, secret scan, package smoke, and second-opinion review pass."
+          - "Release notes explain breaking removals, adopter migration, host ownership, company Brain/tool-use/Dreamer behavior, and no-permanent-shim policy."

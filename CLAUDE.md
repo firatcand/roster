@@ -45,13 +45,15 @@ templates/  Files copied into a user's workspace by `roster init`.
 skills/     Skills shipped to AI tools by `roster install`. One dir per skill.
 agents/     Agent .md files shipped alongside skills (Claude Code only).
 test/       Node test runner specs + smoke.sh integration test.
-docs/       Public docs — HOWTO.md, ARCHITECTURE.md, API.md, roadmap.md, retros.
+docs/       Public docs. docs/adr/ contains historical implementation records, not active product-spec decisions.
 .forge/     Forge methodology rules + worktree harness state (not shipped).
-spec/       Local-only PRD/SPEC/CONTEXT (gitignored — see .forge/CONTEXT.md).
-plans/      Local-only phases.yaml (gitignored — see .forge/CONTEXT.md).
+spec/       Tracked durable product authority — BRIEF, PRD, SPEC, CONTEXT, and ephemeral decisions.
+plans/      Tracked design/decomposition snapshot — GitHub owns live execution state.
 ```
 
-**Shipped to npm** (verified via `npm pack --dry-run`): `bin/`, `lib/`, `skills/`, `agents/`, `templates/`, `README.md`, `LICENSE`. Allowlist is in `package.json` under `files`. `.forge/`, `spec/`, `plans/` never ship.
+GitHub Issues owns live task status, assignment, sequencing, and blockers. Query GitHub for routine tracker-state reads and use read-only/dry-run reconciliation. Run a non-dry `forge orchestrate reconcile --pull` only when its resulting `plans/phases.yaml` snapshot will be committed, including the one-time post-bootstrap refresh that replaces the dangling `spec_revision`.
+
+**Shipped to npm** (verified via `npm pack --dry-run`): `bin/`, `lib/`, `skills/`, `agents/`, `templates/`, `data/`, `README.md`, `LICENSE`. This is the exact `package.json#files` allowlist; tracked `.forge/`, `spec/`, and `plans/` artifacts never ship.
 
 ## Build & verify
 
@@ -66,7 +68,7 @@ pnpm test:scaffold-scripts # test/new-agent-slash-only.sh + test/audit-agent-gui
 npm pack --dry-run   # confirm tarball stays clean (~359 kB packed, 81 files; +hitl state machine #319)
 ```
 
-The Phase gate command (run before opening a PR): `pnpm typecheck && pnpm build && pnpm test`. When the diff touches `templates/scaffold/scripts/`, also run `pnpm test:scaffold-scripts`.
+The Phase gate command (run before opening a PR): `pnpm typecheck && pnpm build && pnpm test && pnpm test:scaffold-scripts && pnpm smoke`.
 
 ## Where things live in the CLI
 
