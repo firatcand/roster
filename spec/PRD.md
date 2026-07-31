@@ -218,16 +218,16 @@ skill_ref: exa:search
 why: Find timely posts that match our audience and positioning.
 when:
   - discovering reply opportunities
+capabilities:
+  - web and social search
 how:
-  - exclude URLs already presented according to Brain history
-  - rank ICP relevance before engagement volume
+  - search first-party and high-credibility sources for the requested lookback
+  - exclude previously presented URLs using Brain history
+  - rank by ICP relevance before engagement volume
 output_expectations:
-  - canonical_url
-  - author
-  - published_at
-  - relevance_reason
+  required: [canonical_url, author, published_at, relevance_reason]
 brain:
-  read: [icp-and-messaging, previously-presented-opportunities]
+  read: [icp, messaging, previously-presented-opportunities]
   write: [discovered-opportunity, retrieval-provenance]
 effects: read-only
 approval: none
@@ -323,7 +323,7 @@ Claude Code and Codex reliably activate the same Roster workflow without duplica
 - Generated adapters teach each host to discover targets, retrieve context, interpret the selected plan, load vendor skills, execute work, record evidence, check Dreamer readiness, and present human decisions.
 - Adapters contain host integration only; they do not contain business-agent logic or a plan interpreter.
 - Generated files are versioned, reproducible, identifiable, and never canonical authoring sources.
-- Sync detects generated-file drift, duplicate shadows, stale versions, unsupported host capability, and unsafe overwrite.
+- `roster update` detects generated-file drift, duplicate shadows, stale versions, unsupported host capability, and unsafe overwrite.
 - `roster doctor` tests scaffold/discovery, plan references, context budgets, Brain binding and retrieval, tool-use/skill references, evidence writes, Dreamer readiness/activation, host adapter versions, and migration state.
 - A dry-run migrator reports every create/move/rewrite/archive/delete action and supports one explicit apply.
 - Migration preserves authored structured plans, guidelines, lessons, and useful Brain/evidence data while removing schedule and general-operations surfaces.

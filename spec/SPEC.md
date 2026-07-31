@@ -127,7 +127,7 @@ Every managed path is one of:
 - `state`: local generated cache or migration state; or
 - `projection`: optional local rendering of Brain-canonical data.
 
-Scaffold manifests store generated hashes and schema versions. Sync may replace an unedited generated file, refuse an edited generated file, and report authored/generated shadows. Atomic writes, workspace confinement, component-wise symlink checks, regular-file checks, byte limits, and collision checks apply to every path.
+Scaffold manifests store generated hashes and schema versions. `roster update` may replace an unedited generated file, refuse an edited generated file, and report authored/generated shadows. Atomic writes, workspace confinement, component-wise symlink checks, regular-file checks, byte limits, and collision checks apply to every path.
 
 ## Workspace schemas
 
