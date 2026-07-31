@@ -7,10 +7,10 @@ gate_check_command: "pnpm typecheck && pnpm build && pnpm test && pnpm test:scaf
 source:
   tracker: "github"
   project_id: "340"
-  synced_at: "2026-07-31T22:27:58.484Z"
-  spec_revision: "485b986be608292fae9e68547270459b46a58cd4"
+  synced_at: "2026-07-31T22:53:45.862Z"
+  spec_revision: "57326ecdc11a5f1dacd7fe07b51c82795fac4098"
   tracker_url: "https://github.com/firatcand/roster/issues/340"
-  tracker_revision: "github:2026-07-31T22:24:16Z"
+  tracker_revision: "github:2026-07-31T22:37:37Z"
 
 phases:
   - id: "phase-1"
