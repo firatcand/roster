@@ -31,8 +31,7 @@ contributor guide; this file is the same context for Gemini.
 - Test: `pnpm test`
 - Smoke (pack + install + init end-to-end): `pnpm smoke`
 - Scaffold-scripts regression: `pnpm test:scaffold-scripts`
-- **Phase gate before a PR:** `pnpm typecheck && pnpm build && pnpm test`
-  (add `pnpm test:scaffold-scripts` when the diff touches `templates/scaffold/scripts/`).
+- **Phase gate before a PR:** `pnpm typecheck && pnpm build && pnpm test && pnpm test:scaffold-scripts && pnpm smoke`
 
 ## Conventions
 - File names: lowercase kebab-case.

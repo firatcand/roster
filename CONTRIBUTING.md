@@ -29,10 +29,11 @@ pnpm install      # Node 22.18+ or 24+
 pnpm typecheck
 pnpm build
 pnpm test
+pnpm test:scaffold-scripts
 pnpm smoke        # full pack + install + init end-to-end
 ```
 
-The pre-PR gate is `pnpm typecheck && pnpm build && pnpm test`. When the diff touches `templates/scaffold/scripts/`, also run `pnpm test:scaffold-scripts`.
+The pre-PR gate is `pnpm typecheck && pnpm build && pnpm test && pnpm test:scaffold-scripts && pnpm smoke`.
 
 Read [CLAUDE.md](CLAUDE.md) for repo layout and conventions (ESM, kebab-case filenames, hand-rolled argv, no docstrings).
 
@@ -58,7 +59,7 @@ Read [CLAUDE.md](CLAUDE.md) for repo layout and conventions (ESM, kebab-case fil
 
 ## CI / branch protection
 
-PRs into `main` run [.github/workflows/ci.yml](.github/workflows/ci.yml) — typecheck, test, build, `npm pack --dry-run`, `pnpm smoke`. Branch protection on `main` requires:
+PRs into `main` run [.github/workflows/ci.yml](.github/workflows/ci.yml) — typecheck, build, unit tests, scaffold-script regressions, `npm pack --dry-run`, smoke, and `pnpm e2e:schedule`. Branch protection on `main` requires:
 
 - `CI / verify` status check passes
 - Branch up to date with `main`

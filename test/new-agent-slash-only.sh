@@ -33,6 +33,13 @@ TMPDIR_ROOT="$(mktemp -d -t roster-slash-only-XXXXXXXX)"
 PASS_COUNT=0
 FAIL_COUNT=0
 
+# Poisoned yaml module — makes `import yaml` fail even where PyYAML exists.
+PYTHON_POISON_DIR="$TMPDIR_ROOT/yaml-poison"
+mkdir -p "$PYTHON_POISON_DIR"
+cat > "$PYTHON_POISON_DIR/yaml.py" <<'PY'
+raise ImportError("pyyaml intentionally unavailable (roster test shim)")
+PY
+
 cleanup() {
   local rc=$?
   rm -rf "$TMPDIR_ROOT" 2>/dev/null || true
@@ -94,10 +101,14 @@ touch_agent_tree() {
 #   124    — TIMEOUT (subprocess hung; matches GNU `timeout(1)` convention)
 # Callers that expect non-zero MUST use assert_nonzero_not_timeout to
 # distinguish a hang from a legitimate refusal.
-run_subject() {
-  local ws="$1"; shift
+run_subject_with_pythonpath() {
+  local ws="$1" pythonpath="$2"; shift 2
   # macOS has no GNU `timeout` by default; use a portable perl one-liner.
-  ( cd "$ws" && perl -e '
+  ( cd "$ws" || exit 1
+    if [ -n "$pythonpath" ]; then
+      export PYTHONPATH="$pythonpath"
+    fi
+    perl -e '
     use strict; use warnings;
     my $pid = fork();
     if ($pid == 0) { exec @ARGV or die "exec: $!"; }
@@ -107,6 +118,62 @@ run_subject() {
     alarm 0;
     exit($? >> 8);
   ' bash scripts/new-agent.sh "$@" </dev/null )
+}
+
+run_subject() {
+  local ws="$1"; shift
+  run_subject_with_pythonpath "$ws" "" "$@"
+}
+
+run_function_check() {
+  local ws="$1" pipefail_mode="$2" fn="$3"
+  ( cd "$ws" && PYTHONPATH="$PYTHON_POISON_DIR" bash -c '
+    set -u
+    if [ "$1" = "on" ]; then
+      set -o pipefail
+    else
+      set +o pipefail
+    fi
+    ROOT="$2"
+    source "$ROOT/scripts/lib/functions.sh"
+    is_valid_function "$3"
+  ' roster-function-check "$pipefail_mode" "$ws" "$fn" )
+}
+
+assert_function_rejected() {
+  local ws="$1" pipefail_mode="$2" fn="$3" desc="$4" rc
+  run_function_check "$ws" "$pipefail_mode" "$fn"
+  rc=$?
+  if [ "$rc" -eq 1 ]; then
+    pass "$desc"
+  else
+    fail "$desc — expected exit 1, got $rc"
+  fi
+}
+
+write_large_registry() {
+  local config="$1" i slug
+  {
+    printf 'functions:\n'
+    printf '  - slug: gtm\n'
+    printf '    description: first entry\n'
+    printf '    has_expert: false\n'
+    i=1
+    while [ "$i" -le 4998 ]; do
+      if [ "$i" -eq 2500 ]; then
+        slug="target-middle"
+      else
+        slug="synthetic-function-$i"
+      fi
+      printf '  - slug: %s\n' "$slug"
+      printf '    description: synthetic entry\n'
+      printf '    has_expert: false\n'
+      i=$((i + 1))
+    done
+    printf '  - slug: target-last\n'
+    printf '    description: last entry\n'
+    printf '    has_expert: false\n'
+  } > "$config"
 }
 
 # -----------------------------------------------------------------------------
@@ -372,9 +439,9 @@ fi
 #
 # Only ONE of the two runtime paths in read_functions runs per invocation
 # (the Python-yaml path if `python3 + pyyaml` is installed, else the
-# grep/awk fallback). Both implementations use the same regex literal, so
-# rejection behavior is identical; CI exercises whichever path the runner
-# has. Tests for the explicit fallback path are out of scope here.
+# grep/sed fallback). Both implementations use the same regex literal, so
+# these cases preserve environment-native coverage. Tests 12 and 13 below
+# force the fallback path independently of the runner's Python environment.
 # -----------------------------------------------------------------------------
 echo ""
 echo "===> Test 11: malformed registry slug rejection (ROS-69)"
@@ -417,3 +484,105 @@ run_malformed_case "uppercase"     "BadSlug"
 run_malformed_case "underscore"    "bad_slug"
 run_malformed_case "leading-dot"   ".badslug"
 run_malformed_case "embedded-quote" 'bad"quote'
+
+# -----------------------------------------------------------------------------
+# Test 12: forced no-PyYAML shared-library coverage. The 5,000-entry registry
+# makes the fallback producer exceed typical pipe capacity, so a first-entry
+# `grep -q` consumer deterministically exposes the pipefail/SIGPIPE regression.
+# -----------------------------------------------------------------------------
+echo ""
+echo "===> Test 12: function validation drains the no-PyYAML registry"
+WS="$TMPDIR_ROOT/t12"
+make_workspace "$WS"
+write_large_registry "$WS/.config/functions.yaml"
+
+if command -v python3 >/dev/null 2>&1 \
+  && PYTHONPATH="$PYTHON_POISON_DIR" python3 -c 'import yaml' >/dev/null 2>&1; then
+  fail "PyYAML poison did not force the fallback path"
+else
+  pass "PyYAML poison forces the fallback path"
+fi
+
+if run_function_check "$WS" on gtm; then
+  pass "fallback accepts the first registry entry under pipefail"
+else
+  fail "fallback rejected the first registry entry under pipefail"
+fi
+if run_function_check "$WS" on target-middle; then
+  pass "fallback accepts a middle registry entry under pipefail"
+else
+  fail "fallback rejected a middle registry entry under pipefail"
+fi
+if run_function_check "$WS" on target-last; then
+  pass "fallback accepts the last registry entry under pipefail"
+else
+  fail "fallback rejected the last registry entry under pipefail"
+fi
+assert_function_rejected "$WS" on unknown-function "fallback rejects an unknown function"
+assert_function_rejected "$WS" on "" "fallback rejects an empty function"
+assert_function_rejected "$WS" on -leading-hyphen "fallback rejects a leading-hyphen function"
+assert_function_rejected "$WS" on $'gtm\nproduct' "fallback rejects a newline-bearing function"
+
+cat > "$WS/.config/functions.yaml" <<'YAML'
+functions:
+  - slug: gtm
+    description: valid first entry
+    has_expert: false
+  - slug: BadTail
+    description: malformed tail
+    has_expert: false
+YAML
+assert_function_rejected "$WS" off gtm "fallback propagates a malformed tail with pipefail disabled"
+
+# -----------------------------------------------------------------------------
+# Test 13: real new-agent integration through the forced no-PyYAML fallback.
+# -----------------------------------------------------------------------------
+echo ""
+echo "===> Test 13: --slash-only uses the no-PyYAML fallback safely"
+WS="$TMPDIR_ROOT/t13"
+make_workspace "$WS"
+cat > "$WS/.config/functions.yaml" <<'YAML'
+functions:
+  - slug: gtm
+    description: first entry
+    has_expert: true
+  - slug: product
+    description: middle entry
+    has_expert: true
+  - slug: design
+    description: last entry
+    has_expert: true
+YAML
+touch_agent_tree "$WS" gtm fallback-agent
+if run_subject_with_pythonpath "$WS" "$PYTHON_POISON_DIR" --slash-only gtm fallback-agent > "$WS/stdout" 2> "$WS/stderr"; then
+  pass "--slash-only accepts the first fallback registry entry"
+else
+  fail "--slash-only rejected the first fallback registry entry (stderr: $(cat "$WS/stderr"))"
+fi
+if [ -f "$WS/.claude/commands/fallback-agent.md" ]; then
+  pass "--slash-only writes the command through the fallback path"
+else
+  fail "--slash-only did not write the command through the fallback path"
+fi
+run_subject_with_pythonpath "$WS" "$PYTHON_POISON_DIR" --slash-only unknown unknown-agent > /dev/null 2> "$WS/unknown.stderr"
+assert_nonzero_not_timeout "$?" "--slash-only rejects an unknown fallback function"
+if grep -q "not a registered function" "$WS/unknown.stderr"; then
+  pass "fallback integration explains the unknown-function refusal"
+else
+  fail "fallback integration omitted the unknown-function refusal"
+fi
+
+WS="$TMPDIR_ROOT/t13-malformed-tail"
+make_workspace "$WS"
+cat > "$WS/.config/functions.yaml" <<'YAML'
+functions:
+  - slug: gtm
+    description: valid first entry
+    has_expert: true
+  - slug: BadTail
+    description: malformed tail
+    has_expert: false
+YAML
+touch_agent_tree "$WS" gtm malformed-tail-agent
+run_subject_with_pythonpath "$WS" "$PYTHON_POISON_DIR" --slash-only gtm malformed-tail-agent > /dev/null 2> "$WS/stderr"
+assert_nonzero_not_timeout "$?" "--slash-only rejects a malformed fallback registry tail"
