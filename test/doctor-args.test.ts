@@ -45,11 +45,11 @@ test('--fix --json → both true', () => {
   assert.equal(r.json, true);
 });
 
-test('unknown flag ignored (forward-compat)', () => {
+test('unknown flag is rejected', () => {
   const r = parseDoctorArgs(['--futureflag', '--json']);
-  assert.equal(r.kind, 'ok');
-  if (r.kind !== 'ok') return;
-  assert.equal(r.json, true);
+  assert.equal(r.kind, 'err');
+  if (r.kind !== 'err') return;
+  assert.match(r.message, /unknown flag '--futureflag'/);
 });
 
 test('--dry-run → dryRun true (ROS-45)', () => {

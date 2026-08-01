@@ -1,12 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { auditExpertRoutes, sanitizeRouteForDisplay } from '../src/lib/doctor-expert-routes.ts';
-import { syncFounderSkills } from '../src/lib/founder-skills/sync.ts';
-import type { SkillsInstaller } from '../src/lib/founder-skills/installer.ts';
 
 const BIN = resolve('src/bin/roster.ts');
 
@@ -142,7 +140,7 @@ test('sanitizeRouteForDisplay: escapes ANSI + newline, truncates, passes kebab t
   assert.ok(long.endsWith('…'));
 });
 
-// ── executeDoctor-level: warnings render but NEVER flip the exit code ────────
+// ── executeDoctor-level: legacy workspaces are quarantined ──────────────────
 
 type Run = { status: number; stdout: string; stderr: string };
 
@@ -161,38 +159,7 @@ function runCliInCwd(args: readonly string[], env: Record<string, string>, cwd: 
   return { status: out.status ?? -1, stdout: out.stdout, stderr: out.stderr };
 }
 
-function fakeInstaller(): SkillsInstaller {
-  const sub: Record<'claude' | 'codex', string[]> = {
-    claude: ['.claude', 'skills'],
-    codex: ['.agents', 'skills'],
-  };
-  return {
-    async add(spec, o) {
-      for (const tool of spec.tools) {
-        const dir = join(o.cwd, ...sub[tool], spec.skill);
-        mkdirSync(dir, { recursive: true });
-        writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${spec.skill}\ndescription: x\n---\nbody\n`);
-      }
-    },
-  };
-}
-
-async function withEnv(env: Record<string, string>, fn: () => Promise<void>): Promise<void> {
-  const saved = new Map<string, string | undefined>();
-  for (const [k, v] of Object.entries(env)) {
-    saved.set(k, process.env[k]);
-    process.env[k] = v;
-  }
-  try {
-    await fn();
-  } finally {
-    for (const [k, v] of saved) {
-      v === undefined ? delete process.env[k] : (process.env[k] = v);
-    }
-  }
-}
-
-test('doctor: expert-route warnings do not flip the exit code', async () => {
+test('doctor: legacy expert-route workspace fails closed without mutation', () => {
   const root = mkdtempSync(join(tmpdir(), 'roster-doctor-expert-'));
   try {
     const claudeHome = join(root, 'claude');
@@ -206,45 +173,15 @@ test('doctor: expert-route warnings do not flip the exit code', async () => {
     mkdirSync(join(ws, 'config'), { recursive: true });
     writeFileSync(join(ws, 'config', 'project.yaml'), 'name: t\n');
 
-    const install = runCliInCwd(
-      ['install', '--tool', 'claude', '--scope', 'project', '--yes', '--silent'],
-      env,
-      ws,
-    );
-    assert.equal(install.status, 0, `install failed: ${install.stderr}`);
-
-    writeExpert(ws, 'gtm', ['pricing', 'made-up-skill']);
-
-    const before = runCliInCwd(['doctor'], env, ws);
-    assert.equal(before.status, 0, `stderr: ${before.stderr}\nstdout: ${before.stdout}`);
-    assert.doesNotMatch(before.stdout, /Expert routes/);
-
-    writeFileSync(join(ws, 'founder-skills.yaml'), 'ref: v1\nskills:\n  - pricing\n');
-    await withEnv(env, async () => {
-      await syncFounderSkills({ cwd: ws, installer: fakeInstaller() });
-    });
-
+    const marker = join(ws, 'config', 'project.yaml');
+    const before = readFileSync(marker, 'utf8');
     const doc = runCliInCwd(['doctor', '--json'], env, ws);
-    assert.equal(doc.status, 0, `stderr: ${doc.stderr}\nstdout: ${doc.stdout}`);
-    const payload = JSON.parse(doc.stdout) as {
-      ok: boolean;
-      founder_skills: { status: string };
-      expert_routes: {
-        status: string;
-        warnings: Array<{ file: string; route: string; message: string }>;
-      };
-    };
-    assert.equal(payload.ok, true, 'warnings must not flip doctor ok');
-    assert.equal(payload.founder_skills.status, 'checked');
-    assert.equal(payload.expert_routes.status, 'checked');
-    assert.equal(payload.expert_routes.warnings.length, 1);
-    assert.equal(payload.expert_routes.warnings[0]!.route, 'made-up-skill');
-
-    const text = runCliInCwd(['doctor'], env, ws);
-    assert.equal(text.status, 0, `stderr: ${text.stderr}\nstdout: ${text.stdout}`);
-    assert.match(text.stdout, /Expert routes/);
-    assert.match(text.stdout, /made-up-skill/);
-    assert.match(text.stdout, /never affects exit code/);
+    assert.equal(doc.status, 1, `stderr: ${doc.stderr}\nstdout: ${doc.stdout}`);
+    const payload = JSON.parse(doc.stdout) as { ok: boolean; code: string; remedy: string };
+    assert.equal(payload.ok, false);
+    assert.equal(payload.code, 'LEGACY_WORKSPACE');
+    assert.match(payload.remedy, /migration/i);
+    assert.equal(readFileSync(marker, 'utf8'), before);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

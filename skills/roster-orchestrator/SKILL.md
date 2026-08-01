@@ -1,9 +1,9 @@
 ---
 name: roster-orchestrator
 description: "Bootstraps roster workspaces. On chat session start, surfaces unread decisions (HITL) as a single banner pointing at /inbox. On a scheduled fire, verifies the schedule is registered, resolves the agent's merged env, dispatches the named agent via the host tool's native subagent primitive, writes a run log + state.md entry, and exits. Reads roster/<function>/schedules.yaml plus pending items at both roster/<function>/pending/ (error class) and <function>/<agent>/pending/ (lesson class). Subscription-billed primitives only — never invokes the Claude CLI in headless print or API modes, nor the Anthropic SDK."
-version: "1.3.0"
+version: "1.4.0"
 trigger_conditions:
-  - "Session start in a roster workspace (identified by config/project.yaml at cwd; CLAUDE.md / AGENTS.md / CONTEXT.md typically also present)"
+  - "Session start in a legacy roster workspace (identified by config/project.yaml at cwd)"
   - "A scheduled fire prompt names a roster agent (e.g., 'Run sdr cold-outreach')"
   - "User invokes /roster-orchestrator"
 ---
@@ -19,9 +19,14 @@ The skill is **stateless**. It re-reads disk on every invocation so `/clear` and
 
 ## Working directory
 
-Operate from the workspace root only — the directory identified by `config/project.yaml` (the v1 workspace identity file). **That file alone marks a roster workspace.** The `roster/` directory (the scheduler/queue namespace) is created lazily by `roster schedule install` / `roster pending sync`, so it is **absent on a fresh init and that is normal** — do not require it for chat-session bootstrap. If `config/project.yaml` is missing, abort with:
+Operate from the workspace root and classify it before choosing a mode:
 
-> Run roster-orchestrator from your roster workspace root (must contain config/project.yaml).
+- If both `roster.yaml` and `config/project.yaml` exist, stop. This is a mixed workspace; preserve both markers and use the v2 migration flow when #363 lands.
+- If `roster.yaml` exists, stop with: `Roster v2 is host-activated through ROSTER.md. The legacy roster-orchestrator scheduler and pending bootstrap do not apply; do not invoke legacy schedule, pending, review, or workspace scripts. Thin shared host activation lands in #349.`
+- Otherwise, `config/project.yaml` alone marks a legacy v1 workspace. The `roster/` directory (the scheduler/queue namespace) is created lazily by `roster schedule install` / `roster pending sync`, so it is **absent on a fresh legacy init and that is normal** — do not require it for chat-session bootstrap.
+- If neither identity file exists, abort with:
+
+> Run roster-orchestrator from a legacy Roster workspace root (must contain config/project.yaml); Roster v2 uses roster.yaml and ROSTER.md instead.
 
 A missing `roster/` simply means zero error-class pending items (see Mode 1). The stricter requirement on `roster/<function>/schedules.yaml` applies only to scheduled-fire mode (Mode 2).
 

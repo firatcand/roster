@@ -21,17 +21,26 @@ test('inbox: SKILL.md exists at skills/inbox/SKILL.md', () => {
   assert.ok(existsSync(inboxSrc), 'inbox SKILL.md present');
 });
 
-test('inbox: Working-directory guard identifies a workspace by config/project.yaml alone', () => {
+test('inbox: guard preserves the explicit legacy v1 branch', () => {
   const content = readFileSync(inboxSrc, 'utf8');
-  assert.ok(
-    !/must contain config\/project\.yaml and roster\//.test(content),
-    'old "must contain config/project.yaml and roster/" guard is gone',
-  );
   assert.match(
     content,
-    /must contain config\/project\.yaml\)/,
-    'abort message now requires only config/project.yaml',
+    /`config\/project\.yaml` alone identifies a legacy v1 workspace/,
+    'legacy behavior is explicitly quarantined behind the v1 marker',
   );
+});
+
+test('inbox: v2 branch stops before invoking the legacy review queue', () => {
+  const content = readFileSync(inboxSrc, 'utf8');
+  assert.match(content, /If `roster\.yaml` exists, stop/);
+  assert.match(content, /do not run roster review or inspect legacy pending\/ trees/i);
+  assert.match(content, /#356 and #358/, 'points to the portable evidence and Dreamer replacements');
+});
+
+test('inbox: mixed markers fail closed with migration guidance', () => {
+  const content = readFileSync(inboxSrc, 'utf8');
+  assert.match(content, /both `roster\.yaml` and `config\/project\.yaml` exist/);
+  assert.match(content, /#363/);
 });
 
 test('inbox: documents that a missing roster/ is an empty queue, not an error', () => {

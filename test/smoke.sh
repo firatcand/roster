@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Roster Phase 1 smoke test.
+# Roster packaged-product smoke test.
 #
 # End-to-end exercise of the published-package install path:
 #   1. pnpm build the source
@@ -7,7 +7,7 @@
 #   3. npm install -g <tarball> --prefix <isolated-tmp-prefix>
 #   4. <prefix>/bin/roster install with HOME + ROSTER_CLAUDE_HOME redirected
 #   5. <prefix>/bin/roster init my-test-workspace in a scratch dir
-#   6. Assert all the files Phase 1 promises actually land
+#   6. Assert the sparse v2 workspace and generated host activation contracts
 #
 # Everything writes under a single tmp dir cleaned up on exit (trap),
 # so the host machine's /usr/local, ~/.claude, and ~/.npm-global are
@@ -167,156 +167,94 @@ assert "-f \"$GEMINI_HOME/extensions/tasks/SKILL.md\"" "gemini installs tasks sk
 assert "-f \"$GEMINI_HOME/agents/lesson-drafter.md\"" "gemini emits lesson-drafter.md (md-copy)"
 assert "-f \"$GEMINI_HOME/agents/brain-organizer.md\"" "gemini emits brain-organizer.md (ROS-145 — md-copy)"
 
-# 5. roster init
+# 5. Sparse v2 workspace and qualified registry
 echo ""
-echo "===> 5. roster init"
+echo "===> 5. sparse v2 workspace"
 cd "$WORKSPACE"
-"$ROSTER_BIN" init my-test-workspace --silent --no-git
-assert "-f CLAUDE.md" "CLAUDE.md exists"
-assert_contains CLAUDE.md "my-test-workspace" "CLAUDE.md contains project name"
-assert "! -z \"\$(grep -v '{{PROJECT_NAME}}' CLAUDE.md)\"" "no unresolved {{PROJECT_NAME}} tokens"
-assert "-f conventions.md" "conventions.md ported into workspace"
-assert "-f brain/RESOLVER.md" "brain/RESOLVER.md ported (ROS-139 brain scaffold)"
-assert_contains CLAUDE.md "roster:managed:start brain" "CONTEXT/CLAUDE.md carries the brain managed region"
-assert "-f gtm/EXPERT.md" "gtm/EXPERT.md ported (function dir, no preinstalled agent)"
-assert "-f product/EXPERT.md" "product/EXPERT.md ported"
-assert "-f design/EXPERT.md" "design/EXPERT.md ported"
-assert "-f ops/EXPERT.md" "ops/EXPERT.md ported"
-assert "! -e gtm/sdr" "no SDR worked example shipped into workspace"
-assert "-f chief-of-staff/agent.md" "chief-of-staff/agent.md ported"
-assert "-f dreamer/agent.md" "dreamer/agent.md ported"
-assert "-x scripts/new-agent.sh" "scripts/new-agent.sh ported + executable (ROS-58)"
-assert "-x scripts/lib/bindings-prompt.sh" "scripts/lib/bindings-prompt.sh ported + executable"
-assert "-f .config/functions.yaml" ".config/functions.yaml ported"
-assert "-d logs/cron" "logs/cron/ ported"
-assert "-f .env.example" ".env.example exists"
-assert "-f .gitignore" ".gitignore exists"
-assert_contains .gitignore "# Roster defaults" ".gitignore has Roster defaults marker"
-
-# ROS-79: v1 single-project workspace shape — positive assertions after roster init.
-# Use a recursive find so nested legacy paths (e.g. <function>/<agent>/projects)
-# also fail the assertion, not just a top-level projects/ dir.
-assert "-z \"\$(find . -type d -name projects)\"" "no projects/ dirs anywhere after init (v1 single-project shape)"
-# ROS-79 follow-up: also guard the prompt TEXT. v0.4 EXPERT/agent prompts pointed
-# agents at projects/<project>/... paths that do not exist in the v1 flat shape.
-# (The disabled bindings-prompt.sh historical note uses projects/<inst>/, which
-# this literal does not match — intentionally left as a migration record.)
-assert "-z \"\$(grep -rl 'projects/<project>/' . 2>/dev/null)\"" "no projects/<project>/ path residue in shipped prompts (v1 flat shape)"
-assert "-f config/project.yaml" "config/project.yaml ported (v1 identity)"
-# ROS-81: config/project.yaml must have substituted {{PROJECT_NAME}} + {{DISPLAY_NAME}}
-assert_contains config/project.yaml "name: my-test-workspace" "config/project.yaml name substituted"
-assert_contains config/project.yaml 'display_name: "my-test-workspace"' "config/project.yaml display_name substituted"
-assert_count config/project.yaml "{{PROJECT_NAME}}" 0 "config/project.yaml has no PROJECT_NAME placeholder"
-assert_count config/project.yaml "{{DISPLAY_NAME}}" 0 "config/project.yaml has no DISPLAY_NAME placeholder"
-assert "! -e config/project.yaml.template" "config/project.yaml.template suffix stripped after init"
-# ROS-143: fresh init produces the workspace identity file but NOT the runtime
-# roster/ queue tree — the exact precondition that made the Codex
-# roster-orchestrator chat bootstrap falsely abort. Lock it so the mode-aware
-# guard always has a real fresh-init scaffold to bootstrap against. (.roster/
-# scaffold metadata DOES exist and must not be confused with runtime roster/.)
-assert "! -e roster" "fresh init does NOT create a runtime roster/ dir (ROS-143 precondition)"
-assert "-d .roster" ".roster/ scaffold metadata exists, distinct from runtime roster/ (ROS-143)"
-assert "-d guidelines" "guidelines/ ported (v1 cross-agent substrate)"
-assert "-f guidelines/voice.md" "guidelines/voice.md ported"
-assert "-f guidelines/messaging.md" "guidelines/messaging.md ported"
-assert "-f guidelines/brand-book.md" "guidelines/brand-book.md ported"
-assert "-f guidelines/asset-links.md" "guidelines/asset-links.md ported"
-assert "-d guidelines/icps" "guidelines/icps/ ported"
-assert "-f guidelines/icps/_persona-template.md" "guidelines/icps/_persona-template.md seed ported"
-
-# 5c. new-agent.sh end-to-end against the fresh workspace.
-# Script has interactive tool-bindings prompts — </dev/null + AGENT_TEAM_NO_CONFIRM=1
-# is load-bearing per non-interactive-flags-need-tty-audits.md.
-AGENT_TEAM_NO_CONFIRM=1 bash scripts/new-agent.sh gtm test-agent </dev/null > /dev/null
-assert "-d gtm/test-agent" "new-agent.sh creates gtm/test-agent/ (ROS-58)"
-assert "-f gtm/test-agent/agent.md" "new-agent.sh creates agent.md (ROS-58)"
-assert "-f .claude/commands/test-agent.md" "new-agent.sh creates slash command (ROS-58)"
-# ROS-79: flat v1 agent shape — no projects/ subdir anywhere under the agent,
-# all expected files/dirs present. Recursive find guards against any nested
-# projects/ regression, not just an immediate child.
-assert "-z \"\$(find gtm/test-agent -type d -name projects)\"" "new-agent.sh does NOT create any projects/ subdir (v1 flat shape)"
-assert "-f gtm/test-agent/README.md" "new-agent.sh creates README.md"
-assert "-f gtm/test-agent/config.yaml" "new-agent.sh creates config.yaml (v1 flat)"
-assert "-f gtm/test-agent/asset-references.md" "new-agent.sh creates asset-references.md"
-assert "-d gtm/test-agent/plans" "new-agent.sh creates plans/"
-assert "-d gtm/test-agent/playbook" "new-agent.sh creates playbook/"
-assert "-d gtm/test-agent/pending" "new-agent.sh creates pending/"
-assert "-d gtm/test-agent/logs/runs" "new-agent.sh creates logs/runs/"
-assert "-d gtm/test-agent/logs/feedback" "new-agent.sh creates logs/feedback/"
-assert "-d gtm/test-agent/subagents" "new-agent.sh creates subagents/"
-assert "-f gtm/test-agent/.mcp.json" "new-agent.sh creates .mcp.json"
-# --slash-only recovery flag (ROS-53) — exercised end-to-end against the shipped script
-rm .claude/commands/test-agent.md
-AGENT_TEAM_NO_CONFIRM=1 bash scripts/new-agent.sh --slash-only gtm test-agent </dev/null > /dev/null
-assert "-f .claude/commands/test-agent.md" "--slash-only recovery (ROS-53) works via shipped script (ROS-58)"
-
-# Idempotency: re-run init with --force, marker should still appear exactly once
-# AND the v1 shape contract must still hold (no resurrected projects/, identity
-# anchor + guidelines seeds preserved).
-"$ROSTER_BIN" init my-test-workspace --silent --no-git --force
-assert_count .gitignore "# Roster defaults" 1 "Roster defaults block appended exactly once"
-assert "-z \"\$(find . -type d -name projects)\"" "no projects/ dirs after --force re-init"
-assert "-f config/project.yaml" "config/project.yaml survives --force re-init"
-assert "-f guidelines/voice.md" "guidelines/voice.md survives --force re-init"
-
-# 6. Schedule list/status/remove smoke (ROS-36).
-#
-# Writes schedules.yaml + state.md as fixtures directly (skipping install)
-# so the section works cross-platform — `install --tool claude` is
-# macOS/Windows-only, and `install --tool codex` requires a logged-in
-# Codex CLI with cleared env, neither of which Linux CI provides.
-# Install is exercised in its own unit tests + the macOS Mac mini gate
-# (ROS-40). What's being smoked here is the four NEW commands.
-echo ""
-echo "===> 5e. roster upgrade (ROS-130) — runs in the $WORKSPACE workspace (CWD)"
-assert "-f .roster/scaffold-manifest.json" "init wrote the scaffold manifest"
-# Fresh workspace → upgrade is a clean no-op.
-UPGRADE_OUT=$("$ROSTER_BIN" upgrade 2>&1)
-assert "$? -eq 0" "roster upgrade exits 0 on a fresh workspace"
-echo "$UPGRADE_OUT" | grep -q "already matches" && pass "upgrade: fresh workspace reports no changes" || fail "upgrade: expected no-change report"
-# Delete a scaffold file → upgrade recreates it (create path, end-to-end).
-rm -f gtm/EXPERT.md
-"$ROSTER_BIN" upgrade > /dev/null 2>&1
-assert "-f gtm/EXPERT.md" "upgrade recreates a deleted scaffold file"
-# Edit a file → --dry-run must not write a .new.
-printf '\nMY EDIT\n' >> conventions.md
-"$ROSTER_BIN" upgrade --dry-run > /dev/null 2>&1
-assert "! -f conventions.md.new" "upgrade --dry-run writes nothing"
-# ROS-131: guidelines/ excluded by default — editing voice.md never yields a .new.
-printf '\nMY VOICE\n' >> guidelines/voice.md
-"$ROSTER_BIN" upgrade > /dev/null 2>&1
-assert "! -f guidelines/voice.md.new" "upgrade excludes guidelines/ by default (no .new)"
-# --exclude skips an additional path (gtm here).
-rm -f gtm/EXPERT.md.new; printf '\nEDIT\n' >> gtm/EXPERT.md
-"$ROSTER_BIN" upgrade --exclude gtm > /dev/null 2>&1
-assert "! -f gtm/EXPERT.md.new" "upgrade --exclude skips the named path"
-
-echo ""
-echo "===> 5f. inbox / headless review apply (ROS-132) — in $WORKSPACE"
-# Shipped banner reworded to "unread decisions … /inbox" (rebrand only).
-assert_contains "$REPO_ROOT/templates/hooks/banner.sh" "unread %s awaiting — run /inbox" "banner.sh reworded to /inbox"
-if grep -q "pending HITL items — run" "$REPO_ROOT/templates/hooks/banner.sh"; then
-  fail "old banner literal still present in banner.sh"
+"$ROSTER_BIN" init my-test-workspace --silent
+assert "-f roster.yaml" "init creates roster.yaml"
+assert "-f ROSTER.md" "init creates ROSTER.md"
+TOP_LEVEL=$(find . -mindepth 1 -maxdepth 1 -print | sed 's#^./##' | sort)
+if [ "$TOP_LEVEL" = $'ROSTER.md\nroster.yaml' ]; then
+  pass "fresh init creates exactly two files"
 else
-  pass "old banner literal gone from banner.sh"
+  fail "fresh init creates exactly two files (got: $TOP_LEVEL)"
 fi
-# Plant a decision, list it (with id), approve it headlessly → moves to target.
-mkdir -p roster/gtm/pending
-printf -- '---\ntarget_on_approve: gtm/sdr/logs/runs/resolved.md\n---\nbody\n' > roster/gtm/pending/error-smoke.md
-INBOX_ID=$("$ROSTER_BIN" review --json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const a=JSON.parse(s);process.stdout.write(a[0]?a[0].id:'')})" 2>/dev/null)
-assert "-n \"$INBOX_ID\"" "review --json yields a decision id"
-"$ROSTER_BIN" review --approve "$INBOX_ID" --json > /dev/null 2>&1
-assert "-f gtm/sdr/logs/runs/resolved.md" "review --approve <id> moves the decision to its target"
-assert "! -f roster/gtm/pending/error-smoke.md" "approved decision leaves the pending queue"
+assert "! -e .roster" "fresh init does not create generated or state metadata"
+assert "! -e functions" "fresh init does not create optional authored roots"
+assert "! -e .env" "fresh init does not create local secret files"
+assert "! -e .gitignore" "fresh init does not create unrelated Git policy"
+assert_contains roster.yaml "workspace_id: my-test-workspace" "registry carries workspace identity"
 
+# An identical retry adopts the exact bytes without overlaying authored content.
+INIT_ROSTER_HASH=$(shasum -a 256 roster.yaml | awk '{print $1}')
+INIT_BOOTSTRAP_HASH=$(shasum -a 256 ROSTER.md | awk '{print $1}')
+if "$ROSTER_BIN" init my-test-workspace --silent > /dev/null 2>&1; then
+  pass "identical init retry is byte-idempotent"
+else
+  fail "identical init retry is byte-idempotent"
+fi
+assert "\"\$(shasum -a 256 roster.yaml | awk '{print \$1}')\" = '$INIT_ROSTER_HASH'" "init retry preserves roster.yaml"
+assert "\"\$(shasum -a 256 ROSTER.md | awk '{print \$1}')\" = '$INIT_BOOTSTRAP_HASH'" "init retry preserves ROSTER.md"
+
+"$ROSTER_BIN" scaffold function gtm --purpose "Go-to-market policy" --json > /dev/null
+"$ROSTER_BIN" scaffold function product --purpose "Product policy" --json > /dev/null
+"$ROSTER_BIN" scaffold agent social-manager --scope function:gtm --purpose "Social discovery" --json > /dev/null
+"$ROSTER_BIN" scaffold agent social-manager --scope function:product --purpose "Product social" --json > /dev/null
+"$ROSTER_BIN" scaffold guideline voice --scope function:gtm --purpose "Company voice" --json > /dev/null
+"$ROSTER_BIN" scaffold plan opportunity-discovery --scope agent:gtm/social-manager --purpose "Find reply opportunities" --json > /dev/null
+"$ROSTER_BIN" scaffold subagent researcher --scope agent:gtm/social-manager --purpose "Collect evidence" --json > /dev/null
+"$ROSTER_BIN" scaffold tool-use social-search --scope plan:gtm/social-manager#opportunity-discovery --purpose "Use the selected search source" --json > /dev/null
+"$ROSTER_BIN" scaffold lesson strong-hook --scope agent:gtm/social-manager --purpose "Approved hook pattern" --json > /dev/null
+
+assert "-f functions/gtm/function.yaml" "function scaffold creates only the registered function"
+assert "-f functions/gtm/agents/social-manager/agent.yaml" "agent scaffold creates its qualified record"
+assert "-f functions/product/agents/social-manager/agent.yaml" "same local agent id works in another function"
+assert "-f functions/gtm/agents/social-manager/plans/opportunity-discovery.yaml" "plan scaffold creates one structured plan"
+assert "-f functions/gtm/agents/social-manager/tools/social-search.yaml" "plan-scoped tool guidance lands under its agent"
+assert "-f functions/gtm/agents/social-manager/playbook/strong-hook.md" "lesson scaffold creates one authored lesson"
+assert "! -e functions/product/agents/social-manager/plans" "unused agent slots remain absent"
+assert "! -e functions/gtm/agents/social-manager/logs" "scaffolding creates no runtime log forest"
+
+DISCOVER_JSON=$("$ROSTER_BIN" discover social-manager --kind agent --json)
+if node -e 'const x=JSON.parse(process.argv[1]); const ids=x.records.map(r=>r.qualified_id); if(!x.ok || ids.length!==2 || !ids.includes("gtm/social-manager") || !ids.includes("product/social-manager")) process.exit(1)' "$DISCOVER_JSON"; then
+  pass "discovery returns both qualified same-name agents"
+else
+  fail "discovery returns both qualified same-name agents"
+fi
+VALIDATE_JSON=$("$ROSTER_BIN" validate --json)
+if node -e 'const x=JSON.parse(process.argv[1]); if(!x.ok || x.diagnostics.some(d=>d.severity==="error")) process.exit(1)' "$VALIDATE_JSON"; then
+  pass "validate accepts the registered sparse workspace"
+else
+  fail "validate accepts the registered sparse workspace"
+fi
+
+# 5b. Explicit v2 project activation works without user-level host homes.
 echo ""
-echo "===> 5g. roster update umbrella (ROS-133) — in $WORKSPACE"
-UPDATE_OUT=$(HOME="$FAKE_HOME" ROSTER_CLAUDE_HOME="$CLAUDE_HOME" "$ROSTER_BIN" update 2>&1)
-assert "$? -eq 0" "roster update exits 0 in a workspace"
-echo "$UPDATE_OUT" | grep -q "Skills + agents" && pass "update: runs the install step" || fail "update: missing install step"
-echo "$UPDATE_OUT" | grep -q "Scaffold files" && pass "update: runs the upgrade step" || fail "update: missing upgrade step"
-echo "$UPDATE_OUT" | grep -q "npm i -g @firatcand/roster@latest" && pass "update: prints CLI-bump reminder" || fail "update: missing CLI reminder"
-assert "-f .claude/skills/inbox/SKILL.md" "update installs the inbox skill project-local"
+echo "===> 5b. generated project activation"
+HOME="$FAKE_HOME" ROSTER_CLAUDE_HOME="$SMOKE_DIR/missing-claude-home" \
+  "$ROSTER_BIN" install --tool claude --scope project --yes --silent
+assert "-f .claude/CLAUDE.md" "Claude activation creates its project instruction"
+assert "-f .roster/generated-manifest.json" "project activation creates the generated manifest"
+assert "-f .roster/.gitignore" "first generated state creates narrow state ignore policy"
+assert_contains .roster/.gitignore "^state/$" "generated ignore policy covers only local state"
+
+HOME="$FAKE_HOME" ROSTER_CODEX_HOME="$SMOKE_DIR/missing-codex-home" \
+  "$ROSTER_BIN" install --tool codex --scope project --yes --silent
+assert "-f AGENTS.md" "Codex activation creates root AGENTS.md when safe"
+assert "-f .agents/skills/roster/SKILL.md" "Codex activation creates its project skill fallback"
+assert_contains roster.yaml "claude: enabled" "Claude activation is registered"
+assert_contains roster.yaml "codex: enabled" "Codex activation is registered"
+
+"$ROSTER_BIN" update > /dev/null
+assert "! -e .claude/skills" "v2 update does not copy the legacy skill forest"
+assert "! -e brain" "v2 update does not create optional Brain files"
+assert "! -e pending" "v2 update does not create approval or operations queues"
+if "$ROSTER_BIN" upgrade > /dev/null 2>&1; then
+  fail "v2 workspace refuses the eager legacy upgrader"
+else
+  pass "v2 workspace refuses the eager legacy upgrader"
+fi
 
 echo ""
 echo "===> 6. Schedule list/status/remove (ROS-36)"
@@ -376,8 +314,8 @@ echo "$LIST_OUT" | grep -q "heartbeat-noop" && fail "list (after remove): still 
 # 8. founder-skills sync (ROS-125) — runs in the $WORKSPACE workspace (CWD).
 echo ""
 echo "===> 8. founder-skills sync"
-# 8a. Opt-out: the scaffold ships the .example, NOT an active manifest.
-assert "-f founder-skills.yaml.example" "scaffold ships founder-skills.yaml.example"
+# 8a. Opt-out: the sparse scaffold creates neither an example nor an active manifest.
+assert "! -f founder-skills.yaml.example" "sparse scaffold creates no founder-skills example"
 assert "! -f founder-skills.yaml" "no active founder-skills.yaml after init (opt-out default)"
 # 8b. No manifest → sync is a clean no-op, exit 0, nothing installed.
 "$ROSTER_BIN" skills sync --silent > /dev/null 2>&1

@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, existsSync, lstatSync, rmSync, symlinkSync, wri
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { renderRosterBootstrap } from '../src/lib/generated-artifacts.ts';
 
 const BIN = resolve('src/bin/roster.ts');
 
@@ -46,10 +47,12 @@ function runCli(
 }
 
 function makeWorkspace(root: string): string {
-  // Minimal workspace fixture: config/project.yaml is the detection signal.
   const ws = mkdtempSync(join(root, 'ws-'));
-  mkdirSync(join(ws, 'config'));
-  writeFileSync(join(ws, 'config', 'project.yaml'), 'name: test\n');
+  writeFileSync(
+    join(ws, 'roster.yaml'),
+    'schema_version: 2\nworkspace_id: test\nfunctions: {}\nhosts: {}\n',
+  );
+  writeFileSync(join(ws, 'ROSTER.md'), renderRosterBootstrap());
   return ws;
 }
 
@@ -247,18 +250,18 @@ test('install --tool unknown exits 1 and stderr header is structured (no stack w
 
 // ROS-109 acceptance tests — install scope + --yes + comma-separated --tool.
 
-test('ROS-109: install --scope project from a non-workspace dir exits 2 with the documented error', () => {
+test('install --scope project from a non-workspace dir exits 1 with the v2 sentinel remedy', () => {
   const h = makeHomes(['claude']);
-  // CWD is the tmpdir root which has no config/project.yaml.
+  // CWD is the tmpdir root which has no roster.yaml.
   try {
     const r = runCli(['install', '--scope', 'project', '--yes'], {
       ROSTER_CLAUDE_HOME: h.claude,
       ROSTER_CODEX_HOME: h.codex,
       ROSTER_GEMINI_HOME: h.gemini,
     }, h.root);
-    assert.equal(r.status, 2, `stderr: ${r.stderr}`);
+    assert.equal(r.status, 1, `stderr: ${r.stderr}`);
     assert.match(r.stderr, /project-level install requires a roster workspace/i);
-    assert.match(r.stderr, /config\/project\.yaml/);
+    assert.match(r.stderr, /roster\.yaml/);
     assert.match(r.stderr, /--scope user/);
   } finally {
     h.cleanup();
@@ -282,7 +285,7 @@ test('ROS-109: install --tool all --scope user --yes writes to home-dir paths vi
   }
 });
 
-test('ROS-109: install --scope project from a workspace writes to <workspace>/.tool/ paths', () => {
+test('install --scope project from a v2 workspace writes minimal generated activation', () => {
   const h = makeHomes(['claude']);
   try {
     const ws = makeWorkspace(h.root);
@@ -292,10 +295,29 @@ test('ROS-109: install --scope project from a workspace writes to <workspace>/.t
       ROSTER_GEMINI_HOME: h.gemini,
     }, ws);
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
-    // Project-scope install: skills land inside the workspace, NOT in claude home.
-    assert.ok(existsSync(join(ws, '.claude', 'skills')), 'workspace .claude/skills written');
-    assert.ok(existsSync(join(ws, '.claude', 'agents')), 'workspace .claude/agents written');
+    assert.ok(existsSync(join(ws, '.claude', 'CLAUDE.md')), 'workspace Claude bootstrap written');
+    assert.ok(existsSync(join(ws, '.roster', 'generated-manifest.json')), 'generated manifest written');
+    assert.ok(!existsSync(join(ws, '.claude', 'agents')), 'legacy agent forest not written');
     assert.ok(!existsSync(join(h.claude, 'skills')), 'user-scope claude NOT touched');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 project install preflights unsupported Gemini before writing any supported host', () => {
+  const h = makeHomes(['claude', 'gemini']);
+  try {
+    const ws = makeWorkspace(h.root);
+    const r = runCli(['install', '--yes', '--silent'], {
+      ROSTER_CLAUDE_HOME: h.claude,
+      ROSTER_CODEX_HOME: h.codex,
+      ROSTER_GEMINI_HOME: h.gemini,
+    }, ws);
+    assert.equal(r.status, 3, r.stderr);
+    assert.match(r.stderr, /Gemini project activation is not available/);
+    assert.equal(existsSync(join(ws, '.roster')), false);
+    assert.equal(existsSync(join(ws, '.claude')), false);
+    assert.equal(existsSync(join(ws, 'AGENTS.md')), false);
   } finally {
     h.cleanup();
   }
@@ -350,7 +372,7 @@ test('ROS-109: install --scope foo exits 1 with a clear error', () => {
   }
 });
 
-test('ROS-109: --yes from inside a workspace defaults to project scope', () => {
+test('--yes from inside a v2 workspace defaults to project scope', () => {
   const h = makeHomes(['claude']);
   try {
     const ws = makeWorkspace(h.root);
@@ -362,7 +384,7 @@ test('ROS-109: --yes from inside a workspace defaults to project scope', () => {
     }, ws);
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     // Should land under workspace, not home.
-    assert.ok(existsSync(join(ws, '.claude', 'skills')), 'workspace install under --yes default');
+    assert.ok(existsSync(join(ws, '.claude', 'CLAUDE.md')), 'workspace activation under --yes default');
     assert.ok(!existsSync(join(h.claude, 'skills')), 'user home NOT used');
   } finally {
     h.cleanup();
@@ -372,7 +394,7 @@ test('ROS-109: --yes from inside a workspace defaults to project scope', () => {
 test('ROS-109: --yes outside a workspace defaults to user scope', () => {
   const h = makeHomes(['claude']);
   try {
-    // CWD has no config/project.yaml.
+    // CWD has no roster.yaml.
     const r = runCli(['install', '--tool', 'claude', '--yes', '--silent'], {
       ROSTER_CLAUDE_HOME: h.claude,
       ROSTER_CODEX_HOME: h.codex,
@@ -392,4 +414,35 @@ test('ROS-109: help text documents --scope and --yes', () => {
   assert.match(r.stdout, /--yes/);
   assert.match(r.stdout, /-y/);
   assert.match(r.stdout, /project\|user/);
+});
+
+test('v2 project install --json works without a user host home and reports assurance', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspace(h.root);
+    const r = runCli(
+      ['install', '--tool', 'claude', '--scope', 'project', '--yes', '--json'],
+      {
+        ROSTER_CLAUDE_HOME: h.claude,
+        ROSTER_CODEX_HOME: h.codex,
+        ROSTER_GEMINI_HOME: h.gemini,
+        PATH: '',
+      },
+      ws,
+    );
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stderr, '');
+    const payload = JSON.parse(r.stdout) as {
+      ok: boolean;
+      scope: string;
+      hosts: Array<{ host: string; activation: { assurance: string; registryUpdated: boolean } }>;
+    };
+    assert.equal(payload.ok, true);
+    assert.equal(payload.scope, 'project');
+    assert.equal(payload.hosts[0]?.host, 'claude');
+    assert.equal(payload.hosts[0]?.activation.assurance, 'advisory-manual');
+    assert.equal(payload.hosts[0]?.activation.registryUpdated, true);
+  } finally {
+    h.cleanup();
+  }
 });

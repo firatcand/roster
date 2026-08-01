@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import fsExtra from 'fs-extra';
 import chalk from 'chalk';
@@ -8,6 +9,20 @@ import type { Scope } from './install-scope.ts';
 import { permissionError } from './errors.ts';
 import { renderSkillFrontmatterContent } from './frontmatter.ts';
 import { renderCodexAgentToml, RosterAgentRenderError } from './agent-render.ts';
+import {
+  installV2ProjectActivation,
+  type ProjectActivationInstallResult,
+} from './generated-artifacts.ts';
+import { probeWorkspace } from './workspace-probe.ts';
+import {
+  EXIT_NO_TOOLS,
+  RosterError,
+  legacyWorkspaceError,
+  mixedWorkspaceError,
+  unsafeWorkspaceMarkerError,
+  workspaceRequiredError,
+} from './errors.ts';
+import { workspaceFailure } from './workspace-diagnostics.ts';
 
 const { copy, ensureDir } = fsExtra;
 
@@ -28,6 +43,8 @@ export type InstallOptions = {
   // suggest chmod (workspace-local), user-scope errors suggest sudo (home dir).
   // See errors.ts#permissionError.
   scope?: Scope;
+  projectRoot?: string;
+  hostVersion?: string;
 };
 
 export type InstallResult = {
@@ -35,6 +52,7 @@ export type InstallResult = {
   skillsTarget: string;
   agentsCount: number;
   agentsTarget: string | null;
+  activation?: ProjectActivationInstallResult;
 };
 
 export class RosterPathTraversalError extends Error {
@@ -48,6 +66,37 @@ export class RosterPathTraversalError extends Error {
     this.root = root;
     this.label = label;
   }
+}
+
+export function detectProjectHostVersion(host: 'claude' | 'codex'): string | undefined {
+  const result = spawnSync(host, ['--version'], {
+    encoding: 'utf8',
+    timeout: 2_000,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  if (result.status !== 0) return undefined;
+  const version = result.stdout.trim();
+  return version.length > 0 && version.length <= 256 ? version : undefined;
+}
+
+export function detectProjectHostVersions(): Partial<Record<'claude' | 'codex', string>> {
+  const versions: Partial<Record<'claude' | 'codex', string>> = {};
+  for (const host of ['claude', 'codex'] as const) {
+    const version = detectProjectHostVersion(host);
+    if (version !== undefined) versions[host] = version;
+  }
+  return versions;
+}
+
+export function unsupportedV2ProjectHostError(host: 'gemini'): RosterError {
+  return new RosterError({
+    header: `roster: ${host === 'gemini' ? 'Gemini' : host} project activation is not available in Roster v2`,
+    body: '  Roster v2 currently has generated activation contracts for Claude Code and Codex only.',
+    remedy: '  Use --tool claude or --tool codex. Gemini remains quarantined pending measured demand.',
+    exitCode: EXIT_NO_TOOLS,
+    code: 'HOST_UNSUPPORTED',
+    details: { host, scope: 'project' },
+  });
 }
 
 // Internal invariant check. Not a defense against ROSTER_*_HOME=/etc; that env var is
@@ -159,6 +208,49 @@ async function writeRenderedOne(
 }
 
 export async function installToTool(tool: Tool, opts: InstallOptions): Promise<InstallResult> {
+  if (opts.scope === 'project') {
+    const projectRoot = opts.projectRoot ?? resolve(tool.configRoot, '..');
+    const probe = probeWorkspace(projectRoot);
+    if (probe.kind === 'legacy') throw legacyWorkspaceError(probe.legacySignals);
+    if (probe.kind === 'mixed') throw mixedWorkspaceError(probe.v2Signals, probe.legacySignals);
+    if (probe.kind === 'unsafe') throw unsafeWorkspaceMarkerError(probe.unsafeSignals);
+    if (probe.kind === 'none') throw workspaceRequiredError(projectRoot);
+    if (tool.key === 'gemini') {
+      throw unsupportedV2ProjectHostError(tool.key);
+    }
+    const hostVersions = detectProjectHostVersions();
+    if (opts.hostVersion !== undefined) hostVersions[tool.key] = opts.hostVersion;
+    const activation = installV2ProjectActivation({
+      root: projectRoot,
+      host: tool.key,
+      hostVersions,
+    });
+    if (!activation.ok) {
+      const first = activation.diagnostics.find((diagnostic) => diagnostic.severity === 'error');
+      if (first !== undefined) {
+        throw workspaceFailure(
+          first.code,
+          first.message,
+          first.remedy ?? 'Resolve the generated activation drift and retry the project install.',
+          first.details,
+        );
+      }
+      throw workspaceFailure(
+        'GENERATED_FILE_EDITED',
+        `Project activation for '${tool.key}' is incomplete.`,
+        'Resolve generated activation drift and retry the project install.',
+        { host: tool.key },
+      );
+    }
+    return {
+      skillsCount: 0,
+      skillsTarget: tool.skillsTarget,
+      agentsCount: 0,
+      agentsTarget: tool.agentsTarget,
+      activation,
+    };
+  }
+
   const logger = opts.logger ?? consoleLogger;
   const confirm = opts.confirm ?? defaultConfirm;
   const silent = opts.silent ?? false;

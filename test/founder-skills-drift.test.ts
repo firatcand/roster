@@ -4,6 +4,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { auditFounderSkillsDrift } from '../src/lib/founder-skills/drift.ts';
+import {
+  renderRosterBootstrap,
+  updateV2ProjectActivations,
+} from '../src/lib/generated-artifacts.ts';
 import { syncFounderSkills } from '../src/lib/founder-skills/sync.ts';
 import type { SkillsInstaller } from '../src/lib/founder-skills/installer.ts';
 
@@ -30,8 +34,9 @@ async function withWorkspace(fn: (cwd: string) => Promise<void>): Promise<void> 
   const cwd = mkdtempSync(join(tmpdir(), 'roster-fs-drift-'));
   const claudeHome = join(cwd, '.h-claude');
   mkdirSync(claudeHome, { recursive: true });
-  mkdirSync(join(cwd, 'config'), { recursive: true });
-  writeFileSync(join(cwd, 'config', 'project.yaml'), 'name: t\n');
+  writeFileSync(join(cwd, 'roster.yaml'), 'schema_version: 2\nworkspace_id: test\nfunctions: {}\nhosts: {}\n');
+  writeFileSync(join(cwd, 'ROSTER.md'), renderRosterBootstrap());
+  assert.equal(updateV2ProjectActivations({ root: cwd }).ok, true);
   const saved = {
     c: process.env['ROSTER_CLAUDE_HOME'],
     x: process.env['ROSTER_CODEX_HOME'],

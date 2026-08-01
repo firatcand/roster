@@ -1,0 +1,1867 @@
+import { createHash } from 'node:crypto';
+import { posix } from 'node:path';
+import { getPackageVersion } from './paths.ts';
+import {
+  ensureRosterStateRoot,
+  ensureWorkspaceDirectory,
+  hashWorkspaceBytes,
+  publishCreateOnly,
+  readWorkspaceText,
+  removeManagedWorkspaceFileIfHash,
+  removePublishedWorkspaceFile,
+  replaceWorkspaceFile,
+  tryReadWorkspaceFile,
+  withWorkspaceLock,
+  type WorkspaceDurabilityFs,
+  type WorkspaceFileIdentityToken,
+} from './workspace-io.ts';
+import {
+  isWorkspaceFailure,
+  workspaceDiagnostic,
+  workspaceFailure,
+  type WorkspaceDiagnostic,
+} from './workspace-diagnostics.ts';
+import { addWorkspaceHost, parseWorkspaceRegistry } from './workspace-record.ts';
+import { probeWorkspace } from './workspace-probe.ts';
+import {
+  legacyWorkspaceError,
+  mixedWorkspaceError,
+  unsafeWorkspaceMarkerError,
+  workspaceRequiredError,
+} from './errors.ts';
+
+export type ActivationAssurance = 'auto-loaded' | 'advisory-manual' | 'missing';
+export type GeneratedArtifactHost = 'neutral' | 'claude' | 'codex';
+export type HostGeneratedArtifact = Exclude<GeneratedArtifactHeader['artifact'], 'roster-bootstrap'>;
+
+export type HostActivationAttestation = {
+  schema_version: 1;
+  fixture_id: string;
+  host: Exclude<GeneratedArtifactHost, 'neutral'>;
+  artifact: HostGeneratedArtifact;
+  tested_host_version: string;
+  minimum_host_version: string;
+  maximum_host_version_exclusive?: string;
+  outcome: 'passed' | 'disconfirmed';
+};
+
+export const CHECKED_IN_HOST_ATTESTATIONS: readonly HostActivationAttestation[] = Object.freeze([
+  {
+    schema_version: 1,
+    fixture_id: 'test/fixtures/host-activation/claude-project/.claude/CLAUDE.md@2.1.220',
+    host: 'claude',
+    artifact: 'claude-project-instructions',
+    tested_host_version: '2.1.220',
+    minimum_host_version: '2.1.220',
+    maximum_host_version_exclusive: '2.1.221',
+    outcome: 'passed',
+  },
+  {
+    schema_version: 1,
+    fixture_id: 'test/fixtures/host-activation/claude-rule/.claude/rules/roster.md@2.1.220',
+    host: 'claude',
+    artifact: 'claude-project-rule',
+    tested_host_version: '2.1.220',
+    minimum_host_version: '2.1.220',
+    maximum_host_version_exclusive: '2.1.221',
+    outcome: 'passed',
+  },
+  {
+    schema_version: 1,
+    fixture_id: 'test/fixtures/host-activation/codex-project/AGENTS.md@0.144.1',
+    host: 'codex',
+    artifact: 'codex-project-instructions',
+    tested_host_version: '0.144.1',
+    minimum_host_version: '0.144.1',
+    maximum_host_version_exclusive: '0.144.2',
+    outcome: 'passed',
+  },
+]);
+
+export const GENERATED_MANIFEST_PATH = '.roster/generated-manifest.json';
+export const CLAUDE_PROJECT_INSTRUCTIONS_PATH = '.claude/CLAUDE.md';
+export const CLAUDE_PROJECT_RULE_PATH = '.claude/rules/roster.md';
+export const CODEX_PROJECT_INSTRUCTIONS_PATH = 'AGENTS.md';
+export const CODEX_ROSTER_SKILL_PATH = '.agents/skills/roster/SKILL.md';
+
+const GENERATED_PATH_IDENTITIES = {
+  'ROSTER.md': { artifact: 'roster-bootstrap', host: 'neutral' },
+  [CLAUDE_PROJECT_INSTRUCTIONS_PATH]: { artifact: 'claude-project-instructions', host: 'claude' },
+  [CLAUDE_PROJECT_RULE_PATH]: { artifact: 'claude-project-rule', host: 'claude' },
+  [CODEX_PROJECT_INSTRUCTIONS_PATH]: { artifact: 'codex-project-instructions', host: 'codex' },
+  [CODEX_ROSTER_SKILL_PATH]: { artifact: 'codex-roster-skill', host: 'codex' },
+} as const satisfies Record<string, {
+  artifact: GeneratedArtifactHeader['artifact'];
+  host: GeneratedArtifactHost;
+}>;
+
+export type GeneratedManifestEntry = {
+  path: string;
+  artifact: GeneratedArtifactHeader['artifact'];
+  host: GeneratedArtifactHost;
+  activation_assurance: ActivationAssurance;
+  supported_host_versions: string;
+  attestation_fixture: string | null;
+  content_hash: string;
+};
+
+export type GeneratedManifestHost = {
+  status: 'enabled';
+  activation_assurance: ActivationAssurance;
+  artifacts: string[];
+  attestation_fixture: string | null;
+};
+
+export type GeneratedArtifactManifest = {
+  schema_version: 1;
+  generator: '@firatcand/roster';
+  generator_version: string;
+  protocol_version: 2;
+  files: GeneratedManifestEntry[];
+  hosts: Partial<Record<'claude' | 'codex', GeneratedManifestHost>>;
+  manifest_hash: string;
+};
+
+export type GeneratedFileResult = {
+  path: string;
+  status: 'created' | 'updated' | 'unchanged' | 'preserved-authored' | 'conflict' | 'missing' | 'removed' | 'rolled-back';
+  artifact: GeneratedArtifactHeader['artifact'];
+};
+
+const FILE_ROLLBACK_STATE: unique symbol = Symbol('roster-file-rollback-state');
+type GeneratedFileRollbackState =
+  | { kind: 'created'; expectedHash: string; identity?: WorkspaceFileIdentityToken }
+  | { kind: 'updated'; expectedHash: string; priorHash: string; prior: Buffer }
+  | { kind: 'removed'; priorHash: string; prior: Buffer };
+type TrackedGeneratedFileResult = GeneratedFileResult & {
+  [FILE_ROLLBACK_STATE]?: GeneratedFileRollbackState;
+};
+
+export type GeneratedActivationResult = {
+  host: 'claude' | 'codex';
+  assurance: ActivationAssurance;
+  files: GeneratedFileResult[];
+  diagnostics: WorkspaceDiagnostic[];
+  manifest: GeneratedArtifactManifest | null;
+};
+
+export type GeneratedArtifactHeader = {
+  schema_version: '1';
+  generator: '@firatcand/roster';
+  generator_version: string;
+  protocol_version: '2';
+  artifact: 'roster-bootstrap' | 'claude-project-instructions' | 'claude-project-rule' | 'codex-project-instructions' | 'codex-roster-skill';
+  host: GeneratedArtifactHost;
+  activation_assurance: ActivationAssurance;
+  supported_host_versions: string;
+  attestation_fixture: string;
+  content_hash: string;
+};
+
+const HEADER_START = '<!-- roster:generated';
+const HEADER_END = '-->';
+const HASH_PREFIX = 'sha256:';
+const HEADER_KEYS = [
+  'schema_version',
+  'generator',
+  'generator_version',
+  'protocol_version',
+  'artifact',
+  'host',
+  'activation_assurance',
+  'supported_host_versions',
+  'attestation_fixture',
+] as const;
+
+function normalizeLf(value: string): string {
+  return value.replace(/\r\n?/g, '\n');
+}
+
+function hasGeneratedHeaderAtOwnedPosition(path: string, value: string): boolean {
+  const normalized = normalizeLf(value);
+  const marker = `${HEADER_START}\n`;
+  if (normalized.startsWith(marker)) return true;
+  if (path !== CODEX_ROSTER_SKILL_PATH || !normalized.startsWith('---\n')) return false;
+  const frontmatterEnd = normalized.indexOf('\n---\n', 4);
+  return frontmatterEnd >= 0 && normalized.startsWith(marker, frontmatterEnd + '\n---\n'.length);
+}
+
+function canonicalHeaderWithoutHash(header: Omit<GeneratedArtifactHeader, 'content_hash'>): string {
+  return HEADER_KEYS.map((key) => `${key}: ${header[key]}`).join('\n');
+}
+
+export function generatedArtifactHash(
+  header: Omit<GeneratedArtifactHeader, 'content_hash'>,
+  body: string,
+): string {
+  const bytes = `${canonicalHeaderWithoutHash(header)}\n\n${normalizeLf(body)}`;
+  return `${HASH_PREFIX}${createHash('sha256').update(bytes, 'utf8').digest('hex')}`;
+}
+
+export function renderGeneratedMarkdown(
+  header: Omit<GeneratedArtifactHeader, 'content_hash'>,
+  body: string,
+  prefix = '',
+): string {
+  const normalizedBody = normalizeLf(body);
+  const normalizedPrefix = normalizeLf(prefix);
+  const contentHash = generatedArtifactHash(header, `${normalizedPrefix}${normalizedBody}`);
+  const generatedHeader = [
+    HEADER_START,
+    canonicalHeaderWithoutHash(header),
+    `content_hash: ${contentHash}`,
+    HEADER_END,
+    '',
+  ].join('\n');
+  return `${normalizedPrefix}${generatedHeader}${normalizedBody}`;
+}
+
+export type ParsedGeneratedMarkdown = {
+  header: GeneratedArtifactHeader;
+  prefix: string;
+  body: string;
+  valid: boolean;
+};
+
+export function parseGeneratedMarkdown(value: string): ParsedGeneratedMarkdown | null {
+  const normalized = normalizeLf(value);
+  const markerOffset = normalized.indexOf(`${HEADER_START}\n`);
+  if (markerOffset < 0 || markerOffset > 4096) return null;
+  const endOffset = normalized.indexOf(`\n${HEADER_END}\n`, markerOffset);
+  if (endOffset < 0 || endOffset - markerOffset > 4096) return null;
+
+  const headerLines = normalized.slice(markerOffset + HEADER_START.length + 1, endOffset).split('\n');
+  const entries = new Map<string, string>();
+  for (const line of headerLines) {
+    const separator = line.indexOf(': ');
+    if (separator <= 0) return null;
+    const key = line.slice(0, separator);
+    const fieldValue = line.slice(separator + 2);
+    if (entries.has(key) || fieldValue.length === 0) return null;
+    entries.set(key, fieldValue);
+  }
+
+  const expectedKeys = [...HEADER_KEYS, 'content_hash'];
+  if (entries.size !== expectedKeys.length || expectedKeys.some((key) => !entries.has(key))) {
+    return null;
+  }
+
+  const schemaVersion = entries.get('schema_version');
+  const generator = entries.get('generator');
+  const protocolVersion = entries.get('protocol_version');
+  const artifact = entries.get('artifact');
+  const host = entries.get('host');
+  const assurance = entries.get('activation_assurance');
+  const contentHash = entries.get('content_hash');
+  if (
+    schemaVersion !== '1' ||
+    generator !== '@firatcand/roster' ||
+    protocolVersion !== '2' ||
+    !isGeneratedArtifactKind(artifact) ||
+    !isGeneratedArtifactHost(host) ||
+    !isActivationAssurance(assurance) ||
+    contentHash === undefined ||
+    !/^sha256:[a-f0-9]{64}$/.test(contentHash)
+  ) {
+    return null;
+  }
+
+  const bodyStart = endOffset + `\n${HEADER_END}\n`.length;
+  const prefix = normalized.slice(0, markerOffset);
+  const body = normalized.slice(bodyStart).replace(/^\n/, '');
+  const header: GeneratedArtifactHeader = {
+    schema_version: schemaVersion,
+    generator,
+    generator_version: entries.get('generator_version')!,
+    protocol_version: protocolVersion,
+    artifact,
+    host,
+    activation_assurance: assurance,
+    supported_host_versions: entries.get('supported_host_versions')!,
+    attestation_fixture: entries.get('attestation_fixture')!,
+    content_hash: contentHash,
+  };
+  const { content_hash: _contentHash, ...withoutHash } = header;
+  return {
+    header,
+    prefix,
+    body,
+    valid: generatedArtifactHash(withoutHash, `${prefix}${body}`) === contentHash,
+  };
+}
+
+function isGeneratedArtifactKind(value: string | undefined): value is GeneratedArtifactHeader['artifact'] {
+  return value === 'roster-bootstrap' ||
+    value === 'claude-project-instructions' ||
+    value === 'claude-project-rule' ||
+    value === 'codex-project-instructions' ||
+    value === 'codex-roster-skill';
+}
+
+function isGeneratedArtifactHost(value: string | undefined): value is GeneratedArtifactHost {
+  return value === 'neutral' || value === 'claude' || value === 'codex';
+}
+
+function isActivationAssurance(value: string | undefined): value is ActivationAssurance {
+  return value === 'auto-loaded' || value === 'advisory-manual' || value === 'missing';
+}
+
+type SemverTuple = readonly [number, number, number];
+
+function parseSemver(value: string): SemverTuple | null {
+  const match = /(?:^|[^0-9A-Za-z_])v?(\d+)\.(\d+)\.(\d+)/.exec(value);
+  if (match === null) return null;
+  const following = value[match.index + match[0].length];
+  if (following !== undefined && /[0-9A-Za-z_.+-]/.test(following)) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+function compareSemver(left: SemverTuple, right: SemverTuple): number {
+  for (let index = 0; index < left.length; index++) {
+    const difference = left[index]! - right[index]!;
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+function attestationSupportsVersion(
+  attestation: HostActivationAttestation,
+  hostVersion: string,
+): boolean {
+  const actual = parseSemver(hostVersion);
+  const minimum = parseSemver(attestation.minimum_host_version);
+  if (actual === null || minimum === null || compareSemver(actual, minimum) < 0) return false;
+  if (attestation.maximum_host_version_exclusive === undefined) return true;
+  const maximum = parseSemver(attestation.maximum_host_version_exclusive);
+  return maximum !== null && compareSemver(actual, maximum) < 0;
+}
+
+function formatAttestationRange(attestation: HostActivationAttestation): string {
+  const maximum = attestation.maximum_host_version_exclusive;
+  return maximum === undefined
+    ? `>=${attestation.minimum_host_version}`
+    : `>=${attestation.minimum_host_version} <${maximum}`;
+}
+
+export type ResolvedActivationAssurance = {
+  assurance: Exclude<ActivationAssurance, 'missing'>;
+  supportedHostVersions: string;
+  attestationFixture: string | null;
+};
+
+export function resolveActivationAssurance(options: {
+  host: Exclude<GeneratedArtifactHost, 'neutral'>;
+  artifact: HostGeneratedArtifact;
+  hostVersion?: string;
+  attestations?: readonly HostActivationAttestation[];
+}): ResolvedActivationAssurance {
+  const attestations = (options.attestations ?? CHECKED_IN_HOST_ATTESTATIONS)
+    .filter((candidate) => candidate.host === options.host && candidate.artifact === options.artifact);
+  if (options.hostVersion === undefined) {
+    return { assurance: 'advisory-manual', supportedHostVersions: 'unattested', attestationFixture: null };
+  }
+  const matching = attestations.filter((candidate) => attestationSupportsVersion(candidate, options.hostVersion!));
+  const disconfirmed = matching.find((candidate) => candidate.outcome === 'disconfirmed');
+  if (disconfirmed !== undefined) {
+    return {
+      assurance: 'advisory-manual',
+      supportedHostVersions: formatAttestationRange(disconfirmed),
+      attestationFixture: disconfirmed.fixture_id,
+    };
+  }
+  const passed = matching.find((candidate) => candidate.outcome === 'passed');
+  if (passed === undefined) {
+    return { assurance: 'advisory-manual', supportedHostVersions: 'unattested', attestationFixture: null };
+  }
+  return {
+    assurance: 'auto-loaded',
+    supportedHostVersions: formatAttestationRange(passed),
+    attestationFixture: passed.fixture_id,
+  };
+}
+
+export function resolveCurrentHostActivationAssurance(
+  manifest: GeneratedArtifactManifest,
+  host: 'claude' | 'codex',
+  hostVersion?: string,
+): ActivationAssurance {
+  const summary = manifest.hosts[host];
+  if (summary === undefined || summary.activation_assurance === 'missing') return 'missing';
+  const entries = manifest.files.filter((entry) => entry.host === host);
+  const activation = host === 'claude'
+    ? entries.find((entry) =>
+        entry.artifact === 'claude-project-instructions' || entry.artifact === 'claude-project-rule'
+      )
+    : entries.find((entry) => entry.artifact === 'codex-project-instructions');
+  if (activation === undefined) {
+    return host === 'codex' && entries.some((entry) => entry.artifact === 'codex-roster-skill')
+      ? 'advisory-manual'
+      : 'missing';
+  }
+  if (activation.artifact === 'roster-bootstrap') return 'missing';
+  return resolveActivationAssurance({
+    host,
+    artifact: activation.artifact,
+    ...(hostVersion === undefined ? {} : { hostVersion }),
+  }).assurance;
+}
+
+function hostArtifactHeader(options: {
+  artifact: HostGeneratedArtifact;
+  host: Exclude<GeneratedArtifactHost, 'neutral'>;
+  assurance: ResolvedActivationAssurance;
+}): Omit<GeneratedArtifactHeader, 'content_hash'> {
+  return {
+    schema_version: '1',
+    generator: '@firatcand/roster',
+    generator_version: getPackageVersion(),
+    protocol_version: '2',
+    artifact: options.artifact,
+    host: options.host,
+    activation_assurance: options.assurance.assurance,
+    supported_host_versions: options.assurance.supportedHostVersions,
+    attestation_fixture: options.assurance.attestationFixture ?? 'none',
+  };
+}
+
+function renderHostBootstrapBody(hostName: string): string {
+  return [
+    '# Roster project activation',
+    '',
+    `This repository uses Roster. ${hostName} is the runtime and owns reasoning, execution, tools, retries, and human decisions.`,
+    '',
+    '1. Read `ROSTER.md` before Roster-managed work.',
+    '2. Use `roster discover --json` to resolve the requested function, agent, plan, or supporting record.',
+    '3. Use `roster scaffold` only when the user asks to create an authored structure.',
+    '4. Never treat Roster as a plan executor, scheduler, provider router, or approval authority.',
+    '',
+  ].join('\n');
+}
+
+export function renderClaudeProjectInstructions(
+  artifact: 'claude-project-instructions' | 'claude-project-rule',
+  assurance: ResolvedActivationAssurance,
+): string {
+  return renderGeneratedMarkdown(
+    hostArtifactHeader({ artifact, host: 'claude', assurance }),
+    renderHostBootstrapBody('Claude Code'),
+  );
+}
+
+export function renderCodexProjectInstructions(assurance: ResolvedActivationAssurance): string {
+  return renderGeneratedMarkdown(
+    hostArtifactHeader({ artifact: 'codex-project-instructions', host: 'codex', assurance }),
+    renderHostBootstrapBody('Codex'),
+  );
+}
+
+export function renderCodexRosterSkill(assurance: ResolvedActivationAssurance): string {
+  const frontmatter = [
+    '---',
+    'name: roster',
+    'description: Use the repository Roster registry and sparse scaffold when working with purpose-built agents.',
+    '---',
+    '',
+  ].join('\n');
+  return renderGeneratedMarkdown(
+    hostArtifactHeader({ artifact: 'codex-roster-skill', host: 'codex', assurance }),
+    [
+      '# Roster',
+      '',
+      'Read `ROSTER.md`, resolve records with `roster discover --json`, and create authored structures only through `roster scaffold`.',
+      '',
+    ].join('\n'),
+    frontmatter,
+  );
+}
+
+function validatedStoredAssurance(
+  entry: GeneratedManifestEntry,
+): ResolvedActivationAssurance | null {
+  if (
+    entry.host === 'neutral' ||
+    entry.artifact === 'roster-bootstrap' ||
+    entry.activation_assurance === 'missing'
+  ) return null;
+  if (entry.activation_assurance === 'advisory-manual') {
+    if (entry.supported_host_versions === 'unattested' && entry.attestation_fixture === null) {
+      return {
+        assurance: 'advisory-manual',
+        supportedHostVersions: 'unattested',
+        attestationFixture: null,
+      };
+    }
+    const disconfirmed = CHECKED_IN_HOST_ATTESTATIONS.find((candidate) =>
+      candidate.host === entry.host &&
+      candidate.artifact === entry.artifact &&
+      candidate.outcome === 'disconfirmed' &&
+      candidate.fixture_id === entry.attestation_fixture &&
+      formatAttestationRange(candidate) === entry.supported_host_versions
+    );
+    return disconfirmed === undefined
+      ? null
+      : {
+          assurance: 'advisory-manual',
+          supportedHostVersions: entry.supported_host_versions,
+          attestationFixture: entry.attestation_fixture,
+        };
+  }
+  const passed = CHECKED_IN_HOST_ATTESTATIONS.find((candidate) =>
+    candidate.host === entry.host &&
+    candidate.artifact === entry.artifact &&
+    candidate.outcome === 'passed' &&
+    candidate.fixture_id === entry.attestation_fixture &&
+    formatAttestationRange(candidate) === entry.supported_host_versions
+  );
+  return passed === undefined
+    ? null
+    : {
+        assurance: 'auto-loaded',
+        supportedHostVersions: entry.supported_host_versions,
+        attestationFixture: entry.attestation_fixture,
+      };
+}
+
+function renderCanonicalGeneratedEntry(entry: GeneratedManifestEntry): string | null {
+  if (entry.path === 'ROSTER.md' && entry.artifact === 'roster-bootstrap' && entry.host === 'neutral') {
+    return entry.activation_assurance === 'advisory-manual'
+      && entry.supported_host_versions === '*'
+      && entry.attestation_fixture === null
+      ? renderRosterBootstrap()
+      : null;
+  }
+  const assurance = validatedStoredAssurance(entry);
+  if (assurance === null) return null;
+  if (entry.artifact === 'claude-project-instructions') {
+    return renderClaudeProjectInstructions('claude-project-instructions', assurance);
+  }
+  if (entry.artifact === 'claude-project-rule') {
+    return renderClaudeProjectInstructions('claude-project-rule', assurance);
+  }
+  if (entry.artifact === 'codex-project-instructions') {
+    return renderCodexProjectInstructions(assurance);
+  }
+  if (entry.artifact === 'codex-roster-skill') return renderCodexRosterSkill(assurance);
+  return null;
+}
+
+type GeneratedManifestDraft = Omit<GeneratedArtifactManifest, 'manifest_hash'>;
+
+function canonicalManifestDraft(draft: GeneratedManifestDraft): GeneratedManifestDraft {
+  const files = [...draft.files]
+    .map((entry) => ({ ...entry }))
+    .sort((left, right) => left.path.localeCompare(right.path, 'en'));
+  const hosts: GeneratedManifestDraft['hosts'] = {};
+  for (const host of ['claude', 'codex'] as const) {
+    const entry = draft.hosts[host];
+    if (entry === undefined) continue;
+    hosts[host] = { ...entry, artifacts: [...entry.artifacts].sort((a, b) => a.localeCompare(b, 'en')) };
+  }
+  return { ...draft, files, hosts };
+}
+
+function manifestHash(draft: GeneratedManifestDraft): string {
+  return hashWorkspaceBytes(`${JSON.stringify(canonicalManifestDraft(draft))}\n`);
+}
+
+export function createGeneratedManifest(draft: GeneratedManifestDraft): GeneratedArtifactManifest {
+  const canonical = canonicalManifestDraft(draft);
+  return { ...canonical, manifest_hash: manifestHash(canonical) };
+}
+
+export function renderGeneratedManifest(manifest: GeneratedArtifactManifest): string {
+  const { manifest_hash: _manifestHash, ...draft } = manifest;
+  const canonical = createGeneratedManifest(draft);
+  return `${JSON.stringify(canonical, null, 2)}\n`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(value).sort((a, b) => a.localeCompare(b, 'en'));
+  const sortedExpected = [...expected].sort((a, b) => a.localeCompare(b, 'en'));
+  return actual.length === sortedExpected.length && actual.every((key, index) => key === sortedExpected[index]);
+}
+
+function parseManifestEntry(value: unknown): GeneratedManifestEntry | null {
+  if (!isRecord(value) || !hasExactKeys(value, [
+    'path',
+    'artifact',
+    'host',
+    'activation_assurance',
+    'supported_host_versions',
+    'attestation_fixture',
+    'content_hash',
+  ])) return null;
+  const artifact = typeof value.artifact === 'string' ? value.artifact : undefined;
+  const host = typeof value.host === 'string' ? value.host : undefined;
+  const assurance = typeof value.activation_assurance === 'string'
+    ? value.activation_assurance
+    : undefined;
+  if (
+    typeof value.path !== 'string' ||
+    !isGeneratedArtifactKind(artifact) ||
+    !isGeneratedArtifactHost(host) ||
+    !isActivationAssurance(assurance) ||
+    typeof value.supported_host_versions !== 'string' ||
+    !(value.attestation_fixture === null || typeof value.attestation_fixture === 'string') ||
+    typeof value.content_hash !== 'string' ||
+    !/^sha256:[a-f0-9]{64}$/.test(value.content_hash)
+  ) return null;
+  return {
+    path: value.path,
+    artifact,
+    host,
+    activation_assurance: assurance,
+    supported_host_versions: value.supported_host_versions,
+    attestation_fixture: value.attestation_fixture,
+    content_hash: value.content_hash,
+  };
+}
+
+function parseManifestHost(value: unknown): GeneratedManifestHost | null {
+  if (!isRecord(value) || !hasExactKeys(value, [
+    'status',
+    'activation_assurance',
+    'artifacts',
+    'attestation_fixture',
+  ])) return null;
+  const assurance = typeof value.activation_assurance === 'string'
+    ? value.activation_assurance
+    : undefined;
+  if (
+    value.status !== 'enabled' ||
+    !isActivationAssurance(assurance) ||
+    !Array.isArray(value.artifacts) ||
+    !value.artifacts.every((path) => typeof path === 'string') ||
+    !(value.attestation_fixture === null || typeof value.attestation_fixture === 'string')
+  ) return null;
+  return {
+    status: value.status,
+    activation_assurance: assurance,
+    artifacts: [...value.artifacts],
+    attestation_fixture: value.attestation_fixture,
+  };
+}
+
+export function parseGeneratedManifest(value: string): GeneratedArtifactManifest | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed) || !hasExactKeys(parsed, [
+    'schema_version',
+    'generator',
+    'generator_version',
+    'protocol_version',
+    'files',
+    'hosts',
+    'manifest_hash',
+  ])) return null;
+  if (
+    parsed.schema_version !== 1 ||
+    parsed.generator !== '@firatcand/roster' ||
+    typeof parsed.generator_version !== 'string' ||
+    parsed.protocol_version !== 2 ||
+    !Array.isArray(parsed.files) ||
+    !isRecord(parsed.hosts) ||
+    typeof parsed.manifest_hash !== 'string' ||
+    !/^sha256:[a-f0-9]{64}$/.test(parsed.manifest_hash)
+  ) return null;
+  if (!Object.keys(parsed.hosts).every((key) => key === 'claude' || key === 'codex')) return null;
+  const files = parsed.files.map(parseManifestEntry);
+  if (files.some((entry) => entry === null)) return null;
+  const hosts: GeneratedArtifactManifest['hosts'] = {};
+  for (const host of ['claude', 'codex'] as const) {
+    if (!(host in parsed.hosts)) continue;
+    const hostEntry = parseManifestHost(parsed.hosts[host]);
+    if (hostEntry === null) return null;
+    hosts[host] = hostEntry;
+  }
+  const draft: GeneratedManifestDraft = {
+    schema_version: 1,
+    generator: '@firatcand/roster',
+    generator_version: parsed.generator_version,
+    protocol_version: 2,
+    files: files as GeneratedManifestEntry[],
+    hosts,
+  };
+  if (manifestHash(draft) !== parsed.manifest_hash) return null;
+  return { ...draft, manifest_hash: parsed.manifest_hash };
+}
+
+function entryFromGeneratedContent(path: string, content: string): GeneratedManifestEntry | null {
+  if (!hasGeneratedHeaderAtOwnedPosition(path, content)) return null;
+  const parsed = parseGeneratedMarkdown(content);
+  if (parsed === null || !parsed.valid) return null;
+  const expectedIdentity = GENERATED_PATH_IDENTITIES[path as keyof typeof GENERATED_PATH_IDENTITIES];
+  if (
+    expectedIdentity === undefined ||
+    parsed.header.artifact !== expectedIdentity.artifact ||
+    parsed.header.host !== expectedIdentity.host
+  ) return null;
+  return {
+    path,
+    artifact: parsed.header.artifact,
+    host: parsed.header.host,
+    activation_assurance: parsed.header.activation_assurance,
+    supported_host_versions: parsed.header.supported_host_versions,
+    attestation_fixture: parsed.header.attestation_fixture === 'none'
+      ? null
+      : parsed.header.attestation_fixture,
+    content_hash: parsed.header.content_hash,
+  };
+}
+
+function diagnosticForPathFailure(error: unknown, path: string): WorkspaceDiagnostic {
+  if (isWorkspaceFailure(error)) {
+    return workspaceDiagnostic(error.code, error.header.replace(/^roster:\s*/, ''), {
+      path,
+      remedy: error.remedy,
+      details: error.details,
+    });
+  }
+  throw error;
+}
+
+function rollbackTrackedGeneratedFile(
+  root: string,
+  path: string,
+  rollback: GeneratedFileRollbackState,
+): boolean {
+  if (rollback.kind === 'created') {
+    return rollback.identity === undefined
+      ? false
+      : removePublishedWorkspaceFile(root, path, rollback.identity);
+  }
+  const current = tryReadWorkspaceFile(root, path);
+  if (rollback.kind === 'removed') {
+    if (current !== null) return hashWorkspaceBytes(current) === rollback.priorHash;
+    const parent = posix.dirname(path);
+    if (parent !== '.') ensureWorkspaceDirectory(root, parent);
+    publishCreateOnly(root, path, rollback.prior);
+    return true;
+  }
+  if (current === null) return false;
+  const currentHash = hashWorkspaceBytes(current);
+  if (currentHash === rollback.priorHash) return true;
+  if (currentHash !== rollback.expectedHash) return false;
+  replaceWorkspaceFile(root, path, rollback.prior, { expectedHash: rollback.expectedHash });
+  return true;
+}
+
+function syncExpectedGeneratedFile(
+  root: string,
+  path: string,
+  content: string,
+): { result: TrackedGeneratedFileResult; diagnostic?: WorkspaceDiagnostic } {
+  const expected = entryFromGeneratedContent(path, content);
+  if (expected === null) throw new Error(`Generated renderer produced an invalid ownership header for ${path}`);
+  let existing: Buffer | null;
+  try {
+    existing = tryReadWorkspaceFile(root, path);
+  } catch (error) {
+    return {
+      result: { path, artifact: expected.artifact, status: 'conflict' },
+      diagnostic: diagnosticForPathFailure(error, path),
+    };
+  }
+  if (existing === null) {
+    const expectedHash = hashWorkspaceBytes(content);
+    let rollback: GeneratedFileRollbackState = {
+      kind: 'created',
+      expectedHash,
+    };
+    try {
+      const parent = posix.dirname(path);
+      if (parent !== '.') ensureWorkspaceDirectory(root, parent);
+      const publication = publishCreateOnly(root, path, content, {
+        captureCreation(identity) {
+          rollback = { kind: 'created', expectedHash, identity };
+        },
+      });
+      return {
+        result: {
+          path,
+          artifact: expected.artifact,
+          status: publication === 'created' ? 'created' : 'unchanged',
+          ...(publication === 'created'
+            ? {
+                [FILE_ROLLBACK_STATE]: {
+                  ...rollback,
+                },
+              }
+            : {}),
+        },
+      };
+    } catch (error) {
+      rollbackTrackedGeneratedFile(root, path, rollback);
+      return {
+        result: {
+          path,
+          artifact: expected.artifact,
+          status: 'conflict',
+          [FILE_ROLLBACK_STATE]: rollback,
+        },
+        diagnostic: diagnosticForPathFailure(error, path),
+      };
+    }
+  }
+  const existingText = existing.toString('utf8');
+  if (existingText === content) {
+    return { result: { path, artifact: expected.artifact, status: 'unchanged' } };
+  }
+  const prior = parseGeneratedMarkdown(existingText);
+  if (
+    prior === null ||
+    !prior.valid ||
+    prior.header.artifact !== expected.artifact ||
+    prior.header.host !== expected.host
+  ) {
+    return {
+      result: { path, artifact: expected.artifact, status: 'conflict' },
+      diagnostic: workspaceDiagnostic(
+        'GENERATED_FILE_EDITED',
+        `Generated file '${path}' has user edits or an invalid ownership header.`,
+        {
+          path,
+          remedy: 'Keep the file as authored, or restore the last generated bytes before running update again.',
+          details: {
+            path,
+            expectedArtifact: expected.artifact,
+            expectedHost: expected.host,
+            actualArtifact: prior?.header.artifact ?? null,
+            actualHost: prior?.header.host ?? null,
+          },
+        },
+      ),
+    };
+  }
+  const rollback: GeneratedFileRollbackState = {
+    kind: 'updated',
+    expectedHash: hashWorkspaceBytes(content),
+    priorHash: hashWorkspaceBytes(existing),
+    prior: existing,
+  };
+  try {
+    replaceWorkspaceFile(root, path, content, { expectedHash: hashWorkspaceBytes(existing) });
+    return {
+      result: {
+        path,
+        artifact: expected.artifact,
+        status: 'updated',
+        [FILE_ROLLBACK_STATE]: {
+          ...rollback,
+        },
+      },
+    };
+  } catch (error) {
+    rollbackTrackedGeneratedFile(root, path, rollback);
+    return {
+      result: {
+        path,
+        artifact: expected.artifact,
+        status: 'conflict',
+        [FILE_ROLLBACK_STATE]: rollback,
+      },
+      diagnostic: diagnosticForPathFailure(error, path),
+    };
+  }
+}
+
+function inspectGeneratedPath(root: string, path: string): {
+  status: 'absent' | 'generated' | 'authored' | 'edited-generated' | 'unsafe';
+  entry?: GeneratedManifestEntry;
+  content?: string;
+  diagnostic?: WorkspaceDiagnostic;
+} {
+  let bytes: Buffer | null;
+  try {
+    bytes = tryReadWorkspaceFile(root, path);
+  } catch (error) {
+    return { status: 'unsafe', diagnostic: diagnosticForPathFailure(error, path) };
+  }
+  if (bytes === null) return { status: 'absent' };
+  const text = bytes.toString('utf8');
+  const entry = entryFromGeneratedContent(path, text);
+  if (entry !== null) return { status: 'generated', entry, content: text };
+  return hasGeneratedHeaderAtOwnedPosition(path, text)
+    ? { status: 'edited-generated' }
+    : { status: 'authored' };
+}
+
+function editedGeneratedDiagnostic(path: string): WorkspaceDiagnostic {
+  return workspaceDiagnostic(
+    'GENERATED_FILE_EDITED',
+    `Generated file '${path}' has user edits or an invalid ownership header.`,
+    {
+      path,
+      remedy: 'Keep the file as authored, or restore the last generated bytes before running update again.',
+      details: { path },
+    },
+  );
+}
+
+function disabledHostArtifactDiagnostic(
+  path: string,
+  host: 'claude' | 'codex',
+  source: 'file' | 'manifest',
+): WorkspaceDiagnostic {
+  return workspaceDiagnostic(
+    'GENERATED_FILE_EDITED',
+    source === 'file'
+      ? `Generated activation '${path}' remains for disabled host '${host}'.`
+      : `Generated manifest still claims '${path}' for disabled host '${host}'.`,
+    {
+      path: source === 'file' ? path : GENERATED_MANIFEST_PATH,
+      remedy: `Run roster update to deactivate '${host}'; edited or noncanonical generated bytes must be reconciled manually.`,
+      details: { artifactPath: path, host, source },
+    },
+  );
+}
+
+function validateDisabledHostArtifacts(
+  root: string,
+  enabledHosts: ReadonlySet<string>,
+): WorkspaceDiagnostic[] {
+  const diagnostics: WorkspaceDiagnostic[] = [];
+  for (const [path, identity] of Object.entries(GENERATED_PATH_IDENTITIES)) {
+    if (identity.host === 'neutral' || enabledHosts.has(identity.host)) continue;
+    const inspected = inspectGeneratedPath(root, path);
+    if (inspected.status === 'generated' || inspected.status === 'edited-generated') {
+      diagnostics.push(disabledHostArtifactDiagnostic(path, identity.host, 'file'));
+    }
+    if (inspected.diagnostic !== undefined) diagnostics.push(inspected.diagnostic);
+  }
+  return diagnostics;
+}
+
+function deactivateDisabledHostArtifacts(
+  root: string,
+  enabledHosts: readonly ('claude' | 'codex')[],
+): WorkspaceDiagnostic[] {
+  const enabled = new Set(enabledHosts);
+  const diagnostics: WorkspaceDiagnostic[] = [];
+  for (const [path, identity] of Object.entries(GENERATED_PATH_IDENTITIES)) {
+    if (identity.host === 'neutral' || enabled.has(identity.host)) continue;
+    const inspected = inspectGeneratedPath(root, path);
+    if (inspected.status === 'absent' || inspected.status === 'authored') continue;
+    if (inspected.status === 'unsafe') {
+      if (inspected.diagnostic !== undefined) diagnostics.push(inspected.diagnostic);
+      continue;
+    }
+    const expected = inspected.entry === undefined
+      ? null
+      : renderCanonicalGeneratedEntry(inspected.entry);
+    if (
+      inspected.status !== 'generated' ||
+      inspected.content === undefined ||
+      expected === null ||
+      inspected.content !== expected
+    ) {
+      diagnostics.push(workspaceDiagnostic(
+        'GENERATED_FILE_EDITED',
+        `Disabled host artifact '${path}' has authored or noncanonical generated edits and was preserved.`,
+        {
+          path,
+          remedy: `Keep the file as authored, or restore its canonical generated bytes and rerun roster update to deactivate '${identity.host}'.`,
+          details: { host: identity.host, status: inspected.status },
+        },
+      ));
+      continue;
+    }
+    try {
+      if (!removeManagedWorkspaceFileIfHash(root, path, hashWorkspaceBytes(expected))) {
+        diagnostics.push(workspaceDiagnostic(
+          'WRITE_CONFLICT',
+          `Disabled host artifact '${path}' changed before it could be deactivated.`,
+          {
+            path,
+            remedy: 'Preserve the concurrent bytes, inspect the file, and rerun roster update.',
+            details: { host: identity.host },
+          },
+        ));
+      }
+    } catch (error) {
+      diagnostics.push(diagnosticForPathFailure(error, path));
+    }
+  }
+  return diagnostics;
+}
+
+function syncClaudeArtifacts(options: {
+  root: string;
+  hostVersion?: string;
+  attestations?: readonly HostActivationAttestation[];
+}): Omit<GeneratedActivationResult, 'manifest'> {
+  const files: GeneratedFileResult[] = [];
+  const diagnostics: WorkspaceDiagnostic[] = [];
+  const rootState = inspectGeneratedPath(options.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH);
+  if (rootState.diagnostic !== undefined) diagnostics.push(rootState.diagnostic);
+
+  const rootAssurance = resolveActivationAssurance({
+    host: 'claude',
+    artifact: 'claude-project-instructions',
+    ...(options.hostVersion === undefined ? {} : { hostVersion: options.hostVersion }),
+    ...(options.attestations === undefined ? {} : { attestations: options.attestations }),
+  });
+  if (rootState.status === 'absent' || rootState.status === 'generated') {
+    const synced = syncExpectedGeneratedFile(
+      options.root,
+      CLAUDE_PROJECT_INSTRUCTIONS_PATH,
+      renderClaudeProjectInstructions('claude-project-instructions', rootAssurance),
+    );
+    files.push(synced.result);
+    if (synced.diagnostic !== undefined) diagnostics.push(synced.diagnostic);
+    const succeeded = synced.result.status !== 'conflict' && synced.result.status !== 'missing';
+    if (succeeded) {
+      const fallbackState = inspectGeneratedPath(options.root, CLAUDE_PROJECT_RULE_PATH);
+      if (fallbackState.diagnostic !== undefined) diagnostics.push(fallbackState.diagnostic);
+      if (fallbackState.status === 'edited-generated') {
+        diagnostics.push(editedGeneratedDiagnostic(CLAUDE_PROJECT_RULE_PATH));
+      } else if (
+        fallbackState.status === 'generated' &&
+        fallbackState.entry !== undefined &&
+        fallbackState.content !== undefined
+      ) {
+        const expectedFallback = renderCanonicalGeneratedEntry(fallbackState.entry);
+        if (expectedFallback === null || fallbackState.content !== expectedFallback) {
+          diagnostics.push(workspaceDiagnostic(
+            'GENERATED_FILE_EDITED',
+            `Redundant Claude fallback '${CLAUDE_PROJECT_RULE_PATH}' is noncanonical and was preserved.`,
+            {
+              path: CLAUDE_PROJECT_RULE_PATH,
+              remedy: 'Restore its canonical generated bytes and rerun roster update, or keep it as authored policy without a Roster ownership header.',
+            },
+          ));
+        } else {
+          try {
+            if (removeManagedWorkspaceFileIfHash(
+              options.root,
+              CLAUDE_PROJECT_RULE_PATH,
+              hashWorkspaceBytes(expectedFallback),
+            )) {
+              const removed: TrackedGeneratedFileResult = {
+                path: CLAUDE_PROJECT_RULE_PATH,
+                artifact: 'claude-project-rule',
+                status: 'removed',
+                [FILE_ROLLBACK_STATE]: {
+                  kind: 'removed',
+                  priorHash: hashWorkspaceBytes(expectedFallback),
+                  prior: Buffer.from(expectedFallback, 'utf8'),
+                },
+              };
+              files.push(removed);
+            } else {
+              diagnostics.push(workspaceDiagnostic(
+                'WRITE_CONFLICT',
+                `Redundant Claude fallback '${CLAUDE_PROJECT_RULE_PATH}' changed before it could be removed.`,
+                {
+                  path: CLAUDE_PROJECT_RULE_PATH,
+                  remedy: 'Preserve the concurrent bytes, inspect the file, and rerun roster update.',
+                },
+              ));
+            }
+          } catch (error) {
+            diagnostics.push(diagnosticForPathFailure(error, CLAUDE_PROJECT_RULE_PATH));
+          }
+        }
+      }
+    }
+    return {
+      host: 'claude',
+      assurance: succeeded ? rootAssurance.assurance : 'missing',
+      files,
+      diagnostics,
+    };
+  }
+
+  files.push({
+    path: CLAUDE_PROJECT_INSTRUCTIONS_PATH,
+    artifact: 'claude-project-instructions',
+    status: rootState.status === 'authored' ? 'preserved-authored' : 'conflict',
+  });
+  if (rootState.status === 'edited-generated') {
+    diagnostics.push(editedGeneratedDiagnostic(CLAUDE_PROJECT_INSTRUCTIONS_PATH));
+  }
+
+  const fallbackAssurance = resolveActivationAssurance({
+    host: 'claude',
+    artifact: 'claude-project-rule',
+    ...(options.hostVersion === undefined ? {} : { hostVersion: options.hostVersion }),
+    ...(options.attestations === undefined ? {} : { attestations: options.attestations }),
+  });
+  const fallback = syncExpectedGeneratedFile(
+    options.root,
+    CLAUDE_PROJECT_RULE_PATH,
+    renderClaudeProjectInstructions('claude-project-rule', fallbackAssurance),
+  );
+  files.push(fallback.result);
+  if (fallback.diagnostic !== undefined) diagnostics.push(fallback.diagnostic);
+  const fallbackSucceeded = fallback.result.status !== 'conflict' && fallback.result.status !== 'missing';
+  return {
+    host: 'claude',
+    assurance: fallbackSucceeded ? fallbackAssurance.assurance : 'missing',
+    files,
+    diagnostics,
+  };
+}
+
+function syncCodexArtifacts(options: {
+  root: string;
+  hostVersion?: string;
+  attestations?: readonly HostActivationAttestation[];
+}): Omit<GeneratedActivationResult, 'manifest'> {
+  const files: GeneratedFileResult[] = [];
+  const diagnostics: WorkspaceDiagnostic[] = [];
+  const rootState = inspectGeneratedPath(options.root, CODEX_PROJECT_INSTRUCTIONS_PATH);
+  if (rootState.diagnostic !== undefined) diagnostics.push(rootState.diagnostic);
+  const rootAssurance = resolveActivationAssurance({
+    host: 'codex',
+    artifact: 'codex-project-instructions',
+    ...(options.hostVersion === undefined ? {} : { hostVersion: options.hostVersion }),
+    ...(options.attestations === undefined ? {} : { attestations: options.attestations }),
+  });
+  let generatedRoot = false;
+  if (rootState.status === 'absent' || rootState.status === 'generated') {
+    const synced = syncExpectedGeneratedFile(
+      options.root,
+      CODEX_PROJECT_INSTRUCTIONS_PATH,
+      renderCodexProjectInstructions(rootAssurance),
+    );
+    files.push(synced.result);
+    if (synced.diagnostic !== undefined) diagnostics.push(synced.diagnostic);
+    generatedRoot = synced.result.status !== 'conflict' && synced.result.status !== 'missing';
+  } else {
+    files.push({
+      path: CODEX_PROJECT_INSTRUCTIONS_PATH,
+      artifact: 'codex-project-instructions',
+      status: rootState.status === 'authored' ? 'preserved-authored' : 'conflict',
+    });
+    if (rootState.status === 'edited-generated') {
+      diagnostics.push(editedGeneratedDiagnostic(CODEX_PROJECT_INSTRUCTIONS_PATH));
+    }
+  }
+
+  const skillAssurance = resolveActivationAssurance({
+    host: 'codex',
+    artifact: 'codex-roster-skill',
+    ...(options.hostVersion === undefined ? {} : { hostVersion: options.hostVersion }),
+    ...(options.attestations === undefined ? {} : { attestations: options.attestations }),
+  });
+  const skill = syncExpectedGeneratedFile(
+    options.root,
+    CODEX_ROSTER_SKILL_PATH,
+    renderCodexRosterSkill(skillAssurance),
+  );
+  files.push(skill.result);
+  if (skill.diagnostic !== undefined) diagnostics.push(skill.diagnostic);
+  const skillSucceeded = skill.result.status !== 'conflict' && skill.result.status !== 'missing';
+  const assurance: ActivationAssurance = generatedRoot
+    ? rootAssurance.assurance
+    : skillSucceeded && (rootState.status === 'authored' || rootState.status === 'edited-generated')
+      ? 'advisory-manual'
+      : 'missing';
+  return { host: 'codex', assurance, files, diagnostics };
+}
+
+function syncHostArtifacts(options: {
+  root: string;
+  host: 'claude' | 'codex';
+  hostVersion?: string;
+  attestations?: readonly HostActivationAttestation[];
+}): Omit<GeneratedActivationResult, 'manifest'> {
+  return options.host === 'claude'
+    ? syncClaudeArtifacts(options)
+    : syncCodexArtifacts(options);
+}
+
+function scanGeneratedEntries(root: string): {
+  entries: GeneratedManifestEntry[];
+  diagnostics: WorkspaceDiagnostic[];
+} {
+  const entries: GeneratedManifestEntry[] = [];
+  const diagnostics: WorkspaceDiagnostic[] = [];
+  for (const path of [
+    'ROSTER.md',
+    CLAUDE_PROJECT_INSTRUCTIONS_PATH,
+    CLAUDE_PROJECT_RULE_PATH,
+    CODEX_PROJECT_INSTRUCTIONS_PATH,
+    CODEX_ROSTER_SKILL_PATH,
+  ]) {
+    const inspected = inspectGeneratedPath(root, path);
+    if (inspected.status === 'generated' && inspected.entry !== undefined) entries.push(inspected.entry);
+    if (inspected.status === 'edited-generated') diagnostics.push(editedGeneratedDiagnostic(path));
+    if (inspected.diagnostic !== undefined) diagnostics.push(inspected.diagnostic);
+  }
+  entries.sort((left, right) => left.path.localeCompare(right.path, 'en'));
+  return { entries, diagnostics };
+}
+
+function actualHostEntry(
+  root: string,
+  host: 'claude' | 'codex',
+  entries: readonly GeneratedManifestEntry[],
+): GeneratedManifestHost {
+  const hostEntries = entries.filter((entry) => entry.host === host);
+  const artifacts = hostEntries.map((entry) => entry.path).sort((a, b) => a.localeCompare(b, 'en'));
+  if (host === 'claude') {
+    const activation = hostEntries.find((entry) =>
+      entry.path === CLAUDE_PROJECT_INSTRUCTIONS_PATH || entry.path === CLAUDE_PROJECT_RULE_PATH
+    );
+    return {
+      status: 'enabled',
+      activation_assurance: activation?.activation_assurance ?? 'missing',
+      artifacts,
+      attestation_fixture: activation?.attestation_fixture ?? null,
+    };
+  }
+  const rootEntry = hostEntries.find((entry) => entry.path === CODEX_PROJECT_INSTRUCTIONS_PATH);
+  if (rootEntry !== undefined) {
+    return {
+      status: 'enabled',
+      activation_assurance: rootEntry.activation_assurance,
+      artifacts,
+      attestation_fixture: rootEntry.attestation_fixture,
+    };
+  }
+  const skillEntry = hostEntries.find((entry) => entry.path === CODEX_ROSTER_SKILL_PATH);
+  const rootStatus = inspectGeneratedPath(root, CODEX_PROJECT_INSTRUCTIONS_PATH).status;
+  const preservedRoot = rootStatus === 'authored' || rootStatus === 'edited-generated';
+  return {
+    status: 'enabled',
+    activation_assurance: skillEntry !== undefined && preservedRoot ? 'advisory-manual' : 'missing',
+    artifacts,
+    attestation_fixture: skillEntry?.attestation_fixture ?? null,
+  };
+}
+
+function generatedManifestHostEquals(
+  left: GeneratedManifestHost,
+  right: GeneratedManifestHost,
+): boolean {
+  return left.status === right.status
+    && left.activation_assurance === right.activation_assurance
+    && left.attestation_fixture === right.attestation_fixture
+    && left.artifacts.length === right.artifacts.length
+    && left.artifacts.every((path, index) => path === right.artifacts[index]);
+}
+
+function buildActualManifest(
+  root: string,
+  enabledHosts: readonly ('claude' | 'codex')[],
+): { manifest: GeneratedArtifactManifest; diagnostics: WorkspaceDiagnostic[] } {
+  const scanned = scanGeneratedEntries(root);
+  const hosts: GeneratedArtifactManifest['hosts'] = {};
+  for (const host of [...new Set(enabledHosts)].sort((a, b) => a.localeCompare(b, 'en'))) {
+    hosts[host] = actualHostEntry(root, host, scanned.entries);
+  }
+  return {
+    manifest: createGeneratedManifest({
+      schema_version: 1,
+      generator: '@firatcand/roster',
+      generator_version: getPackageVersion(),
+      protocol_version: 2,
+      files: scanned.entries,
+      hosts,
+    }),
+    diagnostics: scanned.diagnostics,
+  };
+}
+
+export function inspectGeneratedActivationState(root: string): {
+  manifest: GeneratedArtifactManifest;
+  diagnostics: WorkspaceDiagnostic[];
+} {
+  const enabledHosts = enabledV2Hosts(readWorkspaceText(root, 'roster.yaml'));
+  const scanned = scanGeneratedEntries(root);
+  const diagnostics = [...scanned.diagnostics];
+  const canonicalEntries = scanned.entries.filter((entry) => {
+    const inspected = inspectGeneratedPath(root, entry.path);
+    const expected = renderCanonicalGeneratedEntry(entry);
+    const canonical = inspected.status === 'generated'
+      && inspected.content !== undefined
+      && expected !== null
+      && inspected.content === expected;
+    if (!canonical) {
+      diagnostics.push(workspaceDiagnostic(
+        'GENERATED_FILE_EDITED',
+        `Generated artifact '${entry.path}' does not match its current canonical renderer or attestation.`,
+        {
+          path: entry.path,
+          remedy: 'Run roster update after reconciling authored or edited generated bytes.',
+        },
+      ));
+    }
+    return canonical;
+  });
+  const hosts: GeneratedArtifactManifest['hosts'] = {};
+  for (const host of enabledHosts) {
+    const actual = actualHostEntry(root, host, canonicalEntries);
+    const hasCodexSkillFallback = host === 'codex'
+      && canonicalEntries.some((entry) => entry.artifact === 'codex-roster-skill');
+    const codexRootStatus = host === 'codex'
+      ? inspectGeneratedPath(root, CODEX_PROJECT_INSTRUCTIONS_PATH).status
+      : 'absent';
+    hosts[host] = hasCodexSkillFallback
+      && actual.activation_assurance === 'missing'
+      && codexRootStatus !== 'absent'
+      && codexRootStatus !== 'unsafe'
+      ? { ...actual, activation_assurance: 'advisory-manual' }
+      : actual;
+  }
+  return {
+    manifest: createGeneratedManifest({
+      schema_version: 1,
+      generator: '@firatcand/roster',
+      generator_version: getPackageVersion(),
+      protocol_version: 2,
+      files: canonicalEntries,
+      hosts,
+    }),
+    diagnostics,
+  };
+}
+
+function syncGeneratedManifest(
+  root: string,
+  enabledHosts: readonly ('claude' | 'codex')[],
+): { manifest: GeneratedArtifactManifest | null; diagnostic?: WorkspaceDiagnostic } {
+  const built = buildActualManifest(root, enabledHosts);
+  const hasMissingClaim = !built.manifest.files.some((entry) => entry.path === 'ROSTER.md')
+    || enabledHosts.some((host) => built.manifest.hosts[host]?.activation_assurance === 'missing');
+  let existing: Buffer | null;
+  try {
+    existing = tryReadWorkspaceFile(root, GENERATED_MANIFEST_PATH);
+  } catch (error) {
+    return { manifest: null, diagnostic: diagnosticForPathFailure(error, GENERATED_MANIFEST_PATH) };
+  }
+  if (existing === null && built.diagnostics.length > 0) {
+    return { manifest: null, diagnostic: built.diagnostics[0] };
+  }
+  if (existing === null && hasMissingClaim) {
+    return {
+      manifest: null,
+      diagnostic: workspaceDiagnostic(
+        'GENERATED_FILE_EDITED',
+        'Generated manifest cannot be reconstructed while an enabled host activation is missing.',
+        {
+          path: GENERATED_MANIFEST_PATH,
+          remedy: 'Restore or reconcile every enabled generated activation file, then run roster update again.',
+          details: { missingHosts: enabledHosts.filter((host) => built.manifest.hosts[host]?.activation_assurance === 'missing') },
+        },
+      ),
+    };
+  }
+  const rendered = renderGeneratedManifest(built.manifest);
+  if (existing === null) {
+    try {
+      publishCreateOnly(root, GENERATED_MANIFEST_PATH, rendered);
+      return { manifest: built.manifest };
+    } catch (error) {
+      return { manifest: null, diagnostic: diagnosticForPathFailure(error, GENERATED_MANIFEST_PATH) };
+    }
+  }
+  const prior = parseGeneratedManifest(existing.toString('utf8'));
+  if (prior === null) {
+    return {
+      manifest: null,
+      diagnostic: editedGeneratedDiagnostic(GENERATED_MANIFEST_PATH),
+    };
+  }
+  if (existing.toString('utf8') === rendered) return { manifest: built.manifest };
+  try {
+    replaceWorkspaceFile(root, GENERATED_MANIFEST_PATH, rendered, {
+      expectedHash: hashWorkspaceBytes(existing),
+    });
+    return { manifest: built.manifest };
+  } catch (error) {
+    return { manifest: null, diagnostic: diagnosticForPathFailure(error, GENERATED_MANIFEST_PATH) };
+  }
+}
+
+export function synchronizeGeneratedActivations(options: {
+  root: string;
+  enabledHosts: readonly ('claude' | 'codex')[];
+  hostVersions?: Partial<Record<'claude' | 'codex', string>>;
+  attestations?: readonly HostActivationAttestation[];
+}): { results: GeneratedActivationResult[]; diagnostics: WorkspaceDiagnostic[] } {
+  ensureRosterStateRoot(options.root);
+  const diagnostics: WorkspaceDiagnostic[] = [];
+  const bootstrap = syncExpectedGeneratedFile(options.root, 'ROSTER.md', renderRosterBootstrap());
+  if (bootstrap.diagnostic !== undefined) diagnostics.push(bootstrap.diagnostic);
+  const results: GeneratedActivationResult[] = [];
+  for (const host of [...new Set(options.enabledHosts)].sort((a, b) => a.localeCompare(b, 'en'))) {
+    const hostVersion = options.hostVersions?.[host];
+    const synced = syncHostArtifacts({
+      root: options.root,
+      host,
+      ...(hostVersion === undefined ? {} : { hostVersion }),
+      ...(options.attestations === undefined ? {} : { attestations: options.attestations }),
+    });
+    diagnostics.push(...synced.diagnostics);
+    results.push({ ...synced, manifest: null });
+  }
+  const manifest = syncGeneratedManifest(options.root, options.enabledHosts);
+  if (manifest.diagnostic !== undefined) diagnostics.push(manifest.diagnostic);
+  for (const result of results) result.manifest = manifest.manifest;
+  return { results, diagnostics };
+}
+
+export type ProjectActivationInstallResult = GeneratedActivationResult & {
+  ok: boolean;
+  registryUpdated: boolean;
+};
+
+export type ProjectActivationUpdateResult = {
+  ok: boolean;
+  results: GeneratedActivationResult[];
+  diagnostics: WorkspaceDiagnostic[];
+  manifest: GeneratedArtifactManifest | null;
+};
+
+function assertV2Workspace(root: string): void {
+  const probe = probeWorkspace(root);
+  if (probe.kind === 'v2') return;
+  if (probe.kind === 'legacy') throw legacyWorkspaceError(probe.legacySignals);
+  if (probe.kind === 'mixed') throw mixedWorkspaceError(probe.v2Signals, probe.legacySignals);
+  if (probe.kind === 'unsafe') throw unsafeWorkspaceMarkerError(probe.unsafeSignals);
+  throw workspaceRequiredError(root);
+}
+
+function enabledV2Hosts(registryText: string): Array<'claude' | 'codex'> {
+  const registry = parseWorkspaceRegistry(registryText, 'roster.yaml');
+  const hosts = Object.keys(registry.hosts);
+  const unsupported = hosts.filter((host) => host !== 'claude' && host !== 'codex');
+  if (unsupported.length > 0) {
+    throw workspaceFailure(
+      'UNKNOWN_FIELD',
+      `Host '${unsupported[0]}' has no v2 activation contract.`,
+      'Use project activation only for claude or codex; Gemini remains quarantined.',
+      { path: 'roster.yaml', hosts: unsupported },
+    );
+  }
+  return hosts
+    .filter((host): host is 'claude' | 'codex' => host === 'claude' || host === 'codex')
+    .sort((a, b) => a.localeCompare(b, 'en'));
+}
+
+function tryCurrentEnabledV2Hosts(root: string): Array<'claude' | 'codex'> | null {
+  try {
+    return enabledV2Hosts(readWorkspaceText(root, 'roster.yaml'));
+  } catch {
+    return null;
+  }
+}
+
+function rollbackSelectedHostFiles(root: string, activation: GeneratedActivationResult): void {
+  for (const file of activation.files as TrackedGeneratedFileResult[]) {
+    const rollback = file[FILE_ROLLBACK_STATE];
+    if (rollback === undefined) continue;
+    if (rollbackTrackedGeneratedFile(root, file.path, rollback)) file.status = 'rolled-back';
+  }
+}
+
+export function installV2ProjectActivation(options: {
+  root: string;
+  host: 'claude' | 'codex';
+  hostVersion?: string;
+  hostVersions?: Partial<Record<'claude' | 'codex', string>>;
+  attestations?: readonly HostActivationAttestation[];
+  registryDurabilityFs?: WorkspaceDurabilityFs;
+}): ProjectActivationInstallResult {
+  assertV2Workspace(options.root);
+  return withWorkspaceLock(options.root, () => {
+    const registryText = readWorkspaceText(options.root, 'roster.yaml');
+    const enabledBefore = enabledV2Hosts(registryText);
+    const enabledCandidate = [...new Set([...enabledBefore, options.host])];
+    const hostVersions = { ...options.hostVersions };
+    if (options.hostVersion !== undefined) hostVersions[options.host] = options.hostVersion;
+    const synchronized = synchronizeGeneratedActivations({
+      root: options.root,
+      enabledHosts: enabledCandidate,
+      ...(Object.keys(hostVersions).length === 0 ? {} : { hostVersions }),
+      ...(options.attestations === undefined ? {} : { attestations: options.attestations }),
+    });
+    const selected = synchronized.results.find((result) => result.host === options.host);
+    if (selected === undefined) throw new Error(`Generated activation result missing for ${options.host}`);
+    const unrelatedHostDiagnostics = new Set(
+      synchronized.results
+        .filter((result) => result.host !== options.host)
+        .flatMap((result) => result.diagnostics),
+    );
+    const hasBlockingErrors = synchronized.diagnostics.some((diagnostic) =>
+      diagnostic.severity === 'error' && !unrelatedHostDiagnostics.has(diagnostic)
+    );
+    const ok = selected.assurance !== 'missing' && selected.manifest !== null && !hasBlockingErrors;
+    if (!ok) {
+      const currentEnabled = tryCurrentEnabledV2Hosts(options.root);
+      if (currentEnabled === null) {
+        synchronized.diagnostics.push(workspaceDiagnostic(
+          'WRITE_CONFLICT',
+          'roster.yaml became unreadable while project activation was being reconciled.',
+          {
+            path: 'roster.yaml',
+            remedy: 'Inspect roster.yaml and generated activation bytes before retrying; no rollback was attempted.',
+          },
+        ));
+        return {
+          ...selected,
+          ok: false,
+          registryUpdated: false,
+          manifest: null,
+          diagnostics: synchronized.diagnostics,
+        };
+      }
+      if (!currentEnabled.includes(options.host)) rollbackSelectedHostFiles(options.root, selected);
+      const corrected = syncGeneratedManifest(options.root, currentEnabled);
+      if (corrected.diagnostic !== undefined) synchronized.diagnostics.push(corrected.diagnostic);
+      return {
+        ...selected,
+        ok: false,
+        registryUpdated: false,
+        manifest: corrected.manifest,
+        diagnostics: synchronized.diagnostics,
+      };
+    }
+
+    const updatedRegistry = addWorkspaceHost(registryText, 'roster.yaml', options.host);
+    let registryUpdated = false;
+    if (updatedRegistry !== registryText) {
+      try {
+        replaceWorkspaceFile(options.root, 'roster.yaml', updatedRegistry, {
+          expectedHash: hashWorkspaceBytes(registryText),
+          ...(options.registryDurabilityFs === undefined
+            ? {}
+            : { durabilityFs: options.registryDurabilityFs }),
+        });
+        registryUpdated = true;
+      } catch (error) {
+        const currentEnabled = tryCurrentEnabledV2Hosts(options.root);
+        if (currentEnabled !== null) {
+          try {
+            if (!currentEnabled.includes(options.host)) {
+              rollbackSelectedHostFiles(options.root, selected);
+            }
+          } finally {
+            syncGeneratedManifest(options.root, currentEnabled);
+          }
+        }
+        throw error;
+      }
+    }
+    return {
+      ...selected,
+      ok: true,
+      registryUpdated,
+      diagnostics: synchronized.diagnostics,
+    };
+  });
+}
+
+export function updateV2ProjectActivations(options: {
+  root: string;
+  hostVersions?: Partial<Record<'claude' | 'codex', string>>;
+  attestations?: readonly HostActivationAttestation[];
+}): ProjectActivationUpdateResult {
+  assertV2Workspace(options.root);
+  return withWorkspaceLock(options.root, () => {
+    const enabledHosts = enabledV2Hosts(readWorkspaceText(options.root, 'roster.yaml'));
+    const deactivationDiagnostics = deactivateDisabledHostArtifacts(options.root, enabledHosts);
+    const synchronized = synchronizeGeneratedActivations({
+      root: options.root,
+      enabledHosts,
+      ...(options.hostVersions === undefined ? {} : { hostVersions: options.hostVersions }),
+      ...(options.attestations === undefined ? {} : { attestations: options.attestations }),
+    });
+    synchronized.diagnostics.unshift(...deactivationDiagnostics);
+    const manifest = synchronized.results[0]?.manifest
+      ?? syncGeneratedManifest(options.root, enabledHosts).manifest;
+    const ok = manifest !== null
+      && synchronized.results.every((result) => result.assurance !== 'missing')
+      && !synchronized.diagnostics.some((diagnostic) => diagnostic.severity === 'error');
+    return { ok, results: synchronized.results, diagnostics: synchronized.diagnostics, manifest };
+  });
+}
+
+const CANONICAL_GENERATED_PATHS = new Set(Object.keys(GENERATED_PATH_IDENTITIES));
+
+export function validateGeneratedArtifacts(root: string): WorkspaceDiagnostic[] {
+  const diagnostics: WorkspaceDiagnostic[] = [];
+  let registry;
+  try {
+    registry = parseWorkspaceRegistry(readWorkspaceText(root, 'roster.yaml'), 'roster.yaml');
+  } catch (error) {
+    diagnostics.push(diagnosticForPathFailure(error, 'roster.yaml'));
+    return diagnostics;
+  }
+
+  const bootstrap = inspectGeneratedPath(root, 'ROSTER.md');
+  if (bootstrap.status !== 'generated' || bootstrap.entry?.artifact !== 'roster-bootstrap') {
+    diagnostics.push(
+      bootstrap.diagnostic ?? workspaceDiagnostic(
+        'GENERATED_FILE_EDITED',
+        'ROSTER.md is missing, edited, or lacks a valid Roster ownership header.',
+        {
+          path: 'ROSTER.md',
+          remedy: 'Restore the generated ROSTER.md bytes before running roster update.',
+          details: { status: bootstrap.status },
+        },
+      ),
+    );
+  } else if (bootstrap.content !== renderRosterBootstrap()) {
+    diagnostics.push(workspaceDiagnostic(
+      'GENERATED_FILE_EDITED',
+      'Generated file \'ROSTER.md\' does not match the current canonical renderer.',
+      {
+        path: 'ROSTER.md',
+        remedy: 'Run roster update to restore the current generated bootstrap bytes.',
+      },
+    ));
+  }
+
+  const enabledHosts = Object.keys(registry.hosts);
+  const enabledHostSet = new Set(enabledHosts);
+  diagnostics.push(...validateDisabledHostArtifacts(root, enabledHostSet));
+  let manifestBytes: Buffer | null;
+  try {
+    manifestBytes = tryReadWorkspaceFile(root, GENERATED_MANIFEST_PATH);
+  } catch (error) {
+    diagnostics.push(diagnosticForPathFailure(error, GENERATED_MANIFEST_PATH));
+    return diagnostics;
+  }
+  if (manifestBytes === null) {
+    if (enabledHosts.length > 0) {
+      diagnostics.push(workspaceDiagnostic(
+        'GENERATED_FILE_EDITED',
+        'Enabled hosts require .roster/generated-manifest.json.',
+        {
+          path: GENERATED_MANIFEST_PATH,
+          remedy: 'Run roster update after restoring every generated activation ownership header.',
+          details: { enabledHosts },
+        },
+      ));
+    }
+    return diagnostics;
+  }
+  const manifest = parseGeneratedManifest(manifestBytes.toString('utf8'));
+  if (manifest === null) {
+    diagnostics.push(editedGeneratedDiagnostic(GENERATED_MANIFEST_PATH));
+    return diagnostics;
+  }
+  if (manifestBytes.toString('utf8') !== renderGeneratedManifest(manifest)) {
+    diagnostics.push(workspaceDiagnostic(
+      'GENERATED_FILE_EDITED',
+      'Generated manifest does not use the canonical deterministic serialization.',
+      {
+        path: GENERATED_MANIFEST_PATH,
+        remedy: 'Run roster update to restore the canonical generated manifest bytes.',
+      },
+    ));
+  }
+  if (manifest.generator_version !== getPackageVersion()) {
+    diagnostics.push(workspaceDiagnostic(
+      'GENERATED_FILE_EDITED',
+      `Generated manifest was produced by version '${manifest.generator_version}', not '${getPackageVersion()}'.`,
+      {
+        path: GENERATED_MANIFEST_PATH,
+        remedy: 'Run roster update to regenerate metadata with the installed Roster version.',
+        details: {
+          actualGeneratorVersion: manifest.generator_version,
+          expectedGeneratorVersion: getPackageVersion(),
+        },
+      },
+    ));
+  }
+
+  const manifestHosts = Object.keys(manifest.hosts).sort((a, b) => a.localeCompare(b, 'en'));
+  const sortedEnabledHosts = [...enabledHosts].sort((a, b) => a.localeCompare(b, 'en'));
+  if (
+    manifestHosts.length !== sortedEnabledHosts.length ||
+    manifestHosts.some((host, index) => host !== sortedEnabledHosts[index])
+  ) {
+    diagnostics.push(workspaceDiagnostic(
+      'GENERATED_FILE_EDITED',
+      'Generated manifest host membership does not match roster.yaml.',
+      {
+        path: GENERATED_MANIFEST_PATH,
+        remedy: 'Run roster update to synchronize generated metadata with the enabled workspace hosts.',
+        details: { enabledHosts: sortedEnabledHosts, manifestHosts },
+      },
+    ));
+  }
+
+  const seen = new Set<string>();
+  for (const entry of manifest.files) {
+    if (seen.has(entry.path) || !CANONICAL_GENERATED_PATHS.has(entry.path)) {
+      diagnostics.push(workspaceDiagnostic(
+        'GENERATED_FILE_EDITED',
+        `Generated manifest contains an invalid or duplicate path '${entry.path}'.`,
+        {
+          path: GENERATED_MANIFEST_PATH,
+          remedy: 'Restore the deterministic generated manifest through roster update.',
+          details: { path: entry.path, duplicate: seen.has(entry.path) },
+        },
+      ));
+      continue;
+    }
+    seen.add(entry.path);
+    if (
+      (entry.host === 'claude' || entry.host === 'codex') &&
+      !enabledHostSet.has(entry.host)
+    ) {
+      diagnostics.push(disabledHostArtifactDiagnostic(entry.path, entry.host, 'manifest'));
+    }
+    const inspected = inspectGeneratedPath(root, entry.path);
+    if (
+      inspected.status !== 'generated' ||
+      inspected.entry === undefined ||
+      inspected.entry.artifact !== entry.artifact ||
+      inspected.entry.host !== entry.host ||
+      inspected.entry.activation_assurance !== entry.activation_assurance ||
+      inspected.entry.supported_host_versions !== entry.supported_host_versions ||
+      inspected.entry.attestation_fixture !== entry.attestation_fixture ||
+      inspected.entry.content_hash !== entry.content_hash
+    ) {
+      diagnostics.push(
+        inspected.diagnostic ?? workspaceDiagnostic(
+          'GENERATED_FILE_EDITED',
+          `Generated artifact '${entry.path}' does not match its manifest entry.`,
+          {
+            path: entry.path,
+            remedy: 'Preserve authored edits, or restore the generated bytes and run roster update.',
+            details: { status: inspected.status },
+          },
+        ),
+      );
+      continue;
+    }
+    const expectedContent = renderCanonicalGeneratedEntry(entry);
+    if (expectedContent === null || inspected.content !== expectedContent) {
+      diagnostics.push(workspaceDiagnostic(
+        'GENERATED_FILE_EDITED',
+        `Generated artifact '${entry.path}' does not match its current canonical renderer or attestation.`,
+        {
+          path: entry.path,
+          remedy: 'Preserve authored bytes, or run roster update to restore a fixture-backed generated artifact.',
+          details: {
+            artifact: entry.artifact,
+            host: entry.host,
+            assurance: entry.activation_assurance,
+            attestationFixture: entry.attestation_fixture,
+          },
+        },
+      ));
+    }
+  }
+
+  const actual = scanGeneratedEntries(root);
+  diagnostics.push(...actual.diagnostics);
+  if (
+    enabledHostSet.has('claude') &&
+    actual.entries.some((entry) => entry.path === CLAUDE_PROJECT_INSTRUCTIONS_PATH) &&
+    actual.entries.some((entry) => entry.path === CLAUDE_PROJECT_RULE_PATH)
+  ) {
+    diagnostics.push(workspaceDiagnostic(
+      'GENERATED_FILE_EDITED',
+      'Claude primary activation and its generated fallback are both present.',
+      {
+        path: CLAUDE_PROJECT_RULE_PATH,
+        remedy: 'Run roster update to remove the redundant canonical fallback; reconcile noncanonical fallback bytes manually.',
+        details: {
+          primary: CLAUDE_PROJECT_INSTRUCTIONS_PATH,
+          fallback: CLAUDE_PROJECT_RULE_PATH,
+        },
+      },
+    ));
+  }
+  for (const entry of actual.entries) {
+    if (!seen.has(entry.path)) {
+      diagnostics.push(workspaceDiagnostic(
+        'GENERATED_FILE_EDITED',
+        `Generated artifact '${entry.path}' is not registered in the generated manifest.`,
+        {
+          path: entry.path,
+          remedy: 'Run roster update to reconstruct the portable generated manifest.',
+          details: { path: entry.path },
+        },
+      ));
+    }
+  }
+
+  for (const host of enabledHosts) {
+    if (host !== 'claude' && host !== 'codex') {
+      diagnostics.push(workspaceDiagnostic(
+        'UNKNOWN_FIELD',
+        `Host '${host}' has no v2 activation contract.`,
+        {
+          path: 'roster.yaml',
+          remedy: 'Use project activation only for claude or codex; Gemini remains quarantined.',
+          details: { host },
+        },
+      ));
+      continue;
+    }
+    const hostEntry = manifest.hosts[host];
+    if (hostEntry === undefined || hostEntry.activation_assurance === 'missing') {
+      diagnostics.push(workspaceDiagnostic(
+        'GENERATED_FILE_EDITED',
+        `Enabled host '${host}' has no complete generated activation.`,
+        {
+          path: GENERATED_MANIFEST_PATH,
+          remedy: `Run roster install --tool ${host} --scope project after reconciling authored instruction files.`,
+          details: { host, assurance: hostEntry?.activation_assurance ?? 'missing' },
+        },
+      ));
+      continue;
+    }
+    const expectedHostEntry = actualHostEntry(root, host, actual.entries);
+    if (!generatedManifestHostEquals(hostEntry, expectedHostEntry)) {
+      diagnostics.push(workspaceDiagnostic(
+        'GENERATED_FILE_EDITED',
+        `Generated manifest summary for '${host}' does not match the actual activation files.`,
+        {
+          path: GENERATED_MANIFEST_PATH,
+          remedy: 'Run roster update to rebuild the host assurance summary from validated generated headers.',
+          details: {
+            host,
+            expected: expectedHostEntry,
+            actual: hostEntry,
+          },
+        },
+      ));
+    }
+  }
+  return diagnostics;
+}
+
+export function renderRosterBootstrap(): string {
+  return renderGeneratedMarkdown(
+    {
+      schema_version: '1',
+      generator: '@firatcand/roster',
+      generator_version: getPackageVersion(),
+      protocol_version: '2',
+      artifact: 'roster-bootstrap',
+      host: 'neutral',
+      activation_assurance: 'advisory-manual',
+      supported_host_versions: '*',
+      attestation_fixture: 'none',
+    },
+    [
+      '# Roster workspace',
+      '',
+      'Roster is the context and scaffolding layer for this repository. The host agent interprets plans and executes the work.',
+      '',
+      '- Read `roster.yaml` for the workspace registry.',
+      '- Use `roster discover --json` to resolve purpose-built agents and records.',
+      '- Use `roster scaffold` to add one explicitly requested authored record at a time.',
+      '- Preserve authored files and report generated-file drift instead of overwriting user changes.',
+      '',
+    ].join('\n'),
+  );
+}

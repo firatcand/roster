@@ -13,8 +13,8 @@ import {
   permissionError,
   renderError,
   unexpectedError,
-  userCancelledInit,
   userCancelledInstall,
+  workspaceRequiredError,
 } from '../src/lib/errors.ts';
 
 // Stripping ANSI escape sequences so substring matches don't have to escape colors.
@@ -88,6 +88,40 @@ test('isRosterError narrows to RosterError', () => {
   assert.equal(isRosterError('string'), false);
 });
 
+test('RosterError exposes stable code and JSON-safe details without breaking legacy callsites', () => {
+  const legacy = new RosterError({
+    header: 'header',
+    body: 'body',
+    remedy: 'remedy',
+    exitCode: EXIT_ERROR,
+  });
+  assert.equal(legacy.code, 'ROSTER_ERROR');
+  assert.deepEqual(legacy.details, {});
+
+  const structured = new RosterError({
+    header: 'header',
+    body: 'body',
+    remedy: 'remedy',
+    exitCode: EXIT_ERROR,
+    code: 'IDENTITY_INVALID',
+    details: { field: 'workspace_id', candidates: ['one', 'two'] },
+  });
+  assert.equal(structured.code, 'IDENTITY_INVALID');
+  assert.deepEqual(structured.details, {
+    field: 'workspace_id',
+    candidates: ['one', 'two'],
+  });
+});
+
+test('workspaceRequiredError points to the v2 sentinel and is a state failure', () => {
+  const error = workspaceRequiredError('/work');
+  assert.equal(error.exitCode, EXIT_ERROR);
+  assert.equal(error.code, 'WORKSPACE_NOT_FOUND');
+  assert.deepEqual(error.details, { cwd: '/work' });
+  assert.match(error.body, /roster\.yaml/);
+  assert.doesNotMatch(error.body, /config\/project\.yaml/);
+});
+
 test('permissionError: exitCode EXIT_ERROR, header mentions permission, remedy mentions sudo', () => {
   const cause = Object.assign(new Error('boom'), { code: 'EACCES', syscall: 'mkdir' });
   const err = permissionError('/tmp/foo', cause);
@@ -121,12 +155,6 @@ test('noToolsError: empty tool list yields a coherent error (no crash)', () => {
   const err = noToolsError([]);
   assert.equal(err.exitCode, EXIT_NO_TOOLS);
   assert.match(err.header, /no AI tools detected/i);
-});
-
-test('userCancelledInit: exit 2, body "Nothing written."', () => {
-  const err = userCancelledInit();
-  assert.equal(err.exitCode, EXIT_CANCELLED);
-  assert.match(err.body, /Nothing written\./);
 });
 
 test('userCancelledInstall: exit 2, body "Nothing written.", remedy points back to install', () => {

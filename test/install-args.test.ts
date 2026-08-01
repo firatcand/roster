@@ -9,6 +9,7 @@ test('no flags → interactive mode, all booleans false, scope null', () => {
   assert.equal(r.silent, false);
   assert.equal(r.verbose, false);
   assert.equal(r.yes, false);
+  assert.equal(r.json, false);
   assert.equal(r.scope, null);
   assert.deepEqual(r.target, { mode: 'interactive' });
 });
@@ -135,11 +136,11 @@ test('--tool= (empty value) → err', () => {
   assert.match(r.message, /--tool/);
 });
 
-test('unknown flag is ignored (forward-compat)', () => {
+test('unknown flag is rejected so agent typos cannot silently change behavior', () => {
   const r = parseInstallArgs(['--futureflag', '--all']);
-  assert.equal(r.kind, 'ok');
-  if (r.kind !== 'ok') return;
-  assert.deepEqual(r.target, { mode: 'all' });
+  assert.equal(r.kind, 'err');
+  if (r.kind !== 'err') return;
+  assert.match(r.message, /--futureflag/);
 });
 
 // --scope tests
@@ -196,6 +197,13 @@ test('--yes → yes true', () => {
   assert.equal(r.kind, 'ok');
   if (r.kind !== 'ok') return;
   assert.equal(r.yes, true);
+});
+
+test('--json → json true', () => {
+  const r = parseInstallArgs(['--json']);
+  assert.equal(r.kind, 'ok');
+  if (r.kind !== 'ok') return;
+  assert.equal(r.json, true);
 });
 
 test('-y (short form) → yes true', () => {

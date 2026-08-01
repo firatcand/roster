@@ -2,8 +2,20 @@ import { existsSync, lstatSync, readFileSync, realpathSync, rmSync } from 'node:
 import { join, sep } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { detectTools, type ToolKey } from '../tools.ts';
-import { detectWorkspace } from '../install-scope.ts';
-import { workspaceRequiredError } from '../errors.ts';
+import {
+  legacyWorkspaceError,
+  mixedWorkspaceError,
+  unsafeWorkspaceMarkerError,
+  workspaceRequiredError,
+} from '../errors.ts';
+import { probeWorkspace } from '../workspace-probe.ts';
+import { validateWorkspace } from '../workspace-registry.ts';
+import {
+  GENERATED_MANIFEST_PATH,
+  parseGeneratedManifest,
+} from '../generated-artifacts.ts';
+import { tryReadWorkspaceFile } from '../workspace-io.ts';
+import { workspaceFailure } from '../workspace-diagnostics.ts';
 import {
   founderManifestSchema,
   normalizeManifest,
@@ -44,6 +56,44 @@ export type SyncOptions = {
   cwd: string;
   installer: SkillsInstaller;
 };
+
+export function assertFounderSkillsWorkspace(cwd: string): void {
+  const probe = probeWorkspace(cwd);
+  if (probe.kind === 'v2') {
+    const validation = validateWorkspace(cwd);
+    if (!validation.ok) {
+      const diagnostic = validation.diagnostics.find((entry) => entry.severity === 'error')!;
+      throw workspaceFailure(
+        diagnostic.code,
+        diagnostic.message,
+        diagnostic.remedy ?? 'Repair the v2 workspace before installing declared skills.',
+        diagnostic.details,
+      );
+    }
+    const manifestBytes = tryReadWorkspaceFile(cwd, GENERATED_MANIFEST_PATH);
+    if (manifestBytes === null) {
+      throw workspaceFailure(
+        'PARENT_NOT_FOUND',
+        'Explicit skill installation requires a generated v2 activation manifest.',
+        'Run roster install --tool claude|codex --scope project, then retry roster skills sync or update.',
+        { path: GENERATED_MANIFEST_PATH },
+      );
+    }
+    if (parseGeneratedManifest(manifestBytes.toString('utf8')) === null) {
+      throw workspaceFailure(
+        'GENERATED_FILE_EDITED',
+        'The generated v2 activation manifest is invalid.',
+        'Repair generated activation with roster update before installing declared skills.',
+        { path: GENERATED_MANIFEST_PATH },
+      );
+    }
+    return;
+  }
+  if (probe.kind === 'legacy') throw legacyWorkspaceError(probe.legacySignals);
+  if (probe.kind === 'mixed') throw mixedWorkspaceError(probe.v2Signals, probe.legacySignals);
+  if (probe.kind === 'unsafe') throw unsafeWorkspaceMarkerError(probe.unsafeSignals);
+  throw workspaceRequiredError(cwd);
+}
 
 function loadManifest(workspaceRoot: string): NormalizedManifest {
   const raw = parseYaml(readFileSync(manifestPath(workspaceRoot), 'utf8')) as unknown;
@@ -108,13 +158,9 @@ function pruneSkillDir(wsRoot: string, base: string, name: string): boolean {
 
 export async function syncFounderSkills(opts: SyncOptions): Promise<SyncResult> {
   const { cwd } = opts;
+  assertFounderSkillsWorkspace(cwd);
   if (!existsSync(manifestPath(cwd))) {
     return { status: 'no-manifest' };
-  }
-  // Manifest present but not a workspace: we don't know where `.claude/` should
-  // live. Refuse rather than guess.
-  if (!detectWorkspace(cwd)) {
-    throw workspaceRequiredError(cwd);
   }
 
   const manifest = loadManifest(cwd);

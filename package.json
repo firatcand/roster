@@ -24,6 +24,7 @@
     "typecheck": "tsc --noEmit",
     "dev": "tsdown --watch",
     "test": "node --test --experimental-strip-types 'test/**/*.test.ts'",
+    "test:workspace-benchmark": "node --test --test-concurrency=1 --experimental-strip-types test/workspace-registry.benchmark.ts",
     "test:update-golden": "node --experimental-strip-types scripts/update-golden.ts",
     "test:update-golden:stub": "node --experimental-strip-types scripts/update-golden-stub.ts",
     "smoke": "bash test/smoke.sh",

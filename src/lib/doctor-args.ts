@@ -46,6 +46,8 @@ export function parseDoctorArgs(args: readonly string[]): ParsedDoctorArgs {
         return { kind: 'err', message: `--scope requires a value: ${SCOPE_LIST}` };
       }
       scopeValue = value;
+    } else {
+      return { kind: 'err', message: `unknown flag '${arg}' for 'doctor'` };
     }
   }
 

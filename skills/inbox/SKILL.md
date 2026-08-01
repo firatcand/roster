@@ -1,7 +1,7 @@
 ---
 name: inbox
 description: "Conversational review of unread decisions in a roster workspace. Lists pending HITL items (roster/<function>/pending/ and <agent>/pending/), shows each in chat, collects approve/reject/defer by reply, and applies each via `roster review --approve/--reject <id>`. No TTY needed — this is the chat-native front door for `roster review`. Triggers on /inbox or when the user asks to review their inbox / pending decisions / HITL items."
-version: "1.0.0"
+version: "1.1.0"
 trigger_conditions:
   - "User invokes /inbox"
   - "User asks to review unread decisions / pending HITL items / their inbox in a roster workspace"
@@ -15,9 +15,14 @@ The skill is **stateless** — it re-reads the queue on every invocation.
 
 ## Working directory
 
-Operate from the workspace root only — the directory identified by `config/project.yaml` (the v1 workspace identity file). That file alone marks a roster workspace. A missing `roster/` directory just means the queue is empty (`roster review --json` returns `[]`), **not** an error — on a fresh init `roster/` does not exist yet and `/inbox` should simply report inbox-zero. If `config/project.yaml` is missing, stop and say:
+Operate from the workspace root and classify it before running any command:
 
-> Run /inbox from your roster workspace root (must contain config/project.yaml).
+- If both `roster.yaml` and `config/project.yaml` exist, stop. This is a mixed workspace; preserve both markers and use the v2 migration flow when #363 lands.
+- If `roster.yaml` exists, stop with: `This is a Roster v2 workspace. /inbox is a legacy queue workflow; do not run roster review or inspect legacy pending/ trees. Portable Brain evidence and Dreamer candidate decisions replace it in #356 and #358.`
+- Otherwise, `config/project.yaml` alone identifies a legacy v1 workspace and the procedure below remains available. A missing `roster/` directory just means the legacy queue is empty (`roster review --json` returns `[]`), **not** an error.
+- If neither identity file exists, stop and say:
+
+> Run /inbox from a legacy Roster workspace root (must contain config/project.yaml); Roster v2 workspaces use roster.yaml and do not expose this queue.
 
 (`.roster/` — dotted — is scaffold/schedule-spec metadata, not the runtime `roster/` queue; never treat one as the other.)
 

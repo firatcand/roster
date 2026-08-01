@@ -1,6 +1,6 @@
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Tool, ToolKey } from './tools.ts';
+import { probeWorkspace } from './workspace-probe.ts';
 
 export type Scope = 'project' | 'user';
 
@@ -8,15 +8,15 @@ export type Scope = 'project' | 'user';
 // installs need it; user-scope installs ignore it.
 export const SCOPES: readonly Scope[] = ['project', 'user'];
 
-// Workspace detection signal. v1.0 single-project shape means `config/project.yaml`
-// is the canonical marker — `roster init` always writes it; nothing else does.
-// Keep this in lockstep with src/commands/init.ts's emit path.
+// The sparse v2 sentinel is roster.yaml. Legacy, mixed, and unsafe workspaces
+// deliberately do not pass this boolean compatibility seam; callers that need
+// actionable classification use probeWorkspace directly.
 export function detectWorkspace(cwd: string): boolean {
-  return existsSync(join(cwd, 'config', 'project.yaml'));
+  return probeWorkspace(cwd).kind === 'v2';
 }
 
 // Safe default for `--yes` / non-TTY context. In a workspace, install scope
-// defaults to project (the v1 "workspace = project" model). Outside, fall
+// defaults to project. Outside, fall
 // back to user-scope (matches today's behavior so the README one-liner from
 // a non-roster shell doesn't suddenly refuse).
 export function defaultScopeForContext(workspaceExists: boolean): Scope {

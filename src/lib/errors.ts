@@ -6,11 +6,21 @@ export const EXIT_ERROR = 1;
 export const EXIT_CANCELLED = 2;
 export const EXIT_NO_TOOLS = 3;
 
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { readonly [key: string]: JsonValue };
+
 export type RosterErrorInit = {
   header: string;
   body: string;
   remedy: string;
   exitCode: number;
+  code?: string;
+  details?: Readonly<Record<string, JsonValue>>;
 };
 
 export class RosterError extends Error {
@@ -18,6 +28,8 @@ export class RosterError extends Error {
   readonly body: string;
   readonly remedy: string;
   readonly exitCode: number;
+  readonly code: string;
+  readonly details: Readonly<Record<string, JsonValue>>;
 
   constructor(opts: RosterErrorInit) {
     super(`${opts.header}\n${opts.body}\n${opts.remedy}`);
@@ -26,6 +38,8 @@ export class RosterError extends Error {
     this.body = opts.body;
     this.remedy = opts.remedy;
     this.exitCode = opts.exitCode;
+    this.code = opts.code ?? 'ROSTER_ERROR';
+    this.details = opts.details ?? {};
   }
 }
 
@@ -132,26 +146,43 @@ export function missingScaffoldError(scaffoldPath: string): RosterError {
   });
 }
 
-export function v04WorkspaceDetectedError(paths: ReadonlyArray<string>): RosterError {
+export function legacyWorkspaceError(paths: ReadonlyArray<string>): RosterError {
   const list = paths.map((p) => `    - ${p}`).join('\n');
   return new RosterError({
-    header: `${chalk.red.bold('roster:')} detected v0.4 workspace`,
+    header: `${chalk.red.bold('roster:')} This is a Roster v1 workspace.`,
     body: [
-      '  v1.0 is a breaking change with no automatic migration.',
-      '  Found:',
+      '  Found legacy signals:',
       list,
     ].join('\n'),
-    remedy: '  Re-scaffold in a fresh directory; see docs/CHANGELOG.md#v1.0.0.',
-    exitCode: EXIT_CANCELLED,
+    remedy: '  Preserve it and use the v2 migration command when #363 lands.',
+    exitCode: EXIT_ERROR,
+    code: 'LEGACY_WORKSPACE',
+    details: { signals: [...paths] },
   });
 }
 
-export function userCancelledInit(): RosterError {
+export function mixedWorkspaceError(
+  v2Signals: ReadonlyArray<string>,
+  legacySignals: ReadonlyArray<string>,
+): RosterError {
   return new RosterError({
-    header: `${chalk.dim('roster:')} cancelled`,
-    body: '  Nothing written.',
-    remedy: '  Re-run with --force to overwrite an existing CLAUDE.md.',
-    exitCode: EXIT_CANCELLED,
+    header: `${chalk.red.bold('roster:')} mixed v2 and legacy workspace markers`,
+    body: '  This directory contains both Roster v2 and legacy workspace signals.',
+    remedy: '  Preserve every marker and use the v2 migration command when #363 lands; do not overlay either workspace shape.',
+    exitCode: EXIT_ERROR,
+    code: 'MIXED_WORKSPACE',
+    details: { v2_signals: [...v2Signals], legacy_signals: [...legacySignals] },
+  });
+}
+
+export function unsafeWorkspaceMarkerError(paths: ReadonlyArray<string>): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} unsafe workspace marker`,
+    body: '  A Roster marker or one of its path components is not the expected regular file or directory.',
+    remedy: '  Inspect the reported paths, replace symlinks or special files with safe workspace-owned entries, and retry.',
+    exitCode: EXIT_ERROR,
+    code: 'UNSAFE_WORKSPACE_MARKER',
+    details: { signals: [...paths] },
   });
 }
 
@@ -169,14 +200,16 @@ export function workspaceRequiredError(cwd: string): RosterError {
     header: `${chalk.red.bold('roster:')} project-level install requires a roster workspace`,
     body: [
       `  CWD: ${cwd}`,
-      `  Expected: config/project.yaml (created by ${chalk.bold('roster init')})`,
+      `  Expected: roster.yaml (created by ${chalk.bold('roster init')})`,
     ].join('\n'),
     remedy: [
       `  Either:`,
       `    - cd into a roster workspace, or`,
       `    - re-run with ${chalk.bold('--scope user')} to install to your home directory.`,
     ].join('\n'),
-    exitCode: EXIT_CANCELLED,
+    exitCode: EXIT_ERROR,
+    code: 'WORKSPACE_NOT_FOUND',
+    details: { cwd },
   });
 }
 

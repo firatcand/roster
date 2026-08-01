@@ -24,26 +24,27 @@ function runCli(args: readonly string[], cwd: string, env: Record<string, string
   return { status: out.status ?? -1, stdout: out.stdout, stderr: out.stderr };
 }
 
-test('update: in a workspace runs install + hooks + upgrade, exit 0', () => {
+test('update: in a v2 workspace synchronizes only enabled generated activation', () => {
   const root = mkdtempSync(join(tmpdir(), 'roster-update-'));
   const claudeHome = join(root, '.h-claude');
   const fakeHome = join(root, '.home');
-  mkdirSync(claudeHome, { recursive: true }); // makes claude "detected"
+  mkdirSync(claudeHome, { recursive: true });
   mkdirSync(fakeHome, { recursive: true });
   try {
     // Scaffold a real workspace first.
-    assert.equal(runCli(['init', 'tw', '--no-git', '--silent'], root).status, 0);
+    assert.equal(runCli(['init', 'tw', '--silent'], root).status, 0);
     const env = { HOME: fakeHome, ROSTER_CLAUDE_HOME: claudeHome };
+    const install = runCli(['install', '--tool', 'claude', '--scope', 'project', '--yes', '--silent'], root, env);
+    assert.equal(install.status, 0, install.stderr);
+    rmSync(join(root, '.claude', 'CLAUDE.md'));
     const r = runCli(['update'], root, env);
     assert.equal(r.status, 0, r.stderr);
-    // Step 1 installed roster's skills project-local (incl. inbox).
-    assert.ok(existsSync(join(root, '.claude', 'skills', 'inbox', 'SKILL.md')), 'inbox skill installed project-local');
-    // Step 3 ran upgrade → seeded the scaffold manifest.
-    assert.ok(existsSync(join(root, '.roster', 'scaffold-manifest.json')), 'upgrade seeded the manifest');
-    // Output mentions the three steps + the CLI-bump reminder.
-    assert.match(r.stdout, /Skills \+ agents/);
-    assert.match(r.stdout, /Scaffold files/);
-    assert.match(r.stdout, /npm i -g @firatcand\/roster@latest/);
+    assert.ok(existsSync(join(root, '.claude', 'CLAUDE.md')), 'missing generated activation is recreated');
+    assert.ok(existsSync(join(root, '.roster', 'generated-manifest.json')), 'portable generated manifest exists');
+    assert.equal(existsSync(join(root, '.roster', 'scaffold-manifest.json')), false);
+    assert.equal(existsSync(join(root, '.claude', 'skills', 'inbox', 'SKILL.md')), false);
+    assert.match(r.stdout, /v2 generated activation/);
+    assert.doesNotMatch(r.stdout, /Founder skills|Scaffold files|hooks/i);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -66,6 +67,17 @@ test('update: unknown flag → exit 1', () => {
     const r = runCli(['update', '--bogus'], root);
     assert.equal(r.status, 1);
     assert.match(r.stderr, /unknown flag/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('update: removed --exclude flag fails loudly instead of becoming a no-op', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-update-exclude-'));
+  try {
+    const r = runCli(['update', '--exclude', 'guidelines'], root);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /unknown flag '--exclude'/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -500,10 +500,14 @@ test('cli run: not configured → actionable exit 1 (both human + --json)', () =
     assert.equal(human.status, 1);
     assert.match(human.stderr, /operations backend is not configured/);
     assert.match(human.stderr, /roster ops setup/);
-    // The not-configured RosterError renders on stderr regardless of --json.
+    // Machine mode uses the global stable error envelope on stdout.
     const j = runCli(['run', 'list', '--json'], cwd);
     assert.equal(j.status, 1);
-    assert.match(j.stderr, /not configured/);
+    assert.equal(j.stderr, '');
+    const payload = JSON.parse(j.stdout) as { ok: boolean; message: string; remedy: string };
+    assert.equal(payload.ok, false);
+    assert.match(payload.message, /not configured/);
+    assert.match(payload.remedy, /roster ops setup/);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

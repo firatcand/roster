@@ -1,6 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -9,93 +16,103 @@ const BIN = resolve('src/bin/roster.ts');
 
 type Run = { status: number; stdout: string; stderr: string };
 
-function runCli(
-  args: readonly string[],
-  cwd: string,
-  envOverrides: Record<string, string> = {},
-): Run {
-  const out = spawnSync(
+function runCli(args: readonly string[], cwd: string): Run {
+  const output = spawnSync(
     process.execPath,
     ['--experimental-strip-types', '--no-warnings', BIN, ...args],
     {
       encoding: 'utf8',
       cwd,
-      env: { ...process.env, ...envOverrides, FORCE_COLOR: '0', NO_COLOR: '1' },
+      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 10000,
+      timeout: 10_000,
     },
   );
-  return { status: out.status ?? -1, stdout: out.stdout, stderr: out.stderr };
+  return {
+    status: output.status ?? -1,
+    stdout: output.stdout,
+    stderr: output.stderr,
+  };
 }
 
-test('roster init in a dir with existing CLAUDE.md and closed stdin exits 2 with "Nothing written."', () => {
-  // With stdin: 'ignore', inquirer's confirm() rejects → executeInit returns
-  // status: 'cancelled' → runner renders userCancelledInit() → exit 2.
-  const cwd = mkdtempSync(join(tmpdir(), 'roster-cli-init-cancel-'));
+function temporaryWorkspace(prefix: string): { root: string; cleanup: () => void } {
+  const root = mkdtempSync(join(tmpdir(), `${prefix}-`));
+  return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+test('roster init creates only the sparse v2 files', () => {
+  const { root, cleanup } = temporaryWorkspace('roster-cli-init');
   try {
-    writeFileSync(join(cwd, 'CLAUDE.md'), '# pre-existing\n', 'utf8');
-    const r = runCli(['init', 'foo', '--silent', '--no-git'], cwd);
-    assert.equal(r.status, 2, `stderr: ${r.stderr}\nstdout: ${r.stdout}`);
-    assert.match(r.stderr, /Nothing written\./);
-    // No stack trace without --debug.
-    assert.doesNotMatch(r.stderr, /\bat\s+.+:\d+:\d+\)/);
+    const result = runCli(['init', 'acme', '--silent'], root);
+    assert.equal(result.status, 0, `stderr: ${result.stderr}\nstdout: ${result.stdout}`);
+    assert.deepEqual(readdirSync(root).sort(), ['ROSTER.md', 'roster.yaml']);
+    assert.match(readFileSync(join(root, 'roster.yaml'), 'utf8'), /^workspace_id: acme$/m);
   } finally {
-    rmSync(cwd, { recursive: true, force: true });
+    cleanup();
   }
 });
 
-test('roster init --debug on cancellation includes a stack trace', () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'roster-cli-init-cancel-debug-'));
+test('roster init accepts matching positional and --name identities', () => {
+  const { root, cleanup } = temporaryWorkspace('roster-cli-name');
   try {
-    writeFileSync(join(cwd, 'CLAUDE.md'), '# pre-existing\n', 'utf8');
-    const r = runCli(['init', 'foo', '--silent', '--no-git', '--debug'], cwd);
-    assert.equal(r.status, 2, `stderr: ${r.stderr}\nstdout: ${r.stdout}`);
-    assert.match(r.stderr, /Nothing written\./);
-    assert.match(r.stderr, /\bat\s+.+:\d+:\d+\)/, 'stack frame present with --debug');
+    const result = runCli(['init', 'acme', '--name', 'acme', '--silent'], root);
+    assert.equal(result.status, 0, `stderr: ${result.stderr}\nstdout: ${result.stdout}`);
+    assert.match(readFileSync(join(root, 'roster.yaml'), 'utf8'), /^workspace_id: acme$/m);
   } finally {
-    rmSync(cwd, { recursive: true, force: true });
+    cleanup();
   }
 });
 
-test('roster init in a v0.4 workspace (projects/ at cwd) exits 2 with documented error', () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'roster-cli-init-v04-'));
+test('roster init rejects disagreeing positional and --name identities before writing', () => {
+  const { root, cleanup } = temporaryWorkspace('roster-cli-name-conflict');
   try {
-    mkdirSync(join(cwd, 'projects'));
-    const r = runCli(['init', 'foo', '--silent', '--no-git'], cwd);
-    assert.equal(r.status, 2, `stderr: ${r.stderr}\nstdout: ${r.stdout}`);
-    assert.match(r.stderr, /detected v0\.4 workspace/i);
-    assert.match(r.stderr, /CHANGELOG\.md#v1\.0\.0/);
-    assert.match(r.stderr, /projects\//);
+    const result = runCli(['init', 'first', '--name', 'second', '--silent'], root);
+    assert.equal(result.status, 1, `stderr: ${result.stderr}\nstdout: ${result.stdout}`);
+    assert.match(result.stderr, /identity arguments disagree/i);
+    assert.deepEqual(readdirSync(root), []);
   } finally {
-    rmSync(cwd, { recursive: true, force: true });
+    cleanup();
   }
 });
 
-test('roster init in a v0.4 workspace (nested <fn>/<agent>/projects) also exits 2', () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'roster-cli-init-v04-nested-'));
+test('roster init preserves unrelated repository files', () => {
+  const { root, cleanup } = temporaryWorkspace('roster-cli-existing');
   try {
-    mkdirSync(join(cwd, 'gtm', 'sdr', 'projects'), { recursive: true });
-    const r = runCli(['init', 'foo', '--silent', '--no-git'], cwd);
-    assert.equal(r.status, 2, `stderr: ${r.stderr}\nstdout: ${r.stdout}`);
-    assert.match(r.stderr, /detected v0\.4 workspace/i);
-    assert.match(r.stderr, /gtm\/sdr\/projects\//);
+    writeFileSync(join(root, 'README.md'), '# existing\n');
+    const result = runCli(['init', 'acme', '--silent'], root);
+    assert.equal(result.status, 0, `stderr: ${result.stderr}\nstdout: ${result.stdout}`);
+    assert.equal(readFileSync(join(root, 'README.md'), 'utf8'), '# existing\n');
+    assert.deepEqual(readdirSync(root).sort(), ['README.md', 'ROSTER.md', 'roster.yaml']);
   } finally {
-    rmSync(cwd, { recursive: true, force: true });
+    cleanup();
   }
 });
 
-test('roster init substitutes PROJECT_NAME + DISPLAY_NAME into config/project.yaml', () => {
-  const cwd = mkdtempSync(join(tmpdir(), 'roster-cli-init-subst-'));
+test('roster init refuses a legacy workspace with migration guidance and exit 1', () => {
+  const { root, cleanup } = temporaryWorkspace('roster-cli-legacy');
   try {
-    const r = runCli(['init', 'acme-co', '--silent', '--no-git'], cwd);
-    assert.equal(r.status, 0, `stderr: ${r.stderr}\nstdout: ${r.stdout}`);
-
-    const yaml = readFileSync(join(cwd, 'config', 'project.yaml'), 'utf8');
-    assert.match(yaml, /^name: acme-co\b/m, 'name field substituted');
-    assert.match(yaml, /^display_name: "acme-co"/m, 'display_name substituted (pass-through)');
-    assert.ok(!yaml.includes('{{PROJECT_NAME}}'), 'no PROJECT_NAME placeholder left');
-    assert.ok(!yaml.includes('{{DISPLAY_NAME}}'), 'no DISPLAY_NAME placeholder left');
+    mkdirSync(join(root, 'config'));
+    writeFileSync(join(root, 'config', 'project.yaml'), 'name: legacy\n');
+    const result = runCli(['init', 'acme', '--silent'], root);
+    assert.equal(result.status, 1, `stderr: ${result.stderr}\nstdout: ${result.stdout}`);
+    assert.match(result.stderr, /Roster v1 workspace/i);
+    assert.match(result.stderr, /#363/);
+    assert.ok(!readdirSync(root).includes('roster.yaml'));
   } finally {
-    rmSync(cwd, { recursive: true, force: true });
+    cleanup();
+  }
+});
+
+test('removed eager-init flags fail instead of enabling overwrite or migration behavior', () => {
+  for (const flag of ['--force', '--migrate', '--no-git', '--skip-git']) {
+    const { root, cleanup } = temporaryWorkspace('roster-cli-removed-flag');
+    try {
+      const result = runCli(['init', 'acme', flag, '--silent'], root);
+      assert.equal(result.status, 1, `${flag}: stderr: ${result.stderr}\nstdout: ${result.stdout}`);
+      assert.match(result.stderr, /unsupported.*init|unknown.*flag|usage/i);
+      assert.deepEqual(readdirSync(root), []);
+    } finally {
+      cleanup();
+    }
   }
 });
