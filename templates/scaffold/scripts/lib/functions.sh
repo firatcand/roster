@@ -96,6 +96,10 @@ for fn in data.get('functions', []):
 }
 
 is_valid_function() {
-  local fn="$1"
-  read_functions 2>/dev/null | grep -Fxq "$fn"
+  local fn="$1" registry
+  [[ "$fn" =~ ^[a-z][a-z0-9-]*$ ]] || return 1
+  # Read the registry fully before matching; an early-exiting pipeline can
+  # SIGPIPE read_functions and reject a valid first entry under pipefail.
+  registry="$(read_functions 2>/dev/null)" || return 1
+  grep -F -x -q -e "$fn" <<< "$registry"
 }

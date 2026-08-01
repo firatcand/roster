@@ -103,6 +103,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm test
+      - run: pnpm test:scaffold-scripts
       - run: npm pack --dry-run
       - run: pnpm smoke
       - run: pnpm e2e:schedule
