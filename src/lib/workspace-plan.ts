@@ -437,7 +437,7 @@ function parseCompletion(value: unknown, path: string): PlanCompletion {
   };
 }
 
-export function parseStructuredPlanEnvelope(envelope: PlanEnvelope, path: string): StructuredPlan {
+function parseStructuredPlanEnvelope(envelope: PlanEnvelope, path: string): StructuredPlan {
   const value = envelope.value;
   assertKnownFields(value, [
     'schema_version',
