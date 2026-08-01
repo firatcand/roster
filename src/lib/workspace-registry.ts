@@ -16,6 +16,7 @@ import {
   parseChildDefinition,
   parseFunctionDefinition,
   parseMarkdownDefinition,
+  parsePlanEnvelope,
   parseWorkspaceRegistry,
   renderAgentDefinition,
   renderChildDefinition,
@@ -27,6 +28,7 @@ import {
   MAX_AUTHORED_MARKDOWN_BYTES,
   MAX_AUTHORED_YAML_BYTES,
 } from './workspace-record.ts';
+import { validateStructuredPlans } from './workspace-plan.ts';
 import {
   ensureWorkspaceDirectory,
   enumerateWorkspaceSlot,
@@ -356,7 +358,7 @@ function collectWorkspaceRecords(root: string, full: boolean): WorkspaceDiscover
       for (const planId of agent.definition.plans) {
         const path = childRecordPath(fn.root, agentId, 'plan', planId);
         const file = readAuthored(root, path, false, session);
-        const definition = parseChildDefinition('plan', file.text, path);
+        const definition = parsePlanEnvelope(file.text, path);
         if (definition.id !== planId) identityMismatch(path, planId, definition.id);
         if (definition.agent !== agentQualified) identityMismatch(path, agentQualified, definition.agent);
         pushRecord(records, identities, record(
@@ -567,6 +569,12 @@ function resolveRegisteredRecord(
     return record(kind, qualifiedRecordId(kind, { functionId, agentId, localId: id }), path, definition.purpose, actualScope, file.bytes, {}, full);
   }
   const file = readAuthored(root, path, false, session);
+  if (kind === 'plan') {
+    const definition = parsePlanEnvelope(file.text, path);
+    if (definition.id !== id) identityMismatch(path, id, definition.id);
+    if (definition.agent !== agentQualified) identityMismatch(path, agentQualified, definition.agent);
+    return record(kind, qualifiedRecordId(kind, { functionId, agentId, localId: id }), path, definition.purpose, { function: functionId, agent: agentId }, file.bytes, {}, full);
+  }
   const definition = parseChildDefinition(kind, file.text, path);
   if (definition.id !== id) identityMismatch(path, id, definition.id);
   if (definition.agent !== agentQualified) identityMismatch(path, agentQualified, definition.agent);
@@ -608,8 +616,11 @@ function scopeMatches(recordValue: WorkspaceDiscoveryRecord, scopeValue: string)
       && recordValue.scope.plan === parsed.scope.plan);
 }
 
-function discoverWorkspaceUnchecked(root: string, options: DiscoverWorkspaceOptions = {}): DiscoverWorkspaceResult {
-  let records = collectWorkspaceRecords(root, options.full ?? false);
+function filterWorkspaceRecords(
+  source: readonly WorkspaceDiscoveryRecord[],
+  options: DiscoverWorkspaceOptions = {},
+): WorkspaceDiscoveryRecord[] {
+  let records = [...source];
   if (options.kind !== undefined) records = records.filter((entry) => entry.kind === options.kind);
   if (options.scope !== undefined) records = records.filter((entry) => scopeMatches(entry, options.scope!));
   const query = options.query;
@@ -637,6 +648,11 @@ function discoverWorkspaceUnchecked(root: string, options: DiscoverWorkspaceOpti
       throw workspaceFailure('IDENTITY_AMBIGUOUS', `Exact query '${query ?? ''}' matches multiple records.`, 'Pass a qualified identity and, if necessary, --kind.', { query: query ?? '', candidates: records.map((entry) => ({ kind: entry.kind, qualified_id: entry.qualified_id })) });
     }
   }
+  return records;
+}
+
+function discoverWorkspaceUnchecked(root: string, options: DiscoverWorkspaceOptions = {}): DiscoverWorkspaceResult {
+  const records = filterWorkspaceRecords(collectWorkspaceRecords(root, options.full ?? false), options);
   return { ok: true, records, diagnostics: [] };
 }
 
@@ -709,7 +725,7 @@ function assertPlanScopeHealthy(root: string, fn: LoadedFunction, agent: LoadedA
   }
   const path = childRecordPath(fn.root, agent.definition.id, 'plan', planId);
   const file = readAuthored(root, path);
-  const definition = parseChildDefinition('plan', file.text, path);
+  const definition = parsePlanEnvelope(file.text, path);
   const expectedAgent = `${agent.definition.function}/${agent.definition.id}`;
   if (definition.id !== planId) identityMismatch(path, planId, definition.id);
   if (definition.agent !== expectedAgent) identityMismatch(path, expectedAgent, definition.agent);
@@ -761,7 +777,9 @@ function assertRenderedScaffold(
     const child = parseMarkdownDefinition(rendered, targetPath);
     assertMarkdownIdentity(targetPath, { id, kind, scope: scope! }, child);
   } else {
-    const child = parseChildDefinition(kind, rendered, targetPath);
+    const child = kind === 'plan'
+      ? parsePlanEnvelope(rendered, targetPath)
+      : parseChildDefinition(kind, rendered, targetPath);
     if (child.id !== id) identityMismatch(targetPath, id, child.id);
     const expectedAgent = `${scope!.function}/${scope!.agent}`;
     if (child.agent !== expectedAgent) identityMismatch(targetPath, expectedAgent, child.agent);
@@ -989,18 +1007,21 @@ export function validateWorkspace(root: string, options: { target?: string } = {
   assertV2Workspace(root);
   const checks: StructuralCheck[] = [];
   const diagnostics: WorkspaceDiagnostic[] = [];
-  let discoveredRecords: WorkspaceDiscoveryRecord[] = [];
+  let allRecords: WorkspaceDiscoveryRecord[] = [];
+  let selectedRecords: WorkspaceDiscoveryRecord[] = [];
+  let declaredRegistryPassed = false;
   try {
-    const discovery = discoverWorkspaceUnchecked(root, {
+    allRecords = collectWorkspaceRecords(root, true);
+    selectedRecords = filterWorkspaceRecords(allRecords, {
       ...(options.target === undefined ? {} : { query: options.target, exact: true }),
       full: true,
     });
-    discoveredRecords = discovery.records;
+    declaredRegistryPassed = true;
     checks.push({
       name: 'declared-registry',
       severity: 'error',
       status: 'pass',
-      details: { records: discovery.records.length },
+      details: { records: selectedRecords.length },
     });
   } catch (error) {
     if (!isWorkspaceFailure(error)) throw error;
@@ -1010,6 +1031,43 @@ export function validateWorkspace(root: string, options: { target?: string } = {
       severity: 'error',
       status: 'fail',
       details: { code: error.code },
+    });
+  }
+  if (!declaredRegistryPassed) {
+    checks.push({
+      name: 'structured-plans',
+      severity: 'error',
+      status: 'fail',
+      details: { blocked_by: 'declared-registry', diagnostics: 0 },
+    });
+  } else {
+    let roots: string[] | undefined;
+    if (options.target !== undefined) {
+      const selected = selectedRecords[0]!;
+      roots = selected.kind === 'plan'
+        ? [selected.qualified_id]
+        : selected.kind === 'agent'
+          ? allRecords
+            .filter((record) => record.kind === 'plan'
+              && record.scope.function === selected.qualified_id.split('/')[0]
+              && record.scope.agent === selected.qualified_id.split('/')[1])
+            .map((record) => record.qualified_id)
+          : selected.kind === 'function'
+            ? allRecords
+              .filter((record) => record.kind === 'plan' && record.scope.function === selected.qualified_id)
+              .map((record) => record.qualified_id)
+            : [];
+    }
+    const structured = validateStructuredPlans(allRecords, roots);
+    diagnostics.push(...structured.diagnostics);
+    checks.push({
+      name: 'structured-plans',
+      severity: 'error',
+      status: structured.diagnostics.some((entry) => entry.severity === 'error') ? 'fail' : 'pass',
+      details: {
+        plans: structured.selected_plan_ids.length,
+        diagnostics: structured.diagnostics.length,
+      },
     });
   }
   try {
@@ -1032,7 +1090,7 @@ export function validateWorkspace(root: string, options: { target?: string } = {
     });
   }
   const machinePathPattern = /(?:\/Users\/[A-Za-z0-9._-]+\/|\/home\/[A-Za-z0-9._-]+\/|[A-Za-z]:\\Users\\[^\\\s]+\\)/;
-  const machinePathDiagnostics = discoveredRecords
+  const machinePathDiagnostics = selectedRecords
     .filter((entry) => entry.content !== undefined && machinePathPattern.test(entry.content))
     .map((entry) => workspaceDiagnostic(
       'PATH_ESCAPE',

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -163,6 +163,68 @@ test('spawned validate returns nonzero for structural orphan diagnostics', () =>
     const envelope = json(result);
     assert.equal(envelope['ok'], false);
     assert.ok((envelope['diagnostics'] as Array<{ code: string }>).some((entry) => entry.code === 'UNREGISTERED_RECORD'));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('spawned CLI returns complete authored plans while validate enforces semantic readiness', () => {
+  const fx = fixture();
+  try {
+    init(fx.root);
+    assert.equal(runCli(fx.root, ['scaffold', 'function', 'gtm', '--json']).status, 0);
+    assert.equal(runCli(fx.root, ['scaffold', 'agent', 'social', '--scope', 'function:gtm', '--json']).status, 0);
+    assert.equal(runCli(fx.root, [
+      'scaffold',
+      'plan',
+      'discover',
+      '--scope',
+      'agent:gtm/social',
+      '--purpose',
+      'Discover opportunities.',
+      '--json',
+    ]).status, 0);
+
+    const draft = runCli(fx.root, ['validate', 'gtm/social#discover', '--json']);
+    assert.equal(draft.status, 1);
+    assert.ok((json(draft)['diagnostics'] as Array<{ code: string }>).some((entry) => entry.code === 'PLAN_DRAFT_INCOMPLETE'));
+
+    const path = join(fx.root, 'functions', 'gtm', 'agents', 'social', 'plans', 'discover.yaml');
+    const invalid = [
+      'schema_version: 2',
+      'id: discover',
+      'agent: gtm/social',
+      'purpose: Discover opportunities.',
+      'inputs: {}',
+      'brain_selectors: {}',
+      'guidelines: []',
+      'artifacts: {}',
+      'caps: {}',
+      'steps:',
+      '  - id: prepare',
+      '    kind: reasoning',
+      '    instruction: Prepare filters.',
+      '    command: hidden-runtime',
+      'completion:',
+      '  artifacts: []',
+      '  output_guidance: Return the filters.',
+      '  criteria:',
+      '    - Filters match the request.',
+      '',
+    ].join('\n');
+    writeFileSync(path, invalid);
+    const discovered = runCli(fx.root, ['discover', 'gtm/social#discover', '--exact', '--full', '--json']);
+    assert.equal(discovered.status, 0, discovered.stderr);
+    assert.equal(((json(discovered)['records'] as Array<{ content: string }>)[0]?.content), invalid);
+    const rejected = runCli(fx.root, ['validate', 'gtm/social#discover', '--json']);
+    assert.equal(rejected.status, 1);
+    assert.ok((json(rejected)['diagnostics'] as Array<{ code: string }>).some((entry) => entry.code === 'PLAN_FIELD_FORBIDDEN'));
+
+    writeFileSync(path, invalid.replace('    command: hidden-runtime\n', ''));
+    const valid = runCli(fx.root, ['validate', 'gtm/social#discover', '--json']);
+    assert.equal(valid.status, 0, `stdout: ${valid.stdout}\nstderr: ${valid.stderr}`);
+    const structured = (json(valid)['checks'] as Array<{ name: string; details: Record<string, unknown> }>).find((check) => check.name === 'structured-plans');
+    assert.deepEqual(structured?.details, { plans: 1, diagnostics: 0 });
   } finally {
     fx.cleanup();
   }

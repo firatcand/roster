@@ -173,28 +173,57 @@ id: opportunity-discovery
 agent: gtm/social-manager
 purpose: Produce a reviewed list of relevant reply opportunities.
 inputs:
-  channels:
-    description: Requested social channels.
-  lookback:
-    description: Time window requested by the human.
+  request:
+    description: The human's current discovery request.
+    required: true
+    shape: Plain text.
+brain_selectors:
+  successful-replies:
+    description: Examples of successful prior replies.
+    required: false
+guidelines:
+  - gtm/guidelines/brand-voice
+artifacts:
+  search-brief:
+    description: Filters prepared by the host for the selected search tool.
+  opportunity-shortlist:
+    description: The human-reviewed shortlist.
+    shape: Markdown list with canonical URLs and relevance reasons.
+caps:
+  candidates:
+    maximum: 25
+    guidance: Keep only opportunities that match the current request.
 steps:
   - id: prepare
     kind: reasoning
     instruction: Derive request-specific filters from the task, ICP, and examples.
     context:
-      brain: [icp, messaging, successful-replies]
+      brain: [successful-replies]
+      guidelines: [gtm/guidelines/brand-voice]
+    expected:
+      artifacts: [search-brief]
+      output_guidance: Explain why each filter matches the request.
   - id: discover
     kind: tool
     tool_use: social-opportunity-research
     instruction: Find current opportunities using the prepared filters.
+    retry_guidance:
+      max_attempts: 2
+      instruction: Narrow the host-prepared filters before retrying.
   - id: review
     kind: reasoning
     instruction: Remove duplicates and explain relevance with citations.
   - id: present
     kind: approval
     instruction: Present the shortlist and wait for the human's selection.
+    approval_guidance: Wait for the human in the host interface.
+  - id: return
+    kind: artifact
+    instruction: Return the approved shortlist.
+    artifact: opportunity-shortlist
 completion:
   artifacts: [opportunity-shortlist]
+  output_guidance: Return the approved shortlist with relevance rationale.
   criteria:
     - Every item has a canonical URL and relevance reason.
 ```
@@ -206,12 +235,11 @@ Static validation checks:
 - unique ordered step IDs;
 - existing agent, plan, subagent, guideline, Brain selector, and tool-use references;
 - direct and transitive nested-plan cycles;
-- impossible forward references in explanatory bindings;
 - bounded caps and retry guidance;
 - declared expected artifacts and completion criteria;
-- no arbitrary code, templates that execute code, shell command strings, goto, worker queue, or hidden expression language.
+- no arbitrary code, executable template, binding, shell command, goto, worker queue, transition, or hidden expression language.
 
-Input/output shapes are documentation and lint targets for the host, not transition gates. Roster returns the whole selected plan in context.
+Array position is the only sequence; the schema has no output binding, dependency, transition, or current-step grammar. Input/output shapes, condition guidance, retries, caps, and approvals are inert instructions for the host, not transition gates. Roster returns the whole selected plan in context.
 
 ### Workspace tool-use definition
 
@@ -221,7 +249,7 @@ id: social-opportunity-research
 scope:
   function: gtm
   agent: social-manager
-  plans: [opportunity-discovery]
+  plan: opportunity-discovery
 skill_ref: exa:search
 why: Find timely, credible posts that match our audience and positioning.
 when:

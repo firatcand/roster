@@ -10,6 +10,7 @@ import {
   renderChildDefinition,
   renderMarkdownDefinition,
 } from '../src/lib/workspace-record.ts';
+import { validateStructuredPlans } from '../src/lib/workspace-plan.ts';
 import { discoverWorkspace } from '../src/lib/workspace-registry.ts';
 
 const FUNCTION_COUNT = 50;
@@ -17,7 +18,7 @@ const AGENTS_PER_FUNCTION = 10;
 const WARM_READS = 50;
 const P95_LIMIT_MS = 250;
 
-test('seeded warm discovery p95 stays below 250 ms without a cache', { timeout: 120_000 }, (context) => {
+test('seeded warm discovery and static plan-validation p95 stay below 250 ms without a cache', { timeout: 120_000 }, (context) => {
   const root = mkdtempSync(join(tmpdir(), 'roster-discovery-bench-'));
   try {
     const functions: Record<string, { path: string }> = {};
@@ -39,7 +40,7 @@ test('seeded warm discovery p95 stays below 250 ms without a cache', { timeout: 
         join(absoluteFunction, 'guidelines', 'shared.md'),
         renderMarkdownDefinition('guideline', 'shared', '', { function: functionId }),
       );
-      for (const agentId of agents) {
+      for (const [agentIndex, agentId] of agents.entries()) {
         const absoluteAgent = join(absoluteFunction, 'agents', agentId);
         for (const slot of ['plans', 'subagents', 'guidelines', 'tools', 'playbook']) {
           mkdirSync(join(absoluteAgent, slot), { recursive: true });
@@ -58,7 +59,30 @@ test('seeded warm discovery p95 stays below 250 ms without a cache', { timeout: 
         }));
         writeFileSync(
           join(absoluteAgent, 'plans', 'primary.yaml'),
-          renderChildDefinition('plan', functionId, agentId, 'primary', ''),
+          YAML.stringify({
+            schema_version: 2,
+            id: 'primary',
+            agent: `${functionId}/${agentId}`,
+            purpose: 'Run the primary workflow.',
+            inputs: {},
+            brain_selectors: {},
+            guidelines: [],
+            artifacts: {},
+            caps: {},
+            steps: agentIndex < AGENTS_PER_FUNCTION - 1
+              ? [{
+                  id: 'delegate',
+                  kind: 'nested-plan',
+                  instruction: 'Use the next specialist plan.',
+                  plan: `${functionId}/agent-${agentIndex + 1}#primary`,
+                }]
+              : [{ id: 'prepare', kind: 'reasoning', instruction: 'Prepare the result.' }],
+            completion: {
+              artifacts: [],
+              output_guidance: 'Return the completed result.',
+              criteria: ['The result is complete.'],
+            },
+          }),
         );
         writeFileSync(
           join(absoluteAgent, 'subagents', 'researcher.yaml'),
@@ -98,6 +122,21 @@ test('seeded warm discovery p95 stays below 250 ms without a cache', { timeout: 
     const p95 = durations[Math.ceil(durations.length * 0.95) - 1]!;
     context.diagnostic(`warm discovery p95 ${p95.toFixed(1)} ms`);
     assert.ok(p95 < P95_LIMIT_MS, `warm discovery p95 ${p95.toFixed(1)} ms exceeds ${P95_LIMIT_MS} ms`);
+
+    const fullSnapshot = discoverWorkspace(root, { full: true }).records;
+    assert.deepEqual(validateStructuredPlans(fullSnapshot).diagnostics, []);
+    const validationDurations: number[] = [];
+    for (let iteration = 0; iteration < WARM_READS; iteration++) {
+      const started = performance.now();
+      const validation = validateStructuredPlans(fullSnapshot);
+      assert.deepEqual(validation.diagnostics, []);
+      validationDurations.push(performance.now() - started);
+    }
+    validationDurations.sort((left, right) => left - right);
+    const validationP95 = validationDurations[Math.ceil(validationDurations.length * 0.95) - 1]!;
+    context.diagnostic(`warm static validation p95 ${validationP95.toFixed(1)} ms`);
+    assert.ok(validationP95 < P95_LIMIT_MS, `warm static validation p95 ${validationP95.toFixed(1)} ms exceeds ${P95_LIMIT_MS} ms`);
+
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

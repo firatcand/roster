@@ -11,6 +11,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import YAML from 'yaml';
 import { renderRosterBootstrap } from '../src/lib/generated-artifacts.ts';
 import { parseChildDefinition } from '../src/lib/workspace-record.ts';
 import {
@@ -43,6 +44,32 @@ function failureCode(run: () => unknown): string | undefined {
     assert.equal(isWorkspaceFailure(error), true);
     return isWorkspaceFailure(error) ? error.code : undefined;
   }
+}
+
+function authorPlan(
+  root: string,
+  functionId: string,
+  agentId: string,
+  planId: string,
+  steps: Array<Record<string, unknown>> = [{ id: 'prepare', kind: 'reasoning', instruction: 'Prepare the work.' }],
+): void {
+  writeFileSync(join(root, 'functions', functionId, 'agents', agentId, 'plans', `${planId}.yaml`), YAML.stringify({
+    schema_version: 2,
+    id: planId,
+    agent: `${functionId}/${agentId}`,
+    purpose: `Run ${planId}.`,
+    inputs: {},
+    brain_selectors: {},
+    guidelines: [],
+    artifacts: {},
+    caps: {},
+    steps,
+    completion: {
+      artifacts: [],
+      output_guidance: 'Return the result.',
+      criteria: ['The work is complete.'],
+    },
+  }));
 }
 
 test('scaffold creates only requested ancestors, preserves comments, and is idempotent', () => {
@@ -242,6 +269,194 @@ test('validation reports undeclared slot entries and generated drift without ado
     assert.equal(discoverWorkspace(fx.root).records.some((record) => record.qualified_id.includes('rogue')), false);
     writeFileSync(join(fx.root, 'ROSTER.md'), 'edited\n');
     assert.ok(validateWorkspace(fx.root).diagnostics.some((diagnostic) => diagnostic.code === 'GENERATED_FILE_EDITED'));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('scaffolded plans remain discoverable drafts until semantic validation succeeds', () => {
+  const fx = fixture();
+  try {
+    scaffoldWorkspace(fx.root, { kind: 'function', id: 'gtm' });
+    scaffoldWorkspace(fx.root, { kind: 'agent', id: 'social', scope: 'function:gtm' });
+    scaffoldWorkspace(fx.root, { kind: 'plan', id: 'discover', scope: 'agent:gtm/social', purpose: 'Discover opportunities.' });
+    const discovered = discoverWorkspace(fx.root, { query: 'gtm/social#discover', exact: true, full: true }).records[0]!;
+    assert.match(discovered.content!, /brain_selectors: \{\}/);
+    assert.match(discovered.content!, /output_guidance: ""/);
+    const invalid = validateWorkspace(fx.root, { target: 'gtm/social#discover' });
+    assert.equal(invalid.ok, false);
+    assert.equal(invalid.checks.find((check) => check.name === 'structured-plans')?.status, 'fail');
+    assert.ok(invalid.diagnostics.some((entry) => entry.code === 'PLAN_DRAFT_INCOMPLETE'));
+    assert.equal(discoverWorkspace(fx.root, { query: discovered.path, exact: true, full: true }).records[0]!.content, discovered.content);
+
+    authorPlan(fx.root, 'gtm', 'social', 'discover');
+    const valid = validateWorkspace(fx.root, { target: 'gtm/social#discover' });
+    assert.equal(valid.ok, true, JSON.stringify(valid.diagnostics));
+    assert.deepEqual(valid.checks.find((check) => check.name === 'structured-plans')?.details, { plans: 1, diagnostics: 0 });
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('empty-purpose plan drafts remain discoverable but fail semantic readiness', () => {
+  const fx = fixture();
+  try {
+    scaffoldWorkspace(fx.root, { kind: 'function', id: 'gtm' });
+    scaffoldWorkspace(fx.root, { kind: 'agent', id: 'social', scope: 'function:gtm' });
+    scaffoldWorkspace(fx.root, { kind: 'plan', id: 'discover', scope: 'agent:gtm/social' });
+
+    assert.equal(
+      discoverWorkspace(fx.root, { query: 'gtm/social#discover', exact: true }).records[0]?.qualified_id,
+      'gtm/social#discover',
+    );
+    const validation = validateWorkspace(fx.root, { target: 'gtm/social#discover' });
+    assert.ok(validation.diagnostics.some((entry) => (
+      entry.code === 'PLAN_SCHEMA_INVALID' && entry.details['field_path'] === 'purpose'
+    )));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('targeted plan validation follows nested closure and ignores unrelated drafts', () => {
+  const fx = fixture();
+  try {
+    scaffoldWorkspace(fx.root, { kind: 'function', id: 'gtm' });
+    scaffoldWorkspace(fx.root, { kind: 'guideline', id: 'voice', scope: 'function:gtm' });
+    scaffoldWorkspace(fx.root, { kind: 'agent', id: 'social', scope: 'function:gtm' });
+    for (const planId of ['primary', 'nested', 'draft']) {
+      scaffoldWorkspace(fx.root, {
+        kind: 'plan',
+        id: planId,
+        scope: 'agent:gtm/social',
+        purpose: `Run ${planId}.`,
+      });
+    }
+    authorPlan(fx.root, 'gtm', 'social', 'primary', [
+      { id: 'nested', kind: 'nested-plan', instruction: 'Use the nested guide.', plan: 'gtm/social#nested' },
+    ]);
+    authorPlan(fx.root, 'gtm', 'social', 'nested');
+
+    const targeted = validateWorkspace(fx.root, { target: 'gtm/social#primary' });
+    assert.equal(targeted.ok, true, JSON.stringify(targeted.diagnostics));
+    assert.deepEqual(targeted.checks.find((check) => check.name === 'structured-plans')?.details, { plans: 2, diagnostics: 0 });
+    assert.equal(validateWorkspace(fx.root).diagnostics.some((entry) => entry.code === 'PLAN_DRAFT_INCOMPLETE'), true);
+    assert.equal(validateWorkspace(fx.root, { target: 'gtm/social' }).diagnostics.some((entry) => entry.code === 'PLAN_DRAFT_INCOMPLETE'), true);
+    assert.equal(validateWorkspace(fx.root, { target: 'gtm' }).diagnostics.some((entry) => entry.code === 'PLAN_DRAFT_INCOMPLETE'), true);
+    assert.deepEqual(validateWorkspace(fx.root, { target: 'gtm/guidelines/voice' }).checks.find((check) => check.name === 'structured-plans')?.details, { plans: 0, diagnostics: 0 });
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('targeted validation preserves exact not-found and ambiguity diagnostics', () => {
+  const fx = fixture();
+  try {
+    for (const functionId of ['gtm', 'support']) {
+      scaffoldWorkspace(fx.root, { kind: 'function', id: functionId });
+      scaffoldWorkspace(fx.root, { kind: 'agent', id: 'social', scope: `function:${functionId}` });
+      scaffoldWorkspace(fx.root, { kind: 'plan', id: 'discover', scope: `agent:${functionId}/social` });
+      authorPlan(fx.root, functionId, 'social', 'discover');
+    }
+    const missing = validateWorkspace(fx.root, { target: 'missing' });
+    assert.equal(missing.ok, false);
+    assert.equal(missing.diagnostics[0]?.code, 'PARENT_NOT_FOUND');
+    assert.deepEqual(missing.checks.find((check) => check.name === 'structured-plans')?.details, { blocked_by: 'declared-registry', diagnostics: 0 });
+    const ambiguous = validateWorkspace(fx.root, { target: 'discover' });
+    assert.equal(ambiguous.ok, false);
+    assert.ok(ambiguous.diagnostics.some((entry) => entry.code === 'IDENTITY_AMBIGUOUS'));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('semantic plan failures aggregate one schema failure per plan and every valid reference failure', () => {
+  const fx = fixture();
+  try {
+    scaffoldWorkspace(fx.root, { kind: 'function', id: 'gtm' });
+    scaffoldWorkspace(fx.root, { kind: 'agent', id: 'social', scope: 'function:gtm' });
+    for (const planId of ['bad-one', 'bad-two', 'references']) {
+      scaffoldWorkspace(fx.root, { kind: 'plan', id: planId, scope: 'agent:gtm/social' });
+    }
+    const badOne = join(fx.root, 'functions/gtm/agents/social/plans/bad-one.yaml');
+    writeFileSync(badOne, readFileSync(badOne, 'utf8').replace('steps: []', 'steps: wrong'));
+    const badTwo = join(fx.root, 'functions/gtm/agents/social/plans/bad-two.yaml');
+    writeFileSync(badTwo, readFileSync(badTwo, 'utf8').replace('brain_selectors: {}', 'brain_selectors: []'));
+    authorPlan(fx.root, 'gtm', 'social', 'references', [
+      { id: 'first', kind: 'subagent', instruction: 'Delegate.', subagent: 'missing-one' },
+      { id: 'second', kind: 'subagent', instruction: 'Delegate.', subagent: 'missing-two' },
+    ]);
+    const validation = validateWorkspace(fx.root);
+    assert.equal(validation.diagnostics.filter((entry) => entry.code === 'PLAN_SCHEMA_INVALID').length, 2);
+    assert.equal(validation.diagnostics.filter((entry) => entry.code === 'REFERENCE_NOT_FOUND').length, 2);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('record collection failure does not turn registered roots into false orphans', () => {
+  const fx = fixture();
+  try {
+    scaffoldWorkspace(fx.root, { kind: 'function', id: 'gtm' });
+    scaffoldWorkspace(fx.root, { kind: 'agent', id: 'social', scope: 'function:gtm' });
+    scaffoldWorkspace(fx.root, { kind: 'plan', id: 'broken', scope: 'agent:gtm/social' });
+    writeFileSync(join(fx.root, 'functions/gtm/agents/social/plans/broken.yaml'), 'not: [valid\n');
+
+    const validation = validateWorkspace(fx.root);
+    assert.ok(validation.diagnostics.some((entry) => entry.code === 'YAML_INVALID'));
+    assert.equal(
+      validation.diagnostics.some((entry) => entry.code === 'UNREGISTERED_RECORD' && entry.path === 'functions/gtm'),
+      false,
+    );
+    assert.deepEqual(
+      validation.checks.find((check) => check.name === 'registered-slots')?.details,
+      { diagnostics: 0 },
+    );
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('orphan validation preserves nonstandard roots when record collection fails', () => {
+  const fx = fixture();
+  try {
+    writeFileSync(join(fx.root, 'roster.yaml'), [
+      'schema_version: 2',
+      'workspace_id: registry-test',
+      'functions:',
+      '  gtm:',
+      '    path: teams/gtm',
+      'hosts: {}',
+      '',
+    ].join('\n'));
+    mkdirSync(join(fx.root, 'teams/gtm/agents/social/plans'), { recursive: true });
+    mkdirSync(join(fx.root, 'teams/gtm/agents/rogue'), { recursive: true });
+    writeFileSync(join(fx.root, 'teams/gtm/function.yaml'), YAML.stringify({
+      schema_version: 2,
+      id: 'gtm',
+      purpose: 'Grow demand.',
+      agents: ['social'],
+      guidelines: [],
+    }));
+    writeFileSync(join(fx.root, 'teams/gtm/agents/social/agent.yaml'), YAML.stringify({
+      schema_version: 2,
+      id: 'social',
+      function: 'gtm',
+      purpose: 'Manage social.',
+      plans: ['broken'],
+      subagents: [],
+      guidelines: [],
+      tool_uses: [],
+      lessons: [],
+      default_guidelines: [],
+    }));
+    writeFileSync(join(fx.root, 'teams/gtm/agents/social/plans/broken.yaml'), 'not: [valid\n');
+
+    const validation = validateWorkspace(fx.root);
+    assert.ok(validation.diagnostics.some((entry) => entry.code === 'YAML_INVALID'));
+    assert.ok(validation.diagnostics.some((entry) => (
+      entry.code === 'UNREGISTERED_RECORD' && entry.path === 'teams/gtm/agents/rogue'
+    )));
   } finally {
     fx.cleanup();
   }

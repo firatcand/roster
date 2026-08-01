@@ -213,7 +213,7 @@ id: social-opportunity-research
 scope:
   function: gtm
   agent: social-manager
-  plans: [opportunity-discovery]
+  plan: opportunity-discovery
 skill_ref: exa:search
 why: Find timely posts that match our audience and positioning.
 when:

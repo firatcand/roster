@@ -53,6 +53,14 @@ export type ChildDefinition = {
   value: Record<string, unknown>;
 };
 
+export type PlanEnvelope = {
+  schema_version: 2;
+  id: string;
+  purpose: string;
+  agent: string;
+  value: Record<string, unknown>;
+};
+
 export type MarkdownDefinition = {
   schema_version: 2;
   id: string;
@@ -221,6 +229,7 @@ function parseYaml(
   path: string,
   maxBytes: number = MAX_AUTHORED_YAML_BYTES,
   preserveDocument = false,
+  trySimple = true,
 ): ParsedYaml {
   if (Buffer.byteLength(text, 'utf8') > maxBytes) {
     throw workspaceFailure('READ_LIMIT_EXCEEDED', `${path}: exceeds the ${maxBytes}-byte YAML limit.`, 'Reduce the authored record before retrying.', { path, maxBytes });
@@ -233,7 +242,7 @@ function parseYaml(
       if (document.errors.length > 0) schemaFailure(path, document.errors[0]!.message);
       raw = document.toJS({ maxAliasCount: 0 });
     } else {
-      raw = tryParseSimpleYaml(text)
+      raw = (trySimple ? tryParseSimpleYaml(text) : undefined)
         ?? YAML.parse(text, { strict: true, uniqueKeys: true, maxAliasCount: 0 }) as unknown;
     }
   } catch (error) {
@@ -338,8 +347,7 @@ export function parseAgentDefinition(text: string, path: string): AgentDefinitio
   };
 }
 
-const CHILD_FIELDS: Readonly<Record<'plan' | 'subagent' | 'tool-use', readonly string[]>> = {
-  plan: ['schema_version', 'id', 'agent', 'purpose', 'inputs', 'steps', 'completion'],
+const CHILD_FIELDS: Readonly<Record<'subagent' | 'tool-use', readonly string[]>> = {
   subagent: ['schema_version', 'id', 'agent', 'purpose'],
   'tool-use': [
     'schema_version',
@@ -360,7 +368,7 @@ const CHILD_FIELDS: Readonly<Record<'plan' | 'subagent' | 'tool-use', readonly s
 };
 
 export function parseChildDefinition(
-  kind: 'plan' | 'subagent' | 'tool-use',
+  kind: 'subagent' | 'tool-use',
   text: string,
   path: string,
 ): ChildDefinition {
@@ -373,6 +381,17 @@ export function parseChildDefinition(
     purpose: requireString(value.purpose, path, 'purpose'),
     agent: requireString(value.agent, path, 'agent'),
     ...(scope === undefined ? {} : { scope }),
+    value,
+  };
+}
+
+export function parsePlanEnvelope(text: string, path: string): PlanEnvelope {
+  const { value } = parseYaml(text, path, MAX_AUTHORED_YAML_BYTES, false, false);
+  return {
+    schema_version: requireSchemaVersion(value.schema_version, path),
+    id: assertRecordId(requireString(value.id, path, 'id')),
+    purpose: requireString(value.purpose, path, 'purpose'),
+    agent: requireString(value.agent, path, 'agent'),
     value,
   };
 }
@@ -448,8 +467,12 @@ export function renderChildDefinition(
       agent,
       purpose,
       inputs: {},
+      brain_selectors: {},
+      guidelines: [],
+      artifacts: {},
+      caps: {},
       steps: [],
-      completion: { artifacts: [], criteria: [] },
+      completion: { artifacts: [], output_guidance: '', criteria: [] },
     });
   }
   if (kind === 'subagent') {

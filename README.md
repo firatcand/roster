@@ -44,15 +44,16 @@ provides:
 - exact sparse initialization;
 - deterministic on-demand scaffolding;
 - a hierarchical canonical registry with flat JSON discovery;
-- structural path, ownership, and generated-drift validation;
+- strict structured-plan schema, reference, scope, and cycle validation alongside
+  structural path, ownership, and generated-drift checks;
 - bounded regular-file reads, component-wise symlink refusal, and atomic writes;
 - minimal generated Claude Code and Codex activation that mentions only commands
   available today; and
 - the existing opt-in company Brain while its v2 identity/source lifecycle is
   upgraded.
 
-Full structured-plan validation, scoped tool-use precedence, bounded context,
-portable evidence, and activated Dreamer learning are subsequent roadmap tasks.
+Scoped tool-use precedence, bounded context, portable evidence, and activated
+Dreamer learning are subsequent roadmap tasks.
 Legacy scheduling and general-operations commands remain temporarily for
 migration safety; they are not part of the v2 product contract and are removed
 by the breaking-simplification phase.
@@ -114,6 +115,56 @@ roster validate --json
 
 Names are qualified by ownership. `gtm/social-manager` and
 `product/social-manager` are different agents and never collide.
+
+A scaffolded plan is an editable draft. It is discoverable immediately, but
+`roster validate` rejects it until an expert authors at least one ordered step
+and actionable completion guidance. Roster validates and returns the complete
+guide; Claude Code or Codex interprets it and performs the work.
+
+```yaml
+schema_version: 2
+id: opportunity-discovery
+agent: gtm/social-manager
+purpose: Produce a reviewed shortlist of relevant reply opportunities.
+inputs:
+  request:
+    description: The human's current discovery request.
+    required: true
+brain_selectors:
+  successful-replies:
+    description: Examples of successful prior replies.
+    required: false
+guidelines: []
+artifacts:
+  shortlist:
+    description: The human-reviewed opportunity shortlist.
+caps:
+  candidates:
+    maximum: 25
+    guidance: Keep only opportunities that match the current request.
+steps:
+  - id: prepare
+    kind: reasoning
+    instruction: Derive request-specific filters before choosing a tool query.
+  - id: search
+    kind: tool
+    instruction: Use the company-defined social search use case.
+    tool_use: social-opportunity-search
+  - id: approve
+    kind: approval
+    instruction: Present the shortlist and pause.
+    approval_guidance: Wait for the human in the host interface.
+completion:
+  artifacts:
+    - shortlist
+  output_guidance: Return the approved shortlist with relevance rationale.
+  criteria:
+    - Every opportunity is supported by evidence.
+```
+
+Plans contain inert guidance, not commands or an expression language. Array
+position is the only step order, and references use local IDs only for
+same-agent records. Cross-agent and nested-plan targets remain fully qualified.
 
 ## Workspace model
 
