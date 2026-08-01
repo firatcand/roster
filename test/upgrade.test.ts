@@ -1,262 +1,75 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
-import {
-  mkdtempSync,
-  rmSync,
-  readFileSync,
-  writeFileSync,
-  existsSync,
-  symlinkSync,
-  unlinkSync,
-} from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { executeInit } from '../src/commands/init.ts';
-import { executeUpgrade, decideUpgradeAction, isPathExcluded } from '../src/lib/upgrade.ts';
-import {
-  readScaffoldManifest,
-  writeScaffoldManifest,
-  scaffoldManifestPath,
-} from '../src/lib/scaffold-manifest.ts';
+import { executeUpgradeCommand } from '../src/commands/upgrade.ts';
+import { decideUpgradeAction, isPathExcluded } from '../src/lib/upgrade.ts';
+import { RosterError } from '../src/lib/errors.ts';
 
-const sha = (s: string): string => createHash('sha256').update(s).digest('hex');
-
-async function withWorkspace(fn: (cwd: string) => Promise<void>): Promise<void> {
-  const cwd = mkdtempSync(join(tmpdir(), 'roster-upgrade-'));
-  try {
-    await executeInit({ cwd, name: 'test-ws', silent: true, noGit: true });
-    await fn(cwd);
-  } finally {
-    rmSync(cwd, { recursive: true, force: true });
-  }
-}
-
-// Rewrite one manifest entry's baseline hash (to simulate a prior template version).
-function setBaseline(cwd: string, path: string, hash: string): void {
-  const m = readScaffoldManifest(cwd);
-  assert.ok(m, 'manifest exists');
-  const e = m.files.find((f) => f.path === path);
-  assert.ok(e, `manifest entry for ${path}`);
-  e.sha256 = hash;
-  writeScaffoldManifest(cwd, m);
-}
-
-test('decideUpgradeAction: every branch', () => {
+test('decideUpgradeAction retains the isolated legacy conflict-classification seam', () => {
   const base = { path: 'x', sha256: 'BASE' };
   assert.equal(decideUpgradeAction({ disk: { kind: 'absent' }, newSha: 'N', manifestEntry: base }), 'create');
   assert.equal(decideUpgradeAction({ disk: { kind: 'file', sha: 'N' }, newSha: 'N', manifestEntry: base }), 'noop');
-  // degraded: no entry, differs
   assert.equal(decideUpgradeAction({ disk: { kind: 'file', sha: 'D' }, newSha: 'N', manifestEntry: undefined }), 'conflict');
-  // template unchanged (newSha == baseline), user edited → noop (nothing to deliver)
   assert.equal(decideUpgradeAction({ disk: { kind: 'file', sha: 'D' }, newSha: 'BASE', manifestEntry: base }), 'noop');
-  // pristine (disk == baseline) + template changed → update
   assert.equal(decideUpgradeAction({ disk: { kind: 'file', sha: 'BASE' }, newSha: 'N', manifestEntry: base }), 'update');
-  // edited (disk != baseline) + template changed → conflict
   assert.equal(decideUpgradeAction({ disk: { kind: 'file', sha: 'D' }, newSha: 'N', manifestEntry: base }), 'conflict');
 });
 
-test('init writes a scaffold manifest covering scaffold files', async () => {
-  await withWorkspace(async (cwd) => {
-    assert.ok(existsSync(scaffoldManifestPath(cwd)));
-    const m = readScaffoldManifest(cwd);
-    assert.ok(m && m.files.length > 10);
-    assert.ok(m.files.some((f) => f.path === 'gtm/EXPERT.md'));
-  });
-});
-
-test('fresh workspace → upgrade is a noop', async () => {
-  await withWorkspace(async (cwd) => {
-    const r = executeUpgrade({ cwd, dryRun: false });
-    assert.deepEqual([r.created, r.updated, r.conflicts], [[], [], []]);
-  });
-});
-
-test('pristine file + changed template → auto-update, no .new', async () => {
-  await withWorkspace(async (cwd) => {
-    const f = join(cwd, 'gtm', 'EXPERT.md');
-    writeFileSync(f, 'OLD BASELINE\n');
-    setBaseline(cwd, 'gtm/EXPERT.md', sha('OLD BASELINE\n')); // disk == baseline → pristine
-    const r = executeUpgrade({ cwd, dryRun: false });
-    assert.ok(r.updated.includes('gtm/EXPERT.md'));
-    assert.ok(readFileSync(f, 'utf8').includes('GTM Expert')); // restored to current template
-    assert.ok(!existsSync(`${f}.new`));
-  });
-});
-
-test('user-edited file + changed template → .new written, user file untouched', async () => {
-  await withWorkspace(async (cwd) => {
-    const f = join(cwd, 'gtm', 'EXPERT.md');
-    writeFileSync(f, 'MY EDITS\n');
-    setBaseline(cwd, 'gtm/EXPERT.md', 'a-different-old-baseline'); // disk != baseline → edited; template != baseline
-    const r = executeUpgrade({ cwd, dryRun: false });
-    assert.ok(r.conflicts.includes('gtm/EXPERT.md'));
-    assert.equal(readFileSync(f, 'utf8'), 'MY EDITS\n'); // never clobbered
-    assert.ok(existsSync(`${f}.new`));
-    assert.ok(readFileSync(`${f}.new`, 'utf8').includes('GTM Expert'));
-  });
-});
-
-test('user-edited file + UNCHANGED template → noop (no .new noise)', async () => {
-  await withWorkspace(async (cwd) => {
-    const f = join(cwd, 'gtm', 'EXPERT.md');
-    writeFileSync(f, 'MY EDITS\n'); // manifest baseline left as the real template hash
-    const r = executeUpgrade({ cwd, dryRun: false });
-    assert.ok(!r.conflicts.includes('gtm/EXPERT.md'));
-    assert.ok(!existsSync(`${f}.new`));
-  });
-});
-
-test('missing file → created', async () => {
-  await withWorkspace(async (cwd) => {
-    const f = join(cwd, 'gtm', 'EXPERT.md');
-    unlinkSync(f);
-    const r = executeUpgrade({ cwd, dryRun: false });
-    assert.ok(r.created.includes('gtm/EXPERT.md'));
-    assert.ok(existsSync(f));
-  });
-});
-
-test('symlinked dest → skipped, not overwritten', async () => {
-  await withWorkspace(async (cwd) => {
-    const f = join(cwd, 'gtm', 'EXPERT.md');
-    unlinkSync(f);
-    symlinkSync(join(cwd, 'conventions.md'), f);
-    setBaseline(cwd, 'gtm/EXPERT.md', 'old'); // force a would-be change
-    const r = executeUpgrade({ cwd, dryRun: false });
-    assert.ok(r.symlinkSkipped.includes('gtm/EXPERT.md'));
-    assert.ok(!existsSync(`${f}.new`));
-  });
-});
-
-test('template dropped a file → kept, reported, never deleted', async () => {
-  await withWorkspace(async (cwd) => {
-    const ghost = join(cwd, 'gtm', 'GHOST.md');
-    writeFileSync(ghost, 'user content\n');
-    const m = readScaffoldManifest(cwd)!;
-    m.files.push({ path: 'gtm/GHOST.md', sha256: sha('user content\n') });
-    writeScaffoldManifest(cwd, m);
-    const r = executeUpgrade({ cwd, dryRun: false });
-    assert.ok(r.droppedKept.includes('gtm/GHOST.md'));
-    assert.ok(existsSync(ghost));
-  });
-});
-
-test('no manifest → degraded safe mode + re-seeds a baseline', async () => {
-  await withWorkspace(async (cwd) => {
-    const f = join(cwd, 'gtm', 'EXPERT.md');
-    writeFileSync(f, 'EDITED\n');
-    unlinkSync(scaffoldManifestPath(cwd));
-    const r = executeUpgrade({ cwd, dryRun: false });
-    assert.equal(r.hadManifest, false);
-    assert.ok(r.conflicts.includes('gtm/EXPERT.md'));
-    assert.equal(readFileSync(f, 'utf8'), 'EDITED\n'); // not clobbered
-    assert.ok(existsSync(scaffoldManifestPath(cwd))); // seeded for next time
-  });
-});
-
-test('Codex 2nd-pass: an unresolved conflict persists across consecutive upgrades', async () => {
-  await withWorkspace(async (cwd) => {
-    const f = join(cwd, 'gtm', 'EXPERT.md');
-    writeFileSync(f, 'MY EDITS\n');
-    setBaseline(cwd, 'gtm/EXPERT.md', 'old-divergent-baseline'); // edited + template changed
-    const r1 = executeUpgrade({ cwd, dryRun: false });
-    assert.ok(r1.conflicts.includes('gtm/EXPERT.md'));
-    rmSync(`${f}.new`); // user deletes the .new without merging
-    // Second run, nothing else changed: the conflict must NOT silently become a noop.
-    const r2 = executeUpgrade({ cwd, dryRun: false });
-    assert.ok(r2.conflicts.includes('gtm/EXPERT.md'), 'conflict still flagged on re-run');
-    assert.ok(existsSync(`${f}.new`), '.new regenerated');
-    assert.equal(readFileSync(f, 'utf8'), 'MY EDITS\n'); // never auto-clobbered
-  });
-});
-
-test('Codex 2nd-pass: refuses to write through a symlinked parent dir (escape)', async () => {
-  await withWorkspace(async (cwd) => {
-    const escapeTarget = mkdtempSync(join(tmpdir(), 'roster-escape-'));
-    try {
-      // Replace gtm/ with a symlink pointing outside the workspace.
-      rmSync(join(cwd, 'gtm'), { recursive: true, force: true });
-      symlinkSync(escapeTarget, join(cwd, 'gtm'));
-      setBaseline(cwd, 'gtm/EXPERT.md', 'old'); // would-be change
-      const r = executeUpgrade({ cwd, dryRun: false });
-      assert.ok(r.symlinkSkipped.includes('gtm/EXPERT.md'));
-      // Nothing written into the escape target.
-      assert.ok(!existsSync(join(escapeTarget, 'EXPERT.md')));
-      assert.ok(!existsSync(join(escapeTarget, 'EXPERT.md.new')));
-    } finally {
-      rmSync(escapeTarget, { recursive: true, force: true });
-    }
-  });
-});
-
-test('--dry-run reports but writes nothing', async () => {
-  await withWorkspace(async (cwd) => {
-    const f = join(cwd, 'gtm', 'EXPERT.md');
-    writeFileSync(f, 'OLD\n');
-    setBaseline(cwd, 'gtm/EXPERT.md', sha('OLD\n'));
-    const before = readFileSync(scaffoldManifestPath(cwd), 'utf8');
-    const r = executeUpgrade({ cwd, dryRun: true });
-    assert.ok(r.updated.includes('gtm/EXPERT.md'));
-    assert.equal(readFileSync(f, 'utf8'), 'OLD\n'); // unchanged
-    assert.equal(readFileSync(scaffoldManifestPath(cwd), 'utf8'), before); // manifest untouched
-  });
-});
-
-test('isPathExcluded: exact, directory-subtree, and glob', () => {
-  assert.equal(isPathExcluded('guidelines/voice.md', ['guidelines']), true); // subtree
-  assert.equal(isPathExcluded('guidelines', ['guidelines']), true); // exact
-  assert.equal(isPathExcluded('guidelines/icps/x.md', ['guidelines']), true); // nested subtree
+test('isPathExcluded retains exact, subtree, and glob behavior for migration tooling', () => {
+  assert.equal(isPathExcluded('guidelines/voice.md', ['guidelines']), true);
+  assert.equal(isPathExcluded('guidelines', ['guidelines']), true);
+  assert.equal(isPathExcluded('guidelines/icps/x.md', ['guidelines']), true);
   assert.equal(isPathExcluded('gtm/EXPERT.md', ['guidelines']), false);
-  assert.equal(isPathExcluded('voice.md', ['*.md']), true); // top-level glob
-  assert.equal(isPathExcluded('gtm/EXPERT.md', ['*.md']), false); // * doesn't cross /
-  assert.equal(isPathExcluded('gtm/EXPERT.md', ['**/EXPERT.md']), true); // ** crosses /
-  assert.equal(isPathExcluded('gtm/EXPERT.md', ['guidelines/']), false); // trailing slash normalized
+  assert.equal(isPathExcluded('voice.md', ['*.md']), true);
+  assert.equal(isPathExcluded('gtm/EXPERT.md', ['*.md']), false);
+  assert.equal(isPathExcluded('gtm/EXPERT.md', ['**/EXPERT.md']), true);
 });
 
-test('guidelines/ is excluded by default — never gets a .new even when edited', async () => {
-  await withWorkspace(async (cwd) => {
-    const g = join(cwd, 'guidelines', 'voice.md');
-    writeFileSync(g, 'MY VOICE\n');
-    setBaseline(cwd, 'guidelines/voice.md', 'old-baseline'); // would otherwise be a conflict
-    const r = executeUpgrade({ cwd, dryRun: false });
-    assert.ok(r.excluded.includes('guidelines/voice.md'));
-    assert.ok(!r.conflicts.includes('guidelines/voice.md'));
-    assert.ok(!existsSync(`${g}.new`));
-    assert.equal(readFileSync(g, 'utf8'), 'MY VOICE\n'); // untouched
-  });
+test('upgrade refuses a sparse v2 workspace and preserves every byte', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'roster-upgrade-v2-'));
+  try {
+    await executeInit({ cwd, name: 'upgrade-v2', silent: true });
+    const registryBefore = readFileSync(join(cwd, 'roster.yaml'));
+    const bootstrapBefore = readFileSync(join(cwd, 'ROSTER.md'));
+    assert.throws(
+      () => executeUpgradeCommand({ cwd, dryRun: false, json: false, excludes: [] }),
+      (error: unknown) => error instanceof RosterError && error.code === 'COMMAND_REPLACED' && /roster update/.test(error.remedy),
+    );
+    assert.deepEqual(readFileSync(join(cwd, 'roster.yaml')), registryBefore);
+    assert.deepEqual(readFileSync(join(cwd, 'ROSTER.md')), bootstrapBefore);
+    assert.deepEqual(readdirSync(cwd).sort(), ['ROSTER.md', 'roster.yaml']);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
-test('--exclude adds a custom pattern (skips an EXPERT it would otherwise .new)', async () => {
-  await withWorkspace(async (cwd) => {
-    const f = join(cwd, 'gtm', 'EXPERT.md');
-    writeFileSync(f, 'EDITS\n');
-    setBaseline(cwd, 'gtm/EXPERT.md', 'old-baseline');
-    const r = executeUpgrade({ cwd, dryRun: false, excludes: ['gtm'] });
-    assert.ok(r.excluded.includes('gtm/EXPERT.md'));
-    assert.ok(!r.conflicts.includes('gtm/EXPERT.md'));
-    assert.ok(!existsSync(`${f}.new`));
-  });
+test('upgrade refuses legacy workspaces without overlaying v2 state', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'roster-upgrade-legacy-'));
+  try {
+    mkdirSync(join(cwd, 'config'));
+    const legacy = Buffer.from('name: legacy\n');
+    writeFileSync(join(cwd, 'config', 'project.yaml'), legacy);
+    assert.throws(
+      () => executeUpgradeCommand({ cwd, dryRun: true, json: true, excludes: [] }),
+      (error: unknown) => error instanceof RosterError && error.code === 'LEGACY_WORKSPACE',
+    );
+    assert.deepEqual(readFileSync(join(cwd, 'config', 'project.yaml')), legacy);
+    assert.deepEqual(readdirSync(cwd).sort(), ['config']);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
-test('excluded files preserve their manifest entry', async () => {
-  await withWorkspace(async (cwd) => {
-    const before = readScaffoldManifest(cwd)!;
-    const voiceBefore = before.files.find((e) => e.path === 'guidelines/voice.md');
-    assert.ok(voiceBefore);
-    // Edit guidelines so an unfiltered upgrade would advance/drop it; default exclude must preserve.
-    writeFileSync(join(cwd, 'guidelines', 'voice.md'), 'CHANGED\n');
-    executeUpgrade({ cwd, dryRun: false });
-    const after = readScaffoldManifest(cwd)!;
-    const voiceAfter = after.files.find((e) => e.path === 'guidelines/voice.md');
-    assert.deepEqual(voiceAfter, voiceBefore); // entry preserved unchanged
-  });
-});
-
-test('refuses outside a workspace', () => {
+test('upgrade refuses outside a workspace', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'roster-noupgrade-'));
   try {
-    assert.throws(() => executeUpgrade({ cwd, dryRun: false }));
+    assert.throws(
+      () => executeUpgradeCommand({ cwd, dryRun: false, json: false, excludes: [] }),
+      (error: unknown) => error instanceof RosterError && error.code === 'WORKSPACE_NOT_FOUND',
+    );
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

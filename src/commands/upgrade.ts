@@ -1,6 +1,14 @@
 import chalk from 'chalk';
-import { EXIT_OK } from '../lib/errors.ts';
-import { executeUpgrade, type UpgradeResult } from '../lib/upgrade.ts';
+import {
+  EXIT_ERROR,
+  RosterError,
+  legacyWorkspaceError,
+  mixedWorkspaceError,
+  unsafeWorkspaceMarkerError,
+  workspaceRequiredError,
+} from '../lib/errors.ts';
+import { type UpgradeResult } from '../lib/upgrade.ts';
+import { probeWorkspace } from '../lib/workspace-probe.ts';
 
 export type UpgradeCommandOptions = {
   cwd: string;
@@ -48,11 +56,17 @@ export function renderUpgradeResult(result: UpgradeResult): string[] {
 }
 
 export function executeUpgradeCommand(opts: UpgradeCommandOptions): number {
-  const result = executeUpgrade({ cwd: opts.cwd, dryRun: opts.dryRun, excludes: opts.excludes });
-  if (opts.json) {
-    console.log(JSON.stringify({ ok: true, ...result }, null, 2));
-  } else {
-    console.log(renderUpgradeResult(result).join('\n'));
-  }
-  return EXIT_OK;
+  const probe = probeWorkspace(opts.cwd);
+  if (probe.kind === 'legacy') throw legacyWorkspaceError(probe.legacySignals);
+  if (probe.kind === 'mixed') throw mixedWorkspaceError(probe.v2Signals, probe.legacySignals);
+  if (probe.kind === 'unsafe') throw unsafeWorkspaceMarkerError(probe.unsafeSignals);
+  if (probe.kind === 'none') throw workspaceRequiredError(opts.cwd);
+  throw new RosterError({
+    header: 'roster: upgrade is not a Roster v2 command',
+    body: '  Roster v2 synchronizes only deterministic generated activation artifacts.',
+    remedy: '  Run roster update instead. It never invokes eager templates, hooks, or founder-skill side effects.',
+    exitCode: EXIT_ERROR,
+    code: 'COMMAND_REPLACED',
+    details: { command: 'upgrade', replacement: 'update' },
+  });
 }

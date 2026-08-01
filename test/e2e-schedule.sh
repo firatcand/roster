@@ -137,9 +137,10 @@ TEST_PATH="$STUB_BIN:$NPM_PREFIX/bin:$NODE_BIN_DIR:/usr/bin:/bin"
 echo ""
 echo "===> 4. roster init workspace"
 cd "$WORKSPACE"
-HOME="$FAKE_HOME" PATH="$TEST_PATH" "$ROSTER_BIN" init my-e2e-workspace --silent --no-git
-assert "-f CLAUDE.md" "workspace CLAUDE.md exists"
-assert "-d gtm" "gtm/ function dir scaffolds (v1.0: empty function dir, no sdr/)"
+HOME="$FAKE_HOME" PATH="$TEST_PATH" "$ROSTER_BIN" init my-e2e-workspace --silent
+assert "-f roster.yaml" "sparse workspace registry exists"
+assert "-f ROSTER.md" "workspace bootstrap exists"
+assert "\"$(find . -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')\" -eq 2" "sparse init creates exactly two entries"
 
 # ── 5. Install one Codex --via cron schedule ──────────────────────────────
 echo ""

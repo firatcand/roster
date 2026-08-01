@@ -1,7 +1,7 @@
 ---
 name: chief-of-staff
-description: "Workspace maintenance for a roster v1 workspace — create agents under a function, register new functions, and audit completeness. Wraps shell scripts in scripts/. Triggers when the user asks to scaffold or audit a roster workspace, or invokes the /chief-of-staff slash command."
-version: "1.0.0"
+description: "Workspace maintenance for Roster workspaces. Uses deterministic roster scaffold/validate commands in v2 and quarantined legacy scripts only in v1. Triggers when the user asks to scaffold or audit a roster workspace, or invokes the /chief-of-staff slash command."
+version: "1.1.0"
 trigger_conditions:
   - "User invokes the /chief-of-staff slash command"
   - "User asks to scaffold a new agent or register a new function (e.g., 'create a gtm/sdr agent', 'add a design function')"
@@ -10,15 +10,38 @@ trigger_conditions:
 
 # Chief of Staff
 
-Structural maintenance for a roster v1 workspace. **Operate on the workspace itself**, not on the business workflows inside it. This skill scaffolds empty agent and function structure and audits completeness. Filling content into the scaffolds is a separate concern handled by function-level experts and role-level agents.
+Structural maintenance for a Roster workspace. **Operate on the workspace itself**, not on the business workflows inside it. This skill scaffolds empty agent and function structure and audits completeness. Filling content into the scaffolds is a separate concern handled by function-level experts and role-level agents.
 
-When in doubt, defer to `conventions.md` in the workspace root for the canonical structure schema, and to `scripts/new-agent.sh` for the canonical scaffold contents (heredocs inside the script are the source of truth for every generated file).
+Only after the working-directory classifier below selects the legacy v1 branch, defer to `conventions.md` for its structure schema and to `scripts/new-agent.sh` for its legacy scaffold contents. Those files are never v2 authorities.
 
 ## Working directory
 
-This skill operates from the workspace root only — the directory that contains `CLAUDE.md`, `conventions.md`, `config/project.yaml`, `roster/`, and the function dirs (`gtm/`, `product/`, etc.). If invoked from elsewhere, abort with:
+This skill operates from the workspace root. Classify the workspace before reading any legacy file or invoking any script:
+
+- If both `roster.yaml` and `config/project.yaml` exist, stop. This is a mixed workspace; preserve both markers and use the v2 migration flow when #363 lands.
+- If `roster.yaml` exists, use the v2 command path below and never invoke `scripts/new-agent.sh`, `scripts/create-function.sh`, or any other legacy script.
+- Otherwise, `config/project.yaml` identifies a legacy v1 workspace. Continue with the legacy plans in this document.
+- If neither identity file exists, abort with:
 
 > Run chief-of-staff from your roster workspace root.
+
+### Roster v2 command path
+
+Translate the user's requested structure into one deterministic command, show it, obtain any host-native confirmation the user requested, run it, and report its structured result:
+
+- create function: `roster scaffold function <id> [--purpose <text>] --json`
+- create agent: `roster scaffold agent <id> --scope function:<function> [--purpose <text>] --json`
+- create plan: `roster scaffold plan <id> --scope agent:<function/agent> [--purpose <text>] --json`
+- create subagent: `roster scaffold subagent <id> --scope agent:<function/agent> [--purpose <text>] --json`
+- create function guideline: `roster scaffold guideline <id> --scope function:<function> [--purpose <text>] --json`
+- create agent guideline: `roster scaffold guideline <id> --scope agent:<function/agent> [--purpose <text>] --json`
+- create agent tool-use definition: `roster scaffold tool-use <id> --scope agent:<function/agent> [--purpose <text>] --json`
+- create plan tool-use definition: `roster scaffold tool-use <id> --scope plan:<function/agent#plan> [--purpose <text>] --json`
+- create agent lesson: `roster scaffold lesson <id> --scope agent:<function/agent> [--purpose <text>] --json`
+- create plan lesson: `roster scaffold lesson <id> --scope plan:<function/agent#plan> [--purpose <text>] --json`
+- audit structure: `roster validate [target] --json`
+
+Stop after this v2 path. Do not fall through into the v1 plans or synthesize file contents outside the scaffold command.
 
 ## How invocation works
 
@@ -46,7 +69,7 @@ v1 is a single workspace per directory — this skill does not spin up sibling w
 
 Each plan lives in `chief-of-staff/plans/<plan>.yaml` in the workspace, backed by a script in `scripts/`.
 
-## Common preamble for every plan
+## Legacy v1 common preamble for every plan
 
 1. **Confirm cwd is workspace root.** Check for `CLAUDE.md`, `conventions.md`, `config/project.yaml`, and `roster/`. If not all present, abort with the message above.
 2. **Parse the user's request.** Extract plan name and parameters. If ambiguous, ask before proceeding.

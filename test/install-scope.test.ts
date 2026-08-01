@@ -35,21 +35,33 @@ test('detectWorkspace: returns false for an empty directory', () => {
   }
 });
 
-test('detectWorkspace: returns true when config/project.yaml exists', () => {
+test('detectWorkspace: returns true when roster.yaml exists', () => {
   const { dir, cleanup } = mkTmp('roster-scope-workspace');
   try {
-    mkdirSync(join(dir, 'config'));
-    writeFileSync(join(dir, 'config', 'project.yaml'), 'name: test\n');
+    writeFileSync(join(dir, 'roster.yaml'), 'schema_version: 2\nworkspace_id: test\nfunctions: {}\nhosts: {}\n');
     assert.equal(detectWorkspace(dir), true);
   } finally {
     cleanup();
   }
 });
 
-test('detectWorkspace: returns false when config/ exists but project.yaml does not', () => {
-  const { dir, cleanup } = mkTmp('roster-scope-partial');
+test('detectWorkspace: returns false for a legacy config/project.yaml marker', () => {
+  const { dir, cleanup } = mkTmp('roster-scope-legacy');
   try {
     mkdirSync(join(dir, 'config'));
+    writeFileSync(join(dir, 'config', 'project.yaml'), 'name: legacy\n');
+    assert.equal(detectWorkspace(dir), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test('detectWorkspace: returns false for mixed v2 and legacy markers', () => {
+  const { dir, cleanup } = mkTmp('roster-scope-mixed');
+  try {
+    writeFileSync(join(dir, 'roster.yaml'), 'schema_version: 2\nworkspace_id: test\nfunctions: {}\nhosts: {}\n');
+    mkdirSync(join(dir, 'config'));
+    writeFileSync(join(dir, 'config', 'project.yaml'), 'name: legacy\n');
     assert.equal(detectWorkspace(dir), false);
   } finally {
     cleanup();

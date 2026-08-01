@@ -14,6 +14,7 @@ export type ParsedInstallArgs =
       silent: boolean;
       verbose: boolean;
       yes: boolean;
+      json: boolean;
       scope: Scope | null;
       target: InstallTarget;
     }
@@ -57,6 +58,7 @@ export function parseInstallArgs(args: readonly string[]): ParsedInstallArgs {
   let silent = false;
   let verbose = false;
   let yes = false;
+  let json = false;
   let all = false;
   let toolValue: string | null = null;
   let toolFlagSeen = false;
@@ -71,6 +73,8 @@ export function parseInstallArgs(args: readonly string[]): ParsedInstallArgs {
       verbose = true;
     } else if (arg === '--yes' || arg === '-y') {
       yes = true;
+    } else if (arg === '--json') {
+      json = true;
     } else if (arg === '--all') {
       all = true;
     } else if (arg === '--tool') {
@@ -103,6 +107,8 @@ export function parseInstallArgs(args: readonly string[]): ParsedInstallArgs {
         return { kind: 'err', message: `--scope requires a value: ${SCOPE_LIST}` };
       }
       scopeValue = value;
+    } else {
+      return { kind: 'err', message: `unknown flag '${arg}' for 'install'` };
     }
   }
 
@@ -132,5 +138,5 @@ export function parseInstallArgs(args: readonly string[]): ParsedInstallArgs {
     target = { mode: 'interactive' };
   }
 
-  return { kind: 'ok', silent, verbose, yes, scope, target };
+  return { kind: 'ok', silent, verbose, yes, json, scope, target };
 }

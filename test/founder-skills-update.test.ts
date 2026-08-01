@@ -10,6 +10,10 @@ import {
   type RefResolver,
 } from '../src/lib/founder-skills/update.ts';
 import type { SkillsInstaller, AddSpec } from '../src/lib/founder-skills/installer.ts';
+import {
+  renderRosterBootstrap,
+  updateV2ProjectActivations,
+} from '../src/lib/generated-artifacts.ts';
 
 const SOURCE = 'github:firatcand/founder-skills';
 
@@ -52,8 +56,9 @@ function withWorkspace<T>(fn: (cwd: string) => Promise<T> | T): Promise<T> | T {
   const codexHome = join(cwd, '.fakehome-codex');
   mkdirSync(claudeHome, { recursive: true });
   mkdirSync(codexHome, { recursive: true });
-  mkdirSync(join(cwd, 'config'), { recursive: true });
-  writeFileSync(join(cwd, 'config', 'project.yaml'), 'name: test\n');
+  writeFileSync(join(cwd, 'roster.yaml'), 'schema_version: 2\nworkspace_id: test\nfunctions: {}\nhosts: {}\n');
+  writeFileSync(join(cwd, 'ROSTER.md'), renderRosterBootstrap());
+  assert.equal(updateV2ProjectActivations({ root: cwd }).ok, true);
   const saved = {
     c: process.env['ROSTER_CLAUDE_HOME'],
     x: process.env['ROSTER_CODEX_HOME'],

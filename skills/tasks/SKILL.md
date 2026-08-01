@@ -1,7 +1,7 @@
 ---
 name: tasks
 description: "Conversational task driver for a roster workspace. Translates natural prompts — what's ready? / work on N / I'm blocked / send for review / mark done / status update — into `roster task` verbs against the user's own tracker board (Notion v1). Never writes the tracker directly; every mutation goes through the CLI's state machine. Triggers on /tasks or when the user asks to list, claim, advance, block, or get a status report on their tracker tasks in a roster workspace."
-version: "1.0.0"
+version: "1.1.0"
 trigger_conditions:
   - "User invokes /tasks"
   - "User asks what's ready / to work on a task / to block, submit, finish, or cancel a task on their board in a roster workspace"
@@ -20,11 +20,14 @@ sole source of truth; there is no local task cache.
 
 ## Working directory
 
-Operate from the workspace root only — the directory identified by `config/project.yaml`
-(the v1 workspace identity file). Tasks additionally need `roster/tracker.yaml` (the
-board mapping). If `config/project.yaml` is missing, stop and say:
+Operate from the workspace root and classify it before running any command:
 
-> Run /tasks from your roster workspace root (must contain config/project.yaml).
+- If both `roster.yaml` and `config/project.yaml` exist, stop. This is a mixed workspace; preserve both markers and use the v2 migration flow when #363 lands.
+- If `roster.yaml` exists, stop with: `This is a Roster v2 workspace. /tasks is a legacy Notion state-machine workflow; do not invoke roster task or read legacy tracker state. Define the external tracker as workflow-specific tool guidance when the v2 Tools pillar lands.`
+- Otherwise, `config/project.yaml` identifies a legacy v1 workspace. Legacy tasks additionally need `roster/tracker.yaml` (the board mapping).
+- If neither identity file exists, stop and say:
+
+> Run /tasks from a legacy Roster workspace root (must contain config/project.yaml); Roster v2 workspaces use roster.yaml and do not expose this state machine.
 
 If `roster/tracker.yaml` is missing, the board isn't connected yet — point the user to
 `roster task setup --data-source <id>` and docs/HOWTO.md §13, then stop.

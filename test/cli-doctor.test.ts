@@ -1,9 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, statSync, symlinkSync, cpSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, cpSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import {
+  installV2ProjectActivation,
+  parseGeneratedMarkdown,
+  renderGeneratedMarkdown,
+  renderRosterBootstrap,
+} from '../src/lib/generated-artifacts.ts';
 
 const BIN = resolve('src/bin/roster.ts');
 
@@ -562,10 +568,9 @@ test('doctor --help mentions --fix', () => {
 // ROS-109: doctor scope awareness + shadow collision detection.
 
 function makeWorkspaceDir(root: string): string {
-  // config/project.yaml is the workspace detection signal.
   const ws = mkdtempSync(join(root, 'ws-'));
-  mkdirSync(join(ws, 'config'));
-  writeFileSync(join(ws, 'config', 'project.yaml'), 'name: test\n');
+  writeFileSync(join(ws, 'roster.yaml'), 'schema_version: 2\nworkspace_id: test\nfunctions: {}\nhosts: {}\n');
+  writeFileSync(join(ws, 'ROSTER.md'), renderRosterBootstrap());
   return ws;
 }
 
@@ -581,20 +586,23 @@ test('ROS-109: doctor outside a workspace defaults to user scope', () => {
   }
 });
 
-test('ROS-109: doctor inside a workspace defaults to project scope', () => {
+test('v2 doctor audits structural and generated activation without legacy project parity', () => {
   const h = makeHomes(['claude']);
   try {
     const ws = makeWorkspaceDir(h.root);
-    runCliInCwd(['install', '--tool', 'claude', '--scope', 'project', '--yes', '--silent'], envFor(h), ws);
-    const doc = runCliInCwd(['doctor'], envFor(h), ws);
+    const env = { ...envFor(h), PATH: '' };
+    runCliInCwd(['install', '--tool', 'claude', '--scope', 'project', '--yes', '--silent'], env, ws);
+    const doc = runCliInCwd(['doctor'], env, ws);
     assert.equal(doc.status, 0, `stderr: ${doc.stderr}\nstdout: ${doc.stdout}`);
-    assert.match(doc.stdout, /Install scope: project/);
+    assert.match(doc.stdout, /Roster v2 workspace/);
+    assert.match(doc.stdout, /claude activation: advisory-manual/);
+    assert.doesNotMatch(doc.stdout, /Install scope|Shadow collisions|Scheduling/);
   } finally {
     h.cleanup();
   }
 });
 
-test('ROS-109: doctor --scope user from inside a workspace overrides autodetect', () => {
+test('v2 doctor stays on the v2 structural contract even with quarantined --scope user', () => {
   const h = makeHomes(['claude']);
   try {
     const ws = makeWorkspaceDir(h.root);
@@ -602,13 +610,14 @@ test('ROS-109: doctor --scope user from inside a workspace overrides autodetect'
     runCli(['install', '--all', '--scope', 'user', '--yes', '--silent'], envFor(h));
     const doc = runCliInCwd(['doctor', '--scope', 'user'], envFor(h), ws);
     assert.equal(doc.status, 0, `stderr: ${doc.stderr}`);
-    assert.match(doc.stdout, /Install scope: user/);
+    assert.match(doc.stdout, /Roster v2 workspace/);
+    assert.doesNotMatch(doc.stdout, /Install scope: user/);
   } finally {
     h.cleanup();
   }
 });
 
-test('ROS-109: doctor reports shadow collision when same skill exists at both scopes', () => {
+test('v2 doctor marks legacy shadow parity not-applicable', () => {
   const h = makeHomes(['claude']);
   try {
     const ws = makeWorkspaceDir(h.root);
@@ -617,28 +626,100 @@ test('ROS-109: doctor reports shadow collision when same skill exists at both sc
     // ALSO install at project scope — same skill names land in the workspace.
     runCliInCwd(['install', '--tool', 'claude', '--scope', 'project', '--yes', '--silent'], envFor(h), ws);
 
-    const doc = runCliInCwd(['doctor'], envFor(h), ws);
-    // Doctor still reports OK on each scope independently; shadow is a
-    // warning-level signal, not a failure (today). Verify the section renders.
-    assert.match(doc.stdout, /Shadow collisions/);
-    assert.match(doc.stdout, /chief-of-staff/);
-    assert.match(doc.stdout, /Same skill installed at both scopes/);
+    const doc = runCliInCwd(['doctor', '--json'], envFor(h), ws);
+    assert.equal(doc.status, 0, doc.stderr);
+    const payload = JSON.parse(doc.stdout) as {
+      not_applicable: Record<string, { status: string }>;
+    };
+    assert.equal(payload.not_applicable['user-project-shadowing']?.status, 'not-applicable');
   } finally {
     h.cleanup();
   }
 });
 
-test('ROS-109: doctor --json includes scope and shadows in payload', () => {
+test('v2 doctor --json includes structural, generated assurance, and not-applicable sections', () => {
   const h = makeHomes(['claude']);
   try {
     const ws = makeWorkspaceDir(h.root);
-    runCliInCwd(['install', '--tool', 'claude', '--scope', 'project', '--yes', '--silent'], envFor(h), ws);
+    const env = { ...envFor(h), PATH: '' };
+    runCliInCwd(['install', '--tool', 'claude', '--scope', 'project', '--yes', '--silent'], env, ws);
 
-    const doc = runCliInCwd(['doctor', '--json'], envFor(h), ws);
+    const doc = runCliInCwd(['doctor', '--json'], env, ws);
     assert.equal(doc.status, 0, `stderr: ${doc.stderr}`);
-    const payload = JSON.parse(doc.stdout) as { scope: string; shadows: unknown[] };
-    assert.equal(payload.scope, 'project');
-    assert.ok(Array.isArray(payload.shadows), 'shadows is an array');
+    const payload = JSON.parse(doc.stdout) as {
+      workspace: { kind: string };
+      structural: { ok: boolean };
+      generated: { hosts: { claude?: { activation_assurance: string } } };
+      not_applicable: Record<string, { status: string }>;
+    };
+    assert.equal(payload.workspace.kind, 'v2');
+    assert.equal(payload.structural.ok, true);
+    assert.equal(payload.generated.hosts.claude?.activation_assurance, 'advisory-manual');
+    assert.equal(payload.not_applicable.scheduling?.status, 'not-applicable');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor derives assurance from current files and the locally detected host', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    const installed = installV2ProjectActivation({
+      root: ws,
+      host: 'codex',
+      hostVersion: 'codex-cli 0.144.1',
+    });
+    assert.equal(installed.assurance, 'auto-loaded');
+    const env = { ...envFor(h), PATH: '/usr/bin:/bin' };
+
+    const absentHost = runCliInCwd(['doctor', '--json'], env, ws);
+    assert.equal(absentHost.status, 0, absentHost.stderr);
+    const absentPayload = JSON.parse(absentHost.stdout) as {
+      generated: {
+        manifest_status: string;
+        hosts: { codex?: { activation_assurance: string; detected_host_version: string | null } };
+      };
+    };
+    assert.equal(absentPayload.generated.manifest_status, 'ok');
+    assert.equal(absentPayload.generated.hosts.codex?.activation_assurance, 'advisory-manual');
+    assert.equal(absentPayload.generated.hosts.codex?.detected_host_version, null);
+
+    const bin = join(h.root, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'codex'), '#!/bin/sh\necho "codex-cli 0.144.1"\n');
+    chmodSync(join(bin, 'codex'), 0o755);
+    const detectedEnv = { ...envFor(h), PATH: `${bin}:/usr/bin:/bin` };
+    const detectedHost = runCliInCwd(['doctor', '--json'], detectedEnv, ws);
+    assert.equal(detectedHost.status, 0, detectedHost.stderr);
+    const detectedPayload = JSON.parse(detectedHost.stdout) as {
+      generated: { hosts: { codex?: { activation_assurance: string } } };
+    };
+    assert.equal(detectedPayload.generated.hosts.codex?.activation_assurance, 'auto-loaded');
+
+    const agentsPath = join(ws, 'AGENTS.md');
+    const parsedAgents = parseGeneratedMarkdown(readFileSync(agentsPath, 'utf8'))!;
+    const { content_hash: _contentHash, ...agentsHeader } = parsedAgents.header;
+    writeFileSync(
+      agentsPath,
+      renderGeneratedMarkdown(agentsHeader, `${parsedAgents.body}\nForged instruction.\n`, parsedAgents.prefix),
+    );
+    const noncanonical = runCliInCwd(['doctor', '--json'], detectedEnv, ws);
+    assert.equal(noncanonical.status, 1, noncanonical.stderr);
+    const noncanonicalPayload = JSON.parse(noncanonical.stdout) as {
+      generated: { manifest_status: string; hosts: { codex?: { activation_assurance: string } } };
+    };
+    assert.equal(noncanonicalPayload.generated.manifest_status, 'drift');
+    assert.equal(noncanonicalPayload.generated.hosts.codex?.activation_assurance, 'advisory-manual');
+
+    rmSync(agentsPath);
+    const missingFile = runCliInCwd(['doctor', '--json'], env, ws);
+    assert.equal(missingFile.status, 1, missingFile.stderr);
+    const missingPayload = JSON.parse(missingFile.stdout) as {
+      generated: { manifest_status: string; hosts: { codex?: { activation_assurance: string } } };
+    };
+    assert.equal(missingPayload.generated.manifest_status, 'drift');
+    assert.equal(missingPayload.generated.hosts.codex?.activation_assurance, 'missing');
   } finally {
     h.cleanup();
   }

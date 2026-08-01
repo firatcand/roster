@@ -11,7 +11,14 @@ import {
   type Scope,
 } from '../lib/install-scope.ts';
 import { ROSTER_ROOT, getPackageVersion } from '../lib/paths.ts';
-import { EXIT_OK, EXIT_ERROR, EXIT_NO_TOOLS } from '../lib/errors.ts';
+import {
+  EXIT_OK,
+  EXIT_ERROR,
+  EXIT_NO_TOOLS,
+  legacyWorkspaceError,
+  mixedWorkspaceError,
+  unsafeWorkspaceMarkerError,
+} from '../lib/errors.ts';
 import { auditWorkspace, type WorkspaceAuditResult, type SymlinkStatus } from '../lib/project-context.ts';
 import { validateSchedulesInCwd, type ValidationReport } from '../lib/schedule-validate.ts';
 import {
@@ -45,6 +52,18 @@ import {
   auditExpertRoutes,
   type ExpertRoutesAuditResult,
 } from '../lib/doctor-expert-routes.ts';
+import { probeWorkspace } from '../lib/workspace-probe.ts';
+import { validateWorkspace } from '../lib/workspace-registry.ts';
+import {
+  GENERATED_MANIFEST_PATH,
+  inspectGeneratedActivationState,
+  parseGeneratedManifest,
+  resolveCurrentHostActivationAssurance,
+  type GeneratedArtifactManifest,
+  type GeneratedManifestHost,
+} from '../lib/generated-artifacts.ts';
+import { tryReadWorkspaceFile } from '../lib/workspace-io.ts';
+import { detectProjectHostVersions } from '../lib/install.ts';
 
 export type DoctorOptions = {
   json: boolean;
@@ -818,7 +837,149 @@ function renderExpertRoutesSection(result: ExpertRoutesAuditResult): string[] {
   return lines;
 }
 
+const V2_NOT_APPLICABLE = Object.freeze([
+  'tool-install-parity',
+  'agent-parity',
+  'user-project-shadowing',
+  'context-symlink-parity',
+  'scheduling',
+  'scheduling-drift',
+  'stale-fire',
+  'founder-skill-auto-sync',
+  'expert-routes',
+] as const);
+
+function readV2GeneratedManifest(cwd: string): GeneratedArtifactManifest | null {
+  try {
+    const bytes = tryReadWorkspaceFile(cwd, GENERATED_MANIFEST_PATH);
+    return bytes === null ? null : parseGeneratedManifest(bytes.toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function readCurrentV2GeneratedState(cwd: string): GeneratedArtifactManifest | null {
+  try {
+    return inspectGeneratedActivationState(cwd).manifest;
+  } catch {
+    return null;
+  }
+}
+
+async function executeV2Doctor(opts: DoctorOptions): Promise<number> {
+  const structural = validateWorkspace(opts.cwd);
+  const safety = runSafetyAudit({
+    rosterRoot: ROSTER_ROOT,
+    toolAudits: [],
+    detectedTools: [],
+    homeDir: homedir(),
+    env: process.env,
+  });
+  const initialSecrets = runSecretsAudit({ cwd: opts.cwd, rosterRoot: ROSTER_ROOT, schedules: [] });
+  let fixOutcome: FixOutcome = NO_FIX_REQUESTED;
+  if (opts.fix) {
+    const emptyWorkspace: WorkspaceAuditResult = {
+      cwd: opts.cwd,
+      contextMdExists: false,
+      items: [],
+      warnings: [],
+      ok: true,
+    };
+    fixOutcome = runFixes(
+      opts.cwd,
+      emptyWorkspace,
+      initialSecrets.envPermissions,
+      initialSecrets.agentEnvPermissions,
+      opts.dryRun,
+    );
+  }
+  const secrets = opts.fix && !opts.dryRun && fixOutcome.fixed.length > 0
+    ? runSecretsAudit({ cwd: opts.cwd, rosterRoot: ROSTER_ROOT, schedules: [] })
+    : initialSecrets;
+  const storedManifest = readV2GeneratedManifest(opts.cwd);
+  const currentManifest = readCurrentV2GeneratedState(opts.cwd);
+  const hostVersions = detectProjectHostVersions();
+  const generatedCheck = structural.checks.find((check) => check.name === 'generated-artifacts');
+  const manifestStatus = storedManifest === null
+    ? 'missing-or-invalid'
+    : generatedCheck?.status === 'pass'
+      ? 'ok'
+      : 'drift';
+  const currentHosts: Partial<Record<'claude' | 'codex', GeneratedManifestHost & {
+    detected_host_version: string | null;
+  }>> = {};
+  if (currentManifest !== null) {
+    for (const host of ['claude', 'codex'] as const) {
+      const summary = currentManifest.hosts[host];
+      if (summary === undefined) continue;
+      currentHosts[host] = {
+        ...summary,
+        activation_assurance: resolveCurrentHostActivationAssurance(
+          currentManifest,
+          host,
+          hostVersions[host],
+        ),
+        detected_host_version: hostVersions[host] ?? null,
+      };
+    }
+  }
+  const allOk = structural.ok && safety.ok && secrets.ok;
+  const notApplicable = Object.fromEntries(
+    V2_NOT_APPLICABLE.map((name) => [name, { status: 'not-applicable', reason: 'roster-v2-host-owned-runtime' }]),
+  );
+
+  if (opts.json) {
+    console.log(JSON.stringify({
+      ok: allOk,
+      rosterVersion: getPackageVersion(),
+      workspace: { kind: 'v2', root: opts.cwd },
+      structural,
+      generated: {
+        manifest_status: manifestStatus,
+        hosts: currentHosts,
+        files: currentManifest?.files ?? [],
+      },
+      safety,
+      secrets,
+      not_applicable: notApplicable,
+      fix: fixOutcome,
+    }, null, 2));
+  } else if (!opts.silent) {
+    console.log('');
+    console.log(chalk.bold('Roster v2 workspace'));
+    for (const check of structural.checks) {
+      const mark = check.status === 'pass' ? chalk.green('✓') : chalk.red('✗');
+      console.log(`  ${mark} ${check.name}`);
+    }
+    for (const diagnostic of structural.diagnostics) {
+      console.log(`  ${chalk.red('!')} ${diagnostic.code}: ${diagnostic.message}`);
+      if (diagnostic.remedy !== undefined) console.log(`    ${chalk.dim(diagnostic.remedy)}`);
+    }
+    for (const host of ['claude', 'codex'] as const) {
+      const activation = currentHosts[host] as ({ activation_assurance: string } & Record<string, unknown>) | undefined;
+      if (activation === undefined) continue;
+      const mark = activation.activation_assurance === 'auto-loaded'
+        ? chalk.green('✓')
+        : activation.activation_assurance === 'missing'
+          ? chalk.red('✗')
+          : chalk.yellow('!');
+      console.log(`  ${mark} ${host} activation: ${activation.activation_assurance}`);
+    }
+    for (const line of renderSafetySection(safety)) console.log(line);
+    for (const line of renderSecretsSection(secrets)) console.log(line);
+    for (const line of renderFixSection(fixOutcome)) console.log(line);
+    if (opts.dryRun) console.log(chalk.dim('--dry-run: read-only v2 audit; no generated files were changed.'));
+  }
+  return allOk ? EXIT_OK : EXIT_ERROR;
+}
+
 export async function executeDoctor(opts: DoctorOptions): Promise<number> {
+  const probe = probeWorkspace(opts.cwd);
+  if (probe.kind === 'v2') return executeV2Doctor(opts);
+  if (probe.kind === 'legacy') throw legacyWorkspaceError(probe.legacySignals);
+  if (probe.kind === 'mixed') throw mixedWorkspaceError(probe.v2Signals, probe.legacySignals);
+  if (probe.kind === 'unsafe') throw unsafeWorkspaceMarkerError(probe.unsafeSignals);
+
   // ROS-109: scope-aware audit. Determine effective scope first; downstream
   // tool detection runs against the matching path family.
   const workspaceExists = detectWorkspace(opts.cwd);

@@ -6,6 +6,10 @@ import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { syncFounderSkills } from '../src/lib/founder-skills/sync.ts';
 import type { SkillsInstaller, AddSpec } from '../src/lib/founder-skills/installer.ts';
+import {
+  renderRosterBootstrap,
+  updateV2ProjectActivations,
+} from '../src/lib/generated-artifacts.ts';
 
 // Fake installer: records calls AND materializes a SKILL.md into each tool
 // target so hashing + prune behave end-to-end without touching the network.
@@ -37,9 +41,9 @@ function withWorkspace<T>(fn: (cwd: string) => Promise<T> | T): Promise<T> | T {
   const codexHome = join(cwd, '.fakehome-codex');
   mkdirSync(claudeHome, { recursive: true });
   mkdirSync(codexHome, { recursive: true });
-  // config/project.yaml → detectWorkspace() true
-  mkdirSync(join(cwd, 'config'), { recursive: true });
-  writeFileSync(join(cwd, 'config', 'project.yaml'), 'name: test\n');
+  writeFileSync(join(cwd, 'roster.yaml'), 'schema_version: 2\nworkspace_id: test\nfunctions: {}\nhosts: {}\n');
+  writeFileSync(join(cwd, 'ROSTER.md'), renderRosterBootstrap());
+  assert.equal(updateV2ProjectActivations({ root: cwd }).ok, true);
   const saved = {
     c: process.env['ROSTER_CLAUDE_HOME'],
     x: process.env['ROSTER_CODEX_HOME'],
@@ -115,6 +119,28 @@ test('manifest present but not a workspace → refuses', async () => {
     writeManifest(cwd, 'skills:\n  - pricing\n');
     const { installer } = makeFakeInstaller();
     await assert.rejects(() => syncFounderSkills({ cwd, installer }));
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('sync refuses an init-only or invalid v2 workspace before invoking the installer', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'roster-fs-unactivated-'));
+  try {
+    writeFileSync(join(cwd, 'roster.yaml'), 'schema_version: 2\nworkspace_id: test\nfunctions: {}\nhosts: {}\n');
+    writeFileSync(join(cwd, 'ROSTER.md'), renderRosterBootstrap());
+    writeManifest(cwd, 'ref: main\nskills:\n  - pricing\n');
+    const { installer, calls } = makeFakeInstaller();
+
+    await assert.rejects(() => syncFounderSkills({ cwd, installer }), (error: unknown) => {
+      return error instanceof Error && error.message.includes('activation manifest');
+    });
+    assert.equal(calls.length, 0);
+    assert.equal(existsSync(join(cwd, '.claude')), false);
+
+    writeFileSync(join(cwd, 'roster.yaml'), 'schema_version: nope\n');
+    await assert.rejects(() => syncFounderSkills({ cwd, installer }));
+    assert.equal(calls.length, 0);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

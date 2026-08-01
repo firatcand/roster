@@ -1,1023 +1,938 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync, lstatSync, readlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { performance } from 'node:perf_hooks';
 import {
-  executeInit,
-  appendGitignoreBlock,
-  detectForgeMarkers,
-  detectV04Workspace,
-  substitute,
-  walkScaffold,
-  GITIGNORE_MARKER_START,
-  type ConfirmFn,
-  type InitLogger,
-} from '../src/commands/init.ts';
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { executeInit } from '../src/commands/init.ts';
+import { RosterError } from '../src/lib/errors.ts';
+import { parseGeneratedMarkdown } from '../src/lib/generated-artifacts.ts';
+import { probeWorkspace } from '../src/lib/workspace-probe.ts';
+import { discoverWorkspace, validateWorkspace } from '../src/lib/workspace-registry.ts';
+import {
+  publishCreateOnly,
+  realWorkspaceDurabilityFs,
+  removePublishedWorkspaceFile,
+} from '../src/lib/workspace-io.ts';
 
-function makeTmp(): { cwd: string; cleanup: () => void } {
-  const cwd = mkdtempSync(join(tmpdir(), 'roster-init-'));
-  return { cwd, cleanup: () => rmSync(cwd, { recursive: true, force: true }) };
+function workspace(prefix = 'roster-init'): { root: string; cleanup: () => void } {
+  const root = mkdtempSync(join(tmpdir(), `${prefix}-`));
+  return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
-function silentLogger(): { logger: InitLogger; logs: string[] } {
-  const logs: string[] = [];
-  return {
-    logger: { log: (m) => logs.push(m), warn: (m) => logs.push(m) },
-    logs,
-  };
-}
-
-const yes: ConfirmFn = async () => true;
-const no: ConfirmFn = async () => false;
-
-test('substitute() replaces all {{KEY}} occurrences and leaves unknown tokens', () => {
-  assert.equal(substitute('hello {{NAME}}', { NAME: 'world' }), 'hello world');
-  assert.equal(
-    substitute('a={{X}} b={{Y}} c={{X}}', { X: '1', Y: '2' }),
-    'a=1 b=2 c=1',
-  );
-  assert.equal(substitute('{{UNKNOWN}}', {}), '{{UNKNOWN}}');
-  assert.equal(substitute('no tokens here', { X: '1' }), 'no tokens here');
-});
-
-test('roster init in an empty dir creates CONTEXT.md and symlinks CLAUDE.md + AGENTS.md (POSIX)', async () => {
-  const { cwd, cleanup } = makeTmp();
+async function expectRosterError(
+  action: () => Promise<unknown>,
+  code: string,
+  context?: string,
+): Promise<RosterError> {
   try {
-    const { logger } = silentLogger();
-    const result = await executeInit({
-      cwd,
-      name: 'acme-corp',
-      silent: true,
-      noGit: true,
-      confirm: yes,
-      logger,
-      platform: 'linux',
-    });
+    await action();
+  } catch (error) {
+    assert.ok(error instanceof RosterError, `expected RosterError, got ${String(error)}`);
+    assert.equal(error.code, code, context);
+    return error;
+  }
+  assert.fail(`expected ${code}`);
+}
 
-    assert.equal(result.status, 'ok');
-    assert.equal(result.projectName, 'acme-corp');
+function copyLegacyManagedFile(root: string, relativePath: string): void {
+  const source = resolve('templates', 'scaffold', relativePath);
+  const target = join(root, relativePath);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, readFileSync(source));
+}
 
-    // CONTEXT.md written as regular file
-    assert.ok(existsSync(join(cwd, 'CONTEXT.md')), 'CONTEXT.md exists');
-    assert.ok(result.filesWritten.includes('CONTEXT.md'), 'CONTEXT.md in filesWritten');
+function failUnrelatedDirectoryInspection(relativePath: string): void {
+  if (relativePath !== 'unrelated') return;
+  const error = new Error('injected unreadable directory') as NodeJS.ErrnoException;
+  error.code = 'EACCES';
+  throw error;
+}
 
-    // CLAUDE.md and AGENTS.md are symlinks
-    assert.ok(lstatSync(join(cwd, 'CLAUDE.md')).isSymbolicLink(), 'CLAUDE.md is a symlink');
-    assert.ok(lstatSync(join(cwd, 'AGENTS.md')).isSymbolicLink(), 'AGENTS.md is a symlink');
-    assert.equal(readlinkSync(join(cwd, 'CLAUDE.md')), 'CONTEXT.md', 'CLAUDE.md → CONTEXT.md');
-    assert.equal(readlinkSync(join(cwd, 'AGENTS.md')), 'CONTEXT.md', 'AGENTS.md → CONTEXT.md');
-    assert.ok(result.filesLinked.includes('CLAUDE.md'), 'CLAUDE.md in filesLinked');
-    assert.ok(result.filesLinked.includes('AGENTS.md'), 'AGENTS.md in filesLinked');
-
-    // Content has project name substituted, no unresolved tokens
-    const contextMd = readFileSync(join(cwd, 'CONTEXT.md'), 'utf8');
-    assert.match(contextMd, /acme-corp/, 'project name substituted');
-    assert.ok(!contextMd.includes('{{PROJECT_NAME}}'), 'no unresolved tokens');
-
-    // CLAUDE.md readable through symlink with project name
-    const claudeMd = readFileSync(join(cwd, 'CLAUDE.md'), 'utf8');
-    assert.match(claudeMd, /acme-corp/, 'CLAUDE.md (via symlink) has project name');
-
-    assert.ok(existsSync(join(cwd, '.env.example')), '.env.example exists');
-    assert.ok(existsSync(join(cwd, '.gitignore')), '.gitignore exists');
+test('executeInit creates exactly roster.yaml and ROSTER.md', async () => {
+  const { root, cleanup } = workspace();
+  try {
+    const result = await executeInit({ cwd: root, name: 'acme', silent: true });
+    assert.deepEqual(readdirSync(root).sort(), ['ROSTER.md', 'roster.yaml']);
+    assert.deepEqual(result.filesWritten.sort(), ['ROSTER.md', 'roster.yaml']);
+    assert.deepEqual(result.filesSkipped, []);
+    assert.equal(result.workspaceRoot, resolve(root));
+    assert.equal(result.workspaceId, 'acme');
   } finally {
     cleanup();
   }
 });
 
-test('roster init produces the full scaffold tree (gtm, dreamer, chief-of-staff, conventions, …)', async () => {
-  const { cwd, cleanup } = makeTmp();
+test('executeInit writes the canonical registry and valid self-hashed bootstrap', async () => {
+  const { root, cleanup } = workspace();
   try {
-    const { logger } = silentLogger();
-    await executeInit({ cwd, name: 'acme', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
+    await executeInit({ cwd: root, name: 'my-roster', silent: true });
+    assert.equal(
+      readFileSync(join(root, 'roster.yaml'), 'utf8'),
+      'schema_version: 2\nworkspace_id: my-roster\nfunctions: {}\nhosts: {}\n',
+    );
+    const parsed = parseGeneratedMarkdown(readFileSync(join(root, 'ROSTER.md'), 'utf8'));
+    assert.ok(parsed);
+    assert.equal(parsed.valid, true);
+    assert.equal(parsed.header.artifact, 'roster-bootstrap');
+    assert.match(parsed.body, /host agent interprets plans and executes the work/i);
+  } finally {
+    cleanup();
+  }
+});
 
+test('executeInit is byte-idempotent and reports adopted files as skipped', async () => {
+  const { root, cleanup } = workspace();
+  try {
+    await executeInit({ cwd: root, name: 'acme', silent: true });
+    const beforeRegistry = readFileSync(join(root, 'roster.yaml'));
+    const beforeBootstrap = readFileSync(join(root, 'ROSTER.md'));
+    const repeat = await executeInit({ cwd: root, name: 'acme', silent: true });
+    assert.deepEqual(repeat.filesWritten, []);
+    assert.deepEqual(repeat.filesSkipped.sort(), ['ROSTER.md', 'roster.yaml']);
+    assert.deepEqual(readFileSync(join(root, 'roster.yaml')), beforeRegistry);
+    assert.deepEqual(readFileSync(join(root, 'ROSTER.md')), beforeBootstrap);
+  } finally {
+    cleanup();
+  }
+});
+
+test('executeInit refuses a different workspace id without overwriting bytes', async () => {
+  const { root, cleanup } = workspace();
+  try {
+    await executeInit({ cwd: root, name: 'first', silent: true });
+    const before = readFileSync(join(root, 'roster.yaml'));
+    await expectRosterError(
+      () => executeInit({ cwd: root, name: 'second', silent: true }),
+      'WRITE_CONFLICT',
+    );
+    assert.deepEqual(readFileSync(join(root, 'roster.yaml')), before);
+  } finally {
+    cleanup();
+  }
+});
+
+test('a differing registry-only target is refused before bootstrap publication', async () => {
+  const { root, cleanup } = workspace();
+  try {
+    const existing = 'schema_version: 2\nworkspace_id: first\nfunctions: {}\nhosts: {}\n';
+    writeFileSync(join(root, 'roster.yaml'), existing);
+    await expectRosterError(
+      () => executeInit({ cwd: root, name: 'second', silent: true }),
+      'WRITE_CONFLICT',
+    );
+    assert.deepEqual(readdirSync(root), ['roster.yaml']);
+    assert.equal(readFileSync(join(root, 'roster.yaml'), 'utf8'), existing);
+  } finally {
+    cleanup();
+  }
+});
+
+test('an identical registry-only target adopts the sentinel and creates the bootstrap', async () => {
+  const { root, cleanup } = workspace();
+  try {
+    const existing = 'schema_version: 2\nworkspace_id: acme\nfunctions: {}\nhosts: {}\n';
+    writeFileSync(join(root, 'roster.yaml'), existing);
+    const result = await executeInit({ cwd: root, name: 'acme', silent: true });
+    assert.deepEqual(result.filesWritten, ['ROSTER.md']);
+    assert.deepEqual(result.filesSkipped, ['roster.yaml']);
+    assert.deepEqual(readdirSync(root).sort(), ['ROSTER.md', 'roster.yaml']);
+    assert.equal(readFileSync(join(root, 'roster.yaml'), 'utf8'), existing);
+  } finally {
+    cleanup();
+  }
+});
+
+test('positional workspaceId and --name must agree', async () => {
+  const { root, cleanup } = workspace();
+  try {
+    await expectRosterError(
+      () => executeInit({ cwd: root, workspaceId: 'first', name: 'second', silent: true }),
+      'IDENTITY_INVALID',
+    );
+    assert.deepEqual(readdirSync(root), []);
+    const matching = await executeInit({
+      cwd: root,
+      workspaceId: 'same-id',
+      name: 'same-id',
+      silent: true,
+    });
+    assert.equal(matching.workspaceId, 'same-id');
+  } finally {
+    cleanup();
+  }
+});
+
+test('executeInit validates a derived basename before writing', async () => {
+  const { root, cleanup } = workspace('Roster Invalid');
+  try {
+    await expectRosterError(() => executeInit({ cwd: root, silent: true }), 'IDENTITY_INVALID');
+    assert.deepEqual(readdirSync(root), []);
+  } finally {
+    cleanup();
+  }
+});
+
+test('an existing differing ROSTER.md is preserved and blocks initialization', async () => {
+  const { root, cleanup } = workspace();
+  try {
+    writeFileSync(join(root, 'ROSTER.md'), '# authored\n');
+    await expectRosterError(
+      () => executeInit({ cwd: root, name: 'acme', silent: true }),
+      'WRITE_CONFLICT',
+    );
+    assert.equal(readFileSync(join(root, 'ROSTER.md'), 'utf8'), '# authored\n');
+    assert.deepEqual(readdirSync(root), ['ROSTER.md']);
+  } finally {
+    cleanup();
+  }
+});
+
+test('a bootstrap-only interrupted init can be completed by an identical retry', async () => {
+  const { root, cleanup } = workspace();
+  const source = workspace();
+  try {
+    await executeInit({ cwd: source.root, name: 'source', silent: true });
+    writeFileSync(join(root, 'ROSTER.md'), readFileSync(join(source.root, 'ROSTER.md')));
+    assert.equal(probeWorkspace(root).kind, 'none');
+    const result = await executeInit({ cwd: root, name: 'recovered', silent: true });
+    assert.deepEqual(result.filesWritten, ['roster.yaml']);
+    assert.deepEqual(result.filesSkipped, ['ROSTER.md']);
+    assert.equal(probeWorkspace(root).kind, 'v2');
+  } finally {
+    source.cleanup();
+    cleanup();
+  }
+});
+
+test('registry durability failure rolls back canonical init files and preserves disclosed recovery bytes', async () => {
+  const { root, cleanup } = workspace();
+  try {
+    await expectRosterError(() => executeInit(
+      { cwd: root, name: 'acme', silent: true },
+      {
+        publish(targetRoot, relativePath, content, options) {
+          return publishCreateOnly(targetRoot, relativePath, content, relativePath === 'roster.yaml'
+            ? {
+                ...options,
+                durabilityFs: {
+                  ...realWorkspaceDurabilityFs,
+                  fsyncSync() {
+                    const error = new Error('sync failed') as NodeJS.ErrnoException;
+                    error.code = 'EIO';
+                    throw error;
+                  },
+                },
+              }
+            : options);
+        },
+        removePublished: removePublishedWorkspaceFile,
+      },
+    ), 'WRITE_CONFLICT');
+    assert.equal(existsSync(join(root, 'ROSTER.md')), false);
+    assert.equal(existsSync(join(root, 'roster.yaml')), false);
+    assert.ok(readdirSync(root).some((name) => name.startsWith('.roster.yaml.roster-')));
+    const recovered = await executeInit({ cwd: root, name: 'acme', silent: true });
+    assert.deepEqual(recovered.filesWritten.sort(), ['ROSTER.md', 'roster.yaml']);
+  } finally {
+    cleanup();
+  }
+});
+
+test('late adopted-registry durability failure removes the invocation bootstrap', async () => {
+  const { root, cleanup } = workspace();
+  const registry = 'schema_version: 2\nworkspace_id: acme\nfunctions: {}\nhosts: {}\n';
+  try {
+    writeFileSync(join(root, 'roster.yaml'), registry);
+    let durabilitySyncs = 0;
+    await expectRosterError(() => executeInit(
+      { cwd: root, name: 'acme', silent: true },
+      {
+        publish(targetRoot, relativePath, content, options) {
+          if (relativePath !== 'roster.yaml') {
+            return publishCreateOnly(targetRoot, relativePath, content, options);
+          }
+          return publishCreateOnly(targetRoot, relativePath, content, {
+            ...options,
+            durabilityFs: {
+              ...realWorkspaceDurabilityFs,
+              fsyncSync(fd) {
+                durabilitySyncs += 1;
+                if (durabilitySyncs === 3) {
+                  const error = new Error('late adopted cleanup sync failed') as NodeJS.ErrnoException;
+                  error.code = 'EIO';
+                  throw error;
+                }
+                realWorkspaceDurabilityFs.fsyncSync(fd);
+              },
+            },
+          });
+        },
+        removePublished: removePublishedWorkspaceFile,
+      },
+    ), 'WRITE_CONFLICT');
+    assert.equal(durabilitySyncs, 3);
+    assert.equal(readFileSync(join(root, 'roster.yaml'), 'utf8'), registry);
+    assert.equal(existsSync(join(root, 'ROSTER.md')), false);
+    assert.deepEqual(readdirSync(root), ['roster.yaml']);
+  } finally {
+    cleanup();
+  }
+});
+
+test('legacy exact markers fail closed and remain byte-preserved', async () => {
+  const { root, cleanup } = workspace();
+  try {
+    mkdirSync(join(root, 'config'));
+    writeFileSync(join(root, 'config', 'project.yaml'), 'name: legacy\n');
+    const before = readFileSync(join(root, 'config', 'project.yaml'));
+    const error = await expectRosterError(
+      () => executeInit({ cwd: root, name: 'acme', silent: true }),
+      'LEGACY_WORKSPACE',
+    );
+    assert.deepEqual(error.details, { signals: ['config/project.yaml'] });
+    assert.deepEqual(readFileSync(join(root, 'config', 'project.yaml')), before);
+    assert.ok(!readdirSync(root).includes('roster.yaml'));
+  } finally {
+    cleanup();
+  }
+});
+
+test('v0.4 projects markers fail closed at every supported depth', async () => {
+  for (const relativePath of ['projects', 'gtm/projects', 'gtm/sdr/projects']) {
+    const { root, cleanup } = workspace();
+    try {
+      mkdirSync(join(root, relativePath), { recursive: true });
+      const error = await expectRosterError(
+        () => executeInit({ cwd: root, name: 'acme', silent: true }),
+        'LEGACY_WORKSPACE',
+      );
+      assert.ok((error.details['signals'] as string[]).includes(`${relativePath}/`));
+      assert.ok(!readdirSync(root).includes('roster.yaml'));
+    } finally {
+      cleanup();
+    }
+  }
+});
+
+test('large unrelated source trees do not become unsafe legacy probe signals', () => {
+  const { root, cleanup } = workspace();
+  try {
+    mkdirSync(join(root, 'src'));
+    for (let index = 0; index < 1025; index++) {
+      writeFileSync(join(root, 'src', `module-${index}.ts`), 'export {};\n');
+    }
+    const probe = probeWorkspace(root);
+    assert.equal(probe.kind, 'none');
+    assert.deepEqual(probe.unsafeSignals, []);
+    assert.deepEqual(probe.inconclusiveSignals, []);
+    assert.deepEqual(probe.legacySignals, []);
+  } finally {
+    cleanup();
+  }
+});
+
+test('probe limits remain fail closed without a regular v2 sentinel', async () => {
+  const rootCap = workspace();
+  try {
+    for (let index = 0; index < 1200; index++) {
+      mkdirSync(join(rootCap.root, `area-${String(index).padStart(4, '0')}`));
+    }
+    const probe = probeWorkspace(rootCap.root);
+    assert.equal(probe.kind, 'unsafe');
+    assert.ok(probe.unsafeSignals.includes('.:probe-directory-entry-limit-exceeded'));
+    assert.deepEqual(probe.inconclusiveSignals, ['.:probe-directory-entry-limit-exceeded']);
+    await expectRosterError(
+      () => executeInit({ cwd: rootCap.root, name: 'acme', silent: true }),
+      'UNSAFE_WORKSPACE_MARKER',
+    );
+    assert.equal(existsSync(join(rootCap.root, 'roster.yaml')), false);
+  } finally {
+    rootCap.cleanup();
+  }
+
+  const nestedCap = workspace();
+  try {
+    mkdirSync(join(nestedCap.root, 'company'));
+    for (let index = 0; index < 1200; index++) {
+      mkdirSync(join(nestedCap.root, 'company', `team-${String(index).padStart(4, '0')}`));
+    }
+    const probe = probeWorkspace(nestedCap.root);
+    assert.equal(probe.kind, 'unsafe');
+    assert.ok(probe.unsafeSignals.includes('company:probe-directory-entry-limit-exceeded'));
+    assert.deepEqual(probe.inconclusiveSignals, [
+      'company:probe-directory-entry-limit-exceeded',
+    ]);
+  } finally {
+    nestedCap.cleanup();
+  }
+});
+
+test('probe total traversal budget is inconclusive and therefore unsafe', () => {
+  const { root, cleanup } = workspace();
+  try {
+    for (let group = 0; group < 10; group++) {
+      const parent = join(root, `area-${group}`);
+      mkdirSync(parent);
+      for (let child = 0; child < 1000; child++) {
+        mkdirSync(join(parent, `team-${String(child).padStart(4, '0')}`));
+      }
+    }
+    const probe = probeWorkspace(root);
+    assert.equal(probe.kind, 'unsafe');
+    assert.ok(probe.unsafeSignals.some((signal) => signal.endsWith(':probe-total-entry-limit-exceeded')));
+    assert.ok(probe.inconclusiveSignals.some((signal) => signal.endsWith(':probe-total-entry-limit-exceeded')));
+  } finally {
+    cleanup();
+  }
+});
+
+test('a regular v2 sentinel keeps traversal-budget diagnostics non-blocking', async () => {
+  const { root, cleanup } = workspace();
+  try {
+    await executeInit({ cwd: root, name: 'acme', silent: true });
+    for (let index = 0; index < 1025; index++) {
+      writeFileSync(join(root, `unrelated-${String(index).padStart(4, '0')}.txt`), 'data\n');
+    }
+
+    const probe = probeWorkspace(root);
+    assert.equal(probe.kind, 'v2');
+    assert.deepEqual(probe.v2Signals, ['roster.yaml']);
+    assert.deepEqual(probe.legacySignals, []);
+    assert.deepEqual(probe.unsafeSignals, []);
+    assert.deepEqual(probe.inconclusiveSignals, ['.:probe-directory-entry-limit-exceeded']);
+    assert.deepEqual(discoverWorkspace(root).records, []);
+    assert.equal(validateWorkspace(root).ok, true);
+  } finally {
+    cleanup();
+  }
+});
+
+test('a regular v2 sentinel keeps incidental legacy-scan uncertainty non-blocking', async () => {
+  const { root, cleanup } = workspace();
+  try {
+    await executeInit({ cwd: root, name: 'acme', silent: true });
+    mkdirSync(join(root, 'scripts'));
+    symlinkSync('../ROSTER.md', join(root, 'scripts', 'new-agent.sh'));
+    mkdirSync(join(root, 'company'));
+    writeFileSync(join(root, 'company', 'projects'), 'not a legacy projects directory\n');
+    mkdirSync(join(root, 'unrelated'));
+
+    const probe = probeWorkspace(root, {
+      beforeDirectoryInspect: failUnrelatedDirectoryInspection,
+    });
+    assert.equal(probe.kind, 'v2');
+    assert.deepEqual(probe.v2Signals, ['roster.yaml']);
+    assert.deepEqual(probe.legacySignals, []);
+    assert.deepEqual(probe.unsafeSignals, []);
+    assert.deepEqual(probe.inconclusiveSignals, [
+      'company/projects:file',
+      'scripts/new-agent.sh:symlink',
+      'unrelated:unreadable:EACCES',
+    ]);
+    assert.deepEqual(discoverWorkspace(root).records, []);
+    assert.equal(validateWorkspace(root).ok, true);
+
+    rmSync(join(root, 'company', 'projects'));
+    mkdirSync(join(root, 'company', 'projects'));
+    const mixed = probeWorkspace(root, {
+      beforeDirectoryInspect: failUnrelatedDirectoryInspection,
+    });
+    assert.equal(mixed.kind, 'mixed');
+    assert.deepEqual(mixed.legacySignals, ['company/projects/']);
+    assert.deepEqual(mixed.unsafeSignals, []);
+    assert.deepEqual(mixed.inconclusiveSignals, [
+      'scripts/new-agent.sh:symlink',
+      'unrelated:unreadable:EACCES',
+    ]);
+  } finally {
+    cleanup();
+  }
+});
+
+test('incidental legacy-scan uncertainty remains fail closed without a v2 sentinel', () => {
+  const { root, cleanup } = workspace();
+  try {
+    mkdirSync(join(root, 'scripts'));
+    symlinkSync('../missing-target', join(root, 'scripts', 'new-agent.sh'));
+    mkdirSync(join(root, 'company'));
+    writeFileSync(join(root, 'company', 'projects'), 'not a legacy projects directory\n');
+    mkdirSync(join(root, 'unrelated'));
+
+    const probe = probeWorkspace(root, {
+      beforeDirectoryInspect: failUnrelatedDirectoryInspection,
+    });
     const expected = [
-      'conventions.md',
-      'chief-of-staff/agent.md',
-      'chief-of-staff/plans/audit-repo.yaml',
-      'dreamer/agent.md',
-      'dreamer/subagents/lesson-drafter.md',
-      'gtm/EXPERT.md',
-      'product/EXPERT.md',
-      'design/EXPERT.md',
-      'ops/EXPERT.md',
-      'scripts/lib/functions.sh',
-      '.config/functions.yaml',
-      'logs/cron/.gitkeep',
+      'company/projects:file',
+      'scripts/new-agent.sh:symlink',
+      'unrelated:unreadable:EACCES',
     ];
-    for (const rel of expected) {
-      assert.ok(existsSync(join(cwd, rel)), `${rel} should exist`);
+    assert.equal(probe.kind, 'unsafe');
+    assert.deepEqual(probe.v2Signals, []);
+    assert.deepEqual(probe.legacySignals, []);
+    assert.deepEqual(probe.unsafeSignals, expected);
+    assert.deepEqual(probe.inconclusiveSignals, expected);
+  } finally {
+    cleanup();
+  }
+});
+
+test('canonical marker violations remain unsafe with a regular v2 sentinel', async () => {
+  const cases: Array<{
+    expected: string;
+    mutate: (root: string) => void;
+  }> = [
+    {
+      expected: 'ROSTER.md:symlink',
+      mutate(root) {
+        rmSync(join(root, 'ROSTER.md'));
+        symlinkSync('roster.yaml', join(root, 'ROSTER.md'));
+      },
+    },
+    {
+      expected: 'config/project.yaml:directory',
+      mutate(root) {
+        mkdirSync(join(root, 'config', 'project.yaml'), { recursive: true });
+      },
+    },
+    {
+      expected: '.roster/scaffold-manifest.json:symlink_component',
+      mutate(root) {
+        symlinkSync('.', join(root, '.roster'));
+      },
+    },
+  ];
+
+  for (const entry of cases) {
+    const { root, cleanup } = workspace();
+    try {
+      await executeInit({ cwd: root, name: 'acme', silent: true });
+      entry.mutate(root);
+
+      const probe = probeWorkspace(root);
+      assert.equal(probe.kind, 'unsafe', entry.expected);
+      assert.deepEqual(probe.v2Signals, ['roster.yaml']);
+      assert.deepEqual(probe.unsafeSignals, [entry.expected]);
+      assert.deepEqual(probe.inconclusiveSignals, []);
+    } finally {
+      cleanup();
     }
-  } finally {
-    cleanup();
   }
 });
 
-test('roster init re-run preserves user-edited scaffold files', async () => {
-  const { cwd, cleanup } = makeTmp();
+test('root rename and same-path replacement stays unsafe after swap-back before init', async () => {
+  const parent = workspace();
+  const root = join(parent.root, 'workspace');
+  const moved = join(parent.root, 'workspace-original');
   try {
-    const { logger } = silentLogger();
-    await executeInit({ cwd, name: 'acme', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
-
-    const target = join(cwd, 'gtm', 'EXPERT.md');
-    const userContent = '# my custom expert prompt\n';
-    writeFileSync(target, userContent, 'utf8');
-
-    await executeInit({
-      cwd,
-      name: 'acme',
-      silent: true,
-      force: true,
-      noGit: true,
-      confirm: yes,
-      logger,
-      platform: 'linux',
+    mkdirSync(root);
+    let swapped = false;
+    const probe = probeWorkspace(root, {
+      beforeDirectoryInspect(relativePath) {
+        if (relativePath !== '.' || swapped) return;
+        renameSync(root, moved);
+        mkdirSync(root);
+        swapped = true;
+      },
     });
+    assert.equal(swapped, true);
+    assert.equal(probe.kind, 'unsafe');
+    assert.ok(probe.unsafeSignals.includes('.:probe-directory-identity-changed'));
 
-    assert.equal(readFileSync(target, 'utf8'), userContent, 'user edit preserved');
-  } finally {
-    cleanup();
-  }
-});
-
-test('walkScaffold substitutes .template files and strips the suffix', () => {
-  const { cwd: src, cleanup: cleanSrc } = makeTmp();
-  const { cwd: dst, cleanup: cleanDst } = makeTmp();
-  try {
-    mkdirSync(join(src, 'sub'), { recursive: true });
-    writeFileSync(join(src, 'plain.md'), 'plain {{PROJECT_NAME}}\n', 'utf8');
-    writeFileSync(join(src, 'config.template.yaml'), 'name: {{PROJECT_NAME}}\n', 'utf8');
-    writeFileSync(join(src, 'sub', 'README.template'), 'project: {{PROJECT_NAME}}\n', 'utf8');
-
-    const written = walkScaffold(src, dst, { PROJECT_NAME: 'acme' });
-
-    assert.equal(readFileSync(join(dst, 'plain.md'), 'utf8'), 'plain {{PROJECT_NAME}}\n', 'plain files copied byte-for-byte');
-    assert.equal(readFileSync(join(dst, 'config.yaml'), 'utf8'), 'name: acme\n', 'template substituted, .template stripped');
-    assert.equal(readFileSync(join(dst, 'sub', 'README'), 'utf8'), 'project: acme\n', 'template w/o extension substituted');
-    assert.ok(!existsSync(join(dst, 'config.template.yaml')), 'template suffix gone');
-    assert.ok(written.includes('plain.md'));
-    assert.ok(written.includes('config.yaml'));
-  } finally {
-    cleanSrc();
-    cleanDst();
-  }
-});
-
-test('walkScaffold preserves existing target files', () => {
-  const { cwd: src, cleanup: cleanSrc } = makeTmp();
-  const { cwd: dst, cleanup: cleanDst } = makeTmp();
-  try {
-    writeFileSync(join(src, 'a.md'), 'from-scaffold\n', 'utf8');
-    writeFileSync(join(dst, 'a.md'), 'user-content\n', 'utf8');
-
-    const written = walkScaffold(src, dst, {});
-
-    assert.equal(readFileSync(join(dst, 'a.md'), 'utf8'), 'user-content\n', 'existing file preserved');
-    assert.ok(!written.includes('a.md'), 'preserved file not reported as written');
-  } finally {
-    cleanSrc();
-    cleanDst();
-  }
-});
-
-test('detectForgeMarkers finds BRIEF.md, spec/PRD.md, and plans/phases.yaml', () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    assert.deepEqual(detectForgeMarkers(cwd), []);
-
-    writeFileSync(join(cwd, 'BRIEF.md'), '# brief\n', 'utf8');
-    mkdirSync(join(cwd, 'spec'), { recursive: true });
-    writeFileSync(join(cwd, 'spec', 'PRD.md'), '# prd\n', 'utf8');
-    mkdirSync(join(cwd, 'plans'), { recursive: true });
-    writeFileSync(join(cwd, 'plans', 'phases.yaml'), 'phases:\n', 'utf8');
-
-    assert.deepEqual(detectForgeMarkers(cwd), ['BRIEF.md', 'spec/PRD.md', 'plans/phases.yaml']);
-  } finally {
-    cleanup();
-  }
-});
-
-test('roster init in a forge dir with CONTEXT.md already present prompts with forge-aware message', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    // Pre-write CONTEXT.md (simulating previous roster init) plus forge marker
-    writeFileSync(join(cwd, 'CONTEXT.md'), '# existing context\n', 'utf8');
-    symlinkSync('CONTEXT.md', join(cwd, 'CLAUDE.md'));
-    writeFileSync(join(cwd, 'BRIEF.md'), '# forge brief\n', 'utf8');
-
-    const seen: string[] = [];
-    const captureConfirm: ConfirmFn = async (message) => {
-      seen.push(message);
-      return true;
-    };
-    const { logger } = silentLogger();
-
-    const result = await executeInit({
-      cwd,
-      name: 'forge-proj',
-      silent: true,
-      noGit: true,
-      confirm: captureConfirm,
-      logger,
-      platform: 'linux',
-    });
-
-    assert.equal(result.status, 'ok');
-    assert.equal(seen.length, 1, 'confirm fired once');
-    assert.match(seen[0]!, /forge/i, 'message mentions forge');
-    assert.match(seen[0]!, /BRIEF\.md/, 'message lists the detected marker');
-    const contextMd = readFileSync(join(cwd, 'CONTEXT.md'), 'utf8');
-    assert.match(contextMd, /forge-proj/);
-  } finally {
-    cleanup();
-  }
-});
-
-test('roster init in a forge dir declines → cancelled, no scaffold written', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    // Use a post-init workspace (CONTEXT.md + symlink) so forge prompt fires rather than migration guard
-    writeFileSync(join(cwd, 'CONTEXT.md'), '# existing context\n', 'utf8');
-    symlinkSync('CONTEXT.md', join(cwd, 'CLAUDE.md'));
-    mkdirSync(join(cwd, 'plans'), { recursive: true });
-    writeFileSync(join(cwd, 'plans', 'phases.yaml'), 'phases:\n', 'utf8');
-
-    const { logger, logs } = silentLogger();
-    const result = await executeInit({
-      cwd,
-      name: 'x',
-      silent: true,
-      noGit: true,
-      confirm: no,
-      logger,
-      platform: 'linux',
-    });
-
-    assert.equal(result.status, 'cancelled');
-    assert.deepEqual(result.filesWritten, []);
-    assert.ok(!existsSync(join(cwd, 'projects')), 'projects/ not created');
-    assert.ok(!existsSync(join(cwd, 'gtm')), 'gtm/ not created');
-    // logs may include the 'Cancelled' info line — not asserted here
-    void logs;
-  } finally {
-    cleanup();
-  }
-});
-
-test('roster init with forge marker but no CLAUDE.md warns and proceeds', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    writeFileSync(join(cwd, 'BRIEF.md'), '# forge brief\n', 'utf8');
-
-    const warns: string[] = [];
-    const logger: InitLogger = { log: () => {}, warn: (m) => warns.push(m) };
-
-    const result = await executeInit({
-      cwd,
-      name: 'x',
-      silent: false, // non-silent: warn must fire
-      noGit: true,
-      confirm: yes,
-      logger,
-      platform: 'linux',
-    });
-
-    assert.equal(result.status, 'ok');
-    assert.equal(warns.length, 1, 'one warn line');
-    assert.match(warns[0]!, /forge/i);
-    assert.ok(existsSync(join(cwd, 'CLAUDE.md')), 'CLAUDE.md exists (symlink)');
-    assert.ok(existsSync(join(cwd, 'gtm', 'EXPERT.md')), 'scaffold written');
-  } finally {
-    cleanup();
-  }
-});
-
-test('roster init with forge marker but no CLAUDE.md AND --silent suppresses the warn (still writes scaffold)', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    writeFileSync(join(cwd, 'BRIEF.md'), '# forge brief\n', 'utf8');
-
-    const warns: string[] = [];
-    const logger: InitLogger = { log: () => {}, warn: (m) => warns.push(m) };
-
-    const result = await executeInit({
-      cwd,
-      name: 'x',
-      silent: true,
-      noGit: true,
-      confirm: yes,
-      logger,
-      platform: 'linux',
-    });
-
-    assert.equal(result.status, 'ok');
-    assert.equal(warns.length, 0, '--silent suppresses informational warns');
-    assert.ok(existsSync(join(cwd, 'gtm', 'EXPERT.md')), 'scaffold still written');
-  } finally {
-    cleanup();
-  }
-});
-
-test('walkScaffold throws on a non-regular source entry (packaging hazard)', () => {
-  const { cwd: src, cleanup: cleanSrc } = makeTmp();
-  const { cwd: dst, cleanup: cleanDst } = makeTmp();
-  try {
-    writeFileSync(join(src, 'real.md'), 'ok\n', 'utf8');
-    symlinkSync(join(src, 'real.md'), join(src, 'link.md'));
-
-    assert.throws(
-      () => walkScaffold(src, dst, {}),
-      /unexpected entry type/,
+    rmSync(root, { recursive: true });
+    renameSync(moved, root);
+    let publications = 0;
+    const error = await expectRosterError(
+      () => executeInit(
+        { cwd: root, name: 'acme', silent: true },
+        {
+          probe: () => probe,
+          publish(targetRoot, relativePath, content, options) {
+            publications += 1;
+            return publishCreateOnly(targetRoot, relativePath, content, options);
+          },
+          removePublished: removePublishedWorkspaceFile,
+        },
+      ),
+      'UNSAFE_WORKSPACE_MARKER',
     );
+    assert.deepEqual(error.details, { signals: ['.:probe-directory-identity-changed'] });
+    assert.equal(publications, 0);
+    assert.deepEqual(readdirSync(root), []);
   } finally {
-    cleanSrc();
-    cleanDst();
+    parent.cleanup();
   }
 });
 
-test('walkScaffold preserves a symlink at non-template destination (including broken links)', () => {
-  const { cwd: src, cleanup: cleanSrc } = makeTmp();
-  const { cwd: dst, cleanup: cleanDst } = makeTmp();
+test('candidate rename and same-path replacement stays unsafe after swap-back before init', async () => {
+  const { root, cleanup } = workspace();
+  const candidate = join(root, 'company');
+  const moved = join(root, 'company-original');
   try {
-    writeFileSync(join(src, 'good.md'), 'from-scaffold\n', 'utf8');
-    writeFileSync(join(src, 'broken.md'), 'from-scaffold\n', 'utf8');
-
-    const externalTarget = join(src, 'external.txt');
-    writeFileSync(externalTarget, 'user content\n', 'utf8');
-    symlinkSync(externalTarget, join(dst, 'good.md'));
-    symlinkSync(join(dst, 'does-not-exist'), join(dst, 'broken.md'));
-
-    const written = walkScaffold(src, dst, {});
-
-    assert.ok(lstatSync(join(dst, 'good.md')).isSymbolicLink(), 'valid symlink preserved');
-    assert.ok(lstatSync(join(dst, 'broken.md')).isSymbolicLink(), 'broken symlink preserved');
-    assert.equal(readFileSync(externalTarget, 'utf8'), 'user content\n', 'symlink target untouched');
-    assert.ok(!written.includes('good.md'));
-    assert.ok(!written.includes('broken.md'));
-  } finally {
-    cleanSrc();
-    cleanDst();
-  }
-});
-
-test('walkScaffold refuses to overwrite a symlink at a template destination', () => {
-  const { cwd: src, cleanup: cleanSrc } = makeTmp();
-  const { cwd: dst, cleanup: cleanDst } = makeTmp();
-  try {
-    writeFileSync(join(src, 'config.template.yaml'), 'name: {{PROJECT_NAME}}\n', 'utf8');
-
-    const externalTarget = join(src, 'external.yaml');
-    writeFileSync(externalTarget, 'untouchable\n', 'utf8');
-    symlinkSync(externalTarget, join(dst, 'config.yaml'));
-
-    assert.throws(
-      () => walkScaffold(src, dst, { PROJECT_NAME: 'acme' }),
-      /refusing to overwrite symlink/,
-    );
-    assert.equal(readFileSync(externalTarget, 'utf8'), 'untouchable\n', 'symlink target not modified');
-  } finally {
-    cleanSrc();
-    cleanDst();
-  }
-});
-
-test('roster init completes within the 3s budget on local filesystem', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    const { logger } = silentLogger();
-    const start = performance.now();
-    await executeInit({ cwd, name: 'perf', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
-    const ms = performance.now() - start;
-    assert.ok(ms < 3000, `init took ${ms.toFixed(0)}ms, expected <3000ms`);
-  } finally {
-    cleanup();
-  }
-});
-
-test('CLAUDE.md as regular file + no --force → cancelled with migration message', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    writeFileSync(join(cwd, 'CLAUDE.md'), '# pre-existing\n', 'utf8');
-    const { logger } = silentLogger();
-
-    const result = await executeInit({
-      cwd,
-      name: 'foo',
-      silent: true,
-      noGit: true,
-      confirm: no,
-      logger,
-      platform: 'linux',
+    mkdirSync(candidate);
+    let swapped = false;
+    const probe = probeWorkspace(root, {
+      beforeDirectoryInspect(relativePath) {
+        if (relativePath !== 'company' || swapped) return;
+        renameSync(candidate, moved);
+        mkdirSync(candidate);
+        swapped = true;
+      },
     });
-
-    assert.equal(result.status, 'cancelled');
-    assert.deepEqual(result.filesWritten, []);
-    const claudeMd = readFileSync(join(cwd, 'CLAUDE.md'), 'utf8');
-    assert.equal(claudeMd, '# pre-existing\n', 'CLAUDE.md unchanged');
-    assert.ok(!existsSync(join(cwd, '.env.example')), '.env.example not written');
-    assert.ok(!existsSync(join(cwd, 'projects')), 'projects/ not created');
-    assert.ok(!existsSync(join(cwd, 'CONTEXT.md')), 'CONTEXT.md not created');
-  } finally {
-    cleanup();
-  }
-});
-
-test('CONTEXT.md exists + declining overwrite prompt → cancelled', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    writeFileSync(join(cwd, 'CONTEXT.md'), '# existing\n', 'utf8');
-    const { logger } = silentLogger();
-
-    const result = await executeInit({
-      cwd,
-      name: 'foo',
-      silent: true,
-      noGit: true,
-      confirm: no,
-      logger,
-      platform: 'linux',
-    });
-
-    assert.equal(result.status, 'cancelled');
-    assert.deepEqual(result.filesWritten, []);
-    assert.ok(!existsSync(join(cwd, 'projects')), 'projects/ not created');
-  } finally {
-    cleanup();
-  }
-});
-
-test('--force skips the overwrite confirmation', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    writeFileSync(join(cwd, 'CLAUDE.md'), '# pre-existing\n', 'utf8');
-    const { logger } = silentLogger();
-
-    let prompted = false;
-    const confirm: ConfirmFn = async () => {
-      prompted = true;
-      return true;
-    };
-
-    const result = await executeInit({
-      cwd,
-      name: 'forced',
-      silent: true,
-      force: true,
-      noGit: true,
-      confirm,
-      logger,
-      platform: 'linux',
-    });
-
-    assert.equal(result.status, 'ok');
-    assert.equal(prompted, false, 'no confirmation prompt when --force');
-    // CLAUDE.md is now a symlink to CONTEXT.md
-    assert.ok(lstatSync(join(cwd, 'CLAUDE.md')).isSymbolicLink(), 'CLAUDE.md replaced with symlink');
-    const contextMd = readFileSync(join(cwd, 'CONTEXT.md'), 'utf8');
-    assert.match(contextMd, /forced/);
-  } finally {
-    cleanup();
-  }
-});
-
-test('.gitignore has Roster defaults block appended exactly once on repeated runs', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    const { logger } = silentLogger();
-    await executeInit({ cwd, name: 'x', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
-    await executeInit({ cwd, name: 'x', silent: true, force: true, noGit: true, confirm: yes, logger, platform: 'linux' });
-    await executeInit({ cwd, name: 'x', silent: true, force: true, noGit: true, confirm: yes, logger, platform: 'linux' });
-
-    const gi = readFileSync(join(cwd, '.gitignore'), 'utf8');
-    const occurrences = (gi.match(new RegExp(GITIGNORE_MARKER_START, 'g')) ?? []).length;
-    assert.equal(occurrences, 1, 'marker present exactly once');
-  } finally {
-    cleanup();
-  }
-});
-
-test('.gitignore contains anchored /.env and recursive **/.env after init', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    const { logger } = silentLogger();
-    await executeInit({ cwd, name: 'x', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
-
-    const gi = readFileSync(join(cwd, '.gitignore'), 'utf8');
-    const markerIdx = gi.indexOf(GITIGNORE_MARKER_START);
-    assert.ok(markerIdx >= 0, 'roster marker present');
-    const block = gi.slice(markerIdx);
-
-    assert.match(block, /^\/\.env$/m, 'workspace-anchored /.env present in Roster block');
-    assert.match(block, /^\*\*\/\.env$/m, 'recursive **/.env present in Roster block');
-    assert.match(block, /^\.env$/m, 'pre-v1 .env rule preserved');
-    assert.match(block, /^\.env\.local$/m, 'pre-v1 .env.local rule preserved');
-  } finally {
-    cleanup();
-  }
-});
-
-test('appendGitignoreBlock preserves existing .gitignore content', () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    const existing = 'node_modules/\n*.log\n';
-    writeFileSync(join(cwd, '.gitignore'), existing, 'utf8');
-
-    appendGitignoreBlock(cwd);
-
-    const after = readFileSync(join(cwd, '.gitignore'), 'utf8');
-    assert.ok(after.startsWith(existing), 'pre-existing rules preserved at top');
-    assert.ok(after.includes(GITIGNORE_MARKER_START), 'roster block appended');
-  } finally {
-    cleanup();
-  }
-});
-
-test('init creates .env.example with placeholder values only', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    const { logger } = silentLogger();
-    await executeInit({ cwd, name: 'x', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
-
-    const env = readFileSync(join(cwd, '.env.example'), 'utf8');
-    // Every uncommented line ought to be empty; everything else starts with #.
-    for (const line of env.split('\n')) {
-      const trimmed = line.trim();
-      if (trimmed === '') continue;
-      assert.ok(trimmed.startsWith('#'), `non-comment line in .env.example: ${line}`);
-    }
-  } finally {
-    cleanup();
-  }
-});
-
-test('init does not write .git/ when noGit is true', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    const { logger } = silentLogger();
-    const result = await executeInit({
-      cwd,
-      name: 'x',
-      silent: true,
-      noGit: true,
-      confirm: yes,
-      logger,
-      platform: 'linux',
-    });
-    assert.equal(result.gitInitialized, false);
-    assert.ok(!existsSync(join(cwd, '.git')), '.git/ not created');
-  } finally {
-    cleanup();
-  }
-});
-
-test('init preserves existing .env.example (no overwrite)', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    const customEnv = '# my custom env\nMY_VAR=value\n';
-    writeFileSync(join(cwd, '.env.example'), customEnv, 'utf8');
-
-    const { logger } = silentLogger();
-    await executeInit({ cwd, name: 'x', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
-
-    const after = readFileSync(join(cwd, '.env.example'), 'utf8');
-    assert.equal(after, customEnv, '.env.example unchanged');
-  } finally {
-    cleanup();
-  }
-});
-
-test('win32 dual-write: three regular files with identical content', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    const { logger } = silentLogger();
-    const result = await executeInit({
-      cwd,
-      name: 'win-proj',
-      silent: true,
-      noGit: true,
-      confirm: yes,
-      logger,
-      platform: 'win32',
-    });
-
-    assert.equal(result.status, 'ok');
-    assert.ok(result.filesWritten.includes('CONTEXT.md'), 'CONTEXT.md written');
-    assert.ok(result.filesWritten.includes('CLAUDE.md'), 'CLAUDE.md written');
-    assert.ok(result.filesWritten.includes('AGENTS.md'), 'AGENTS.md written');
-    assert.deepEqual(result.filesLinked, [], 'no symlinks on win32');
-
-    // All three have identical content
-    const contextContent = readFileSync(join(cwd, 'CONTEXT.md'), 'utf8');
-    const claudeContent = readFileSync(join(cwd, 'CLAUDE.md'), 'utf8');
-    const agentsContent = readFileSync(join(cwd, 'AGENTS.md'), 'utf8');
-    assert.equal(claudeContent, contextContent, 'CLAUDE.md matches CONTEXT.md');
-    assert.equal(agentsContent, contextContent, 'AGENTS.md matches CONTEXT.md');
-
-    // They must be regular files, not symlinks
-    assert.equal(lstatSync(join(cwd, 'CLAUDE.md')).isSymbolicLink(), false, 'CLAUDE.md is not a symlink');
-    assert.equal(lstatSync(join(cwd, 'AGENTS.md')).isSymbolicLink(), false, 'AGENTS.md is not a symlink');
-  } finally {
-    cleanup();
-  }
-});
-
-test('re-run idempotency: correct symlinks skipped, CONTEXT.md unchanged → skipped', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    const { logger } = silentLogger();
-    await executeInit({ cwd, name: 'idem', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
-
-    const second = await executeInit({
-      cwd,
-      name: 'idem',
-      silent: true,
-      force: true,
-      noGit: true,
-      confirm: yes,
-      logger,
-      platform: 'linux',
-    });
-
-    assert.ok(second.filesSkipped.includes('CLAUDE.md'), 'CLAUDE.md symlink skipped on re-run');
-    assert.ok(second.filesSkipped.includes('AGENTS.md'), 'AGENTS.md symlink skipped on re-run');
-    // CONTEXT.md content is the same (no user edits) — skipped
+    assert.equal(swapped, true);
+    assert.equal(probe.kind, 'unsafe');
     assert.ok(
-      second.filesSkipped.includes('CONTEXT.md') || second.filesUpdated.includes('CONTEXT.md'),
-      'CONTEXT.md skipped or updated on re-run',
+      probe.unsafeSignals.includes('company:probe-directory-identity-changed'),
     );
-  } finally {
-    cleanup();
-  }
-});
 
-test('re-run: user region content preserved across managed-region refresh', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    const { logger } = silentLogger();
-    await executeInit({ cwd, name: 'user-preserve', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
-
-    // Edit the user region in CONTEXT.md
-    const contextPath = join(cwd, 'CONTEXT.md');
-    const content = readFileSync(contextPath, 'utf8');
-    const edited = content.replace(
-      '[Replace this section with project-specific context: domain, goals, constraints.]',
-      'This is my custom workspace description.',
+    rmSync(candidate, { recursive: true });
+    renameSync(moved, candidate);
+    let publications = 0;
+    const error = await expectRosterError(
+      () => executeInit(
+        { cwd: root, name: 'acme', silent: true },
+        {
+          probe: () => probe,
+          publish(targetRoot, relativePath, content, options) {
+            publications += 1;
+            return publishCreateOnly(targetRoot, relativePath, content, options);
+          },
+          removePublished: removePublishedWorkspaceFile,
+        },
+      ),
+      'UNSAFE_WORKSPACE_MARKER',
     );
-    writeFileSync(contextPath, edited, 'utf8');
-
-    await executeInit({
-      cwd,
-      name: 'user-preserve',
-      silent: true,
-      force: true,
-      noGit: true,
-      confirm: yes,
-      logger,
-      platform: 'linux',
+    assert.deepEqual(error.details, {
+      signals: ['company:probe-directory-identity-changed'],
     });
+    assert.equal(publications, 0);
+    assert.deepEqual(readdirSync(root), ['company']);
+  } finally {
+    cleanup();
+  }
+});
 
-    const afterContent = readFileSync(contextPath, 'utf8');
-    assert.ok(afterContent.includes('This is my custom workspace description.'), 'user region preserved');
-    assert.ok(
-      afterContent.includes('> **You are operating inside a roster-managed workspace.**'),
-      'managed region refreshed',
+test('init revalidates a clean candidate token before any publication', async () => {
+  const { root, cleanup } = workspace();
+  const candidate = join(root, 'company');
+  const moved = join(root, 'company-original');
+  try {
+    mkdirSync(candidate);
+    let publications = 0;
+    const error = await expectRosterError(
+      () => executeInit(
+        { cwd: root, name: 'acme', silent: true },
+        {
+          probe(targetRoot) {
+            const probe = probeWorkspace(targetRoot);
+            assert.ok(probe.session?.candidates.some((token) => token.path === 'company'));
+            renameSync(candidate, moved);
+            mkdirSync(candidate);
+            return probe;
+          },
+          publish(targetRoot, relativePath, content, options) {
+            publications += 1;
+            return publishCreateOnly(targetRoot, relativePath, content, options);
+          },
+          removePublished: removePublishedWorkspaceFile,
+        },
+      ),
+      'UNSAFE_WORKSPACE_MARKER',
     );
-  } finally {
-    cleanup();
-  }
-});
-
-test('CLAUDE.md as regular file + --migrate → symlink created, user content preserved', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    const userContent = '# My Custom Section\n\nImportant project details.';
-    const oldClaudeMd = `# old-proj — Agent-Team Workspace\n\n${userContent}\n`;
-    writeFileSync(join(cwd, 'CLAUDE.md'), oldClaudeMd, 'utf8');
-
-    const { logger } = silentLogger();
-    const result = await executeInit({
-      cwd,
-      name: 'old-proj',
-      silent: true,
-      noGit: true,
-      migrate: true,
-      confirm: yes,
-      logger,
-      platform: 'linux',
+    assert.deepEqual(error.details, {
+      signals: ['company:probe-directory-identity-changed'],
     });
-
-    assert.equal(result.status, 'ok');
-    assert.ok(existsSync(join(cwd, 'CONTEXT.md')), 'CONTEXT.md created');
-    assert.ok(lstatSync(join(cwd, 'CLAUDE.md')).isSymbolicLink(), 'CLAUDE.md replaced with symlink');
-    const contextContent = readFileSync(join(cwd, 'CONTEXT.md'), 'utf8');
-    assert.ok(contextContent.includes('Important project details.'), 'user content preserved in CONTEXT.md');
+    assert.equal(publications, 0);
+    assert.equal(existsSync(join(root, 'ROSTER.md')), false);
+    assert.equal(existsSync(join(root, 'roster.yaml')), false);
+    assert.equal(existsSync(join(moved, 'ROSTER.md')), false);
+    assert.equal(existsSync(join(moved, 'roster.yaml')), false);
   } finally {
     cleanup();
   }
 });
 
-test('CLAUDE.md as regular file + --force → symlink created, no content preservation', async () => {
-  const { cwd, cleanup } = makeTmp();
+test('idempotent v2 init ignores churn in optional legacy-scan candidates', async () => {
+  const { root, cleanup } = workspace();
+  const candidate = join(root, 'company');
+  const moved = join(root, 'company-original');
   try {
-    writeFileSync(join(cwd, 'CLAUDE.md'), '# very important custom content\n', 'utf8');
+    await executeInit({ cwd: root, name: 'acme', silent: true });
+    mkdirSync(candidate);
 
-    const { logger } = silentLogger();
-    const result = await executeInit({
-      cwd,
-      name: 'force-proj',
-      silent: true,
-      noGit: true,
-      force: true,
-      confirm: yes,
-      logger,
-      platform: 'linux',
-    });
-
-    assert.equal(result.status, 'ok');
-    assert.ok(lstatSync(join(cwd, 'CLAUDE.md')).isSymbolicLink(), 'CLAUDE.md is a symlink');
-    const contextContent = readFileSync(join(cwd, 'CONTEXT.md'), 'utf8');
-    assert.ok(!contextContent.includes('very important custom content'), 'old content not preserved with --force');
-  } finally {
-    cleanup();
-  }
-});
-
-test('symlink at wrong target + --force → re-linked to CONTEXT.md', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    writeFileSync(join(cwd, 'CONTEXT.md'), '# ctx\n', 'utf8');
-    writeFileSync(join(cwd, 'old-context.md'), '# old\n', 'utf8');
-    symlinkSync('old-context.md', join(cwd, 'CLAUDE.md'));
-    symlinkSync('CONTEXT.md', join(cwd, 'AGENTS.md'));
-
-    const { logger } = silentLogger();
-    const result = await executeInit({
-      cwd,
-      name: 'x',
-      silent: true,
-      noGit: true,
-      force: true,
-      confirm: yes,
-      logger,
-      platform: 'linux',
-    });
-
-    assert.equal(result.status, 'ok');
-    assert.equal(readlinkSync(join(cwd, 'CLAUDE.md')), 'CONTEXT.md', 'CLAUDE.md re-linked');
-    assert.ok(result.filesLinked.includes('CLAUDE.md'), 'CLAUDE.md in filesLinked');
-  } finally {
-    cleanup();
-  }
-});
-
-test('symlink at wrong target + no --force → throws', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    writeFileSync(join(cwd, 'CONTEXT.md'), '# ctx\n', 'utf8');
-    writeFileSync(join(cwd, 'old-context.md'), '# old\n', 'utf8');
-    symlinkSync('old-context.md', join(cwd, 'CLAUDE.md'));
-    symlinkSync('CONTEXT.md', join(cwd, 'AGENTS.md'));
-
-    const { logger } = silentLogger();
-    await assert.rejects(
-      () => executeInit({
-        cwd,
-        name: 'x',
-        silent: true,
-        noGit: true,
-        force: false,
-        confirm: yes,
-        logger,
-        platform: 'linux',
-      }),
-      /wrong target|re-link|--force/i,
-    );
-  } finally {
-    cleanup();
-  }
-});
-
-test('InitResult.filesWritten excludes skipped files', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    const { logger } = silentLogger();
-    const result = await executeInit({
-      cwd,
-      name: 'x',
-      silent: true,
-      noGit: true,
-      confirm: yes,
-      logger,
-      platform: 'linux',
-    });
-
-    assert.equal(result.status, 'ok');
-    // No file should appear in both filesWritten and filesSkipped
-    for (const f of result.filesSkipped) {
-      assert.ok(!result.filesWritten.includes(f), `${f} must not be in both filesWritten and filesSkipped`);
-    }
-  } finally {
-    cleanup();
-  }
-});
-
-test('InitResult.filesLinked populated on POSIX', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    const { logger } = silentLogger();
-    const result = await executeInit({
-      cwd,
-      name: 'x',
-      silent: true,
-      noGit: true,
-      confirm: yes,
-      logger,
-      platform: 'linux',
-    });
-
-    assert.equal(result.status, 'ok');
-    assert.ok(result.filesLinked.includes('CLAUDE.md'), 'CLAUDE.md in filesLinked');
-    assert.ok(result.filesLinked.includes('AGENTS.md'), 'AGENTS.md in filesLinked');
-    assert.ok(!result.filesWritten.includes('CLAUDE.md'), 'CLAUDE.md not in filesWritten');
-    assert.ok(!result.filesWritten.includes('AGENTS.md'), 'AGENTS.md not in filesWritten');
-  } finally {
-    cleanup();
-  }
-});
-
-test('contract: CLAUDE.md symlink target is the literal string "CONTEXT.md"', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    const { logger } = silentLogger();
-    await executeInit({ cwd, name: 'x', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
-    assert.equal(readlinkSync(join(cwd, 'CLAUDE.md')), 'CONTEXT.md');
-  } finally {
-    cleanup();
-  }
-});
-
-test('detectV04Workspace returns [] for an empty dir', () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    assert.deepEqual(detectV04Workspace(cwd), []);
-  } finally {
-    cleanup();
-  }
-});
-
-test('detectV04Workspace flags cwd/projects', () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    mkdirSync(join(cwd, 'projects'));
-    assert.deepEqual(detectV04Workspace(cwd), ['projects/']);
-  } finally {
-    cleanup();
-  }
-});
-
-test('detectV04Workspace flags <function>/projects (one level)', () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    mkdirSync(join(cwd, 'gtm', 'projects'), { recursive: true });
-    assert.deepEqual(detectV04Workspace(cwd), ['gtm/projects/']);
-  } finally {
-    cleanup();
-  }
-});
-
-test('detectV04Workspace flags <function>/<agent>/projects (two levels)', () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    mkdirSync(join(cwd, 'gtm', 'sdr', 'projects'), { recursive: true });
-    assert.deepEqual(detectV04Workspace(cwd), ['gtm/sdr/projects/']);
-  } finally {
-    cleanup();
-  }
-});
-
-test('detectV04Workspace skips node_modules/dist/build/coverage and hidden dirs', () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    for (const skip of ['node_modules', 'dist', 'build', 'coverage', 'lib', 'bin']) {
-      mkdirSync(join(cwd, skip, 'projects'), { recursive: true });
-    }
-    mkdirSync(join(cwd, '.forge', 'projects'), { recursive: true });
-    mkdirSync(join(cwd, '.git', 'projects'), { recursive: true });
-    assert.deepEqual(detectV04Workspace(cwd), []);
-  } finally {
-    cleanup();
-  }
-});
-
-test('detectV04Workspace returns multiple hits when multiple match', () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    mkdirSync(join(cwd, 'projects'));
-    mkdirSync(join(cwd, 'gtm', 'projects'), { recursive: true });
-    mkdirSync(join(cwd, 'gtm', 'sdr', 'projects'), { recursive: true });
-    const hits = detectV04Workspace(cwd);
-    assert.ok(hits.includes('projects/'));
-    assert.ok(hits.includes('gtm/projects/'));
-    assert.ok(hits.includes('gtm/sdr/projects/'));
-    assert.equal(hits.length, 3);
-  } finally {
-    cleanup();
-  }
-});
-
-test('executeInit refuses to scaffold on a v0.4 workspace (throws v04WorkspaceDetectedError)', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    mkdirSync(join(cwd, 'projects'));
-    const { logger } = silentLogger();
-    await assert.rejects(
-      () => executeInit({ cwd, name: 'x', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' }),
-      (err: Error & { exitCode?: number; header?: string; body?: string }) => {
-        assert.equal(err.exitCode, 2, 'exitCode is EXIT_CANCELLED');
-        assert.match(err.header ?? err.message, /detected v0\.4 workspace/i);
-        assert.match(err.body ?? err.message, /projects\//);
-        return true;
+    const result = await executeInit(
+      { cwd: root, name: 'acme', silent: true },
+      {
+        probe(targetRoot) {
+          const probe = probeWorkspace(targetRoot);
+          assert.deepEqual(probe.v2Signals, ['roster.yaml']);
+          assert.ok(probe.session?.candidates.some((token) => token.path === 'company'));
+          renameSync(candidate, moved);
+          mkdirSync(candidate);
+          return probe;
+        },
+        publish: publishCreateOnly,
+        removePublished: removePublishedWorkspaceFile,
       },
     );
-    // No scaffold should have been written
-    assert.ok(!existsSync(join(cwd, 'CONTEXT.md')), 'CONTEXT.md not created');
-    assert.ok(!existsSync(join(cwd, 'gtm', 'EXPERT.md')), 'scaffold not created');
+
+    assert.deepEqual(result.filesWritten, []);
+    assert.deepEqual(result.filesSkipped.sort(), ['ROSTER.md', 'roster.yaml']);
+    assert.equal(existsSync(join(root, 'ROSTER.md')), true);
+    assert.equal(existsSync(join(root, 'roster.yaml')), true);
   } finally {
     cleanup();
   }
 });
 
-test('executeInit substitutes PROJECT_NAME and DISPLAY_NAME into config/project.yaml', async () => {
-  const { cwd, cleanup } = makeTmp();
-  try {
-    const { logger } = silentLogger();
-    await executeInit({ cwd, name: 'acme-co', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
-
-    const yaml = readFileSync(join(cwd, 'config', 'project.yaml'), 'utf8');
-    assert.match(yaml, /^name: acme-co\b/m, 'name substituted');
-    assert.match(yaml, /^display_name: "acme-co"/m, 'display_name substituted (pass-through)');
-    assert.ok(!yaml.includes('{{PROJECT_NAME}}'), 'no PROJECT_NAME placeholder left');
-    assert.ok(!yaml.includes('{{DISPLAY_NAME}}'), 'no DISPLAY_NAME placeholder left');
-    // The `.template` suffix is stripped on output
-    assert.ok(!existsSync(join(cwd, 'config', 'project.yaml.template')), '.template suffix stripped');
-  } finally {
-    cleanup();
+test('init root replacement at every publication boundary rolls back exact created bytes', async () => {
+  for (const phase of [
+    'bootstrap-before',
+    'bootstrap-after',
+    'registry-before',
+    'registry-after',
+  ] as const) {
+    const parent = workspace();
+    const root = join(parent.root, 'workspace');
+    const moved = join(parent.root, 'workspace-original');
+    try {
+      mkdirSync(root);
+      let swapped = false;
+      const swap = (): void => {
+        if (swapped) return;
+        renameSync(root, moved);
+        mkdirSync(root);
+        swapped = true;
+      };
+      const error = await expectRosterError(
+        () => executeInit(
+          { cwd: root, name: 'acme', silent: true },
+          {
+            publish(targetRoot, relativePath, content, options) {
+              const target = relativePath === 'ROSTER.md' ? 'bootstrap' : 'registry';
+              return publishCreateOnly(targetRoot, relativePath, content, {
+                ...options,
+                beforePublish() {
+                  options?.beforePublish?.();
+                  if (phase === `${target}-before`) swap();
+                },
+                afterMutation() {
+                  options?.afterMutation?.();
+                  if (phase === `${target}-after`) swap();
+                },
+              });
+            },
+            removePublished: removePublishedWorkspaceFile,
+          },
+        ),
+        'UNSAFE_WORKSPACE_MARKER',
+        phase,
+      );
+      assert.equal(swapped, true, phase);
+      assert.deepEqual(error.details, { signals: ['.:probe-directory-identity-changed'] });
+      assert.equal(existsSync(join(root, 'ROSTER.md')), false, phase);
+      assert.equal(existsSync(join(root, 'roster.yaml')), false, phase);
+      assert.equal(existsSync(join(moved, 'ROSTER.md')), false, phase);
+      assert.equal(existsSync(join(moved, 'roster.yaml')), false, phase);
+    } finally {
+      parent.cleanup();
+    }
   }
 });
 
-test('contract: CONTEXT.md contains roster:managed:start orchestrator blockquote', async () => {
-  const { cwd, cleanup } = makeTmp();
+test('init unwinds exact creation tokens when publication throws after capture', async () => {
+  for (const latePath of ['ROSTER.md', 'roster.yaml'] as const) {
+    const { root, cleanup } = workspace();
+    try {
+      await assert.rejects(
+        () => executeInit(
+          { cwd: root, name: 'acme', silent: true },
+          {
+            publish(targetRoot, relativePath, content, options) {
+              const publication = publishCreateOnly(targetRoot, relativePath, content, options);
+              if (relativePath === latePath) throw new Error(`late failure after ${latePath}`);
+              return publication;
+            },
+            removePublished: removePublishedWorkspaceFile,
+          },
+        ),
+        new RegExp(`late failure after ${latePath.replace('.', '\\.')}`),
+      );
+      assert.equal(existsSync(join(root, 'ROSTER.md')), false, latePath);
+      assert.equal(existsSync(join(root, 'roster.yaml')), false, latePath);
+    } finally {
+      cleanup();
+    }
+  }
+});
+
+test('init discloses exact preserved tokens when transactional removal is incomplete', async () => {
+  for (const removalFailure of ['false', 'throw'] as const) {
+    const { root, cleanup } = workspace();
+    try {
+      const error = await expectRosterError(
+        () => executeInit(
+          { cwd: root, name: 'acme', silent: true },
+          {
+            publish(targetRoot, relativePath, content, options) {
+              const publication = publishCreateOnly(targetRoot, relativePath, content, options);
+              if (relativePath === 'roster.yaml') throw new Error('late registry failure');
+              return publication;
+            },
+            removePublished(targetRoot, relativePath, identity) {
+              if (relativePath === 'roster.yaml') {
+                if (removalFailure === 'false') return false;
+                const failure = new Error('removal failed') as NodeJS.ErrnoException;
+                failure.code = 'EIO';
+                throw failure;
+              }
+              return removePublishedWorkspaceFile(targetRoot, relativePath, identity);
+            },
+          },
+        ),
+        'WRITE_CONFLICT',
+        removalFailure,
+      );
+      assert.equal(error.details['path'], 'roster.yaml');
+      assert.equal(error.details['state'], 'unknown');
+      assert.deepEqual(error.details['preservedPaths'], ['roster.yaml', 'ROSTER.md']);
+      assert.equal(typeof error.details['expectedDev'], 'number');
+      assert.equal(typeof error.details['expectedIno'], 'number');
+      assert.equal(typeof error.details['expectedHash'], 'string');
+      assert.equal(existsSync(join(root, 'ROSTER.md')), true);
+      assert.equal(existsSync(join(root, 'roster.yaml')), true);
+    } finally {
+      cleanup();
+    }
+  }
+});
+
+test('unreadable scanned candidate roots are unsafe and init writes nothing', async () => {
+  const { root, cleanup } = workspace();
+  const candidate = join(root, 'company');
   try {
-    const { logger } = silentLogger();
-    await executeInit({ cwd, name: 'x', silent: true, noGit: true, confirm: yes, logger, platform: 'linux' });
-    const content = readFileSync(join(cwd, 'CONTEXT.md'), 'utf8');
-    assert.ok(
-      content.includes('> **You are operating inside a roster-managed workspace.**'),
-      'orchestrator blockquote present',
+    mkdirSync(candidate);
+    chmodSync(candidate, 0o000);
+    const probe = probeWorkspace(root);
+    assert.equal(probe.kind, 'unsafe');
+    assert.ok(probe.unsafeSignals.some((signal) => signal.startsWith('company:unreadable:')));
+    await expectRosterError(
+      () => executeInit({ cwd: root, name: 'acme', silent: true }),
+      'UNSAFE_WORKSPACE_MARKER',
     );
+    assert.equal(existsSync(join(root, 'roster.yaml')), false);
+    assert.equal(existsSync(join(root, 'ROSTER.md')), false);
+  } finally {
+    chmodSync(candidate, 0o755);
+    cleanup();
+  }
+});
+
+test('one coincidental managed v1 leaf is ignored but two exact leaves classify legacy', async () => {
+  const one = workspace();
+  const two = workspace();
+  try {
+    copyLegacyManagedFile(one.root, 'chief-of-staff/agent.md');
+    assert.equal(probeWorkspace(one.root).kind, 'none');
+
+    copyLegacyManagedFile(two.root, 'chief-of-staff/agent.md');
+    copyLegacyManagedFile(two.root, 'dreamer/agent.md');
+    const probe = probeWorkspace(two.root);
+    assert.equal(probe.kind, 'legacy');
+    assert.deepEqual(probe.legacySignals, [
+      'managed-v1:chief-of-staff/agent.md',
+      'managed-v1:dreamer/agent.md',
+    ]);
+  } finally {
+    one.cleanup();
+    two.cleanup();
+  }
+});
+
+test('exact managed v1 signatures retain mixed precedence over incidental uncertainty', async () => {
+  const { root, cleanup } = workspace();
+  try {
+    await executeInit({ cwd: root, name: 'acme', silent: true });
+    copyLegacyManagedFile(root, 'chief-of-staff/agent.md');
+    copyLegacyManagedFile(root, 'dreamer/agent.md');
+    mkdirSync(join(root, 'scripts'));
+    symlinkSync('../ROSTER.md', join(root, 'scripts', 'new-agent.sh'));
+
+    const probe = probeWorkspace(root);
+    assert.equal(probe.kind, 'mixed');
+    assert.deepEqual(probe.legacySignals, [
+      'managed-v1:chief-of-staff/agent.md',
+      'managed-v1:dreamer/agent.md',
+    ]);
+    assert.deepEqual(probe.unsafeSignals, []);
+    assert.deepEqual(probe.inconclusiveSignals, ['scripts/new-agent.sh:symlink']);
   } finally {
     cleanup();
   }
 });
 
-// ROS-106: `roster init` output must disambiguate workspace-name-vs-subdirectory.
-// Pin intent (the user-facing phrases), not the exact rendered line — chalk colors
-// and surrounding decoration are free to evolve.
-test('roster init output disambiguates workspace name from a subdirectory (ROS-106)', async () => {
-  const { cwd, cleanup } = makeTmp();
+test('mixed v2 and legacy markers are refused distinctly', async () => {
+  const { root, cleanup } = workspace();
   try {
-    const { logger, logs } = silentLogger();
-    await executeInit({
-      cwd,
-      name: 'demo-workspace',
-      silent: false,
-      noGit: true,
-      confirm: yes,
-      logger,
-      platform: 'linux',
+    await executeInit({ cwd: root, name: 'acme', silent: true });
+    mkdirSync(join(root, 'config'));
+    writeFileSync(join(root, 'config', 'project.yaml'), 'name: legacy\n');
+    const error = await expectRosterError(
+      () => executeInit({ cwd: root, name: 'acme', silent: true }),
+      'MIXED_WORKSPACE',
+    );
+    assert.deepEqual(error.details, {
+      v2_signals: ['roster.yaml'],
+      legacy_signals: ['config/project.yaml'],
     });
-    // Strip ANSI escape codes so assertions stay stable under FORCE_COLOR / TTY runs.
-    const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, '');
-    const output = stripAnsi(logs.join('\n'));
-    assert.match(
-      output,
-      /\(current directory\)/,
-      'Initialized line must say "(current directory)" so users do not try to cd into a subdir',
-    );
-    assert.match(
-      output,
-      /already in this directory/,
-      'Next: line must reassure the user they do not need to cd',
-    );
-    // Negative: the previous ambiguous phrasing must not survive (regression guard).
-    assert.doesNotMatch(
-      output,
-      /✓ Initialized demo-workspace in /,
-      'old "Initialized <name> in <path>" phrasing must be gone (read as if subdir was created)',
-    );
   } finally {
     cleanup();
+  }
+});
+
+test('unsafe workspace marker types are refused without following symlinks', async () => {
+  const { root, cleanup } = workspace();
+  const outside = workspace();
+  try {
+    writeFileSync(join(outside.root, 'roster.yaml'), 'outside\n');
+    symlinkSync(join(outside.root, 'roster.yaml'), join(root, 'roster.yaml'));
+    const error = await expectRosterError(
+      () => executeInit({ cwd: root, name: 'acme', silent: true }),
+      'UNSAFE_WORKSPACE_MARKER',
+    );
+    assert.deepEqual(error.details, { signals: ['roster.yaml:symlink'] });
+    assert.equal(readFileSync(join(outside.root, 'roster.yaml'), 'utf8'), 'outside\n');
+    assert.deepEqual(readdirSync(root), ['roster.yaml']);
+  } finally {
+    outside.cleanup();
+    cleanup();
+  }
+});
+
+test('a symlinked workspace root is classified unsafe before any publication', async () => {
+  const parent = workspace();
+  const target = workspace();
+  const link = join(parent.root, 'workspace-link');
+  try {
+    symlinkSync(target.root, link);
+    const error = await expectRosterError(
+      () => executeInit({ cwd: link, name: 'acme', silent: true }),
+      'UNSAFE_WORKSPACE_MARKER',
+    );
+    assert.deepEqual(error.details, { signals: ['.:symlink'] });
+    assert.deepEqual(readdirSync(target.root), []);
+  } finally {
+    target.cleanup();
+    parent.cleanup();
   }
 });

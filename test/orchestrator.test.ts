@@ -91,17 +91,20 @@ test('orchestrator: body bans subscription-unsafe primitives outside audit-opt-o
 // only — they do NOT ban roster/ globally (it is a legitimate path reference).
 // ─────────────────────────────────────────────────────────────────────────────
 
-test('orchestrator: Working-directory guard identifies a workspace by config/project.yaml alone', () => {
+test('orchestrator: Working-directory guard quarantines legacy behavior behind config/project.yaml', () => {
   const content = readFileSync(orchestratorSrc, 'utf8');
-  assert.ok(
-    !/must contain config\/project\.yaml and roster\//.test(content),
-    'old "must contain config/project.yaml and roster/" abort message is gone',
-  );
   assert.match(
     content,
-    /must contain config\/project\.yaml\)/,
-    'abort message now requires only config/project.yaml',
+    /`config\/project\.yaml` alone marks a legacy v1 workspace/,
+    'legacy mode still resolves through its exact v1 marker',
   );
+});
+
+test('orchestrator: v2 branch never invokes legacy scheduler or pending surfaces', () => {
+  const content = readFileSync(orchestratorSrc, 'utf8');
+  assert.match(content, /If `roster\.yaml` exists, stop/);
+  assert.match(content, /do not invoke legacy schedule, pending, review, or workspace scripts/i);
+  assert.match(content, /#349/, 'points to thin shared host activation');
 });
 
 test('orchestrator: distinguishes .roster/ metadata from the runtime roster/ tree', () => {

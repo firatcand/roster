@@ -124,7 +124,7 @@ measure "roster install (warm)" 2.0 \
 echo ""
 echo "===> 5. roster init (≤ 3s)"
 cd "$WORKSPACE"
-measure "roster init" 3.0 "$ROSTER_BIN" init perf-test --silent --no-git
+measure "roster init" 3.0 "$ROSTER_BIN" init perf-test --silent
 
 # 6. roster doctor — audit the CLAUDE_HOME we just populated in step 4
 #    (HOME + ROSTER_CLAUDE_HOME redirect → known-good state, exit 0).

@@ -6,24 +6,25 @@ test('defaults', () => {
   const p = parseUpdateArgs([]);
   assert.equal(p.kind, 'ok');
   if (p.kind !== 'ok') return;
-  assert.deepEqual([p.json, p.cwd, p.excludes], [false, undefined, []]);
+  assert.deepEqual([p.json, p.cwd], [false, undefined]);
 });
 
-test('--json --cwd --exclude (comma + repeat)', () => {
-  const p = parseUpdateArgs(['--json', '--cwd', '/tmp/ws', '--exclude', 'a,b', '--exclude', 'c']);
+test('--json and --cwd are the complete v2 update grammar', () => {
+  const p = parseUpdateArgs(['--json', '--cwd', '/tmp/ws']);
   assert.equal(p.kind, 'ok');
   if (p.kind !== 'ok') return;
   assert.equal(p.json, true);
   assert.equal(p.cwd, '/tmp/ws');
-  assert.deepEqual(p.excludes, ['a', 'b', 'c']);
 });
 
 test('--cwd without value errors', () => {
   assert.equal(parseUpdateArgs(['--cwd']).kind, 'err');
 });
 
-test('--exclude without value errors', () => {
-  assert.equal(parseUpdateArgs(['--exclude']).kind, 'err');
+test('--exclude is rejected because v2 update never touches authored records', () => {
+  const parsed = parseUpdateArgs(['--exclude', 'guidelines']);
+  assert.equal(parsed.kind, 'err');
+  if (parsed.kind === 'err') assert.match(parsed.message, /unknown flag '--exclude'/);
 });
 
 test('unknown flag errors', () => {

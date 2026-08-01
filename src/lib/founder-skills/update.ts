@@ -4,11 +4,16 @@ import { promisify } from 'node:util';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import chalk from 'chalk';
 import { atomicWriteFile } from '../schedule-yaml.ts';
-import { RosterError, EXIT_ERROR, workspaceRequiredError } from '../errors.ts';
-import { detectWorkspace } from '../install-scope.ts';
+import { RosterError, EXIT_ERROR } from '../errors.ts';
 import { founderManifestSchema, normalizeManifest } from './manifest-schema.ts';
 import { parseSource } from './installer.ts';
-import { manifestPath, syncFounderSkills, type SyncResult, type SyncOptions } from './sync.ts';
+import {
+  assertFounderSkillsWorkspace,
+  manifestPath,
+  syncFounderSkills,
+  type SyncResult,
+  type SyncOptions,
+} from './sync.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -74,11 +79,9 @@ function rewriteManifestRef(workspaceRoot: string, ref: string): void {
 }
 
 export async function updateFounderSkills(opts: UpdateOptions): Promise<SyncResult> {
+  assertFounderSkillsWorkspace(opts.cwd);
   if (!existsSync(manifestPath(opts.cwd))) {
     return { status: 'no-manifest' };
-  }
-  if (!detectWorkspace(opts.cwd)) {
-    throw workspaceRequiredError(opts.cwd);
   }
   if (opts.latest) {
     const raw = parseYaml(readFileSync(manifestPath(opts.cwd), 'utf8')) as Record<string, unknown>;

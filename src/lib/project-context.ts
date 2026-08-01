@@ -3,6 +3,13 @@ import { join } from 'node:path';
 import { ROSTER_ROOT } from './paths.ts';
 import { entryAtPath, probeSymlinkSupport, safeRead, safeReadlink } from './fs-utils.ts';
 
+export const LEGACY_PROJECT_CONTEXT_PATH = 'CONTEXT.md';
+export const LEGACY_PROJECT_CONTEXT_LINK_PATHS = ['CLAUDE.md', 'AGENTS.md'] as const;
+export const LEGACY_PROJECT_CONTEXT_OWNED_PATHS = [
+  LEGACY_PROJECT_CONTEXT_PATH,
+  ...LEGACY_PROJECT_CONTEXT_LINK_PATHS,
+] as const;
+
 function substitute(template: string, vars: Record<string, string>): string {
   return template.replace(/\{\{(\w+)\}\}/g, (_, key: string) => vars[key] ?? `{{${key}}}`);
 }
@@ -242,7 +249,7 @@ export function writeContextAndLinks(
   };
 
   const fresh = renderTemplate(projectName);
-  const contextPath = join(cwd, 'CONTEXT.md');
+  const contextPath = join(cwd, LEGACY_PROJECT_CONTEXT_PATH);
 
   let effectiveContent: string;
 
@@ -253,20 +260,20 @@ export function writeContextAndLinks(
     effectiveContent = merged;
     if (merged !== existing) {
       writeFileSync(contextPath, merged, 'utf8');
-      result.filesUpdated.push('CONTEXT.md');
+      result.filesUpdated.push(LEGACY_PROJECT_CONTEXT_PATH);
     } else {
-      result.filesSkipped.push('CONTEXT.md');
+      result.filesSkipped.push(LEGACY_PROJECT_CONTEXT_PATH);
     }
   } else {
     writeFileSync(contextPath, fresh, 'utf8');
-    result.filesWritten.push('CONTEXT.md');
+    result.filesWritten.push(LEGACY_PROJECT_CONTEXT_PATH);
     effectiveContent = fresh;
   }
 
   const platform = opts.platform ?? process.platform;
 
   if (platform === 'win32') {
-    for (const name of ['CLAUDE.md', 'AGENTS.md'] as const) {
+    for (const name of LEGACY_PROJECT_CONTEXT_LINK_PATHS) {
       writeFileSync(join(cwd, name), effectiveContent, 'utf8');
       result.filesWritten.push(name);
     }
@@ -275,7 +282,7 @@ export function writeContextAndLinks(
 
   // POSIX: probe symlink support ONCE before creating either link
   if (!probeSymlinkSupport(cwd)) {
-    for (const name of ['CLAUDE.md', 'AGENTS.md'] as const) {
+    for (const name of LEGACY_PROJECT_CONTEXT_LINK_PATHS) {
       writeFileSync(join(cwd, name), effectiveContent, 'utf8');
       result.filesWritten.push(name);
     }
@@ -285,8 +292,8 @@ export function writeContextAndLinks(
     return result;
   }
 
-  for (const name of ['CLAUDE.md', 'AGENTS.md'] as const) {
-    ensureSymlink(cwd, name, 'CONTEXT.md', opts.force, result);
+  for (const name of LEGACY_PROJECT_CONTEXT_LINK_PATHS) {
+    ensureSymlink(cwd, name, LEGACY_PROJECT_CONTEXT_PATH, opts.force, result);
   }
 
   return result;
@@ -316,7 +323,7 @@ export type WorkspaceAuditResult = {
 };
 
 export function auditWorkspace(cwd: string, opts?: { platform?: string }): WorkspaceAuditResult {
-  const contextPath = join(cwd, 'CONTEXT.md');
+  const contextPath = join(cwd, LEGACY_PROJECT_CONTEXT_PATH);
   const contextMdExists = existsSync(contextPath);
   const items: WorkspaceAuditItem[] = [];
   const warnings: string[] = [];
@@ -326,7 +333,7 @@ export function auditWorkspace(cwd: string, opts?: { platform?: string }): Works
     return { cwd, contextMdExists: false, items: [], warnings, ok: true };
   }
 
-  for (const linkName of ['CLAUDE.md', 'AGENTS.md'] as const) {
+  for (const linkName of LEGACY_PROJECT_CONTEXT_LINK_PATHS) {
     const linkPath = join(cwd, linkName);
     const entry = entryAtPath(linkPath);
 
@@ -372,10 +379,10 @@ export function auditWorkspace(cwd: string, opts?: { platform?: string }): Works
       continue;
     }
 
-    if (actual === 'CONTEXT.md') {
+    if (actual === LEGACY_PROJECT_CONTEXT_PATH) {
       items.push({ name: linkName, status: 'ok' });
     } else {
-      items.push({ name: linkName, status: 'wrong-target', reason: `points to '${actual}', expected 'CONTEXT.md'` });
+      items.push({ name: linkName, status: 'wrong-target', reason: `points to '${actual}', expected '${LEGACY_PROJECT_CONTEXT_PATH}'` });
     }
   }
 

@@ -2,16 +2,21 @@
 import chalk from 'chalk';
 import { homedir } from 'node:os';
 import { join, relative } from 'node:path';
+import { stripVTControlCharacters } from 'node:util';
 import { getPackageVersion, ROSTER_ROOT } from '../lib/paths.ts';
 import { allTools, detectTools, type Tool, type ToolKey } from '../lib/tools.ts';
-import { installToTool, type InstallResult } from '../lib/install.ts';
+import {
+  installToTool,
+  unsupportedV2ProjectHostError,
+  type InstallResult,
+} from '../lib/install.ts';
 import { parseInstallArgs } from '../lib/install-args.ts';
 import {
-  detectWorkspace,
   defaultScopeForContext,
   toolForScope,
   type Scope,
 } from '../lib/install-scope.ts';
+import { probeWorkspace } from '../lib/workspace-probe.ts';
 import { parseDoctorArgs } from '../lib/doctor-args.ts';
 import { parseScheduleArgs } from '../lib/schedule-args.ts';
 import { parseReviewArgs } from '../lib/review-args.ts';
@@ -33,20 +38,24 @@ import {
 import { executeReview } from '../commands/review.ts';
 import { executeSecondOpinion } from '../commands/second-opinion.ts';
 import { parseSecondOpinionArgs } from '../lib/second-opinion-args.ts';
-import { executeSkillsSync, executeSkillsUpdate, renderSyncResult } from '../commands/skills.ts';
+import { executeSkillsSync, executeSkillsUpdate } from '../commands/skills.ts';
 import { parseSkillsArgs } from '../lib/skills-args.ts';
 import { executeUpgradeCommand } from '../commands/upgrade.ts';
 import { parseUpgradeArgs } from '../lib/upgrade-args.ts';
 import { executeUpdate } from '../commands/update.ts';
 import { parseUpdateArgs } from '../lib/update-args.ts';
-import { syncFounderSkills } from '../lib/founder-skills/sync.ts';
-import { realInstaller } from '../lib/founder-skills/installer.ts';
 import { executeHooksInstall } from '../commands/hooks.ts';
 import { executeMigrateCodexSkills, executeMigrateFromAgentTeam } from '../commands/migrate.ts';
 import { runTask } from '../commands/task.ts';
 import { runRun } from '../commands/run.ts';
 import { executeOpsSetup } from '../commands/ops.ts';
 import { parseOpsArgs } from '../lib/ops-args.ts';
+import { executeScaffold } from '../commands/scaffold.ts';
+import { executeDiscover } from '../commands/discover.ts';
+import { executeValidate } from '../commands/validate.ts';
+import { parseScaffoldArgs } from '../lib/scaffold-args.ts';
+import { parseDiscoverArgs } from '../lib/discover-args.ts';
+import { parseValidateArgs } from '../lib/validate-args.ts';
 import { parseBrainArgs } from '../lib/brain-args.ts';
 import {
   executeBrainInit,
@@ -75,18 +84,23 @@ import {
   RosterError,
   isRosterError,
   noToolsError,
+  legacyWorkspaceError,
+  mixedWorkspaceError,
   renderError,
   toolsNotDetectedError,
   unexpectedError,
-  userCancelledInit,
+  unsafeWorkspaceMarkerError,
   userCancelledInstall,
   workspaceRequiredError,
 } from '../lib/errors.ts';
 
-type Subcommand = 'install' | 'init' | 'doctor' | 'schedule' | 'review' | 'second-opinion' | 'hooks' | 'migrate' | 'pending' | 'skills' | 'upgrade' | 'update' | 'brain' | 'task' | 'ops' | 'run';
+type Subcommand = 'install' | 'init' | 'scaffold' | 'discover' | 'validate' | 'doctor' | 'schedule' | 'review' | 'second-opinion' | 'hooks' | 'migrate' | 'pending' | 'skills' | 'upgrade' | 'update' | 'brain' | 'task' | 'ops' | 'run';
 const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'install',
   'init',
+  'scaffold',
+  'discover',
+  'validate',
   'doctor',
   'schedule',
   'review',
@@ -117,7 +131,7 @@ function displayPath(path: string, cwd: string): string {
 function printBanner(version: string): void {
   console.log();
   console.log(`${chalk.bold.cyan('roster')}${chalk.dim(` v${version}`)}`);
-  console.log(chalk.dim('Multi-agent workspace scaffolder for Claude Code, Codex CLI, and Gemini.'));
+  console.log(chalk.dim('Agent-facing workspace and context scaffolder for Claude Code and Codex.'));
   console.log();
 }
 
@@ -126,11 +140,14 @@ function printHelp(version: string): void {
   const lines = [
     chalk.bold('Usage:'),
     `  roster                       ${chalk.dim('Interactive install (alias of `roster install`)')}`,
-    `  roster install               ${chalk.dim('Copy skills + agents into detected AI tool config dirs')}`,
-    `  roster init [name]           ${chalk.dim('Scaffold a multi-agent workspace in the current dir')}`,
-    `  roster update                ${chalk.dim('Bring this workspace current: install + hooks install + upgrade in one step')}`,
-    `  roster upgrade [--dry-run]   ${chalk.dim('Refresh scaffold files to the installed roster (guidelines/ excluded; --exclude <glob>)')}`,
-    `  roster doctor                ${chalk.dim('Audit installed skills + agents per AI tool')}`,
+    `  roster install               ${chalk.dim('Generate project activation; user scope retains quarantined legacy installation')}`,
+    `  roster init [workspace-id] [--name <workspace-id>]  ${chalk.dim('Create a sparse workspace: roster.yaml + ROSTER.md')}`,
+    `  roster scaffold <kind> <id>  ${chalk.dim('Create one registered function, agent, plan, subagent, guideline, tool-use, or lesson')}`,
+    `  roster discover [query]      ${chalk.dim('Find compact qualified workspace records (--kind, --scope, --exact, --full, --json)')}`,
+    `  roster validate [target]     ${chalk.dim('Validate registry, paths, ownership, and generated drift (--json)')}`,
+    `  roster update                ${chalk.dim('Synchronize enabled v2 generated activation without touching authored records')}`,
+    `  roster upgrade [--dry-run]   ${chalk.dim('Legacy eager-scaffold command; v2 workspaces use roster update')}`,
+    `  roster doctor                ${chalk.dim('Audit v2 registry, generated activation, filesystem safety, and secrets')}`,
     `  roster schedule validate     ${chalk.dim('Validate roster/<function>/schedules.yaml files')}`,
     `  roster schedule install      ${chalk.dim('Register a schedule (Claude: UI hand-off; Codex: ROS-35)')}`,
     `  roster schedule list         ${chalk.dim('List all registered schedules across roster/<function>/')}`,
@@ -167,15 +184,22 @@ function printHelp(version: string): void {
     chalk.bold('Flags:'),
     `  -h, --help                   ${chalk.dim('Show this help')}`,
     `  -v, --version                ${chalk.dim('Print version and exit')}`,
-    `  --silent                     ${chalk.dim('Suppress non-error output (install)')}`,
+    `  --silent                     ${chalk.dim('Suppress non-error output (init/install)')}`,
     `  --verbose                    ${chalk.dim('Log each file path written (install)')}`,
-    `  --all                        ${chalk.dim('Install to every detected tool (alias of --tool all) (install)')}`,
+    `  --all                        ${chalk.dim('Install to every detected tool (install)')}`,
     `  --tool <name[,name...]>      ${chalk.dim('Install to one or more tools: claude | codex | gemini (install)')}`,
     `  --scope <project|user>       ${chalk.dim('Install at workspace-local or home-dir scope (install)')}`,
+    `  --scope <kind:qualified-id>  ${chalk.dim('Select an owning function, agent, or plan (scaffold/discover)')}`,
+    `  --function <function-id>     ${chalk.dim('Alias function ownership/filter scope (scaffold/discover)')}`,
+    `  --agent <function/agent>     ${chalk.dim('Alias agent ownership/filter scope (scaffold/discover)')}`,
+    `  --name <workspace-id>        ${chalk.dim('Set the sparse workspace identity (init)')}`,
+    `  --purpose <text>             ${chalk.dim('Seed the authored record purpose (scaffold)')}`,
+    `  --kind <record-kind>         ${chalk.dim('Filter discovery to one workspace record kind')}`,
+    `  --exact                      ${chalk.dim('Require one exact qualified discovery match')}`,
+    `  --full                       ${chalk.dim('Include bounded authored content in discovery output')}`,
     `  --yes, -y                    ${chalk.dim('Skip prompts; use safe defaults (install)')}`,
     `  --tool <name>                ${chalk.dim('Required scheduler tool: claude | codex (schedule install)')}`,
-    `  --migrate                    ${chalk.dim('Upgrade pre-CONTEXT.md workspace, preserving CLAUDE.md content (init)')}`,
-    `  --json                       ${chalk.dim('Emit machine-readable JSON (doctor, schedule validate)')}`,
+    `  --json                       ${chalk.dim('Emit machine-readable JSON (install/scaffold/discover/validate/update/doctor and supported legacy commands)')}`,
     `  --fix                        ${chalk.dim('Auto-fix broken symlinks + .env permissions (doctor)')}`,
     `  --cwd <dir>                  ${chalk.dim('Run schedule validate against a different cwd')}`,
     `  --host <name>                ${chalk.dim('Reviewer host: claude | codex | gemini (second-opinion; default: first installed ≠ recommended by skill)')}`,
@@ -212,6 +236,13 @@ function toolHints(tools: ReadonlyArray<Tool>): ReadonlyArray<{ name: string; in
 }
 
 function summarizeInstall(tool: Tool, result: InstallResult, cwd: string): string {
+  if (result.activation !== undefined) {
+    const paths = result.activation.files
+      .filter((file) => file.status !== 'preserved-authored')
+      .map((file) => file.path)
+      .join(', ');
+    return `${chalk.green('✓')} ${chalk.bold(tool.name)} — project activation ${result.activation.assurance}${paths.length === 0 ? '' : ` → ${paths}`}`;
+  }
   const skillsLine = `${result.skillsCount} skills → ${displayPath(result.skillsTarget, cwd)}`;
   const agentsLine = result.agentsTarget
     ? `${result.agentsCount} agents → ${displayPath(result.agentsTarget, cwd)}`
@@ -273,7 +304,7 @@ async function promptForScope(
   const { select } = await import('@inquirer/prompts');
   const projectHint = workspaceExists
     ? 'workspace-local — skills land in the host-native project directory'
-    : 'workspace-local — REQUIRES roster init (config/project.yaml not found here)';
+    : 'workspace-local — REQUIRES roster init (roster.yaml not found here)';
   try {
     return await select<Scope>({
       message: 'Install at which scope?',
@@ -305,16 +336,19 @@ async function runInstall(args: readonly string[]): Promise<number> {
       body: '',
       remedy: `  Run ${chalk.bold('roster --help')} for usage.`,
       exitCode: EXIT_ERROR,
+      code: 'INVALID_ARGS',
+      details: {},
     });
   }
-  const { silent, verbose, yes, scope: requestedScope, target } = parsed;
+  const { silent, verbose, yes, json, scope: requestedScope, target } = parsed;
   const version = getPackageVersion();
 
-  if (!silent) printBanner(version);
+  if (!silent && !json) printBanner(version);
 
   const cwd = process.cwd();
   const isTTY = process.stdin.isTTY === true;
-  const workspaceExists = detectWorkspace(cwd);
+  const workspaceProbe = probeWorkspace(cwd);
+  const workspaceExists = workspaceProbe.kind === 'v2';
   // Non-TTY contexts (CI, pipes) behave as if --yes was passed: skip prompts,
   // pick safe defaults, decline symlink-replacement deterministically. The
   // --yes flag opts into the same mode from an interactive shell.
@@ -322,34 +356,23 @@ async function runInstall(args: readonly string[]): Promise<number> {
 
   const detected = detectTools();
 
-  // Resolve effective tools.
-  let targetTools: Tool[];
-  if (target.mode === 'all') {
-    if (detected.length === 0) throw noToolsError(toolHints(allTools()));
-    targetTools = detected;
-  } else if (target.mode === 'tools') {
-    const detectedKeys = detected.map((t) => t.key);
-    const missing = target.keys.filter((k) => !detectedKeys.includes(k));
-    if (missing.length > 0) {
-      throw toolsNotDetectedError(target.keys, detectedKeys);
+  // An implicit/project install must never reinterpret a legacy, mixed, or
+  // unsafe workspace as "no workspace" and silently fall back to user scope.
+  // Explicit user scope remains the quarantined pre-v2 behavior.
+  if (requestedScope !== 'user') {
+    if (workspaceProbe.kind === 'legacy') {
+      throw legacyWorkspaceError(workspaceProbe.legacySignals);
     }
-    targetTools = detected.filter((t) => target.keys.includes(t.key));
-  } else {
-    // mode: 'interactive'
-    if (detected.length === 0) throw noToolsError(toolHints(allTools()));
-    if (nonInteractive) {
-      targetTools = detected;
-    } else {
-      const undetected = allTools().filter(
-        (t) => !detected.some((d) => d.key === t.key),
-      );
-      const picked = await promptForTools(detected, undetected);
-      if (picked === null) throw userCancelledInstall();
-      targetTools = picked;
+    if (workspaceProbe.kind === 'mixed') {
+      throw mixedWorkspaceError(workspaceProbe.v2Signals, workspaceProbe.legacySignals);
+    }
+    if (workspaceProbe.kind === 'unsafe') {
+      throw unsafeWorkspaceMarkerError(workspaceProbe.unsafeSignals);
     }
   }
 
-  // Resolve effective scope.
+  // Scope is resolved before tools because an explicit v2 project host is a
+  // declaration, not a claim that the same host already has a user-level home.
   let scope: Scope;
   if (requestedScope !== null) {
     scope = requestedScope;
@@ -366,6 +389,40 @@ async function runInstall(args: readonly string[]): Promise<number> {
     throw workspaceRequiredError(cwd);
   }
 
+  const explicitV2ProjectHost = scope === 'project' && workspaceExists;
+
+  // Resolve effective tools.
+  let targetTools: Tool[];
+  if (target.mode === 'all') {
+    if (detected.length === 0) throw noToolsError(toolHints(allTools()));
+    targetTools = detected;
+  } else if (target.mode === 'tools') {
+    const available = explicitV2ProjectHost ? allTools() : detected;
+    const availableKeys = available.map((t) => t.key);
+    const missing = target.keys.filter((k) => !availableKeys.includes(k));
+    if (missing.length > 0) {
+      throw toolsNotDetectedError(target.keys, detected.map((tool) => tool.key));
+    }
+    targetTools = available.filter((t) => target.keys.includes(t.key));
+  } else {
+    // mode: 'interactive'
+    if (detected.length === 0) throw noToolsError(toolHints(allTools()));
+    if (nonInteractive) {
+      targetTools = detected;
+    } else {
+      const undetected = allTools().filter(
+        (t) => !detected.some((d) => d.key === t.key),
+      );
+      const picked = await promptForTools(detected, undetected);
+      if (picked === null) throw userCancelledInstall();
+      targetTools = picked;
+    }
+  }
+
+  if (explicitV2ProjectHost && targetTools.some((tool) => tool.key === 'gemini')) {
+    throw unsupportedV2ProjectHostError('gemini');
+  }
+
   const skillsSrc = join(ROSTER_ROOT, 'skills');
   const agentsSrc = join(ROSTER_ROOT, 'agents');
 
@@ -373,6 +430,7 @@ async function runInstall(args: readonly string[]): Promise<number> {
   // to ask on). Preserves ROS-16 behavior.
   const confirmFn = nonInteractive ? async (): Promise<boolean> => false : undefined;
 
+  const installed: Array<{ host: ToolKey; result: InstallResult }> = [];
   for (const tool of targetTools) {
     const scopedTool = scope === 'project' ? toolForScope(tool, 'project', cwd) : tool;
     const result = await installToTool(scopedTool, {
@@ -380,23 +438,30 @@ async function runInstall(args: readonly string[]): Promise<number> {
       agents: agentsSrc,
       silent: !verbose,
       scope,
+      ...(scope === 'project' ? { projectRoot: cwd } : {}),
       ...(confirmFn ? { confirm: confirmFn } : {}),
     });
-    if (!silent) console.log(summarizeInstall(scopedTool, result, cwd));
+    installed.push({ host: tool.key, result });
+    if (!silent && !json) console.log(summarizeInstall(scopedTool, result, cwd));
   }
 
-  // Auto-sync founder-skills when a workspace declares them. Project-scope only:
-  // founder-skills are always project-local (never global), so a user-scope
-  // install must not touch them. A hard sync failure surfaces (non-zero) rather
-  // than silently leaving the workspace half-provisioned.
-  if (scope === 'project') {
-    const syncResult = await syncFounderSkills({ cwd, installer: realInstaller });
-    if (!silent && syncResult.status !== 'no-manifest') {
-      console.log(renderSyncResult(syncResult).join('\n'));
-    }
+  if (json) {
+    console.log(JSON.stringify({
+      ok: true,
+      scope,
+      hosts: installed.map(({ host, result }) => ({
+        host,
+        ...(result.activation === undefined
+          ? {
+              skills_count: result.skillsCount,
+              agents_count: result.agentsCount,
+            }
+          : { activation: result.activation }),
+      })),
+    }));
   }
 
-  if (!silent) {
+  if (!silent && !json) {
     console.log();
     if (scope === 'project') {
       console.log(
@@ -412,24 +477,121 @@ async function runInstall(args: readonly string[]): Promise<number> {
 }
 
 async function runInit(args: readonly string[]): Promise<number> {
-  const silent = args.includes('--silent');
-  const force = args.includes('--force');
-  const migrate = args.includes('--migrate');
-  const noGit = args.includes('--no-git') || args.includes('--skip-git');
-  const name = args.find((a) => !a.startsWith('-'));
+  let silent = false;
+  let workspaceId: string | undefined;
+  let name: string | undefined;
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
+    if (arg === '--silent') {
+      silent = true;
+      continue;
+    }
+    if (arg === '--name') {
+      const value = args[++index];
+      if (value === undefined || value.startsWith('-')) {
+        throw new RosterError({
+          header: `${chalk.red.bold('roster:')} --name requires a workspace id`,
+          body: '',
+          remedy: '  Usage: roster init [workspace-id] [--name <workspace-id>] [--silent]',
+          exitCode: EXIT_ERROR,
+        });
+      }
+      name = value;
+      continue;
+    }
+    if (arg.startsWith('--name=')) {
+      name = arg.slice('--name='.length);
+      continue;
+    }
+    if (arg.startsWith('-')) {
+      throw new RosterError({
+        header: `${chalk.red.bold('roster:')} unsupported init flag ${chalk.yellow(`'${arg}'`)}`,
+        body: '  Roster v2 does not overlay, force-refresh, migrate, or initialize Git during init.',
+        remedy: '  Usage: roster init [workspace-id] [--name <workspace-id>] [--silent]',
+        exitCode: EXIT_ERROR,
+      });
+    }
+    if (workspaceId !== undefined) {
+      throw new RosterError({
+        header: `${chalk.red.bold('roster:')} init accepts one workspace id`,
+        body: `  Unexpected extra argument: ${arg}`,
+        remedy: '  Usage: roster init [workspace-id] [--name <workspace-id>] [--silent]',
+        exitCode: EXIT_ERROR,
+      });
+    }
+    workspaceId = arg;
+  }
 
   if (!silent) printBanner(getPackageVersion());
 
-  const result = await executeInit({
+  await executeInit({
     cwd: process.cwd(),
-    name,
     silent,
-    force,
-    migrate,
-    noGit,
+    ...(workspaceId !== undefined ? { workspaceId } : {}),
+    ...(name !== undefined ? { name } : {}),
   });
-  if (result.status === 'cancelled') throw userCancelledInit();
   return EXIT_OK;
+}
+
+function commandParseError(
+  command: 'scaffold' | 'discover' | 'validate',
+  message: string,
+  json: boolean,
+): number {
+  const remedy = `Run roster ${command} --help for usage.`;
+  if (json) {
+    console.log(JSON.stringify({ ok: false, code: 'INVALID_ARGS', message, remedy, details: {} }));
+    return EXIT_ERROR;
+  }
+  throw new RosterError({
+    header: `${chalk.red.bold('roster:')} ${message}`,
+    body: '',
+    remedy: `  ${remedy}`,
+    exitCode: EXIT_ERROR,
+  });
+}
+
+function runScaffold(args: readonly string[]): number {
+  const parsed = parseScaffoldArgs(args);
+  if (parsed.kind === 'err') {
+    return commandParseError('scaffold', parsed.message, args.includes('--json'));
+  }
+  return executeScaffold({
+    cwd: process.cwd(),
+    recordKind: parsed.recordKind,
+    id: parsed.id,
+    purpose: parsed.purpose,
+    json: parsed.json,
+    ...(parsed.scope !== undefined ? { scope: parsed.scope } : {}),
+  });
+}
+
+function runDiscover(args: readonly string[]): number {
+  const parsed = parseDiscoverArgs(args);
+  if (parsed.kind === 'err') {
+    return commandParseError('discover', parsed.message, args.includes('--json'));
+  }
+  return executeDiscover({
+    cwd: process.cwd(),
+    exact: parsed.exact,
+    full: parsed.full,
+    json: parsed.json,
+    ...(parsed.query !== undefined ? { query: parsed.query } : {}),
+    ...(parsed.recordKind !== undefined ? { recordKind: parsed.recordKind } : {}),
+    ...(parsed.scope !== undefined ? { scope: parsed.scope } : {}),
+  });
+}
+
+function runValidate(args: readonly string[]): number {
+  const parsed = parseValidateArgs(args);
+  if (parsed.kind === 'err') {
+    return commandParseError('validate', parsed.message, args.includes('--json'));
+  }
+  return executeValidate({
+    cwd: process.cwd(),
+    json: parsed.json,
+    ...(parsed.target !== undefined ? { target: parsed.target } : {}),
+  });
 }
 
 async function runSchedule(args: readonly string[]): Promise<number> {
@@ -603,7 +765,6 @@ async function runUpdate(args: readonly string[]): Promise<number> {
   return await executeUpdate({
     cwd: parsed.cwd ?? process.cwd(),
     json: parsed.json,
-    excludes: parsed.excludes,
   });
 }
 
@@ -850,6 +1011,8 @@ async function runDoctor(args: readonly string[]): Promise<number> {
       body: '',
       remedy: `  Run ${chalk.bold('roster --help')} for usage.`,
       exitCode: EXIT_ERROR,
+      code: 'INVALID_ARGS',
+      details: {},
     });
   }
   const code = await executeDoctor({
@@ -900,6 +1063,7 @@ function isSubcommand(value: string): value is Subcommand {
 
 const rawArgs = process.argv.slice(2);
 const debugMode = rawArgs.includes('--debug');
+const jsonMode = rawArgs.includes('--json');
 
 async function main(): Promise<number> {
   const version = getPackageVersion();
@@ -924,6 +1088,9 @@ async function main(): Promise<number> {
   if (isSubcommand(first)) {
     if (first === 'install') return runInstall(rest);
     if (first === 'init') return await runInit(rest);
+    if (first === 'scaffold') return runScaffold(rest);
+    if (first === 'discover') return runDiscover(rest);
+    if (first === 'validate') return runValidate(rest);
     if (first === 'doctor') return await runDoctor(rest);
     if (first === 'schedule') return await runSchedule(rest);
     if (first === 'review') return await runReview(rest);
@@ -962,6 +1129,18 @@ main()
   .then(exitAfterFlush)
   .catch((err: unknown) => {
     const rosterErr = isRosterError(err) ? err : unexpectedError(err);
-    renderError(rosterErr, { debug: debugMode });
+    if (jsonMode) {
+      const header = stripVTControlCharacters(rosterErr.header).replace(/^roster:\s*/, '');
+      const body = stripVTControlCharacters(rosterErr.body).trim();
+      console.log(JSON.stringify({
+        ok: false,
+        code: rosterErr.code,
+        message: body.length === 0 ? header : `${header}\n${body}`,
+        remedy: stripVTControlCharacters(rosterErr.remedy).trim(),
+        details: rosterErr.details,
+      }));
+    } else {
+      renderError(rosterErr, { debug: debugMode });
+    }
     exitAfterFlush(rosterErr.exitCode);
   });
