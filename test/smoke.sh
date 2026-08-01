@@ -203,6 +203,7 @@ assert "\"\$(shasum -a 256 ROSTER.md | awk '{print \$1}')\" = '$INIT_BOOTSTRAP_H
 "$ROSTER_BIN" scaffold agent social-manager --scope function:product --purpose "Product social" --json > /dev/null
 "$ROSTER_BIN" scaffold guideline voice --scope function:gtm --purpose "Company voice" --json > /dev/null
 "$ROSTER_BIN" scaffold plan opportunity-discovery --scope agent:gtm/social-manager --purpose "Find reply opportunities" --json > /dev/null
+"$ROSTER_BIN" scaffold plan history-screen --scope agent:gtm/social-manager --purpose "Screen prior interactions" --json > /dev/null
 "$ROSTER_BIN" scaffold subagent researcher --scope agent:gtm/social-manager --purpose "Collect evidence" --json > /dev/null
 "$ROSTER_BIN" scaffold tool-use social-search --scope plan:gtm/social-manager#opportunity-discovery --purpose "Use the selected search source" --json > /dev/null
 "$ROSTER_BIN" scaffold lesson strong-hook --scope agent:gtm/social-manager --purpose "Approved hook pattern" --json > /dev/null
@@ -215,6 +216,109 @@ assert "-f functions/gtm/agents/social-manager/tools/social-search.yaml" "plan-s
 assert "-f functions/gtm/agents/social-manager/playbook/strong-hook.md" "lesson scaffold creates one authored lesson"
 assert "! -e functions/product/agents/social-manager/plans" "unused agent slots remain absent"
 assert "! -e functions/gtm/agents/social-manager/logs" "scaffolding creates no runtime log forest"
+assert_contains functions/gtm/agents/social-manager/plans/opportunity-discovery.yaml "brain_selectors: {}" "plan scaffold exposes the Brain selector catalog"
+assert_contains functions/gtm/agents/social-manager/plans/opportunity-discovery.yaml "output_guidance: \"\"" "plan scaffold exposes incomplete completion guidance"
+
+if "$ROSTER_BIN" validate gtm/social-manager#opportunity-discovery --json > /dev/null 2>&1; then
+  fail "incomplete plan draft fails semantic validation"
+else
+  pass "incomplete plan draft fails semantic validation"
+fi
+
+cat > functions/gtm/agents/social-manager/plans/history-screen.yaml <<'PLAN'
+schema_version: 2
+id: history-screen
+agent: gtm/social-manager
+purpose: Screen prior interactions before recommending a reply.
+inputs: {}
+brain_selectors: {}
+guidelines: []
+artifacts: {}
+caps: {}
+steps:
+  - id: screen
+    kind: reasoning
+    instruction: Review the supplied interaction history for conflicts.
+completion:
+  artifacts: []
+  output_guidance: Return any conflicts that affect the shortlist.
+  criteria:
+    - Relevant prior interactions have been considered.
+PLAN
+
+cat > functions/gtm/agents/social-manager/plans/opportunity-discovery.yaml <<'PLAN'
+schema_version: 2
+id: opportunity-discovery
+agent: gtm/social-manager
+purpose: Produce a reviewed shortlist of relevant reply opportunities.
+inputs:
+  request:
+    description: The human's current discovery request.
+    required: true
+    shape: Plain text.
+brain_selectors:
+  successful-replies:
+    description: Examples of successful prior replies.
+    required: false
+guidelines:
+  - gtm/guidelines/voice
+artifacts:
+  search-brief:
+    description: Filters prepared by the host for the selected search tool.
+  shortlist:
+    description: The human-reviewed opportunity shortlist.
+caps:
+  candidates:
+    maximum: 25
+    guidance: Keep only opportunities that match the current request.
+steps:
+  - id: prepare
+    kind: reasoning
+    instruction: Derive request-specific filters before choosing a tool query.
+    context:
+      brain:
+        - successful-replies
+      guidelines:
+        - gtm/guidelines/voice
+    expected:
+      artifacts:
+        - search-brief
+      output_guidance: Explain why each filter matches the request.
+  - id: research
+    kind: subagent
+    instruction: Ask the research specialist to gather candidate evidence.
+    subagent: researcher
+  - id: collaborate
+    kind: cross-agent
+    instruction: Ask the product social manager to challenge relevance.
+    agent: product/social-manager
+  - id: screen-history
+    kind: nested-plan
+    instruction: Apply the registered history-screen operating guide.
+    plan: gtm/social-manager#history-screen
+  - id: search
+    kind: tool
+    instruction: Use the company-defined social search use case.
+    tool_use: social-search
+    retry_guidance:
+      max_attempts: 2
+      instruction: Narrow the host-prepared filters before retrying.
+  - id: approve
+    kind: approval
+    instruction: Pause before presenting the final shortlist.
+    approval_guidance: Wait for the human to approve the shortlist in the host interface.
+  - id: return
+    kind: artifact
+    instruction: Return the approved shortlist.
+    artifact: shortlist
+completion:
+  artifacts:
+    - shortlist
+  output_guidance: Return the approved shortlist with relevance rationale.
+  criteria:
+    - Every opportunity is supported by evidence.
+    - The human approved the shortlist.
+PLAN
 
 DISCOVER_JSON=$("$ROSTER_BIN" discover social-manager --kind agent --json)
 if node -e 'const x=JSON.parse(process.argv[1]); const ids=x.records.map(r=>r.qualified_id); if(!x.ok || ids.length!==2 || !ids.includes("gtm/social-manager") || !ids.includes("product/social-manager")) process.exit(1)' "$DISCOVER_JSON"; then

@@ -6,6 +6,10 @@ Per-phase retrospectives live in [`docs/retros/`](docs/retros/) and carry the lo
 
 ## [Unreleased]
 
+### Added
+
+- **Structured plans are now bounded, host-interpreted operating guides.** Version 2 plans declare explicit inputs, Brain selectors, guidelines, artifacts, caps, ordered steps, and completion guidance. `roster validate` rejects incomplete drafts, unknown or executor-shaped fields, missing or inapplicable references, and deterministic nested-plan cycles, while `roster discover --full` continues to return exact authored bytes. Roster never executes the plan: Claude Code or Codex owns reasoning, tools, subagents, retries, conditions, and human approval waits. (#344)
+
 ### Fixed
 
 - **Function registry validation no longer rejects valid early entries when PyYAML is unavailable.** The shell fallback now reads and validates the complete registry before matching, avoiding `pipefail`/SIGPIPE false negatives while still rejecting unknown functions and malformed slugs anywhere in the registry.
