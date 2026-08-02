@@ -50,7 +50,7 @@ function makeWorkspace(root: string): string {
   const ws = mkdtempSync(join(root, 'ws-'));
   writeFileSync(
     join(ws, 'roster.yaml'),
-    'schema_version: 2\nworkspace_id: test\nfunctions: {}\nhosts: {}\n',
+    'schema_version: 2\nworkspace_id: test\ntool_uses: []\nfunctions: {}\nhosts: {}\n',
   );
   writeFileSync(join(ws, 'ROSTER.md'), renderRosterBootstrap());
   return ws;

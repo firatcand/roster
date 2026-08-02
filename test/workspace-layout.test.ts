@@ -2,10 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ROSTER_RESERVED_PATHS,
+  assertFunctionId,
   assertFunctionRootPath,
   assertNonOverlappingFunctionRoots,
   assertRecordId,
   childRecordPath,
+  planCompanionPath,
+  planRecordPath,
+  planToolUseSlotPath,
   parseScope,
   qualifiedRecordId,
 } from '../src/lib/workspace-layout.ts';
@@ -34,6 +38,7 @@ test('record IDs and qualified scopes reject traversal, separators, controls, an
     assert.equal(codeFrom(() => assertRecordId(invalid)), 'IDENTITY_INVALID', invalid);
   }
   assert.equal(assertRecordId('social-manager'), 'social-manager');
+  assert.deepEqual(parseScope('workspace'), { kind: 'workspace', qualifiedId: 'workspace', scope: {} });
   assert.deepEqual(parseScope('function:gtm').scope, { function: 'gtm' });
   assert.deepEqual(parseScope('agent:gtm/social-manager').scope, { function: 'gtm', agent: 'social-manager' });
   assert.deepEqual(parseScope('plan:gtm/social-manager#discover').scope, {
@@ -41,6 +46,11 @@ test('record IDs and qualified scopes reject traversal, separators, controls, an
     agent: 'social-manager',
     plan: 'discover',
   });
+  for (const invalid of ['workspace:', 'workspace:gtm', 'workspace/tools']) {
+    assert.equal(codeFrom(() => parseScope(invalid)), 'IDENTITY_INVALID', invalid);
+  }
+  assert.equal(codeFrom(() => assertFunctionId('tools')), 'IDENTITY_INVALID');
+  assert.equal(codeFrom(() => parseScope('function:tools')), 'IDENTITY_INVALID');
 });
 
 test('all seven qualified identity forms map to deterministic paths', () => {
@@ -54,6 +64,40 @@ test('all seven qualified identity forms map to deterministic paths', () => {
   assert.equal(qualifiedRecordId('lesson', { functionId: 'gtm', agentId: 'social', localId: 'hook' }), 'gtm/social/playbook/hook');
   assert.equal(childRecordPath(root, '', 'guideline', 'voice', { function: 'gtm' }), 'functions/gtm/guidelines/voice.md');
   assert.equal(childRecordPath(root, 'social', 'plan', 'discover'), 'functions/gtm/agents/social/plans/discover.yaml');
+});
+
+test('tool-use identities and paths cover each exact authored scope', () => {
+  const root = 'company/gtm';
+  const localId = 'social-opportunity-research';
+  assert.equal(qualifiedRecordId('tool-use', { localId }), `tools/${localId}`);
+  assert.equal(qualifiedRecordId('tool-use', { functionId: 'gtm', localId }), `gtm/tools/${localId}`);
+  assert.equal(
+    qualifiedRecordId('tool-use', { functionId: 'gtm', agentId: 'social', localId }),
+    `gtm/social/tools/${localId}`,
+  );
+  assert.equal(
+    qualifiedRecordId('tool-use', { functionId: 'gtm', agentId: 'social', planId: 'discover', localId }),
+    `gtm/social#discover/tools/${localId}`,
+  );
+
+  assert.equal(childRecordPath('', '', 'tool-use', localId, {}), `tools/${localId}.yaml`);
+  assert.equal(
+    childRecordPath(root, '', 'tool-use', localId, { function: 'gtm' }),
+    `${root}/tools/${localId}.yaml`,
+  );
+  assert.equal(
+    childRecordPath(root, 'social', 'tool-use', localId, { function: 'gtm', agent: 'social' }),
+    `${root}/agents/social/tools/${localId}.yaml`,
+  );
+  assert.equal(
+    childRecordPath(root, 'social', 'tool-use', localId, {
+      function: 'gtm', agent: 'social', plan: 'discover',
+    }),
+    `${root}/agents/social/plans/discover/tools/${localId}.yaml`,
+  );
+  assert.equal(planRecordPath(root, 'social', 'discover'), `${root}/agents/social/plans/discover.yaml`);
+  assert.equal(planCompanionPath(root, 'social', 'discover'), `${root}/agents/social/plans/discover`);
+  assert.equal(planToolUseSlotPath(root, 'social', 'discover'), `${root}/agents/social/plans/discover/tools`);
 });
 
 test('function roots reject every renderer-owned root and overlaps', () => {
@@ -72,7 +116,7 @@ test('function roots reject every renderer-owned root and overlaps', () => {
       `${owned} is covered by the central reserved-path registry`,
     );
   }
-  for (const reserved of ['.claude/functions', '.agents', 'config/team', 'roster/gtm']) {
+  for (const reserved of ['.claude/functions', '.agents', 'config/team', 'roster/gtm', 'tools']) {
     assert.equal(codeFrom(() => assertFunctionRootPath(reserved)), 'RESERVED_PATH', reserved);
   }
   for (const aliased of ['functions//gtm', 'functions/./gtm', 'functions/x/../gtm']) {

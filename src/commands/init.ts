@@ -82,6 +82,7 @@ function renderRegistry(workspaceId: string): string {
   return [
     'schema_version: 2',
     `workspace_id: ${workspaceId}`,
+    'tool_uses: []',
     'functions: {}',
     'hosts: {}',
     '',

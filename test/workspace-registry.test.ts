@@ -13,14 +13,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import YAML from 'yaml';
 import { renderRosterBootstrap } from '../src/lib/generated-artifacts.ts';
+import { getPackageVersion } from '../src/lib/paths.ts';
 import { parseChildDefinition } from '../src/lib/workspace-record.ts';
 import {
   discoverWorkspace,
+  prepareVendorSkillMap,
   scaffoldWorkspace,
   validateWorkspace,
 } from '../src/lib/workspace-registry.ts';
 import { isWorkspaceFailure } from '../src/lib/workspace-diagnostics.ts';
 import { realWorkspaceDurabilityFs, replaceWorkspaceFile } from '../src/lib/workspace-io.ts';
+import {
+  buildVendorSkillMap,
+  serializeVendorSkillMap,
+  VENDOR_SKILL_MAP_PATH,
+} from '../src/lib/vendor-skills/adapter-map.ts';
+import { parseSkillRef } from '../src/lib/vendor-skills/skill-ref.ts';
 
 function fixture(): { root: string; cleanup: () => void } {
   const root = mkdtempSync(join(tmpdir(), 'roster-registry-'));
@@ -28,6 +36,7 @@ function fixture(): { root: string; cleanup: () => void } {
     '# workspace comment',
     'schema_version: 2',
     'workspace_id: registry-test # keep-workspace-id',
+    'tool_uses: []',
     'functions: {}',
     'hosts: {}',
     '',
@@ -61,6 +70,7 @@ function authorPlan(
     inputs: {},
     brain_selectors: {},
     guidelines: [],
+    tool_uses: [],
     artifacts: {},
     caps: {},
     steps,
@@ -71,6 +81,47 @@ function authorPlan(
     },
   }));
 }
+
+function authorToolUse(
+  root: string,
+  path: string,
+  id: string,
+  scope: Record<string, string>,
+  skillRef = 'exa:search',
+): void {
+  writeFileSync(join(root, path), YAML.stringify({
+    schema_version: 2,
+    id,
+    scope,
+    purpose: `Use ${id} for this scope.`,
+    skill_ref: skillRef,
+    effects: { allowed: ['external-read'] },
+  }));
+}
+
+test('vendor-map preparation changes with valid authored refs and rejects invalidated inputs', () => {
+  const fx = fixture();
+  try {
+    scaffoldWorkspace(fx.root, {
+      kind: 'tool-use',
+      id: 'search',
+      scope: 'workspace',
+      purpose: 'Search public sources.',
+    });
+    authorToolUse(fx.root, 'tools/search.yaml', 'search', {}, 'exa:search');
+    const first = prepareVendorSkillMap(fx.root).content;
+
+    authorToolUse(fx.root, 'tools/search.yaml', 'search', {}, 'exa:deep-search');
+    const second = prepareVendorSkillMap(fx.root).content;
+    assert.notEqual(second, first);
+    assert.match(second, /exa:deep-search/);
+
+    authorToolUse(fx.root, 'tools/search.yaml', 'search', {}, 'not-canonical');
+    assert.equal(failureCode(() => prepareVendorSkillMap(fx.root)), 'SKILL_REF_INVALID');
+  } finally {
+    fx.cleanup();
+  }
+});
 
 test('scaffold creates only requested ancestors, preserves comments, and is idempotent', () => {
   const fx = fixture();
@@ -194,12 +245,25 @@ test('all owned kinds scaffold at canonical paths and discovery stays compact un
     scaffoldWorkspace(fx.root, { kind: 'guideline', id: 'review', scope: 'agent:gtm/social' });
     scaffoldWorkspace(fx.root, { kind: 'tool-use', id: 'search', scope: 'plan:gtm/social#discover' });
     scaffoldWorkspace(fx.root, { kind: 'lesson', id: 'strong-hook', scope: 'plan:gtm/social#discover' });
+    const existingPlan = scaffoldWorkspace(fx.root, {
+      kind: 'plan',
+      id: 'discover',
+      scope: 'agent:gtm/social',
+    });
+    const exactPlan = discoverWorkspace(fx.root, {
+      query: 'gtm/social#discover',
+      kind: 'plan',
+      exact: true,
+    }).records[0]!;
+    assert.equal(existingPlan.status, 'existing');
+    assert.deepEqual(existingPlan.record, exactPlan);
+    assert.deepEqual(exactPlan.references, { tool_uses: 1 });
     const compact = discoverWorkspace(fx.root).records;
     assert.equal(compact.length, 8);
     assert.ok(compact.every((record) => record.content === undefined));
     assert.deepEqual(compact.map((record) => record.kind), [...compact.map((record) => record.kind)].sort());
     const tool = compact.find((record) => record.kind === 'tool-use')!;
-    assert.equal(tool.path, 'functions/gtm/agents/social/tools/search.yaml');
+    assert.equal(tool.path, 'functions/gtm/agents/social/plans/discover/tools/search.yaml');
     assert.deepEqual(tool.scope, { function: 'gtm', agent: 'social', plan: 'discover' });
     const lesson = compact.find((record) => record.kind === 'lesson')!;
     assert.equal(lesson.path, 'functions/gtm/agents/social/playbook/strong-hook.md');
@@ -349,6 +413,242 @@ test('targeted plan validation follows nested closure and ignores unrelated draf
   }
 });
 
+test('targeted validation ignores only unrelated tool-use drafts', () => {
+  const fx = fixture();
+  try {
+    for (const functionId of ['gtm', 'support']) {
+      scaffoldWorkspace(fx.root, { kind: 'function', id: functionId });
+      scaffoldWorkspace(fx.root, { kind: 'agent', id: 'manager', scope: `function:${functionId}` });
+    }
+    scaffoldWorkspace(fx.root, {
+      kind: 'plan',
+      id: 'discover',
+      scope: 'agent:gtm/manager',
+      purpose: 'Discover opportunities.',
+    });
+    scaffoldWorkspace(fx.root, {
+      kind: 'tool-use',
+      id: 'research',
+      scope: 'agent:gtm/manager',
+      purpose: 'Research public opportunities.',
+    });
+    scaffoldWorkspace(fx.root, {
+      kind: 'tool-use',
+      id: 'unfinished',
+      scope: 'agent:support/manager',
+    });
+    scaffoldWorkspace(fx.root, {
+      kind: 'tool-use',
+      id: 'unused-draft',
+      scope: 'agent:gtm/manager',
+    });
+    writeFileSync(
+      join(fx.root, 'functions', 'gtm', 'agents', 'manager', 'tools', 'research.yaml'),
+      YAML.stringify({
+        schema_version: 2,
+        id: 'research',
+        scope: { function: 'gtm', agent: 'manager' },
+        purpose: 'Research public opportunities.',
+        skill_ref: 'exa:search',
+        effects: { allowed: ['external-read'] },
+      }),
+    );
+    writeFileSync(
+      join(fx.root, 'functions', 'gtm', 'agents', 'manager', 'plans', 'discover.yaml'),
+      YAML.stringify({
+        schema_version: 2,
+        id: 'discover',
+        agent: 'gtm/manager',
+        purpose: 'Discover opportunities.',
+        inputs: {},
+        brain_selectors: {},
+        guidelines: [],
+        tool_uses: [],
+        artifacts: {},
+        caps: {},
+        steps: [{ id: 'research', kind: 'tool', instruction: 'Research opportunities.', tool_use: 'research' }],
+        completion: {
+          artifacts: [],
+          output_guidance: 'Return the opportunities.',
+          criteria: ['Every opportunity has a source.'],
+        },
+      }),
+    );
+    writeFileSync(
+      join(fx.root, VENDOR_SKILL_MAP_PATH),
+      serializeVendorSkillMap(buildVendorSkillMap({
+        workspaceRoot: fx.root,
+        skillRefs: [parseSkillRef('exa:search')],
+        enabledHosts: [],
+        manifest: null,
+        lockfile: null,
+        generatorVersion: getPackageVersion(),
+      })),
+    );
+
+    const targeted = validateWorkspace(fx.root, { target: 'gtm/manager#discover' });
+    assert.equal(
+      targeted.diagnostics.some((entry) => entry.code === 'TOOL_USE_DRAFT_INCOMPLETE'),
+      false,
+      JSON.stringify(targeted.diagnostics),
+    );
+    assert.equal(targeted.checks.find((check) => check.name === 'tool-use-lattice')?.status, 'pass');
+    assert.equal(targeted.checks.find((check) => check.name === 'structured-plans')?.status, 'pass');
+
+    const global = validateWorkspace(fx.root);
+    assert.equal(global.diagnostics.some((entry) => entry.code === 'TOOL_USE_DRAFT_INCOMPLETE'), true);
+    const applicable = validateWorkspace(fx.root, { target: 'support/manager' });
+    assert.equal(applicable.diagnostics.some((entry) => entry.code === 'TOOL_USE_DRAFT_INCOMPLETE'), true);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('targeted nested-plan relevance preserves plan and tool pairs instead of cross-producting them', () => {
+  const fx = fixture();
+  try {
+    for (const functionId of ['gtm', 'support']) {
+      scaffoldWorkspace(fx.root, { kind: 'function', id: functionId });
+      scaffoldWorkspace(fx.root, { kind: 'agent', id: 'manager', scope: `function:${functionId}` });
+    }
+    scaffoldWorkspace(fx.root, {
+      kind: 'plan',
+      id: 'primary',
+      scope: 'agent:gtm/manager',
+      purpose: 'Run primary.',
+    });
+    scaffoldWorkspace(fx.root, {
+      kind: 'plan',
+      id: 'nested',
+      scope: 'agent:support/manager',
+      purpose: 'Run nested.',
+    });
+    const primaryFoo = scaffoldWorkspace(fx.root, {
+      kind: 'tool-use',
+      id: 'foo',
+      scope: 'agent:gtm/manager',
+      purpose: 'Use root foo.',
+    });
+    const nestedBar = scaffoldWorkspace(fx.root, {
+      kind: 'tool-use',
+      id: 'bar',
+      scope: 'agent:support/manager',
+      purpose: 'Use nested bar.',
+    });
+    scaffoldWorkspace(fx.root, {
+      kind: 'tool-use',
+      id: 'foo',
+      scope: 'agent:support/manager',
+    });
+    authorToolUse(fx.root, primaryFoo.record.path, 'foo', { function: 'gtm', agent: 'manager' });
+    authorToolUse(fx.root, nestedBar.record.path, 'bar', { function: 'support', agent: 'manager' });
+    authorPlan(fx.root, 'gtm', 'manager', 'primary', [
+      { id: 'foo', kind: 'tool', instruction: 'Use root foo.', tool_use: 'foo' },
+      { id: 'nested', kind: 'nested-plan', instruction: 'Run support nested.', plan: 'support/manager#nested' },
+    ]);
+    authorPlan(fx.root, 'support', 'manager', 'nested', [
+      { id: 'bar', kind: 'tool', instruction: 'Use nested bar.', tool_use: 'bar' },
+    ]);
+
+    const targeted = validateWorkspace(fx.root, {
+      target: 'gtm/manager#primary',
+      skipVendorSkillMap: true,
+    });
+    assert.equal(
+      targeted.diagnostics.some((entry) => entry.code === 'TOOL_USE_DRAFT_INCOMPLETE'),
+      false,
+      JSON.stringify(targeted.diagnostics),
+    );
+    assert.equal(targeted.checks.find((check) => check.name === 'tool-use-lattice')?.status, 'pass');
+    assert.equal(targeted.checks.find((check) => check.name === 'structured-plans')?.status, 'pass');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('targeted plan validation cannot ignore a same-ID ancestor draft', () => {
+  const fx = fixture();
+  try {
+    scaffoldWorkspace(fx.root, { kind: 'function', id: 'gtm' });
+    scaffoldWorkspace(fx.root, { kind: 'agent', id: 'manager', scope: 'function:gtm' });
+    scaffoldWorkspace(fx.root, {
+      kind: 'plan',
+      id: 'discover',
+      scope: 'agent:gtm/manager',
+      purpose: 'Discover opportunities.',
+    });
+    scaffoldWorkspace(fx.root, {
+      kind: 'tool-use',
+      id: 'research',
+      scope: 'workspace',
+    });
+    const agentResearch = scaffoldWorkspace(fx.root, {
+      kind: 'tool-use',
+      id: 'research',
+      scope: 'agent:gtm/manager',
+      purpose: 'Research opportunities.',
+    });
+    authorToolUse(
+      fx.root,
+      agentResearch.record.path,
+      'research',
+      { function: 'gtm', agent: 'manager' },
+    );
+    authorPlan(fx.root, 'gtm', 'manager', 'discover', [
+      { id: 'research', kind: 'tool', instruction: 'Research.', tool_use: 'research' },
+    ]);
+
+    const targeted = validateWorkspace(fx.root, {
+      target: 'gtm/manager#discover',
+      skipVendorSkillMap: true,
+    });
+    assert.equal(targeted.diagnostics.some((entry) => (
+      entry.code === 'TOOL_USE_DRAFT_INCOMPLETE' && entry.path === 'tools/research.yaml'
+    )), true, JSON.stringify(targeted.diagnostics));
+    assert.equal(targeted.checks.find((check) => check.name === 'tool-use-lattice')?.status, 'fail');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('secret-bearing tool-use discovery exposes neither authored bytes nor a content digest', () => {
+  const fx = fixture();
+  try {
+    scaffoldWorkspace(fx.root, {
+      kind: 'tool-use',
+      id: 'research',
+      scope: 'workspace',
+      purpose: 'Research public opportunities.',
+    });
+    const canary = `sk-${'Ab9_'.repeat(7)}`;
+    const variants = [
+      `# accidental credential: ${canary}\nschema_version: 2\nid: research\nscope: {}\npurpose: Research public opportunities.\nskill_ref: exa:search\n`,
+      `schema_version: 2\nid: research\nscope: {}\npurpose: "\\u0073k-${'Ab9_'.repeat(7)}"\nskill_ref: exa:search\n`,
+    ];
+    for (const authored of variants) {
+      writeFileSync(join(fx.root, 'tools', 'research.yaml'), authored);
+      for (const full of [false, true]) {
+        for (const exact of [false, true]) {
+          const result = discoverWorkspace(fx.root, {
+            full,
+            ...(exact ? { query: 'tools/research', kind: 'tool-use' as const, exact: true } : {}),
+          });
+          assert.equal(result.ok, false);
+          assert.deepEqual(result.records, []);
+          assert.equal(result.diagnostics.length, 1);
+          assert.equal(result.diagnostics[0]?.code, 'SECRET_MATERIAL_FORBIDDEN');
+          const serialized = JSON.stringify(result);
+          assert.equal(serialized.includes(canary), false);
+          assert.equal(serialized.includes('content_hash'), false);
+          assert.equal(serialized.includes('sha256:'), false);
+        }
+      }
+    }
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test('targeted validation preserves exact not-found and ambiguity diagnostics', () => {
   const fx = fixture();
   try {
@@ -423,6 +723,7 @@ test('orphan validation preserves nonstandard roots when record collection fails
     writeFileSync(join(fx.root, 'roster.yaml'), [
       'schema_version: 2',
       'workspace_id: registry-test',
+      'tool_uses: []',
       'functions:',
       '  gtm:',
       '    path: teams/gtm',
@@ -437,6 +738,7 @@ test('orphan validation preserves nonstandard roots when record collection fails
       purpose: 'Grow demand.',
       agents: ['social'],
       guidelines: [],
+      tool_uses: [],
     }));
     writeFileSync(join(fx.root, 'teams/gtm/agents/social/agent.yaml'), YAML.stringify({
       schema_version: 2,

@@ -63,8 +63,8 @@ export function executeUpgradeCommand(opts: UpgradeCommandOptions): number {
   if (probe.kind === 'none') throw workspaceRequiredError(opts.cwd);
   throw new RosterError({
     header: 'roster: upgrade is not a Roster v2 command',
-    body: '  Roster v2 synchronizes only deterministic generated activation artifacts.',
-    remedy: '  Run roster update instead. It never invokes eager templates, hooks, or founder-skill side effects.',
+    body: '  Roster v2 synchronizes deterministic generated activation and its derived vendor-skill map.',
+    remedy: '  Run roster update instead. It never invokes eager templates, hooks, providers, or founder-skill installation.',
     exitCode: EXIT_ERROR,
     code: 'COMMAND_REPLACED',
     details: { command: 'upgrade', replacement: 'update' },

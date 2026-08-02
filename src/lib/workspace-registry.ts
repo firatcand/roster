@@ -3,6 +3,7 @@ import {
   childRecordPath,
   functionRecordPath,
   agentRecordPath,
+  planCompanionPath,
   assertRecordId,
   parseScope,
   qualifiedRecordId,
@@ -12,6 +13,7 @@ import {
 import {
   addWorkspaceFunction,
   addYamlMembership,
+  enabledV2Hosts,
   parseAgentDefinition,
   parseChildDefinition,
   parseFunctionDefinition,
@@ -22,13 +24,19 @@ import {
   renderChildDefinition,
   renderFunctionDefinition,
   renderMarkdownDefinition,
+  renderToolUseDraft,
   type AgentDefinition,
   type FunctionDefinition,
+  type PlanEnvelope,
   type WorkspaceRegistry,
   MAX_AUTHORED_MARKDOWN_BYTES,
   MAX_AUTHORED_YAML_BYTES,
 } from './workspace-record.ts';
-import { validateStructuredPlans } from './workspace-plan.ts';
+import {
+  parseStructuredPlan,
+  validateStructuredPlans,
+  type StructuredPlan,
+} from './workspace-plan.ts';
 import {
   ensureWorkspaceDirectory,
   enumerateWorkspaceSlot,
@@ -36,6 +44,7 @@ import {
   hashWorkspaceBytes,
   publishCreateOnly,
   readWorkspaceFile,
+  tryReadWorkspaceFile,
   removeEmptyWorkspaceDirectories,
   removePublishedWorkspaceFile,
   replaceWorkspaceFile,
@@ -52,6 +61,26 @@ import {
   type JsonValue,
   type WorkspaceDiagnostic,
 } from './workspace-diagnostics.ts';
+import {
+  parseWorkspaceToolUseEnvelope,
+  validateToolUseLattice,
+  type CompleteWorkspaceSnapshot,
+  type ToolUseLatticeValidationResult,
+} from './workspace-tool-use.ts';
+import { mintCompleteWorkspaceSnapshot } from './internal/workspace-tool-use-snapshot.ts';
+import { getPackageVersion } from './paths.ts';
+import { readFounderSkillsManifest } from './founder-skills/manifest-schema.ts';
+import { readLockfile } from './founder-skills/lockfile.ts';
+import {
+  VENDOR_SKILL_MAP_PATH,
+  VENDOR_SKILL_MAP_MAX_BYTES,
+  buildVendorSkillMap,
+  parseVendorSkillMap,
+  serializeVendorSkillMap,
+  type VendorSkillMap,
+} from './vendor-skills/adapter-map.ts';
+import { canonicalJson } from './vendor-skills/canonical-json.ts';
+import type { CanonicalSkillRef } from './vendor-skills/skill-ref.ts';
 import { validateGeneratedArtifacts } from './generated-artifacts.ts';
 import { probeWorkspace } from './workspace-probe.ts';
 import {
@@ -82,7 +111,7 @@ export type DiscoverWorkspaceOptions = {
 };
 
 export type DiscoverWorkspaceResult = {
-  ok: true;
+  ok: boolean;
   records: WorkspaceDiscoveryRecord[];
   diagnostics: WorkspaceDiagnostic[];
 };
@@ -152,6 +181,13 @@ type LoadedAgent = {
   text: string;
   path: string;
   functionRoot: string;
+};
+
+type LoadedPlan = {
+  definition: PlanEnvelope;
+  bytes: Buffer;
+  text: string;
+  path: string;
 };
 
 function identityMismatch(path: string, expected: string, actual: string): never {
@@ -253,6 +289,30 @@ function loadAgent(
   return { definition, bytes: file.bytes, text: file.text, path, functionRoot: fn.root };
 }
 
+function loadPlan(
+  root: string,
+  fn: LoadedFunction,
+  agent: LoadedAgent,
+  planId: string,
+  session?: WorkspaceReadSession,
+): LoadedPlan {
+  if (!agent.definition.plans.includes(planId)) {
+    throw workspaceFailure(
+      'PARENT_NOT_FOUND',
+      `Plan '${agent.definition.function}/${agent.definition.id}#${planId}' is not registered.`,
+      'Scaffold the plan before using it as a scope.',
+      { plan: planId },
+    );
+  }
+  const path = childRecordPath(fn.root, agent.definition.id, 'plan', planId);
+  const file = readAuthored(root, path, false, session);
+  const definition = parsePlanEnvelope(file.text, path);
+  const expectedAgent = `${agent.definition.function}/${agent.definition.id}`;
+  if (definition.id !== planId) identityMismatch(path, planId, definition.id);
+  if (definition.agent !== expectedAgent) identityMismatch(path, expectedAgent, definition.agent);
+  return { definition, bytes: file.bytes, text: file.text, path };
+}
+
 function record(
   kind: WorkspaceRecordKind,
   qualifiedId: string,
@@ -299,11 +359,97 @@ function pushRecord(target: WorkspaceDiscoveryRecord[], identities: Set<string>,
   target.push(value);
 }
 
-function collectWorkspaceRecords(root: string, full: boolean): WorkspaceDiscoveryRecord[] {
+type CollectedWorkspaceRecords = {
+  records: WorkspaceDiscoveryRecord[];
+  diagnostics: WorkspaceDiagnostic[];
+};
+
+function toolUseScopeMatches(
+  actual: Record<string, string>,
+  expected: WorkspaceScope,
+): boolean {
+  return actual.function === expected.function
+    && actual.agent === expected.agent
+    && actual.plan === expected.plan
+    && Number(actual.function !== undefined)
+      + Number(actual.agent !== undefined)
+      + Number(actual.plan !== undefined)
+      === Number(expected.function !== undefined)
+        + Number(expected.agent !== undefined)
+        + Number(expected.plan !== undefined);
+}
+
+function collectToolUseRecord(options: {
+  records: WorkspaceDiscoveryRecord[];
+  identities: Set<string>;
+  diagnostics: WorkspaceDiagnostic[];
+  path: string;
+  file: { bytes: Buffer; text: string };
+  id: string;
+  scope: WorkspaceScope;
+  qualifiedId: string;
+  full: boolean;
+}): void {
+  let definition;
+  try {
+    definition = parseWorkspaceToolUseEnvelope(options.file.text, options.path);
+  } catch (error) {
+    if (!isWorkspaceFailure(error) || error.code !== 'SECRET_MATERIAL_FORBIDDEN') throw error;
+    const diagnostic = diagnosticFromFailure(error);
+    options.diagnostics.push({
+      ...diagnostic,
+      details: {
+        ...diagnostic.details,
+        kind: 'tool-use',
+        qualified_id: options.qualifiedId,
+      },
+    });
+    return;
+  }
+  if (definition.id !== options.id) identityMismatch(options.path, options.id, definition.id);
+  if (!toolUseScopeMatches(definition.scope, options.scope)) {
+    throw workspaceFailure(
+      'IDENTITY_PATH_MISMATCH',
+      `${options.path}: embedded tool-use scope does not match its registered physical owner.`,
+      'Make the authored scope exactly match the workspace, function, agent, or plan that owns this file.',
+      { path: options.path, expected_scope: options.scope, actual_scope: definition.scope },
+    );
+  }
+  pushRecord(options.records, options.identities, record(
+    'tool-use',
+    options.qualifiedId,
+    options.path,
+    definition.purpose,
+    options.scope as Record<string, string>,
+    options.file.bytes,
+    {},
+    options.full,
+  ));
+}
+
+function collectWorkspaceRecords(root: string, full: boolean): CollectedWorkspaceRecords {
   const session = createWorkspaceReadSession(root, { deferParentChecks: true });
   const { registry } = readWorkspaceRegistry(root, session);
   const records: WorkspaceDiscoveryRecord[] = [];
+  const diagnostics: WorkspaceDiagnostic[] = [];
   const identities = new Set<string>();
+
+  for (const toolId of registry.tool_uses) {
+    const scope: WorkspaceScope = {};
+    const path = childRecordPath('', '', 'tool-use', toolId, scope);
+    collectToolUseRecord({
+      records,
+      identities,
+      diagnostics,
+      path,
+      file: readAuthored(root, path, false, session),
+      id: toolId,
+      scope,
+      qualifiedId: qualifiedRecordId('tool-use', { localId: toolId }),
+      full,
+    });
+  }
+
   const functionIds = Object.keys(registry.functions).sort((a, b) => a.localeCompare(b, 'en'));
   for (const functionId of functionIds) {
     const fn = loadFunction(root, registry, functionId, session);
@@ -314,9 +460,29 @@ function collectWorkspaceRecords(root: string, full: boolean): WorkspaceDiscover
       fn.definition.purpose,
       {},
       fn.bytes,
-      { agents: fn.definition.agents.length, guidelines: fn.definition.guidelines.length },
+      {
+        agents: fn.definition.agents.length,
+        guidelines: fn.definition.guidelines.length,
+        tool_uses: fn.definition.tool_uses.length,
+      },
       full,
     ));
+
+    for (const toolId of fn.definition.tool_uses) {
+      const scope: WorkspaceScope = { function: functionId };
+      const path = childRecordPath(fn.root, '', 'tool-use', toolId, scope);
+      collectToolUseRecord({
+        records,
+        identities,
+        diagnostics,
+        path,
+        file: readAuthored(root, path, false, session),
+        id: toolId,
+        scope,
+        qualifiedId: qualifiedRecordId('tool-use', { functionId, localId: toolId }),
+        full,
+      });
+    }
 
     for (const guidelineId of fn.definition.guidelines) {
       const path = childRecordPath(fn.root, '', 'guideline', guidelineId, { function: functionId });
@@ -356,21 +522,38 @@ function collectWorkspaceRecords(root: string, full: boolean): WorkspaceDiscover
       ));
 
       for (const planId of agent.definition.plans) {
-        const path = childRecordPath(fn.root, agentId, 'plan', planId);
-        const file = readAuthored(root, path, false, session);
-        const definition = parsePlanEnvelope(file.text, path);
-        if (definition.id !== planId) identityMismatch(path, planId, definition.id);
-        if (definition.agent !== agentQualified) identityMismatch(path, agentQualified, definition.agent);
+        const plan = loadPlan(root, fn, agent, planId, session);
         pushRecord(records, identities, record(
           'plan',
           qualifiedRecordId('plan', { functionId, agentId, localId: planId }),
-          path,
-          definition.purpose,
+          plan.path,
+          plan.definition.purpose,
           { function: functionId, agent: agentId },
-          file.bytes,
-          {},
+          plan.bytes,
+          { tool_uses: plan.definition.tool_uses.length },
           full,
         ));
+
+        for (const toolId of plan.definition.tool_uses) {
+          const scope: WorkspaceScope = { function: functionId, agent: agentId, plan: planId };
+          const path = childRecordPath(fn.root, agentId, 'tool-use', toolId, scope);
+          collectToolUseRecord({
+            records,
+            identities,
+            diagnostics,
+            path,
+            file: readAuthored(root, path, false, session),
+            id: toolId,
+            scope,
+            qualifiedId: qualifiedRecordId('tool-use', {
+              functionId,
+              agentId,
+              planId,
+              localId: toolId,
+            }),
+            full,
+          });
+        }
       }
 
       for (const subagentId of agent.definition.subagents) {
@@ -409,32 +592,20 @@ function collectWorkspaceRecords(root: string, full: boolean): WorkspaceDiscover
       }
 
       for (const toolId of agent.definition.tool_uses) {
-        const path = childRecordPath(fn.root, agentId, 'tool-use', toolId);
+        const scope: WorkspaceScope = { function: functionId, agent: agentId };
+        const path = childRecordPath(fn.root, agentId, 'tool-use', toolId, scope);
         const file = readAuthored(root, path, false, session);
-        const definition = parseChildDefinition('tool-use', file.text, path);
-        if (definition.id !== toolId) identityMismatch(path, toolId, definition.id);
-        if (definition.agent !== agentQualified) identityMismatch(path, agentQualified, definition.agent);
-        if (definition.scope === undefined || definition.scope.function !== functionId || definition.scope.agent !== agentId) {
-          identityMismatch(path, agentQualified, definition.scope === undefined ? '(none)' : `${definition.scope.function}/${definition.scope.agent ?? ''}`);
-        }
-        if (definition.scope.plan !== undefined && !agent.definition.plans.includes(definition.scope.plan)) {
-          throw workspaceFailure('PARENT_NOT_FOUND', `${path}: plan scope '${definition.scope.plan}' is not registered.`, 'Scaffold the plan before using it as tool-use scope.', { path, plan: definition.scope.plan });
-        }
-        const scope = {
-          function: functionId,
-          agent: agentId,
-          ...(definition.scope.plan === undefined ? {} : { plan: definition.scope.plan }),
-        };
-        pushRecord(records, identities, record(
-          'tool-use',
-          qualifiedRecordId('tool-use', { functionId, agentId, localId: toolId }),
+        collectToolUseRecord({
+          records,
+          identities,
+          diagnostics,
           path,
-          definition.purpose,
+          file,
+          id: toolId,
           scope,
-          file.bytes,
-          {},
+          qualifiedId: qualifiedRecordId('tool-use', { functionId, agentId, localId: toolId }),
           full,
-        ));
+        });
       }
 
       for (const lessonId of agent.definition.lessons) {
@@ -468,7 +639,7 @@ function collectWorkspaceRecords(root: string, full: boolean): WorkspaceDiscover
     }
   }
   session.verify();
-  return records;
+  return { records, diagnostics };
 }
 
 function resolveRegisteredRecord(
@@ -489,7 +660,64 @@ function resolveRegisteredRecord(
       fn.definition.purpose,
       {},
       fn.bytes,
-      { agents: fn.definition.agents.length, guidelines: fn.definition.guidelines.length },
+      {
+        agents: fn.definition.agents.length,
+        guidelines: fn.definition.guidelines.length,
+        tool_uses: fn.definition.tool_uses.length,
+      },
+      full,
+    );
+  }
+  if (kind === 'tool-use') {
+    const expectedScope: WorkspaceScope = { ...(scope ?? {}) };
+    const functionId = expectedScope.function;
+    let functionRoot = '';
+    let membership = registry.tool_uses;
+    if (functionId !== undefined) {
+      const fn = loadFunction(root, registry, functionId, session);
+      functionRoot = fn.root;
+      membership = fn.definition.tool_uses;
+      if (expectedScope.agent !== undefined) {
+        const agent = loadAgent(root, registry, functionId, expectedScope.agent, session, fn);
+        membership = agent.definition.tool_uses;
+        if (expectedScope.plan !== undefined) {
+          membership = loadPlan(root, fn, agent, expectedScope.plan, session).definition.tool_uses;
+        }
+      }
+    }
+    if (!membership.includes(id)) {
+      throw workspaceFailure(
+        'PARENT_NOT_FOUND',
+        `'tool-use:${expectedQualifiedId(kind, id, expectedScope)}' is not registered.`,
+        'Scaffold the tool-use beneath its exact workspace, function, agent, or plan owner first.',
+        { kind, id, scope: expectedScope },
+      );
+    }
+    const path = childRecordPath(functionRoot, expectedScope.agent ?? '', kind, id, expectedScope);
+    const file = readAuthored(root, path, false, session);
+    const definition = parseWorkspaceToolUseEnvelope(file.text, path);
+    if (definition.id !== id) identityMismatch(path, id, definition.id);
+    if (!toolUseScopeMatches(definition.scope, expectedScope)) {
+      throw workspaceFailure(
+        'IDENTITY_PATH_MISMATCH',
+        `${path}: embedded tool-use scope does not match its registered physical owner.`,
+        'Make the authored scope exactly match the workspace, function, agent, or plan that owns this file.',
+        { path, expected_scope: expectedScope, actual_scope: definition.scope },
+      );
+    }
+    return record(
+      kind,
+      qualifiedRecordId(kind, {
+        ...(functionId === undefined ? {} : { functionId }),
+        ...(expectedScope.agent === undefined ? {} : { agentId: expectedScope.agent }),
+        ...(expectedScope.plan === undefined ? {} : { planId: expectedScope.plan }),
+        localId: id,
+      }),
+      path,
+      definition.purpose,
+      { ...expectedScope } as Record<string, string>,
+      file.bytes,
+      {},
       full,
     );
   }
@@ -538,9 +766,7 @@ function resolveRegisteredRecord(
       ? agent.definition.subagents
       : kind === 'guideline'
         ? agent.definition.guidelines
-        : kind === 'tool-use'
-          ? agent.definition.tool_uses
-          : agent.definition.lessons;
+        : agent.definition.lessons;
   if (!membership.includes(id)) {
     throw workspaceFailure('PARENT_NOT_FOUND', `'${kind}:${expectedQualifiedId(kind, id, scope)}' is not registered.`, 'Scaffold the record beneath its registered agent first.', { kind, id, function: functionId, agent: agentId });
   }
@@ -573,24 +799,21 @@ function resolveRegisteredRecord(
     const definition = parsePlanEnvelope(file.text, path);
     if (definition.id !== id) identityMismatch(path, id, definition.id);
     if (definition.agent !== agentQualified) identityMismatch(path, agentQualified, definition.agent);
-    return record(kind, qualifiedRecordId(kind, { functionId, agentId, localId: id }), path, definition.purpose, { function: functionId, agent: agentId }, file.bytes, {}, full);
+    return record(
+      kind,
+      qualifiedRecordId(kind, { functionId, agentId, localId: id }),
+      path,
+      definition.purpose,
+      { function: functionId, agent: agentId },
+      file.bytes,
+      { tool_uses: definition.tool_uses.length },
+      full,
+    );
   }
   const definition = parseChildDefinition(kind, file.text, path);
   if (definition.id !== id) identityMismatch(path, id, definition.id);
   if (definition.agent !== agentQualified) identityMismatch(path, agentQualified, definition.agent);
-  if (kind === 'tool-use') {
-    if (definition.scope === undefined || definition.scope.function !== functionId || definition.scope.agent !== agentId) {
-      identityMismatch(path, agentQualified, definition.scope === undefined ? '(none)' : `${definition.scope.function}/${definition.scope.agent ?? ''}`);
-    }
-    if (definition.scope.plan !== undefined && !agent.definition.plans.includes(definition.scope.plan)) {
-      throw workspaceFailure('PARENT_NOT_FOUND', `${path}: plan scope '${definition.scope.plan}' is not registered.`, 'Scaffold the plan before using it as tool-use scope.', { path, plan: definition.scope.plan });
-    }
-  }
-  const actualScope = {
-    function: functionId,
-    agent: agentId,
-    ...(kind === 'tool-use' && definition.scope?.plan !== undefined ? { plan: definition.scope.plan } : {}),
-  };
+  const actualScope = { function: functionId, agent: agentId };
   return record(kind, qualifiedRecordId(kind, { functionId, agentId, localId: id }), path, definition.purpose, actualScope, file.bytes, {}, full);
 }
 
@@ -601,8 +824,38 @@ function localId(recordValue: WorkspaceDiscoveryRecord): string {
   return recordValue.qualified_id.split('/').at(-1)!;
 }
 
+// Stable English punctuation order for the bounded ASCII identity/path alphabet.
+function lexicalWeight(code: number): number {
+  if (code === 95) return 1;
+  if (code === 45) return 2;
+  if (code === 46) return 3;
+  if (code === 47) return 4;
+  if (code === 35) return 5;
+  if (code >= 48 && code <= 57) return code - 40;
+  if (code >= 97 && code <= 122) return code - 79;
+  return code + 256;
+}
+
+function lexical(left: string, right: string): number {
+  const length = Math.min(left.length, right.length);
+  for (let index = 0; index < length; index++) {
+    const leftCode = left.charCodeAt(index);
+    const rightCode = right.charCodeAt(index);
+    const difference = lexicalWeight(leftCode) - lexicalWeight(rightCode);
+    if (difference !== 0) return difference;
+    if (leftCode !== rightCode) return leftCode - rightCode;
+  }
+  return left.length - right.length;
+}
+
 function scopeMatches(recordValue: WorkspaceDiscoveryRecord, scopeValue: string): boolean {
   const parsed = parseScope(scopeValue);
+  if (parsed.kind === 'workspace') {
+    return recordValue.kind === 'tool-use'
+      && recordValue.scope.function === undefined
+      && recordValue.scope.agent === undefined
+      && recordValue.scope.plan === undefined;
+  }
   if (parsed.kind === 'function') {
     return recordValue.qualified_id === parsed.qualifiedId || recordValue.scope.function === parsed.scope.function;
   }
@@ -637,9 +890,9 @@ function filterWorkspaceRecords(
       ].some((value) => value.toLocaleLowerCase('en-US').includes(needle)));
     }
   }
-  records.sort((a, b) => a.kind.localeCompare(b.kind, 'en')
-    || a.qualified_id.localeCompare(b.qualified_id, 'en')
-    || a.path.localeCompare(b.path, 'en'));
+  records.sort((a, b) => lexical(a.kind, b.kind)
+    || lexical(a.qualified_id, b.qualified_id)
+    || lexical(a.path, b.path));
   if (options.exact) {
     if (records.length === 0) {
       throw workspaceFailure('PARENT_NOT_FOUND', `No record exactly matches '${query ?? ''}'.`, 'Use roster discover without --exact to inspect available qualified identities.', { query: query ?? '', kind: options.kind ?? null });
@@ -652,13 +905,175 @@ function filterWorkspaceRecords(
 }
 
 function discoverWorkspaceUnchecked(root: string, options: DiscoverWorkspaceOptions = {}): DiscoverWorkspaceResult {
-  const records = filterWorkspaceRecords(collectWorkspaceRecords(root, options.full ?? false), options);
-  return { ok: true, records, diagnostics: [] };
+  const collected = collectWorkspaceRecords(root, options.full ?? false);
+  let records: WorkspaceDiscoveryRecord[];
+  try {
+    records = filterWorkspaceRecords(collected.records, options);
+  } catch (error) {
+    if (!isWorkspaceFailure(error) || error.code !== 'PARENT_NOT_FOUND' || !options.exact) throw error;
+    const query = options.query ?? '';
+    const rejected = collected.diagnostics.filter((diagnostic) => (
+      diagnostic.code === 'SECRET_MATERIAL_FORBIDDEN'
+      && (options.kind === undefined || options.kind === 'tool-use')
+      && (diagnostic.path === query
+        || diagnostic.details['qualified_id'] === query
+        || (typeof diagnostic.details['qualified_id'] === 'string'
+          && localId({
+            qualified_id: diagnostic.details['qualified_id'],
+            kind: 'tool-use',
+            path: diagnostic.path ?? '',
+            purpose: '',
+            scope: {},
+            schema_version: 2,
+            content_hash: '',
+            references: {},
+          }) === query))
+    ));
+    if (rejected.length === 0) throw error;
+    return { ok: false, records: [], diagnostics: rejected };
+  }
+  return {
+    ok: !collected.diagnostics.some((diagnostic) => diagnostic.severity === 'error'),
+    records,
+    diagnostics: collected.diagnostics,
+  };
 }
 
 export function discoverWorkspace(root: string, options: DiscoverWorkspaceOptions = {}): DiscoverWorkspaceResult {
   assertV2Workspace(root);
   return discoverWorkspaceUnchecked(root, options);
+}
+
+export function collectCompleteWorkspaceSnapshot(root: string): CompleteWorkspaceSnapshot {
+  assertV2Workspace(root);
+  const collected = collectWorkspaceRecords(root, true);
+  const failure = collected.diagnostics.find((diagnostic) => diagnostic.severity === 'error');
+  if (failure !== undefined) {
+    throw workspaceFailure(
+      failure.code,
+      failure.message,
+      failure.remedy ?? 'Repair the complete workspace registry before resolving tool guidance.',
+      {
+        ...failure.details,
+        ...(failure.path === undefined ? {} : { path: failure.path }),
+      },
+    );
+  }
+  return mintCompleteWorkspaceSnapshot(collected.records);
+}
+
+export type PreparedVendorSkillMap = {
+  snapshot: CompleteWorkspaceSnapshot;
+  map: VendorSkillMap;
+  content: string;
+};
+
+function throwWorkspaceDiagnostic(diagnostic: WorkspaceDiagnostic): never {
+  throw workspaceFailure(
+    diagnostic.code,
+    diagnostic.message,
+    diagnostic.remedy ?? 'Repair the workspace before retrying.',
+    {
+      ...diagnostic.details,
+      ...(diagnostic.path === undefined ? {} : { path: diagnostic.path }),
+    },
+  );
+}
+
+function buildExpectedVendorSkillMap(
+  root: string,
+  snapshot: CompleteWorkspaceSnapshot,
+  ignoredDraftPaths: ReadonlySet<string> = new Set(),
+  lattice: ToolUseLatticeValidationResult = validateToolUseLattice(snapshot),
+): { map: VendorSkillMap; content: string; definitionCount: number } {
+  const failure = lattice.diagnostics.find((diagnostic) => diagnostic.severity === 'error'
+    && !(diagnostic.code === 'TOOL_USE_DRAFT_INCOMPLETE'
+      && diagnostic.path !== undefined
+      && ignoredDraftPaths.has(diagnostic.path)));
+  if (failure !== undefined) throwWorkspaceDiagnostic(failure);
+  const { registry } = readWorkspaceRegistry(root);
+  const skillRefPaths = new Map<CanonicalSkillRef, Set<string>>();
+  for (const resolution of lattice.resolutions) {
+    const paths = skillRefPaths.get(resolution.effective.skill_ref) ?? new Set<string>();
+    for (const contributor of resolution.contributors) paths.add(contributor.path);
+    skillRefPaths.set(resolution.effective.skill_ref, paths);
+  }
+  const map = buildVendorSkillMap({
+    workspaceRoot: root,
+    skillRefs: lattice.definitions.map((definition) => definition.skill_ref),
+    skillRefPaths: new Map([...skillRefPaths].map(([skillRef, paths]) => [skillRef, [...paths]])),
+    enabledHosts: enabledV2Hosts(registry),
+    manifest: readFounderSkillsManifest(root),
+    lockfile: readLockfile(root),
+    generatorVersion: getPackageVersion(),
+  });
+  return { map, content: serializeVendorSkillMap(map), definitionCount: lattice.definitions.length };
+}
+
+export function prepareVendorSkillMap(root: string): PreparedVendorSkillMap {
+  const snapshot = collectCompleteWorkspaceSnapshot(root);
+  const expected = buildExpectedVendorSkillMap(root, snapshot);
+  return { snapshot, map: expected.map, content: expected.content };
+}
+
+function validateVendorSkillMap(
+  root: string,
+  snapshot: CompleteWorkspaceSnapshot,
+  ignoredDraftPaths: ReadonlySet<string> = new Set(),
+  lattice?: ToolUseLatticeValidationResult,
+): WorkspaceDiagnostic[] {
+  try {
+    const expected = buildExpectedVendorSkillMap(root, snapshot, ignoredDraftPaths, lattice);
+    const current = tryReadWorkspaceFile(root, VENDOR_SKILL_MAP_PATH, { maxBytes: VENDOR_SKILL_MAP_MAX_BYTES });
+    if (current === null && expected.definitionCount === 0) return [];
+    if (current === null) {
+      return [workspaceDiagnostic(
+        'SKILL_REF_UNMAPPED',
+        'Authored tool guidance requires a generated vendor-skill map.',
+        {
+          path: VENDOR_SKILL_MAP_PATH,
+          remedy: 'Run roster update after completing every authored tool-use definition.',
+          details: { path: VENDOR_SKILL_MAP_PATH },
+        },
+      )];
+    }
+    if (current.toString('utf8') !== expected.content) {
+      if (ignoredDraftPaths.size > 0) {
+        const parsed = parseVendorSkillMap(current.toString('utf8'));
+        if (parsed !== null && parsed.generator_version === expected.map.generator_version) {
+          const currentByRef = new Map(parsed.skills.map((entry) => [entry.skill_ref, entry]));
+          const requiredEntriesMatch = expected.map.skills.every((entry) => {
+            const currentEntry = currentByRef.get(entry.skill_ref);
+            if (currentEntry === undefined
+              || canonicalJson(currentEntry.hosts) !== canonicalJson(entry.hosts)) return false;
+            const relevantCurrentPaths = currentEntry.authored_paths
+              .filter((path) => !ignoredDraftPaths.has(path));
+            return canonicalJson(relevantCurrentPaths) === canonicalJson(entry.authored_paths);
+          });
+          const expectedRefs = new Set(expected.map.skills.map((entry) => entry.skill_ref));
+          const extrasAreIgnoredDrafts = parsed.skills
+            .filter((entry) => !expectedRefs.has(entry.skill_ref))
+            .every((entry) => entry.authored_paths.length > 0
+              && entry.authored_paths.every((path) => ignoredDraftPaths.has(path))
+              && Object.values(entry.hosts).every((locator) => locator.kind === 'host-native'));
+          if (requiredEntriesMatch && extrasAreIgnoredDrafts) return [];
+        }
+      }
+      return [workspaceDiagnostic(
+        'SKILL_REF_DRIFTED',
+        'The generated vendor-skill map is missing canonical bytes or no longer matches authored guidance.',
+        {
+          path: VENDOR_SKILL_MAP_PATH,
+          remedy: 'Run roster update after repairing tool definitions and reviewed founder-skill metadata.',
+          details: { path: VENDOR_SKILL_MAP_PATH },
+        },
+      )];
+    }
+    return [];
+  } catch (error) {
+    if (!isWorkspaceFailure(error)) throw error;
+    return [diagnosticFromFailure(error)];
+  }
 }
 
 function registeredForScaffold(
@@ -667,14 +1082,21 @@ function registeredForScaffold(
   registry: WorkspaceRegistry,
   functionDefinition?: FunctionDefinition,
   agentDefinition?: AgentDefinition,
+  planDefinition?: PlanEnvelope,
+  scope?: WorkspaceScope,
 ): boolean {
   if (kind === 'function') return registry.functions[id] !== undefined;
+  if (kind === 'tool-use') {
+    if (scope?.function === undefined) return registry.tool_uses.includes(id);
+    if (scope.agent === undefined) return functionDefinition?.tool_uses.includes(id) ?? false;
+    if (scope.plan === undefined) return agentDefinition?.tool_uses.includes(id) ?? false;
+    return planDefinition?.tool_uses.includes(id) ?? false;
+  }
   if (kind === 'agent') return functionDefinition?.agents.includes(id) ?? false;
   if (kind === 'guideline' && agentDefinition === undefined) return functionDefinition?.guidelines.includes(id) ?? false;
   if (kind === 'plan') return agentDefinition?.plans.includes(id) ?? false;
   if (kind === 'subagent') return agentDefinition?.subagents.includes(id) ?? false;
   if (kind === 'guideline') return agentDefinition?.guidelines.includes(id) ?? false;
-  if (kind === 'tool-use') return agentDefinition?.tool_uses.includes(id) ?? false;
   return agentDefinition?.lessons.includes(id) ?? false;
 }
 
@@ -688,6 +1110,14 @@ function membershipField(kind: Exclude<WorkspaceRecordKind, 'function' | 'agent'
 
 function expectedQualifiedId(kind: WorkspaceRecordKind, id: string, scope?: WorkspaceScope): string {
   if (kind === 'function') return id;
+  if (kind === 'tool-use') {
+    return qualifiedRecordId(kind, {
+      ...(scope?.function === undefined ? {} : { functionId: scope.function }),
+      ...(scope?.agent === undefined ? {} : { agentId: scope.agent }),
+      ...(scope?.plan === undefined ? {} : { planId: scope.plan }),
+      localId: id,
+    });
+  }
   if (scope?.function === undefined) {
     throw workspaceFailure('IDENTITY_INVALID', `Missing scope for '${kind}:${id}'.`, 'Pass the scope required by the scaffold kind.', { kind, id });
   }
@@ -708,7 +1138,9 @@ function assertScaffoldScope(kind: WorkspaceRecordKind, scope: ReturnType<typeof
         ? scopeKind === 'agent'
         : kind === 'guideline'
           ? scopeKind === 'function' || scopeKind === 'agent'
-          : scopeKind === 'agent' || scopeKind === 'plan';
+          : kind === 'tool-use'
+            ? scopeKind === 'workspace' || scopeKind === 'function' || scopeKind === 'agent' || scopeKind === 'plan'
+            : scopeKind === 'agent' || scopeKind === 'plan';
   if (!valid) {
     throw workspaceFailure(
       'IDENTITY_INVALID',
@@ -719,22 +1151,11 @@ function assertScaffoldScope(kind: WorkspaceRecordKind, scope: ReturnType<typeof
   }
 }
 
-function assertPlanScopeHealthy(root: string, fn: LoadedFunction, agent: LoadedAgent, planId: string): void {
-  if (!agent.definition.plans.includes(planId)) {
-    throw workspaceFailure('PARENT_NOT_FOUND', `Plan '${agent.definition.function}/${agent.definition.id}#${planId}' is not registered.`, 'Scaffold the plan before using it as a scope.', { plan: planId });
-  }
-  const path = childRecordPath(fn.root, agent.definition.id, 'plan', planId);
-  const file = readAuthored(root, path);
-  const definition = parsePlanEnvelope(file.text, path);
-  const expectedAgent = `${agent.definition.function}/${agent.definition.id}`;
-  if (definition.id !== planId) identityMismatch(path, planId, definition.id);
-  if (definition.agent !== expectedAgent) identityMismatch(path, expectedAgent, definition.agent);
-}
-
 function requestedRecordScope(kind: WorkspaceRecordKind, scope: WorkspaceScope | undefined): Record<string, string> {
   if (kind === 'function') return {};
   if (kind === 'agent') return { function: scope!.function! };
-  if (kind === 'tool-use' || kind === 'lesson') {
+  if (kind === 'tool-use') return { ...(scope ?? {}) } as Record<string, string>;
+  if (kind === 'lesson') {
     return {
       function: scope!.function!,
       agent: scope!.agent!,
@@ -771,6 +1192,27 @@ function assertRenderedScaffold(
     if (child.function !== scope!.function) identityMismatch(targetPath, scope!.function!, child.function);
     const parent = parseFunctionDefinition(updatedParent, parentPath);
     if (!parent.agents.includes(id)) identityMismatch(parentPath, id, '(none)');
+    return;
+  }
+  if (kind === 'tool-use') {
+    const child = parseWorkspaceToolUseEnvelope(rendered, targetPath);
+    if (child.id !== id) identityMismatch(targetPath, id, child.id);
+    if (!toolUseScopeMatches(child.scope, scope ?? {})) {
+      throw workspaceFailure(
+        'IDENTITY_PATH_MISMATCH',
+        `${targetPath}: rendered tool-use scope does not match its requested owner.`,
+        'Retry scaffolding with the exact workspace, function, agent, or plan scope.',
+        { path: targetPath, expected_scope: scope ?? {}, actual_scope: child.scope },
+      );
+    }
+    const parentMembership = scope?.function === undefined
+      ? parseWorkspaceRegistry(updatedParent, parentPath).tool_uses
+      : scope.agent === undefined
+        ? parseFunctionDefinition(updatedParent, parentPath).tool_uses
+        : scope.plan === undefined
+          ? parseAgentDefinition(updatedParent, parentPath).tool_uses
+          : parsePlanEnvelope(updatedParent, parentPath).tool_uses;
+    if (!parentMembership.includes(id)) identityMismatch(parentPath, id, '(none)');
     return;
   }
   if (kind === 'guideline' || kind === 'lesson') {
@@ -810,13 +1252,14 @@ export function scaffoldWorkspace(
     const purpose = options.purpose ?? '';
     let fn: LoadedFunction | undefined;
     let agent: LoadedAgent | undefined;
+    let plan: LoadedPlan | undefined;
     if (scope?.function !== undefined) fn = loadFunction(root, loadedRegistry.registry, scope.function);
     if (scope?.agent !== undefined) agent = loadAgent(root, loadedRegistry.registry, scope.function!, scope.agent, undefined, fn);
     if (scope?.plan !== undefined) {
       if (agent === undefined || fn === undefined) {
         throw workspaceFailure('PARENT_NOT_FOUND', `Plan '${parsedScope!.qualifiedId}' is not registered.`, `Run roster scaffold plan ${scope.plan} --scope agent:${scope.function}/${scope.agent} first.`, { plan: parsedScope!.qualifiedId });
       }
-      assertPlanScopeHealthy(root, fn, agent, scope.plan);
+      plan = loadPlan(root, fn, agent, scope.plan);
     }
     const alreadyRegistered = registeredForScaffold(
       options.kind,
@@ -824,6 +1267,8 @@ export function scaffoldWorkspace(
       loadedRegistry.registry,
       fn?.definition,
       agent?.definition,
+      plan?.definition,
+      scope,
     );
     const qualifiedId = expectedQualifiedId(options.kind, id, scope);
     if (alreadyRegistered) {
@@ -864,6 +1309,37 @@ export function scaffoldWorkspace(
       parentHash = hashWorkspaceBytes(fn.bytes);
       updatedParent = addYamlMembership(parentText, parentPath, 'agents', id);
       rendered = renderAgentDefinition(scope.function, id, purpose);
+    } else if (options.kind === 'tool-use') {
+      const ownerScope = scope ?? {};
+      targetPath = childRecordPath(fn?.root ?? '', ownerScope.agent ?? '', options.kind, id, ownerScope);
+      if (ownerScope.function === undefined) {
+        parentPath = 'roster.yaml';
+        parentText = loadedRegistry.text;
+        parentHash = loadedRegistry.hash;
+      } else if (ownerScope.agent === undefined) {
+        if (fn === undefined) {
+          throw workspaceFailure('PARENT_NOT_FOUND', 'Tool-use function scope is not registered.', 'Pass a registered function scope.');
+        }
+        parentPath = fn.path;
+        parentText = fn.text;
+        parentHash = hashWorkspaceBytes(fn.bytes);
+      } else if (ownerScope.plan === undefined) {
+        if (agent === undefined) {
+          throw workspaceFailure('PARENT_NOT_FOUND', 'Tool-use agent scope is not registered.', 'Pass a registered agent scope.');
+        }
+        parentPath = agent.path;
+        parentText = agent.text;
+        parentHash = hashWorkspaceBytes(agent.bytes);
+      } else {
+        if (plan === undefined) {
+          throw workspaceFailure('PARENT_NOT_FOUND', 'Tool-use plan scope is not registered.', 'Pass a registered plan scope.');
+        }
+        parentPath = plan.path;
+        parentText = plan.text;
+        parentHash = hashWorkspaceBytes(plan.bytes);
+      }
+      updatedParent = addYamlMembership(parentText, parentPath, 'tool_uses', id);
+      rendered = renderToolUseDraft(id, purpose, ownerScope);
     } else {
       if (fn === undefined || scope?.function === undefined) {
         throw workspaceFailure('PARENT_NOT_FOUND', `'${options.kind}' scope has no registered function.`, 'Pass a registered function or agent scope.');
@@ -887,7 +1363,7 @@ export function scaffoldWorkspace(
       if (options.kind === 'guideline' || options.kind === 'lesson') {
         rendered = renderMarkdownDefinition(options.kind, id, purpose, scope);
       } else {
-        rendered = renderChildDefinition(options.kind, scope.function, scope.agent!, id, purpose, scope);
+        rendered = renderChildDefinition(options.kind, scope.function, scope.agent!, id, purpose);
       }
     }
 
@@ -956,6 +1432,60 @@ function inspectSlot(
   }
 }
 
+function inspectPlanSlot(
+  root: string,
+  fn: LoadedFunction,
+  agent: LoadedAgent,
+  diagnostics: WorkspaceDiagnostic[],
+): void {
+  const slot = posix.join(posix.dirname(agent.path), 'plans');
+  let entries;
+  try {
+    entries = enumerateWorkspaceSlot(root, slot);
+  } catch (error) {
+    if (isWorkspaceFailure(error)) {
+      diagnostics.push(diagnosticFromFailure(error));
+      return;
+    }
+    throw error;
+  }
+  const planIds = new Set(agent.definition.plans);
+  const presentCompanions = new Set<string>();
+  for (const entry of entries) {
+    const fileMatch = /^(.*)\.yaml$/.exec(entry.name);
+    const acceptedFile = entry.kind === 'file' && fileMatch !== null && planIds.has(fileMatch[1]!);
+    const acceptedCompanion = entry.kind === 'directory' && planIds.has(entry.name);
+    if (acceptedCompanion) presentCompanions.add(entry.name);
+    if (!acceptedFile && !acceptedCompanion) {
+      diagnostics.push(workspaceDiagnostic('UNREGISTERED_RECORD', `Unregistered entry '${posix.join(slot, entry.name)}'.`, {
+        path: posix.join(slot, entry.name),
+        remedy: 'Remove it or adopt it through the matching explicit scaffold command.',
+      }));
+    }
+  }
+  for (const planId of [...presentCompanions].sort((a, b) => a.localeCompare(b, 'en'))) {
+    let plan: LoadedPlan;
+    try {
+      plan = loadPlan(root, fn, agent, planId);
+    } catch (error) {
+      if (isWorkspaceFailure(error)) {
+        diagnostics.push(diagnosticFromFailure(error));
+        continue;
+      }
+      throw error;
+    }
+    const companion = planCompanionPath(fn.root, agent.definition.id, planId);
+    inspectSlot(root, companion, new Set(['tools']), 'directory', diagnostics);
+    inspectSlot(
+      root,
+      posix.join(companion, 'tools'),
+      expectedSlotNames(plan.definition.tool_uses, '.yaml'),
+      'file',
+      diagnostics,
+    );
+  }
+}
+
 function collectOrphanDiagnostics(root: string): WorkspaceDiagnostic[] {
   const diagnostics: WorkspaceDiagnostic[] = [];
   const { registry } = readWorkspaceRegistry(root);
@@ -968,6 +1498,7 @@ function collectOrphanDiagnostics(root: string): WorkspaceDiagnostic[] {
     'directory',
     diagnostics,
   );
+  inspectSlot(root, 'tools', expectedSlotNames(registry.tool_uses, '.yaml'), 'file', diagnostics);
   for (const functionId of Object.keys(registry.functions).sort()) {
     let fn: LoadedFunction;
     try {
@@ -981,6 +1512,7 @@ function collectOrphanDiagnostics(root: string): WorkspaceDiagnostic[] {
     }
     inspectSlot(root, posix.join(fn.root, 'agents'), expectedSlotNames(fn.definition.agents, ''), 'directory', diagnostics);
     inspectSlot(root, posix.join(fn.root, 'guidelines'), expectedSlotNames(fn.definition.guidelines, '.md'), 'file', diagnostics);
+    inspectSlot(root, posix.join(fn.root, 'tools'), expectedSlotNames(fn.definition.tool_uses, '.yaml'), 'file', diagnostics);
     for (const agentId of fn.definition.agents) {
       let agent: LoadedAgent;
       try {
@@ -993,7 +1525,7 @@ function collectOrphanDiagnostics(root: string): WorkspaceDiagnostic[] {
         throw error;
       }
       const base = posix.dirname(agent.path);
-      inspectSlot(root, posix.join(base, 'plans'), expectedSlotNames(agent.definition.plans, '.yaml'), 'file', diagnostics);
+      inspectPlanSlot(root, fn, agent, diagnostics);
       inspectSlot(root, posix.join(base, 'subagents'), expectedSlotNames(agent.definition.subagents, '.yaml'), 'file', diagnostics);
       inspectSlot(root, posix.join(base, 'guidelines'), expectedSlotNames(agent.definition.guidelines, '.md'), 'file', diagnostics);
       inspectSlot(root, posix.join(base, 'tools'), expectedSlotNames(agent.definition.tool_uses, '.yaml'), 'file', diagnostics);
@@ -1003,25 +1535,127 @@ function collectOrphanDiagnostics(root: string): WorkspaceDiagnostic[] {
   return diagnostics;
 }
 
-export function validateWorkspace(root: string, options: { target?: string } = {}): ValidateWorkspaceResult {
+type TargetedPlanToolUseRelevance = ReadonlyArray<{
+  localIds: ReadonlySet<string>;
+  scope: WorkspaceScope;
+}>;
+
+function collectTargetedPlanToolUseRelevance(
+  records: readonly WorkspaceDiscoveryRecord[],
+  target: WorkspaceDiscoveryRecord,
+): TargetedPlanToolUseRelevance | undefined {
+  if (target.kind !== 'plan') return undefined;
+  const parsed = new Map<string, StructuredPlan>();
+  for (const recordValue of records) {
+    if (recordValue.kind !== 'plan' || recordValue.content === undefined) continue;
+    try {
+      parsed.set(recordValue.qualified_id, parseStructuredPlan(recordValue.content, recordValue.path));
+    } catch {
+      continue;
+    }
+  }
+  const contexts: Array<{ localIds: ReadonlySet<string>; scope: WorkspaceScope }> = [];
+  const visited = new Set<string>();
+  const pending = [target.qualified_id];
+  while (pending.length > 0) {
+    const qualifiedId = pending.pop()!;
+    if (visited.has(qualifiedId)) continue;
+    visited.add(qualifiedId);
+    const plan = parsed.get(qualifiedId);
+    if (plan === undefined) continue;
+    const [functionId, agentId] = plan.agent.split('/');
+    if (functionId === undefined || agentId === undefined) continue;
+    const localIds = new Set(plan.tool_uses);
+    for (const step of plan.steps) {
+      if (step.kind === 'tool') localIds.add(step.tool_use);
+      if (step.kind === 'nested-plan') pending.push(step.plan);
+    }
+    contexts.push({
+      localIds,
+      scope: { function: functionId, agent: agentId, plan: plan.id },
+    });
+  }
+  return contexts;
+}
+
+function toolUseScopeAppliesToContext(
+  draft: WorkspaceDiscoveryRecord,
+  context: WorkspaceScope,
+): boolean {
+  return draft.scope.function === undefined
+    || (draft.scope.function === context.function
+      && (draft.scope.agent === undefined
+        || (draft.scope.agent === context.agent
+          && (draft.scope.plan === undefined || draft.scope.plan === context.plan))));
+}
+
+function toolDraftAppliesToTarget(
+  draft: WorkspaceDiscoveryRecord,
+  target: WorkspaceDiscoveryRecord,
+  targetedPlanRelevance?: TargetedPlanToolUseRelevance,
+): boolean {
+  if (draft.kind !== 'tool-use') return false;
+  if (target.kind === 'plan' && targetedPlanRelevance !== undefined) {
+    const id = localId(draft);
+    return targetedPlanRelevance.some((context) => (
+      context.localIds.has(id) && toolUseScopeAppliesToContext(draft, context.scope)
+    ));
+  }
+  if (target.kind === 'function') {
+    return draft.scope.function === undefined || draft.scope.function === target.qualified_id;
+  }
+  if (target.kind === 'agent') {
+    const [functionId, agentId] = target.qualified_id.split('/');
+    return draft.scope.function === undefined
+      || (draft.scope.function === functionId
+        && (draft.scope.agent === undefined || draft.scope.agent === agentId));
+  }
+  if (target.kind === 'plan') {
+    const [agentQualified, planId] = target.qualified_id.split('#');
+    const [functionId, agentId] = agentQualified!.split('/');
+    return draft.scope.function === undefined
+      || (draft.scope.function === functionId
+        && (draft.scope.agent === undefined
+          || (draft.scope.agent === agentId
+            && (draft.scope.plan === undefined || draft.scope.plan === planId))));
+  }
+  return target.kind === 'tool-use'
+    && localId(draft) === localId(target)
+    && toolUseScopeAppliesToContext(draft, target.scope);
+}
+
+export function validateWorkspace(
+  root: string,
+  options: { target?: string; skipVendorSkillMap?: boolean } = {},
+): ValidateWorkspaceResult {
   assertV2Workspace(root);
   const checks: StructuralCheck[] = [];
   const diagnostics: WorkspaceDiagnostic[] = [];
   let allRecords: WorkspaceDiscoveryRecord[] = [];
   let selectedRecords: WorkspaceDiscoveryRecord[] = [];
+  let completeSnapshot: CompleteWorkspaceSnapshot | undefined;
   let declaredRegistryPassed = false;
+  let toolLatticePassed = false;
+  let toolLattice: ToolUseLatticeValidationResult | undefined;
+  const ignoredDraftPaths = new Set<string>();
   try {
-    allRecords = collectWorkspaceRecords(root, true);
+    const collected = collectWorkspaceRecords(root, true);
+    allRecords = collected.records;
+    diagnostics.push(...collected.diagnostics);
     selectedRecords = filterWorkspaceRecords(allRecords, {
       ...(options.target === undefined ? {} : { query: options.target, exact: true }),
       full: true,
     });
-    declaredRegistryPassed = true;
+    declaredRegistryPassed = !collected.diagnostics.some((entry) => entry.severity === 'error');
+    if (declaredRegistryPassed) completeSnapshot = mintCompleteWorkspaceSnapshot(allRecords);
     checks.push({
       name: 'declared-registry',
       severity: 'error',
-      status: 'pass',
-      details: { records: selectedRecords.length },
+      status: declaredRegistryPassed ? 'pass' : 'fail',
+      details: {
+        records: selectedRecords.length,
+        ...(declaredRegistryPassed ? {} : { diagnostics: collected.diagnostics.length }),
+      },
     });
   } catch (error) {
     if (!isWorkspaceFailure(error)) throw error;
@@ -1033,7 +1667,68 @@ export function validateWorkspace(root: string, options: { target?: string } = {
       details: { code: error.code },
     });
   }
-  if (!declaredRegistryPassed) {
+  if (!declaredRegistryPassed || completeSnapshot === undefined) {
+    checks.push({
+      name: 'tool-use-lattice',
+      severity: 'error',
+      status: 'fail',
+      details: { blocked_by: 'declared-registry', diagnostics: 0 },
+    });
+  } else {
+    const lattice = validateToolUseLattice(completeSnapshot);
+    toolLattice = lattice;
+    const selectedTarget = options.target === undefined ? undefined : selectedRecords[0];
+    const targetedPlanRelevance = selectedTarget === undefined
+      ? undefined
+      : collectTargetedPlanToolUseRelevance(completeSnapshot.records, selectedTarget);
+    const latticeDiagnostics = lattice.diagnostics.filter((diagnostic) => {
+      if (diagnostic.code !== 'TOOL_USE_DRAFT_INCOMPLETE'
+        || diagnostic.path === undefined
+        || selectedTarget === undefined) return true;
+      const record = allRecords.find((candidate) => candidate.path === diagnostic.path);
+      if (record === undefined || toolDraftAppliesToTarget(record, selectedTarget, targetedPlanRelevance)) return true;
+      ignoredDraftPaths.add(diagnostic.path);
+      return false;
+    });
+    diagnostics.push(...latticeDiagnostics);
+    toolLatticePassed = !latticeDiagnostics.some((entry) => entry.severity === 'error');
+    checks.push({
+      name: 'tool-use-lattice',
+      severity: 'error',
+      status: toolLatticePassed ? 'pass' : 'fail',
+      details: {
+        definitions: lattice.definitions.length,
+        resolutions: lattice.resolutions.length,
+        diagnostics: latticeDiagnostics.length,
+        ...(ignoredDraftPaths.size === 0 ? {} : { ignored_unrelated_drafts: ignoredDraftPaths.size }),
+      },
+    });
+  }
+  if (options.skipVendorSkillMap === true) {
+    checks.push({
+      name: 'vendor-skill-map',
+      severity: 'error',
+      status: 'pass',
+      details: { skipped_for: 'founder-skills-sync', diagnostics: 0 },
+    });
+  } else if (!toolLatticePassed || completeSnapshot === undefined) {
+    checks.push({
+      name: 'vendor-skill-map',
+      severity: 'error',
+      status: 'fail',
+      details: { blocked_by: declaredRegistryPassed ? 'tool-use-lattice' : 'declared-registry', diagnostics: 0 },
+    });
+  } else {
+    const mapDiagnostics = validateVendorSkillMap(root, completeSnapshot, ignoredDraftPaths, toolLattice);
+    diagnostics.push(...mapDiagnostics);
+    checks.push({
+      name: 'vendor-skill-map',
+      severity: 'error',
+      status: mapDiagnostics.some((entry) => entry.severity === 'error') ? 'fail' : 'pass',
+      details: { diagnostics: mapDiagnostics.length },
+    });
+  }
+  if (!declaredRegistryPassed || completeSnapshot === undefined) {
     checks.push({
       name: 'structured-plans',
       severity: 'error',
@@ -1058,7 +1753,7 @@ export function validateWorkspace(root: string, options: { target?: string } = {
               .map((record) => record.qualified_id)
             : [];
     }
-    const structured = validateStructuredPlans(allRecords, roots);
+    const structured = validateStructuredPlans(completeSnapshot.records, roots, completeSnapshot);
     diagnostics.push(...structured.diagnostics);
     checks.push({
       name: 'structured-plans',

@@ -1,4 +1,4 @@
-import { EXIT_OK } from '../lib/errors.ts';
+import { EXIT_ERROR, EXIT_OK } from '../lib/errors.ts';
 import { discoverWorkspace } from '../lib/workspace-registry.ts';
 import type { WorkspaceRecordKind } from '../lib/workspace-layout.ts';
 
@@ -22,13 +22,19 @@ export function executeDiscover(options: DiscoverCommandOptions): number {
   });
   if (options.json) {
     console.log(JSON.stringify(result, null, 2));
-  } else if (result.records.length === 0) {
-    console.log('No matching Roster records.');
   } else {
+    const hasError = result.diagnostics.some((diagnostic) => diagnostic.severity === 'error');
+    for (const diagnostic of result.diagnostics) {
+      console.error(`${diagnostic.code}: ${diagnostic.message}`);
+      if (diagnostic.remedy !== undefined) console.error(`  ${diagnostic.remedy}`);
+    }
+    if (result.records.length === 0 && !hasError) console.log('No matching Roster records.');
     for (const record of result.records) {
       console.log(`${record.kind} ${record.qualified_id} -> ${record.path}`);
       if (options.full && record.content !== undefined) console.log(record.content.trimEnd());
     }
   }
-  return EXIT_OK;
+  return result.diagnostics.some((diagnostic) => diagnostic.severity === 'error')
+    ? EXIT_ERROR
+    : EXIT_OK;
 }

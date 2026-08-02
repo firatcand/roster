@@ -645,6 +645,68 @@ test('creation tokens prevent hash-equal replacement cleanup', () => {
   }
 });
 
+test('replacement tokens prevent hash-equal concurrent bytes from being overwritten during rollback', () => {
+  const fx = fixture();
+  try {
+    writeFileSync(join(fx.root, 'record'), 'prior\n');
+    let token: WorkspaceFileIdentityToken | undefined;
+    replaceWorkspaceFile(fx.root, 'record', 'published\n', {
+      expectedHash: hashWorkspaceBytes('prior\n'),
+      capturePublication(published) {
+        token = published;
+      },
+    });
+    assert.notEqual(token, undefined);
+    renameSync(join(fx.root, 'record'), join(fx.root, 'published-by-roster'));
+    writeFileSync(join(fx.root, 'record'), 'published\n');
+
+    assert.equal(failureCode(() => replaceWorkspaceFile(fx.root, 'record', 'prior\n', {
+      expectedHash: hashWorkspaceBytes('published\n'),
+      expectedIdentity: token!,
+    })), 'WRITE_CONFLICT');
+    assert.equal(readFileSync(join(fx.root, 'record'), 'utf8'), 'published\n');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('artifact-owned bounds support identity-guarded create and replacement rollback above 512 KiB', () => {
+  const fx = fixture();
+  const maxBytes = 1024 * 1024;
+  const prior = Buffer.alloc(600 * 1024, 'a');
+  const published = Buffer.alloc(600 * 1024, 'b');
+  try {
+    let creation: WorkspaceFileIdentityToken | undefined;
+    assert.equal(publishCreateOnly(fx.root, 'large-created', published, {
+      captureCreation(token) {
+        creation = token;
+      },
+    }), 'created');
+    assert.notEqual(creation, undefined);
+    assert.equal(removePublishedWorkspaceFile(fx.root, 'large-created', creation!, { maxBytes }), true);
+    assert.equal(existsSync(join(fx.root, 'large-created')), false);
+
+    writeFileSync(join(fx.root, 'large-replaced'), prior);
+    let replacement: WorkspaceFileIdentityToken | undefined;
+    replaceWorkspaceFile(fx.root, 'large-replaced', published, {
+      expectedHash: hashWorkspaceBytes(prior),
+      maxBytes,
+      capturePublication(token) {
+        replacement = token;
+      },
+    });
+    assert.notEqual(replacement, undefined);
+    replaceWorkspaceFile(fx.root, 'large-replaced', prior, {
+      expectedHash: hashWorkspaceBytes(published),
+      expectedIdentity: replacement!,
+      maxBytes,
+    });
+    assert.deepEqual(readFileSync(join(fx.root, 'large-replaced')), prior);
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test('directory creation rolls back partial trees and preserves replaced final components', () => {
   const partial = fixture();
   try {

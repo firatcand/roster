@@ -41,7 +41,7 @@ function withWorkspace<T>(fn: (cwd: string) => Promise<T> | T): Promise<T> | T {
   const codexHome = join(cwd, '.fakehome-codex');
   mkdirSync(claudeHome, { recursive: true });
   mkdirSync(codexHome, { recursive: true });
-  writeFileSync(join(cwd, 'roster.yaml'), 'schema_version: 2\nworkspace_id: test\nfunctions: {}\nhosts: {}\n');
+  writeFileSync(join(cwd, 'roster.yaml'), 'schema_version: 2\nworkspace_id: test\ntool_uses: []\nfunctions: {}\nhosts: {}\n');
   writeFileSync(join(cwd, 'ROSTER.md'), renderRosterBootstrap());
   assert.equal(updateV2ProjectActivations({ root: cwd }).ok, true);
   const saved = {
@@ -78,9 +78,44 @@ test('no manifest → no-op opt-in', async () => {
   });
 });
 
+test('a dangling manifest symlink fails through the confined reader before installation', async () => {
+  await withWorkspace(async (cwd) => {
+    symlinkSync('missing-founder-skills.yaml', join(cwd, 'founder-skills.yaml'));
+    const { installer, calls } = makeFakeInstaller();
+    await assert.rejects(
+      () => syncFounderSkills({ cwd, installer }),
+      (error: unknown) => error instanceof Error
+        && 'code' in error
+        && error.code === 'SYMLINK_COMPONENT',
+    );
+    assert.equal(calls.length, 0);
+    assert.equal(existsSync(join(cwd, 'founder-skills.lock')), false);
+  });
+});
+
+test('explicit sync safely rewrites an unreadable regular lock without trusting it for prune', async () => {
+  await withWorkspace(async (cwd) => {
+    writeManifest(cwd, 'ref: v1.0.0\nskills:\n  - pricing\n');
+    writeFileSync(
+      join(cwd, 'founder-skills.lock'),
+      'version: 1\nsource: github:firatcand/founder-skills\nskills:\n  - name: truncated\n',
+    );
+    const { installer } = makeFakeInstaller();
+    const result = await syncFounderSkills({ cwd, installer });
+    assert.equal(result.status, 'synced');
+    const lock = parseYaml(readFileSync(join(cwd, 'founder-skills.lock'), 'utf8'));
+    assert.deepEqual(lock.skills.map((skill: { name: string }) => skill.name), ['pricing']);
+    assert.ok(lock.skills[0].contentHashes.claude.startsWith('sha256:'));
+    assert.ok(lock.skills[0].contentHashes.codex.startsWith('sha256:'));
+  });
+});
+
 test('sync installs declared skills project-local into claude + codex, writes lock', async () => {
   await withWorkspace(async (cwd) => {
-    writeManifest(cwd, 'ref: v1.0.0\nskills:\n  - pricing\n  - sales-skill\n');
+    writeManifest(
+      cwd,
+      'ref: v1.0.0\nskills:\n  - name: pricing\n    skill_ref: founder-skills:pricing\n  - sales-skill\n',
+    );
     const { installer, calls } = makeFakeInstaller();
     const r = await syncFounderSkills({ cwd, installer });
     assert.equal(r.status, 'synced');
@@ -92,8 +127,56 @@ test('sync installs declared skills project-local into claude + codex, writes lo
     const lock = parseYaml(readFileSync(join(cwd, 'founder-skills.lock'), 'utf8'));
     assert.equal(lock.skills.length, 2);
     assert.equal(lock.skills[0].ref, 'v1.0.0');
+    assert.equal(lock.skills[0].skill_ref, 'founder-skills:pricing');
     assert.ok(lock.skills[0].contentHash.startsWith('sha256:'));
   });
+});
+
+test('sync refuses symlinked, over-deep, over-entry, and over-byte installed trees before minting hashes', async () => {
+  for (const unsafe of ['symlink', 'depth', 'entries', 'bytes'] as const) {
+    await withWorkspace(async (cwd) => {
+      writeManifest(cwd, 'ref: v1.0.0\nskills:\n  - pricing\n');
+      const sentinel = join(cwd, 'outside-sentinel');
+      writeFileSync(sentinel, 'outside bytes');
+      const installer: SkillsInstaller = {
+        async add(spec, opts) {
+          for (const tool of spec.tools) {
+            const root = join(opts.cwd, tool === 'claude' ? '.claude' : '.agents', 'skills', spec.skill);
+            mkdirSync(root, { recursive: true });
+            if (tool !== 'claude') {
+              writeFileSync(join(root, 'SKILL.md'), 'safe');
+              continue;
+            }
+            if (unsafe === 'symlink') {
+              symlinkSync(sentinel, join(root, 'escape'));
+            } else if (unsafe === 'depth') {
+              let directory = root;
+              for (let depth = 0; depth < 17; depth++) directory = join(directory, `d-${depth}`);
+              mkdirSync(directory, { recursive: true });
+              writeFileSync(join(directory, 'leaf'), 'x');
+            } else if (unsafe === 'entries') {
+              for (let index = 0; index <= 4_096; index++) {
+                writeFileSync(join(root, `entry-${index}`), '');
+              }
+            } else {
+              writeFileSync(join(root, 'large'), Buffer.alloc(4 * 1024 * 1024 + 1));
+            }
+          }
+        },
+      };
+
+      await assert.rejects(
+        () => syncFounderSkills({ cwd, installer }),
+        (error: unknown) => (
+          (error as { code?: unknown }).code === 'SYMLINK_COMPONENT'
+          || (error as { code?: unknown }).code === 'READ_LIMIT_EXCEEDED'
+        ),
+        unsafe,
+      );
+      assert.equal(existsSync(join(cwd, 'founder-skills.lock')), false, unsafe);
+      assert.equal(readFileSync(sentinel, 'utf8'), 'outside bytes', unsafe);
+    });
+  }
 });
 
 test('removing a skill from the manifest prunes it on re-sync (full reconcile)', async () => {
@@ -127,7 +210,7 @@ test('manifest present but not a workspace → refuses', async () => {
 test('sync refuses an init-only or invalid v2 workspace before invoking the installer', async () => {
   const cwd = mkdtempSync(join(tmpdir(), 'roster-fs-unactivated-'));
   try {
-    writeFileSync(join(cwd, 'roster.yaml'), 'schema_version: 2\nworkspace_id: test\nfunctions: {}\nhosts: {}\n');
+    writeFileSync(join(cwd, 'roster.yaml'), 'schema_version: 2\nworkspace_id: test\ntool_uses: []\nfunctions: {}\nhosts: {}\n');
     writeFileSync(join(cwd, 'ROSTER.md'), renderRosterBootstrap());
     writeManifest(cwd, 'ref: main\nskills:\n  - pricing\n');
     const { installer, calls } = makeFakeInstaller();
@@ -158,12 +241,17 @@ test('SECURITY: prune refuses to delete through a symlinked skills dir (Codex 2n
     // Prior lock claims roster installed `pricing` for claude.
     writeFileSync(
       join(cwd, 'founder-skills.lock'),
-      `version: 1\nsource: github:firatcand/founder-skills\nskills:\n  - name: pricing\n    ref: v1\n    contentHash: sha256:x\n    tools:\n      - claude\n`,
+      `version: 1\nsource: github:firatcand/founder-skills\nskills:\n  - name: pricing\n    ref: v1\n    contentHash: sha256:${'a'.repeat(64)}\n    tools:\n      - claude\n`,
     );
     // New manifest drops pricing → prune would target it.
     writeManifest(cwd, 'skills:\n  - sales-skill\n');
     const { installer } = makeFakeInstaller();
-    await syncFounderSkills({ cwd, installer });
+    await assert.rejects(
+      () => syncFounderSkills({ cwd, installer }),
+      (error: unknown) => error instanceof Error
+        && 'code' in error
+        && error.code === 'SYMLINK_COMPONENT',
+    );
     assert.ok(existsSync(join(external, 'pricing', 'KEEP')), 'external dir must NOT be pruned through a symlinked skills dir');
   });
 });
@@ -181,9 +269,10 @@ test('SECURITY: a hand-edited lock with a traversal name never deletes outside t
     );
     writeManifest(cwd, 'skills:\n  - pricing\n');
     const { installer } = makeFakeInstaller();
-    const r = await syncFounderSkills({ cwd, installer });
-    assert.equal(r.status, 'synced');
-    if (r.status === 'synced') assert.deepEqual(r.pruned, []); // evil name dropped at read boundary
+    const result = await syncFounderSkills({ cwd, installer });
+    assert.equal(result.status, 'synced');
     assert.ok(existsSync(sentinel), 'sentinel dir must survive');
+    const lock = parseYaml(readFileSync(join(cwd, 'founder-skills.lock'), 'utf8'));
+    assert.deepEqual(lock.skills.map((skill: { name: string }) => skill.name), ['pricing']);
   });
 });

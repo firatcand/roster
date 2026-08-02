@@ -18,6 +18,18 @@ src/lib/cron-*.ts
 src/bin/roster.ts
 src/lib/paths.ts
 
+# V2 authored workspace policy, bounded discovery, and portable vendor-skill
+# mapping — these paths decide which policy and project-local code reaches hosts
+src/lib/workspace-*.ts
+src/lib/internal/workspace-tool-use-snapshot.ts
+src/lib/internal/workspace-update-lock.ts
+src/lib/vendor-skills/**
+src/lib/authored-secret-detector.ts
+src/lib/founder-skills/lockfile.ts
+src/lib/founder-skills/manifest-schema.ts
+src/lib/founder-skills/sync.ts
+src/commands/update.ts
+
 # Copied verbatim into users' workspaces by `roster init`
 templates/scaffold/**
 

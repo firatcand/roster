@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -98,6 +98,131 @@ test('spawned CLI reports invalid scaffold arguments as JSON', () => {
   }
 });
 
+test('spawned CLI scaffolds tool-use guidance at all four explicit scopes', () => {
+  const fx = fixture();
+  try {
+    init(fx.root);
+    assert.equal(runCli(fx.root, ['scaffold', 'function', 'gtm', '--json']).status, 0);
+    assert.equal(runCli(fx.root, [
+      'scaffold',
+      'agent',
+      'social',
+      '--scope',
+      'function:gtm',
+      '--json',
+    ]).status, 0);
+    assert.equal(runCli(fx.root, [
+      'scaffold',
+      'plan',
+      'discover',
+      '--scope',
+      'agent:gtm/social',
+      '--json',
+    ]).status, 0);
+    for (const scope of [
+      'workspace',
+      'function:gtm',
+      'agent:gtm/social',
+      'plan:gtm/social#discover',
+    ]) {
+      const result = runCli(fx.root, [
+        'scaffold',
+        'tool-use',
+        'opportunity-research',
+        '--scope',
+        scope,
+        '--purpose',
+        `Guidance owned by ${scope}.`,
+        '--json',
+      ]);
+      assert.equal(result.status, 0, `scope ${scope}: ${result.stdout}\n${result.stderr}`);
+    }
+    for (const path of [
+      'tools/opportunity-research.yaml',
+      'functions/gtm/tools/opportunity-research.yaml',
+      'functions/gtm/agents/social/tools/opportunity-research.yaml',
+      'functions/gtm/agents/social/plans/discover/tools/opportunity-research.yaml',
+    ]) {
+      assert.equal(existsSync(join(fx.root, path)), true, `${path} should exist`);
+    }
+    const discovered = runCli(fx.root, ['discover', '--kind', 'tool-use', '--json']);
+    assert.equal(discovered.status, 0, discovered.stderr);
+    assert.deepEqual(
+      (json(discovered)['records'] as Array<{ qualified_id: string }>).map((record) => record.qualified_id),
+      [
+        'gtm/social/tools/opportunity-research',
+        'gtm/social#discover/tools/opportunity-research',
+        'gtm/tools/opportunity-research',
+        'tools/opportunity-research',
+      ],
+    );
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('spawned discovery surfaces escaped secret diagnostics without bytes or digests', () => {
+  const fx = fixture();
+  try {
+    init(fx.root);
+    assert.equal(runCli(fx.root, [
+      'scaffold',
+      'tool-use',
+      'research',
+      '--scope',
+      'workspace',
+      '--purpose',
+      'Research public opportunities.',
+      '--json',
+    ]).status, 0);
+    const canary = `sk-${'Ab9_'.repeat(7)}`;
+    writeFileSync(join(fx.root, 'tools', 'research.yaml'), [
+      'schema_version: 2',
+      'id: research',
+      'scope: {}',
+      `purpose: "\\u0073k-${'Ab9_'.repeat(7)}"`,
+      'skill_ref: exa:search',
+      '',
+    ].join('\n'));
+
+    const jsonResult = runCli(fx.root, [
+      'discover',
+      'tools/research',
+      '--kind',
+      'tool-use',
+      '--exact',
+      '--full',
+      '--json',
+    ]);
+    assert.equal(jsonResult.status, 1, jsonResult.stderr);
+    const envelope = json(jsonResult);
+    assert.equal(envelope['ok'], false);
+    assert.deepEqual(envelope['records'], []);
+    assert.equal((envelope['diagnostics'] as Array<{ code: string }>)[0]?.code, 'SECRET_MATERIAL_FORBIDDEN');
+    const serialized = JSON.stringify(envelope);
+    assert.equal(serialized.includes(canary), false);
+    assert.equal(serialized.includes('content_hash'), false);
+    assert.equal(serialized.includes('sha256:'), false);
+
+    const human = runCli(fx.root, [
+      'discover',
+      'tools/research',
+      '--kind',
+      'tool-use',
+      '--exact',
+      '--full',
+    ]);
+    assert.equal(human.status, 1);
+    assert.match(human.stderr, /SECRET_MATERIAL_FORBIDDEN/);
+    assert.match(human.stderr, /Remove the credential/);
+    assert.doesNotMatch(human.stdout, /No matching Roster records/);
+    assert.equal(`${human.stdout}${human.stderr}`.includes(canary), false);
+    assert.doesNotMatch(`${human.stdout}${human.stderr}`, /content_hash|sha256:/);
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test('spawned doctor rejects unknown arguments with the global JSON envelope', () => {
   const fx = fixture();
   try {
@@ -121,6 +246,8 @@ test('public help documents ratified v2 aliases without advertising --tool all',
     assert.match(result.stdout, /init \[workspace-id\] \[--name <workspace-id>\]/);
     assert.match(result.stdout, /--function <function-id>/);
     assert.match(result.stdout, /--agent <function\/agent>/);
+    assert.match(result.stdout, /--scope <owner>\s+Select workspace, function, agent, or plan ownership/);
+    assert.match(result.stdout, /roster update\s+Synchronize v2 activation and the derived vendor-skill map/);
     assert.doesNotMatch(result.stdout, /alias of --tool all/);
   } finally {
     fx.cleanup();
@@ -198,6 +325,7 @@ test('spawned CLI returns complete authored plans while validate enforces semant
       'inputs: {}',
       'brain_selectors: {}',
       'guidelines: []',
+      'tool_uses: []',
       'artifacts: {}',
       'caps: {}',
       'steps:',

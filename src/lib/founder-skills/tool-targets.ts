@@ -1,5 +1,6 @@
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 import type { ToolKey } from '../tools.ts';
+import { isSafeSkillName } from './manifest-schema.ts';
 
 // Tools the `skills` CLI can install founder-skills into, mapped to the
 // workspace-relative dir it writes to. Keep this in lockstep with roster's own
@@ -19,6 +20,11 @@ const PROJECT_SUBDIR: Record<'claude' | 'codex', string[]> = {
   codex: ['.agents', 'skills'],
 };
 
+export const PROJECT_SKILL_ROOTS: Readonly<Record<'claude' | 'codex', string>> = {
+  claude: '.claude/skills',
+  codex: '.agents/skills',
+};
+
 export function isSupportedFounderTool(key: ToolKey): key is 'claude' | 'codex' {
   return key === 'claude' || key === 'codex';
 }
@@ -29,4 +35,11 @@ export function agentFlagFor(key: 'claude' | 'codex'): string {
 
 export function targetDirFor(workspaceRoot: string, key: 'claude' | 'codex'): string {
   return join(workspaceRoot, ...PROJECT_SUBDIR[key]);
+}
+
+export function projectSkillPathFor(key: 'claude' | 'codex', skillName: string): string {
+  if (!isSafeSkillName(skillName)) {
+    throw new TypeError('A project skill path requires a bounded kebab-case skill name.');
+  }
+  return posix.join(PROJECT_SKILL_ROOTS[key], skillName);
 }

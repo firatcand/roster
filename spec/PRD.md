@@ -209,28 +209,32 @@ For a particular function, agent, or plan, the host knows not only which externa
 ### Example
 
 ```yaml
+schema_version: 2
 id: social-opportunity-research
 scope:
   function: gtm
   agent: social-manager
   plan: opportunity-discovery
 skill_ref: exa:search
-why: Find timely posts that match our audience and positioning.
+purpose: Find timely posts that match our audience and positioning.
 when:
   - discovering reply opportunities
-capabilities:
-  - web and social search
 how:
-  - search first-party and high-credibility sources for the requested lookback
-  - exclude previously presented URLs using Brain history
-  - rank by ICP relevance before engagement volume
+  - exclude URLs already presented according to Brain history
+  - rank ICP relevance before engagement volume
 output_expectations:
   required: [canonical_url, author, published_at, relevance_reason]
+  guidance: [include citations for every candidate]
 brain:
-  read: [icp, messaging, previously-presented-opportunities]
+  read: [icp-and-messaging, previously-presented-opportunities]
   write: [discovered-opportunity, retrieval-provenance]
-effects: read-only
-approval: none
+effects:
+  allowed: [external-read, brain-read, brain-write]
+approval:
+  requirement: human
+  guidance: [wait for the human before any engagement]
+evidence:
+  required: [canonical_url, retrieved_at]
 ```
 
 ### Explicit boundary
@@ -246,7 +250,15 @@ Roster does not provide generic provider routing, health checks, fallback execut
 
 ### Flow and edge cases
 
-The host resolves the most-specific applicable tool-use definition, loads its `skill_ref`, derives task-specific filters within company rules, invokes the vendor skill, and records provenance. Missing installs, ambiguous scope, unsafe effect changes, mutable unreviewed skill sources, and secret material block validation or doctor.
+The host resolves the applicable ancestry into one flat definition: only
+`purpose` is replaced by the most-specific value, company guidance accumulates,
+effects may only narrow, approval may only become stricter, and Brain selectors
+remain requested intent rather than authorization. It then loads `skill_ref`,
+derives task-specific filters within company rules, invokes the vendor skill,
+and records provenance. Missing installs, ambiguous scope, unsafe effect changes,
+unreviewed or drifted project-skill provenance, and secret material block
+validation or doctor. Reviewed mutable refs remain visible as
+`revision_immutable: false`; they are never mislabeled as immutable.
 
 ## Feature 6: Portable run, feedback, artifact, and decision evidence
 

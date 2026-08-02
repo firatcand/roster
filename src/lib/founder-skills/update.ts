@@ -1,15 +1,19 @@
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
 import { promisify } from 'node:util';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { stringify as stringifyYaml } from 'yaml';
 import chalk from 'chalk';
-import { atomicWriteFile } from '../schedule-yaml.ts';
 import { RosterError, EXIT_ERROR } from '../errors.ts';
-import { founderManifestSchema, normalizeManifest } from './manifest-schema.ts';
+import { workspaceFailure } from '../workspace-diagnostics.ts';
+import {
+  FOUNDER_SKILLS_MANIFEST_NAME,
+  readFounderSkillsManifestSnapshot,
+  type NormalizedManifest,
+} from './manifest-schema.ts';
 import { parseSource } from './installer.ts';
+import { normalizeFounderRevision } from '../vendor-skills/provenance.ts';
+import { hashWorkspaceBytes, replaceWorkspaceFile } from '../workspace-io.ts';
 import {
   assertFounderSkillsWorkspace,
-  manifestPath,
   syncFounderSkills,
   type SyncResult,
   type SyncOptions,
@@ -66,28 +70,46 @@ export type UpdateOptions = SyncOptions & {
   resolver: RefResolver;
 };
 
-// Rewrite the manifest so every skill is pinned to `ref`. Collapses to the
-// top-level `ref` form (one ref for all skills) since --latest bumps the whole
-// set together.
-function rewriteManifestRef(workspaceRoot: string, ref: string): void {
-  const path = manifestPath(workspaceRoot);
-  const raw = parseYaml(readFileSync(path, 'utf8')) as Record<string, unknown>;
-  const parsed = founderManifestSchema.parse(raw ?? {});
-  const names = normalizeManifest(parsed).skills.map((s) => s.name);
-  const next = { source: parsed.source, ref, skills: names };
-  atomicWriteFile(path, stringifyYaml(next), workspaceRoot);
+// Rewrite the manifest so every skill is pinned to `ref`, retaining the
+// explicit skill_ref join metadata used by the generated vendor-skill map.
+function rewriteManifestRef(
+  workspaceRoot: string,
+  manifest: NormalizedManifest,
+  ref: string,
+  expectedHash: string,
+): void {
+  const skills = manifest.skills.map((skill) => skill.skillRef === undefined
+    ? skill.name
+    : { name: skill.name, skill_ref: skill.skillRef });
+  const next = { source: manifest.source, ref, skills };
+  replaceWorkspaceFile(workspaceRoot, FOUNDER_SKILLS_MANIFEST_NAME, stringifyYaml(next), {
+    expectedHash,
+  });
 }
 
 export async function updateFounderSkills(opts: UpdateOptions): Promise<SyncResult> {
   assertFounderSkillsWorkspace(opts.cwd);
-  if (!existsSync(manifestPath(opts.cwd))) {
-    return { status: 'no-manifest' };
-  }
+  const snapshot = readFounderSkillsManifestSnapshot(opts.cwd);
+  if (snapshot === null) return { status: 'no-manifest' };
   if (opts.latest) {
-    const raw = parseYaml(readFileSync(manifestPath(opts.cwd), 'utf8')) as Record<string, unknown>;
-    const parsed = founderManifestSchema.parse(raw ?? {});
-    const newRef = await opts.resolver.latest(parsed.source);
-    rewriteManifestRef(opts.cwd, newRef);
+    const newRef = normalizeFounderRevision(await opts.resolver.latest(snapshot.manifest.source), {
+      path: FOUNDER_SKILLS_MANIFEST_NAME,
+    });
+    const current = readFounderSkillsManifestSnapshot(opts.cwd);
+    if (current === null || !current.bytes.equals(snapshot.bytes)) {
+      throw workspaceFailure(
+        'WRITE_CONFLICT',
+        'founder-skills.yaml changed while the latest revision was being resolved.',
+        'Preserve the concurrent manifest bytes, review the edit, and retry the update.',
+        { path: FOUNDER_SKILLS_MANIFEST_NAME },
+      );
+    }
+    rewriteManifestRef(
+      opts.cwd,
+      snapshot.manifest,
+      newRef,
+      hashWorkspaceBytes(snapshot.bytes),
+    );
   }
   return syncFounderSkills({ cwd: opts.cwd, installer: opts.installer });
 }

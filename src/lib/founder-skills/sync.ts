@@ -1,6 +1,5 @@
-import { existsSync, lstatSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync, rmSync } from 'node:fs';
 import { join, sep } from 'node:path';
-import { parse as parseYaml } from 'yaml';
 import { detectTools, type ToolKey } from '../tools.ts';
 import {
   legacyWorkspaceError,
@@ -15,13 +14,12 @@ import {
   parseGeneratedManifest,
 } from '../generated-artifacts.ts';
 import { tryReadWorkspaceFile } from '../workspace-io.ts';
-import { workspaceFailure } from '../workspace-diagnostics.ts';
+import { isWorkspaceFailure, workspaceFailure } from '../workspace-diagnostics.ts';
 import {
-  founderManifestSchema,
-  normalizeManifest,
   isSafeSkillName,
-  type NormalizedManifest,
   FOUNDER_SKILLS_LOCK_VERSION,
+  FOUNDER_SKILLS_MANIFEST_NAME,
+  readFounderSkillsManifest,
 } from './manifest-schema.ts';
 import { parseSource, type SkillsInstaller } from './installer.ts';
 import {
@@ -30,14 +28,14 @@ import {
   targetDirFor,
 } from './tool-targets.ts';
 import {
-  hashSkillDir,
   readLockfile,
   writeLockfile,
   type Lockfile,
   type LockedSkill,
 } from './lockfile.ts';
+import { hashProjectSkillForHost } from '../vendor-skills/adapter-map.ts';
 
-export const MANIFEST_NAME = 'founder-skills.yaml';
+export const MANIFEST_NAME = FOUNDER_SKILLS_MANIFEST_NAME;
 
 export function manifestPath(workspaceRoot: string): string {
   return join(workspaceRoot, MANIFEST_NAME);
@@ -60,7 +58,7 @@ export type SyncOptions = {
 export function assertFounderSkillsWorkspace(cwd: string): void {
   const probe = probeWorkspace(cwd);
   if (probe.kind === 'v2') {
-    const validation = validateWorkspace(cwd);
+    const validation = validateWorkspace(cwd, { skipVendorSkillMap: true });
     if (!validation.ok) {
       const diagnostic = validation.diagnostics.find((entry) => entry.severity === 'error')!;
       throw workspaceFailure(
@@ -93,12 +91,6 @@ export function assertFounderSkillsWorkspace(cwd: string): void {
   if (probe.kind === 'mixed') throw mixedWorkspaceError(probe.v2Signals, probe.legacySignals);
   if (probe.kind === 'unsafe') throw unsafeWorkspaceMarkerError(probe.unsafeSignals);
   throw workspaceRequiredError(cwd);
-}
-
-function loadManifest(workspaceRoot: string): NormalizedManifest {
-  const raw = parseYaml(readFileSync(manifestPath(workspaceRoot), 'utf8')) as unknown;
-  const parsed = founderManifestSchema.parse(raw ?? {});
-  return normalizeManifest(parsed);
 }
 
 // Tools roster will fan out to: detected on this machine AND supported by the
@@ -159,14 +151,21 @@ function pruneSkillDir(wsRoot: string, base: string, name: string): boolean {
 export async function syncFounderSkills(opts: SyncOptions): Promise<SyncResult> {
   const { cwd } = opts;
   assertFounderSkillsWorkspace(cwd);
-  if (!existsSync(manifestPath(cwd))) {
-    return { status: 'no-manifest' };
-  }
-
-  const manifest = loadManifest(cwd);
+  const manifest = readFounderSkillsManifest(cwd);
+  if (manifest === null) return { status: 'no-manifest' };
   const source = parseSource(manifest.source);
   const tools = resolveTools();
-  const priorLock = readLockfile(cwd);
+  let priorLock: Lockfile | null;
+  try {
+    priorLock = readLockfile(cwd);
+  } catch (error) {
+    if (!isWorkspaceFailure(error) || ![
+      'READ_LIMIT_EXCEEDED',
+      'SECRET_MATERIAL_FORBIDDEN',
+      'SKILL_REF_INVALID',
+    ].includes(error.code)) throw error;
+    priorLock = null;
+  }
 
   const declaredNames = new Set(manifest.skills.map((s) => s.name));
 
@@ -205,14 +204,24 @@ export async function syncFounderSkills(opts: SyncOptions): Promise<SyncResult> 
   // taken from the first supported tool target that has the skill materialized.
   const lockedSkills: LockedSkill[] = manifest.skills.map((skill) => {
     let contentHash = 'absent';
+    const contentHashes: Partial<Record<'claude' | 'codex', string>> = {};
     for (const toolKey of tools) {
-      const h = hashSkillDir(join(targetDirFor(cwd, toolKey), skill.name));
-      if (h !== 'absent') {
-        contentHash = h;
-        break;
-      }
+      const canonicalHash = hashProjectSkillForHost({
+        workspaceRoot: cwd,
+        host: toolKey,
+        skillName: skill.name,
+      }).contentHash;
+      contentHashes[toolKey] = canonicalHash;
+      if (contentHash === 'absent') contentHash = canonicalHash;
     }
-    return { name: skill.name, ref: skill.ref, contentHash, tools: [...tools] };
+    return {
+      name: skill.name,
+      ref: skill.ref,
+      contentHash,
+      contentHashes,
+      tools: [...tools],
+      ...(skill.skillRef === undefined ? {} : { skill_ref: skill.skillRef }),
+    };
   });
 
   const lock: Lockfile = {

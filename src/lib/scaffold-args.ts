@@ -33,6 +33,12 @@ function scopeAllowed(recordKind: WorkspaceRecordKind, scopeKind: string | undef
   if (recordKind === 'agent') return scopeKind === 'function';
   if (recordKind === 'plan' || recordKind === 'subagent') return scopeKind === 'agent';
   if (recordKind === 'guideline') return scopeKind === 'function' || scopeKind === 'agent';
+  if (recordKind === 'tool-use') {
+    return scopeKind === 'workspace'
+      || scopeKind === 'function'
+      || scopeKind === 'agent'
+      || scopeKind === 'plan';
+  }
   return scopeKind === 'agent' || scopeKind === 'plan';
 }
 
@@ -90,7 +96,9 @@ export function parseScaffoldArgs(args: readonly string[]): ParsedScaffoldArgs {
           ? 'agent:<function/agent>'
           : kindValue === 'guideline'
             ? 'function:<id> or agent:<function/agent>'
-            : 'agent:<function/agent> or plan:<function/agent#plan>';
+            : kindValue === 'tool-use'
+              ? 'workspace, function:<id>, agent:<function/agent>, or plan:<function/agent#plan>'
+              : 'agent:<function/agent> or plan:<function/agent#plan>';
       return parseError(`'scaffold ${kindValue}' requires --scope ${expected}`);
     }
     return {

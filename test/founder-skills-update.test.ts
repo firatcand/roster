@@ -56,7 +56,7 @@ function withWorkspace<T>(fn: (cwd: string) => Promise<T> | T): Promise<T> | T {
   const codexHome = join(cwd, '.fakehome-codex');
   mkdirSync(claudeHome, { recursive: true });
   mkdirSync(codexHome, { recursive: true });
-  writeFileSync(join(cwd, 'roster.yaml'), 'schema_version: 2\nworkspace_id: test\nfunctions: {}\nhosts: {}\n');
+  writeFileSync(join(cwd, 'roster.yaml'), 'schema_version: 2\nworkspace_id: test\ntool_uses: []\nfunctions: {}\nhosts: {}\n');
   writeFileSync(join(cwd, 'ROSTER.md'), renderRosterBootstrap());
   assert.equal(updateV2ProjectActivations({ root: cwd }).ok, true);
   const saved = {
@@ -82,7 +82,7 @@ function withWorkspace<T>(fn: (cwd: string) => Promise<T> | T): Promise<T> | T {
 function writeManifest(cwd: string): void {
   writeFileSync(
     join(cwd, 'founder-skills.yaml'),
-    `source: ${SOURCE}\nref: main\nskills:\n  - pricing\n  - name: sales-skill\n    ref: v0.0.1\n`,
+    `source: ${SOURCE}\nref: main\nskills:\n  - pricing\n  - name: sales-skill\n    ref: v0.0.1\n    skill_ref: founder-skills:sales\n`,
   );
 }
 
@@ -97,7 +97,10 @@ function assertFullChain(cwd: string, calls: AddSpec[], tag: string): void {
   };
   assert.equal(manifest.source, SOURCE);
   assert.equal(manifest.ref, tag);
-  assert.deepEqual(manifest.skills, ['pricing', 'sales-skill']);
+  assert.deepEqual(manifest.skills, [
+    'pricing',
+    { name: 'sales-skill', skill_ref: 'founder-skills:sales' },
+  ]);
 
   assert.equal(calls.length, 2);
   assert.deepEqual(calls.map((c) => c.skill).sort(), ['pricing', 'sales-skill']);
@@ -118,7 +121,7 @@ function assertFullChain(cwd: string, calls: AddSpec[], tag: string): void {
 
   const lock = parseYaml(readFileSync(join(cwd, 'founder-skills.lock'), 'utf8')) as {
     source: string;
-    skills: Array<{ name: string; ref: string; contentHash: string; tools: string[] }>;
+    skills: Array<{ name: string; ref: string; contentHash: string; tools: string[]; skill_ref?: string }>;
   };
   assert.equal(lock.source, SOURCE);
   assert.deepEqual(lock.skills.map((s) => s.name), ['pricing', 'sales-skill']);
@@ -127,6 +130,7 @@ function assertFullChain(cwd: string, calls: AddSpec[], tag: string): void {
     assert.ok(skill.contentHash.startsWith('sha256:'));
     assert.deepEqual([...skill.tools].sort(), ['claude', 'codex']);
   }
+  assert.equal(lock.skills.find((skill) => skill.name === 'sales-skill')?.skill_ref, 'founder-skills:sales');
 }
 
 test('no manifest → no-op, resolver never consulted', async () => {
@@ -152,6 +156,116 @@ test('--latest with a fake resolver bumps manifest + installer + lock (hermetic)
     assert.equal(r.status, 'synced');
     if (r.status === 'synced') assert.deepEqual([...r.tools].sort(), ['claude', 'codex']);
     assertFullChain(cwd, calls, 'v9.9.9');
+  });
+});
+
+test('--latest preserves explicit skill_ref join metadata in the manifest and lock', async () => {
+  await withWorkspace(async (cwd) => {
+    writeFileSync(join(cwd, 'founder-skills.yaml'), [
+      `source: ${SOURCE}`,
+      'ref: main',
+      'skills:',
+      '  - name: sales-skill',
+      '    skill_ref: exa:search',
+      '',
+    ].join('\n'));
+    const { installer } = makeFakeInstaller();
+    await updateFounderSkills({
+      cwd,
+      latest: true,
+      resolver: { latest: async () => 'v9.9.9' },
+      installer,
+    });
+    const manifest = parseYaml(readFileSync(join(cwd, 'founder-skills.yaml'), 'utf8')) as {
+      skills: Array<{ name: string; skill_ref: string }>;
+    };
+    assert.deepEqual(manifest.skills, [{ name: 'sales-skill', skill_ref: 'exa:search' }]);
+    const lock = parseYaml(readFileSync(join(cwd, 'founder-skills.lock'), 'utf8')) as {
+      skills: Array<{ skill_ref?: string }>;
+    };
+    assert.equal(lock.skills[0]?.skill_ref, 'exa:search');
+  });
+});
+
+test('--latest rejects secret-bearing manifest bytes before resolver or installer work', async () => {
+  await withWorkspace(async (cwd) => {
+    const canary = `sk-${'Ab9_'.repeat(7)}`;
+    writeFileSync(join(cwd, 'founder-skills.yaml'), [
+      `# ${canary}`,
+      `source: ${SOURCE}`,
+      'ref: main',
+      'skills:',
+      '  - pricing',
+      '',
+    ].join('\n'));
+    const before = readFileSync(join(cwd, 'founder-skills.yaml'));
+    const { installer, calls } = makeFakeInstaller();
+    let resolverCalled = false;
+    await assert.rejects(
+      updateFounderSkills({
+        cwd,
+        latest: true,
+        resolver: { latest: async () => {
+          resolverCalled = true;
+          return 'v9.9.9';
+        } },
+        installer,
+      }),
+      (error: unknown) => (error as { code?: unknown }).code === 'SECRET_MATERIAL_FORBIDDEN',
+    );
+    assert.equal(resolverCalled, false);
+    assert.equal(calls.length, 0);
+    assert.deepEqual(readFileSync(join(cwd, 'founder-skills.yaml')), before);
+  });
+});
+
+test('--latest validates the resolved ref before writing or installing', async () => {
+  await withWorkspace(async (cwd) => {
+    writeManifest(cwd);
+    const before = readFileSync(join(cwd, 'founder-skills.yaml'));
+    const { installer, calls } = makeFakeInstaller();
+    await assert.rejects(
+      updateFounderSkills({
+        cwd,
+        latest: true,
+        resolver: { latest: async () => 'https://user:credential@example.com/tag' },
+        installer,
+      }),
+      (error: unknown) => (error as { code?: unknown }).code === 'SKILL_REF_INVALID',
+    );
+    assert.equal(calls.length, 0);
+    assert.deepEqual(readFileSync(join(cwd, 'founder-skills.yaml')), before);
+  });
+});
+
+test('--latest preserves a concurrent manifest edit and returns WRITE_CONFLICT', async () => {
+  await withWorkspace(async (cwd) => {
+    writeManifest(cwd);
+    const concurrent = [
+      `source: ${SOURCE}`,
+      'ref: main',
+      'skills:',
+      '  - pricing',
+      '  - new-skill',
+      '',
+    ].join('\n');
+    const { installer, calls } = makeFakeInstaller();
+    await assert.rejects(
+      updateFounderSkills({
+        cwd,
+        latest: true,
+        resolver: {
+          latest: async () => {
+            writeFileSync(join(cwd, 'founder-skills.yaml'), concurrent);
+            return 'v9.9.9';
+          },
+        },
+        installer,
+      }),
+      (error: unknown) => (error as { code?: unknown }).code === 'WRITE_CONFLICT',
+    );
+    assert.equal(calls.length, 0);
+    assert.equal(readFileSync(join(cwd, 'founder-skills.yaml'), 'utf8'), concurrent);
   });
 });
 
