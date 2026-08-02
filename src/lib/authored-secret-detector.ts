@@ -79,7 +79,7 @@ const DETECTORS: readonly Detector[] = [
   },
 ];
 
-function hasCredentialShape(value: string): boolean {
+export function hasCredentialShape(value: string): boolean {
   if (/^[a-z]+(?:-[a-z]+)+(?:\.)?$/.test(value)) return false;
   const classes = [
     /[a-z]/.test(value),

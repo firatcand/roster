@@ -109,6 +109,11 @@ export type StructuredPlanValidationResult = {
   diagnostics: WorkspaceDiagnostic[];
 };
 
+export type ValidatedPlanClosure = {
+  readonly root: StructuredPlan;
+  readonly definitions: readonly StructuredPlan[];
+};
+
 const FORBIDDEN_FIELDS = new Set([
   'args',
   'binding',
@@ -909,4 +914,66 @@ export function resolveValidatedPlan(
     throw workspaceFailure('REFERENCE_NOT_FOUND', `Plan '${qualifiedId}' is not registered.`, 'Register the plan before requesting validated content.', { reference: qualifiedId, expected_kind: 'plan' });
   }
   return plan;
+}
+
+function compareUnicodeCodePoints(left: string, right: string): number {
+  const leftCodePoints = left[Symbol.iterator]();
+  const rightCodePoints = right[Symbol.iterator]();
+  while (true) {
+    const leftEntry = leftCodePoints.next();
+    const rightEntry = rightCodePoints.next();
+    if (leftEntry.done || rightEntry.done) {
+      if (leftEntry.done === rightEntry.done) return 0;
+      return leftEntry.done ? -1 : 1;
+    }
+    const difference = leftEntry.value.codePointAt(0)! - rightEntry.value.codePointAt(0)!;
+    if (difference !== 0) return difference;
+  }
+}
+
+function comparePlanDiagnostics(left: WorkspaceDiagnostic, right: WorkspaceDiagnostic): number {
+  return compareUnicodeCodePoints(left.code, right.code)
+    || compareUnicodeCodePoints(left.path ?? '', right.path ?? '')
+    || compareUnicodeCodePoints(
+      typeof left.details['field_path'] === 'string' ? left.details['field_path'] : '',
+      typeof right.details['field_path'] === 'string' ? right.details['field_path'] : '',
+    )
+    || compareUnicodeCodePoints(left.message, right.message);
+}
+
+export function resolveValidatedPlanClosure(
+  snapshot: CompleteWorkspaceSnapshot,
+  rootId: string,
+): ValidatedPlanClosure {
+  const result = validateStructuredPlans(snapshot.records, [rootId], snapshot);
+  if (result.diagnostics.length > 0) {
+    const first = [...result.diagnostics].sort(comparePlanDiagnostics)[0]!;
+    throw workspaceFailure(
+      first.code,
+      first.message,
+      first.remedy ?? 'Fix the structured plan closure before retrying.',
+      {
+        ...first.details,
+        ...(first.path === undefined ? {} : { path: first.path }),
+      },
+    );
+  }
+  const plans = new Map(result.plans.map((plan) => [plan.qualified_id, plan]));
+  const root = plans.get(rootId);
+  if (root === undefined) {
+    throw workspaceFailure(
+      'REFERENCE_NOT_FOUND',
+      `Plan '${rootId}' is not registered.`,
+      'Register the plan before requesting validated content.',
+      { reference: rootId, expected_kind: 'plan' },
+    );
+  }
+  const definitions = Object.freeze([
+    root,
+    ...result.selected_plan_ids
+      .filter((planId) => planId !== rootId)
+      .sort(compareUnicodeCodePoints)
+      .map((planId) => plans.get(planId)!),
+  ]);
+  return Object.freeze({ root, definitions });
 }
