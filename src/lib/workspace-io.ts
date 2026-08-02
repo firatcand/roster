@@ -107,7 +107,13 @@ export const realWorkspaceMutationFs: WorkspaceMutationFs = {
 export type WorkspaceReadSession = {
   readFile: (relativePath: string, options?: WorkspaceReadOptions) => Buffer;
   readText: (relativePath: string, options?: WorkspaceReadOptions) => string;
-  verify: () => void;
+  verify: (relativePaths?: readonly string[]) => void;
+};
+
+export type WorkspaceReadSessionOptions = {
+  deferParentChecks?: boolean;
+  contextMode?: boolean;
+  rootIdentity?: WorkspaceDirectoryIdentityToken;
 };
 
 export type WorkspaceDirectoryResult = {
@@ -846,6 +852,7 @@ function readRegularWorkspaceFile(
   maxBytes: number,
   verifyParent: () => void,
   fs: WorkspaceReadFs,
+  captureIdentity?: (identity: WorkspaceFileIdentityToken) => void,
 ): Buffer {
   const flags = fsConstants.O_RDONLY
     | (fsConstants.O_NOFOLLOW ?? 0)
@@ -910,7 +917,13 @@ function readRegularWorkspaceFile(
       throw workspaceFailure('WRITE_CONFLICT', `File '${normalized}' was replaced during the bounded read.`, 'Stop the concurrent writer and retry.', { path: normalized });
     }
     verifyParent();
-    return total === bytes.byteLength ? bytes : bytes.subarray(0, total);
+    const content = total === bytes.byteLength ? bytes : bytes.subarray(0, total);
+    captureIdentity?.({
+      dev: initial.dev,
+      ino: initial.ino,
+      hash: hashWorkspaceBytes(content),
+    });
+    return content;
   } finally {
     fs.closeSync(fd);
   }
@@ -922,6 +935,7 @@ function readAnchoredWorkspaceFile(
   normalized: string,
   maxBytes: number,
   fs: WorkspaceReadFs = realWorkspaceReadFs,
+  captureIdentity?: (identity: WorkspaceFileIdentityToken) => void,
 ): Buffer {
   return readRegularWorkspaceFile(
     leaf,
@@ -929,6 +943,7 @@ function readAnchoredWorkspaceFile(
     maxBytes,
     () => assertCurrentDirectoryIdentity(parent),
     fs,
+    captureIdentity,
   );
 }
 
@@ -958,12 +973,41 @@ export function readWorkspaceFile(
 
 export function createWorkspaceReadSession(
   root: string,
-  sessionOptions: { deferParentChecks?: boolean } = {},
+  sessionOptions: WorkspaceReadSessionOptions = {},
 ): WorkspaceReadSession {
   const absoluteRoot = assertRootDirectory(root);
   const directories = new Map<string, DirectoryIdentity>();
   const namespaceParents = new Set<string>();
-  directories.set('.', directoryIdentity(absoluteRoot, '.'));
+  const rootDirectory = directoryIdentity(absoluteRoot, '.');
+  if (sessionOptions.rootIdentity !== undefined
+    && (sessionOptions.rootIdentity.path !== '.'
+      || sessionOptions.rootIdentity.dev !== rootDirectory.dev
+      || sessionOptions.rootIdentity.ino !== rootDirectory.ino)) {
+    throw workspaceDirectoryIdentityFailure(sessionOptions.rootIdentity);
+  }
+  directories.set('.', rootDirectory);
+  const trackedFiles = new Map<string, WorkspaceFileIdentityToken>();
+
+  const captureFileIdentity = (
+    normalized: string,
+    identity: WorkspaceFileIdentityToken,
+  ): void => {
+    if (!sessionOptions.contextMode) return;
+    const existing = trackedFiles.get(normalized);
+    if (existing !== undefined && (
+      existing.dev !== identity.dev
+      || existing.ino !== identity.ino
+      || existing.hash !== identity.hash
+    )) {
+      throw workspaceFailure(
+        'WRITE_CONFLICT',
+        `File '${normalized}' changed between reads in one context session.`,
+        'Stop the concurrent filesystem mutation and retry context resolution.',
+        { path: normalized },
+      );
+    }
+    trackedFiles.set(normalized, identity);
+  };
 
   const ensureDirectory = (relativeDirectory: string): DirectoryIdentity => {
     const normalized = relativeDirectory;
@@ -989,6 +1033,9 @@ export function createWorkspaceReadSession(
   const sessionRead = (relativePath: string, readOptions: WorkspaceReadOptions = {}): Buffer => {
     const normalized = normalizeWorkspaceRelativePath(relativePath);
     const parent = ensureDirectory(posix.dirname(normalized));
+    const captureIdentity = sessionOptions.contextMode
+      ? (identity: WorkspaceFileIdentityToken) => captureFileIdentity(normalized, identity)
+      : undefined;
     if (!sessionOptions.deferParentChecks) {
       assertCachedDirectoryChain(parent.relative);
       const bytes = withAnchoredDirectory(parent, () => {
@@ -1000,6 +1047,7 @@ export function createWorkspaceReadSession(
           normalized,
           readOptions.maxBytes ?? MAX_WORKSPACE_FILE_BYTES,
           readOptions.fs ?? realWorkspaceReadFs,
+          captureIdentity,
         );
       });
       assertCachedDirectoryChain(parent.relative);
@@ -1013,15 +1061,83 @@ export function createWorkspaceReadSession(
       readOptions.maxBytes ?? MAX_WORKSPACE_FILE_BYTES,
       () => assertCachedDirectoryChain(parent.relative),
       readOptions.fs ?? realWorkspaceReadFs,
+      captureIdentity,
     );
+  };
+
+  const verifyTrackedFile = (relativePath: string): void => {
+    const normalized = normalizeWorkspaceRelativePath(relativePath);
+    const expected = trackedFiles.get(normalized);
+    if (expected === undefined) {
+      throw workspaceFailure(
+        'WRITE_CONFLICT',
+        `File '${normalized}' was not captured by this context read session.`,
+        'Retry context resolution from one complete workspace source.',
+        { path: normalized },
+      );
+    }
+    let actual: WorkspaceFileIdentityToken | undefined;
+    try {
+      const parent = ensureDirectory(posix.dirname(normalized));
+      withAnchoredDirectory(parent, () => {
+        assertCurrentDirectoryIdentity(parent);
+        readAnchoredWorkspaceFile(
+          parent,
+          basename(normalized),
+          normalized,
+          MAX_WORKSPACE_FILE_BYTES,
+          realWorkspaceReadFs,
+          (identity) => {
+            actual = identity;
+          },
+        );
+      });
+    } catch (error) {
+      if (isWorkspaceFailure(error)) {
+        throw workspaceFailure(
+          'WRITE_CONFLICT',
+          `File '${normalized}' changed before context verification.`,
+          'Stop the concurrent filesystem mutation and retry context resolution.',
+          { path: normalized, cause: error.code },
+        );
+      }
+      throw error;
+    }
+    if (actual === undefined
+      || actual.dev !== expected.dev
+      || actual.ino !== expected.ino
+      || actual.hash !== expected.hash) {
+      throw workspaceFailure(
+        'WRITE_CONFLICT',
+        `File '${normalized}' changed before context verification.`,
+        'Stop the concurrent filesystem mutation and retry context resolution.',
+        { path: normalized },
+      );
+    }
   };
 
   return {
     readFile: sessionRead,
     readText: (relativePath, options = {}) => sessionRead(relativePath, options).toString('utf8'),
-    verify: () => {
+    verify: (relativePaths) => {
       for (const relativeDirectory of namespaceParents) {
-        assertDirectoryIdentity(directories.get(relativeDirectory)!);
+        const identity = directories.get(relativeDirectory)!;
+        if (sessionOptions.contextMode && relativeDirectory === '.') assertDirectoryBinding(identity);
+        else assertDirectoryIdentity(identity);
+      }
+      if (sessionOptions.contextMode) {
+        assertDirectoryBinding(rootDirectory);
+        const selected = relativePaths === undefined
+          ? [...trackedFiles.keys()]
+          : [...new Set(relativePaths.map((path) => normalizeWorkspaceRelativePath(path)))];
+        for (const path of selected) verifyTrackedFile(path);
+      } else if (relativePaths !== undefined) {
+        throw workspaceFailure(
+          'WRITE_CONFLICT',
+          'File identity verification requires a context read session.',
+          'Create the read session in context mode before selecting terminal file checks.',
+          {},
+        );
       }
     },
   };

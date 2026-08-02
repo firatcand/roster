@@ -348,6 +348,63 @@ test('complete workspace snapshots have one internal mint and one registry-owned
   );
 });
 
+test('prepared context sources and their read capability have one production and one test importer', () => {
+  const sourceFiles = typescriptFiles('src');
+  const testFiles = typescriptFiles('test');
+  const files = [...sourceFiles, ...testFiles];
+  const registryModule = 'workspace-registry';
+  const registryPath = join(PROJECT_ROOT, 'src/lib/workspace-registry.ts');
+  const capability = 'withContextReadCapability';
+  const protectedNames = new Set([
+    capability,
+    'assertPreparedContextSource',
+    'PreparedContextSource',
+    'PreparedContextRegistryMetadata',
+    'ContextReadCapability',
+    'ContextVendorSkillSelection',
+    'ContextVendorSkillProjection',
+  ]);
+
+  assert.deepEqual(declaringFiles(sourceFiles, capability), [
+    'src/lib/workspace-registry.ts',
+  ]);
+  assert.deepEqual(declaringFiles(sourceFiles, 'PREPARED_CONTEXT_SOURCE'), [
+    'src/lib/workspace-registry.ts',
+  ]);
+  assert.equal(exportedNames(registryPath).includes('PREPARED_CONTEXT_SOURCE'), false);
+  assert.deepEqual(importers(sourceFiles, registryModule, capability), [{
+    file: 'src/lib/workspace-context.ts',
+    local: capability,
+  }]);
+  assert.deepEqual(importers(testFiles, registryModule, capability), [{
+    file: 'test/workspace-context.test.ts',
+    local: capability,
+  }]);
+
+  const protectedEdges = files.flatMap((path) => moduleEdges(path)).filter((edge) => (
+    moduleMatches(edge.module, registryModule)
+    && (protectedNames.has(edge.imported) || edge.imported === '*')
+  ));
+  assert.deepEqual(
+    [...new Set(protectedEdges
+      .filter((edge) => edge.file.startsWith('src/'))
+      .map((edge) => edge.file))],
+    ['src/lib/workspace-context.ts'],
+  );
+  assert.deepEqual(
+    [...new Set(protectedEdges
+      .filter((edge) => edge.file.startsWith('test/'))
+      .map((edge) => edge.file))],
+    ['test/workspace-context.test.ts'],
+  );
+  assert.deepEqual(
+    files.flatMap((path) => dynamicModuleReferences(path)
+      .filter((module) => moduleMatches(module, registryModule))
+      .map((module) => `${repositoryPath(path)}:${module}`)),
+    [],
+  );
+});
+
 test('workspace update lock capability stays inside update and generated-artifact transaction seams', () => {
   const files = [...typescriptFiles('src'), ...typescriptFiles('test')];
   const lockModule = 'internal/workspace-update-lock';
