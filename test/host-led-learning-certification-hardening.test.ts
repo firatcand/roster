@@ -21,6 +21,7 @@ import {
   canonicalJson,
   classifyCodexAppServerFrame,
   codexGlobalLaunchArgs,
+  codexPaidExecArgs,
   codexPromptLaunchArgs,
   codexSandboxDeveloperInstructions,
   codexStrictGlobalLaunchArgs,
@@ -347,6 +348,24 @@ test('host launch contract rejects duplicate arrays, protocol drift, and version
   const staleLifecycle = contractClone();
   (staleLifecycle['host_readable_inputs'] as Record<string, unknown>)['lifecycle'] = 'common/fixture-lifecycle.md';
   assert.throws(() => parseHostLedLearningLaunchContract(staleLifecycle), /closed contract/iu);
+
+  for (const mutate of [
+    (delta: Record<string, unknown>) => {
+      delta['strict_config_exception'] = 'unreviewed-exception';
+    },
+    (delta: Record<string, unknown>) => {
+      delta['paid_exec_only_flags'] = ['--ignore-user-config'];
+    },
+  ]) {
+    const launchDeltaDrift = contractClone();
+    const launchDeltaCodex = launchDeltaDrift['codex'] as Record<string, unknown>;
+    const promptInput = launchDeltaCodex['prompt_input'] as Record<string, unknown>;
+    mutate(promptInput['intentional_launch_delta'] as Record<string, unknown>);
+    assert.throws(
+      () => parseHostLedLearningLaunchContract(launchDeltaDrift),
+      /exact model-free probe/iu,
+    );
+  }
 });
 
 test('semantic oracle lesson IDs use exact normalized code-point order', () => {
@@ -907,13 +926,20 @@ test('Codex prompt-input validation rejects extra and injected contributions', (
   const prompt = 'Run the seeded discovery and learning loop.';
   const expectedUtcDate = '2026-08-03';
   const canonical = canonicalCodexPromptInput(prompt);
-  assert.doesNotThrow(() => validateCodexPromptInputContributions({
+  const promptSummary = validateCodexPromptInputContributions({
     value: canonical,
     workspace: HOST_LED_LEARNING_REPO_ROOT,
     prompt,
     contract,
     expectedUtcDate,
-  }));
+  }) as Record<string, JsonValue>;
+  assert.deepEqual(promptSummary['launch_fidelity'], {
+    paid_exec_only_flags: [
+      '--ignore-user-config', '--ignore-rules', '--ephemeral', '--output-schema', '--json', '--color',
+    ],
+    shared_global_launch_except_strict_config: true,
+    strict_config_exception: 'codex-debug-prompt-input-0.144.1-rejects-strict-config',
+  });
   const finalMessage = canonical[4] as Record<string, JsonValue>;
   assert.equal(finalMessage['role'], 'user');
   assert.deepEqual(finalMessage['content'], [{ type: 'input_text', text: prompt }]);
@@ -1060,9 +1086,22 @@ test('Codex paid and prompt probes share one controlled model-bound launch prefi
     `developer_instructions=${JSON.stringify(codexSandboxDeveloperInstructions())}`,
   ));
   const promptPrefix = codexPromptLaunchArgs('/isolated/workspace', env);
-  assert.ok(promptPrefix.includes(
-    `developer_instructions=${JSON.stringify(codexSandboxDeveloperInstructions())}`,
-  ));
+  const developerArg = `developer_instructions=${JSON.stringify(codexSandboxDeveloperInstructions())}`;
+  assert.equal(paidPrefix[2], '--strict-config');
+  assert.equal(paidPrefix.filter((entry) => entry === '--strict-config').length, 1);
+  assert.equal(promptPrefix.filter((entry) => entry === '--strict-config').length, 0);
+  assert.deepEqual(promptPrefix, [...paidPrefix.slice(0, 2), ...paidPrefix.slice(3)]);
+  assert.equal(paidPrefix.filter((entry) => entry === developerArg).length, 1);
+  assert.equal(promptPrefix.filter((entry) => entry === developerArg).length, 1);
+  const paidExecArgs = codexPaidExecArgs('/isolated/schema.json', 'literal request');
+  assert.deepEqual(paidExecArgs, [
+    'exec', '--ignore-user-config', '--ignore-rules', '--ephemeral',
+    '--output-schema', '/isolated/schema.json', '--json', '--color', 'never', 'literal request',
+  ]);
+  assert.deepEqual(
+    paidExecArgs.filter((entry) => entry.startsWith('--')),
+    loadHostLedLearningLaunchContract().codex.prompt_input.intentional_launch_delta.paid_exec_only_flags,
+  );
   const source = readFileSync(join(
     HOST_LED_LEARNING_REPO_ROOT,
     'test/support/host-led-learning-certification.ts',

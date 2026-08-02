@@ -57,6 +57,12 @@ messages: permissions and the exact eight-skill inventory (five system, the
 generated Roster skill, and two fixture skills), the exact sandbox-canary
 developer instruction, two binary-owned developer contributions, workspace
 instructions/environment, and the literal request.
+The debug subcommand rejects `--strict-config` and cannot accept paid
+`exec`-only flags. The launch contract records that exact limitation; the probe
+derives its global arguments from the paid launch by removing only the single
+unsupported `--strict-config` argument, while the paid-only flag set is closed
+and attested. The probe therefore proves the exact configurable prompt
+contributions without claiming byte-identical command lines.
 Discovery and approval are probed separately. Every plugin, skill, prompt, and
 sandbox probe uses its own clean home/config/temp roots and never shares host
 state with a paid turn.

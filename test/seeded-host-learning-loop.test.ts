@@ -302,7 +302,7 @@ test('seeded host-led learning uses product context and lesson seams around boun
       started_at: '2026-08-02T09:00:00.000Z',
       completed_at: '2026-08-02T09:01:00.000Z',
       outcome: 'completed',
-      selected_result_id: 'result-a17f',
+      selected_result_id: 'result-c77f',
       tool_ids: ['social-search'],
       source_ids: ['source-valid-practitioner-evidence'],
       artifact_ids: ['artifact-opportunity-shortlist-001'],

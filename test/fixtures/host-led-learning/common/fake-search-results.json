@@ -3,25 +3,6 @@
   "provider": "roster-350-fixture-search",
   "results": [
     {
-      "result_id": "result-a17f",
-      "canonical_url": "https://social.example.test/posts/reliable-ai-content-review",
-      "author": "Mina Patel",
-      "published_at": "2026-07-31T09:15:00Z",
-      "title": "Where AI-assisted editorial workflows still break",
-      "excerpt": "We can generate drafts quickly, but source checks, handoffs, and review ownership are still unreliable. How are small teams making this auditable without slowing everything down?",
-      "topics": [
-        "ai-assisted-content",
-        "editorial-operations",
-        "human-review"
-      ],
-      "attribution": {
-        "source": "social-example",
-        "source_record_id": "source-item-a17f"
-      },
-      "observed_run_ids": [],
-      "transient_marker": null
-    },
-    {
       "result_id": "result-b62c",
       "canonical_url": "https://social.example.test/in/mina-patel",
       "author": "Mina Patel",
@@ -34,6 +15,25 @@
       "attribution": {
         "source": "social-example",
         "source_record_id": "source-item-b62c"
+      },
+      "observed_run_ids": [],
+      "transient_marker": null
+    },
+    {
+      "result_id": "result-c77f",
+      "canonical_url": "https://social.example.test/posts/reliable-ai-content-review",
+      "author": "Mina Patel",
+      "published_at": "2026-07-31T09:15:00Z",
+      "title": "Where AI-assisted editorial workflows still break",
+      "excerpt": "We can generate drafts quickly, but source checks, handoffs, and review ownership are still unreliable. How are small teams making this auditable without slowing everything down?",
+      "topics": [
+        "ai-assisted-content",
+        "editorial-operations",
+        "human-review"
+      ],
+      "attribution": {
+        "source": "social-example",
+        "source_record_id": "source-item-c77f"
       },
       "observed_run_ids": [],
       "transient_marker": null

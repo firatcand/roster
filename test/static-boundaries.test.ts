@@ -537,11 +537,11 @@ test('host-led fixture skills are byte-identical and cannot leak the semantic an
     'no-counterevidence',
   ]) assert.match(dreamerSkill, new RegExp(`\\b${option}\\b`, 'u'));
   for (const orderedChoices of [
-    'disposition: `prefer` or `avoid`',
-    'source kind: `anonymous-source`, `attributable-practitioner`, or `profile-page`',
-    'topic kind: `generic-ad`, `crypto-promotion`, or `operational-problem`',
-    'falsifier action: `retain` or `reject`',
-    'falsifier observation: `reviewed-outcomes-contradict`,\n  `no-counterevidence`, or `reviewed-outcomes-confirm`',
+    'disposition: `avoid` or `prefer`',
+    'source kind: `anonymous-source`, `profile-page`, or `attributable-practitioner`',
+    'topic kind: `operational-problem`, `generic-ad`, or `crypto-promotion`',
+    'falsifier action: `reject` or `retain`',
+    'falsifier observation: `no-counterevidence`,\n  `reviewed-outcomes-contradict`, or `reviewed-outcomes-confirm`',
   ]) assert.equal(dreamerSkill.includes(orderedChoices), true);
 
   const launchContract = JSON.parse(readFileSync(join(
@@ -628,13 +628,13 @@ test('host-led fixture skills are byte-identical and cannot leak the semantic an
     };
   }).properties.learning.properties.candidate.properties.meaning.properties;
   const expectedMeaningChoices: Record<string, string[]> = {
-    disposition: ['prefer', 'avoid'],
-    source_kind: ['anonymous-source', 'attributable-practitioner', 'profile-page'],
-    topic_kind: ['generic-ad', 'crypto-promotion', 'operational-problem'],
-    falsifier_action: ['retain', 'reject'],
+    disposition: ['avoid', 'prefer'],
+    source_kind: ['anonymous-source', 'profile-page', 'attributable-practitioner'],
+    topic_kind: ['operational-problem', 'generic-ad', 'crypto-promotion'],
+    falsifier_action: ['reject', 'retain'],
     falsifier_observation: [
-      'reviewed-outcomes-contradict',
       'no-counterevidence',
+      'reviewed-outcomes-contradict',
       'reviewed-outcomes-confirm',
     ],
   };
@@ -663,6 +663,8 @@ test('host-led fixture skills are byte-identical and cannot leak the semantic an
   const acceptedIndexes = orderedMeaningFields.map((field) => (
     expectedMeaningChoices[field]!.indexOf(acceptedMeaning[field]!)
   ));
+  assert.deepEqual(acceptedIndexes, [1, 2, 0, 0, 1]);
+  assert.notDeepEqual(acceptedIndexes, [...acceptedIndexes].reverse());
   assert.deepEqual([...new Set(acceptedIndexes)].sort(), [0, 1, 2]);
   const ordinalHeuristics = {
     first: orderedMeaningFields.map(() => 0),

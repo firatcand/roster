@@ -18,7 +18,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir, tmpdir, userInfo } from 'node:os';
+import { tmpdir, userInfo } from 'node:os';
 import { createServer } from 'node:net';
 import {
   dirname,
@@ -285,6 +285,10 @@ export type HostLedLearningLaunchContract = Readonly<{
     prompt_input: Readonly<{
       command: readonly string[];
       literal_prompt_source: string;
+      intentional_launch_delta: Readonly<{
+        strict_config_exception: string;
+        paid_exec_only_flags: readonly string[];
+      }>;
       required_configurable_contributions: readonly string[];
       pinned_contribution_sha256: Readonly<{
         permissions: string;
@@ -645,9 +649,14 @@ export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearn
     return canonicalize(entry) as JsonObject;
   });
   const promptInput = requiredObject(codex['prompt_input'], 'codex.prompt_input', [
-    'command', 'literal_prompt_source', 'required_configurable_contributions',
+    'command', 'literal_prompt_source', 'intentional_launch_delta', 'required_configurable_contributions',
     'pinned_contribution_sha256',
   ]);
+  const promptLaunchDelta = requiredObject(
+    promptInput['intentional_launch_delta'],
+    'codex.prompt_input.intentional_launch_delta',
+    ['strict_config_exception', 'paid_exec_only_flags'],
+  );
   const pinnedPromptContributions = requiredObject(
     promptInput['pinned_contribution_sha256'],
     'codex.prompt_input.pinned_contribution_sha256',
@@ -711,6 +720,16 @@ export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearn
       prompt_input: Object.freeze({
         command: requiredStringArray(promptInput['command'], 'codex.prompt_input.command'),
         literal_prompt_source: requiredString(promptInput['literal_prompt_source'], 'codex.prompt_input.literal_prompt_source'),
+        intentional_launch_delta: Object.freeze({
+          strict_config_exception: requiredString(
+            promptLaunchDelta['strict_config_exception'],
+            'codex.prompt_input.intentional_launch_delta.strict_config_exception',
+          ),
+          paid_exec_only_flags: requiredStringArray(
+            promptLaunchDelta['paid_exec_only_flags'],
+            'codex.prompt_input.intentional_launch_delta.paid_exec_only_flags',
+          ),
+        }),
         required_configurable_contributions: requiredStringArray(
           promptInput['required_configurable_contributions'],
           'codex.prompt_input.required_configurable_contributions',
@@ -757,6 +776,12 @@ export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearn
   if (contract.codex.skills_list.transport !== 'stdio-jsonl'
     || canonicalJson(contract.codex.prompt_input.command) !== canonicalJson(['codex', 'debug', 'prompt-input'])
     || contract.codex.prompt_input.literal_prompt_source !== 'attested-request-positional-argument'
+    || contract.codex.prompt_input.intentional_launch_delta.strict_config_exception
+      !== 'codex-debug-prompt-input-0.144.1-rejects-strict-config'
+    || canonicalJson(contract.codex.prompt_input.intentional_launch_delta.paid_exec_only_flags)
+      !== canonicalJson([
+        '--ignore-user-config', '--ignore-rules', '--ephemeral', '--output-schema', '--json', '--color',
+      ])
     || canonicalJson(contract.codex.prompt_input.required_configurable_contributions)
       !== canonicalJson([
         'canonical-roster-instructions',
@@ -1886,9 +1911,24 @@ export function codexPromptLaunchArgs(
   workspace: string,
   env: Readonly<Record<string, string>>,
 ): readonly string[] {
+  const paidLaunchArgs = codexTurnLaunchArgs(workspace, env);
+  if (paidLaunchArgs[2] !== '--strict-config'
+    || paidLaunchArgs.filter((entry) => entry === '--strict-config').length !== 1) {
+    throw new CertificationError('Codex paid launch strict-config contract drifted.');
+  }
+  return Object.freeze([...paidLaunchArgs.slice(0, 2), ...paidLaunchArgs.slice(3)]);
+}
+
+export function codexPaidExecArgs(schemaPath: string, prompt: string): readonly string[] {
   return Object.freeze([
-    ...codexGlobalLaunchArgs(workspace, env),
-    '-c', `developer_instructions=${JSON.stringify(codexSandboxDeveloperInstructions())}`,
+    'exec',
+    '--ignore-user-config',
+    '--ignore-rules',
+    '--ephemeral',
+    '--output-schema', schemaPath,
+    '--json',
+    '--color', 'never',
+    prompt,
   ]);
 }
 
@@ -1908,14 +1948,7 @@ function codexArgs(
   );
   return Object.freeze([
     ...codexTurnLaunchArgs(pass.workspace, env),
-    'exec',
-    '--ignore-user-config',
-    '--ignore-rules',
-    '--ephemeral',
-    '--output-schema', schemaPath,
-    '--json',
-    '--color', 'never',
-    prompt,
+    ...codexPaidExecArgs(schemaPath, prompt),
   ]);
 }
 
@@ -2431,6 +2464,11 @@ export function validateCodexPromptInputContributions(options: Readonly<{
     throw new CertificationError('Codex prompt-input configurable contribution contract drifted.');
   }
   return canonicalize({
+    launch_fidelity: {
+      shared_global_launch_except_strict_config: true,
+      strict_config_exception: options.contract.codex.prompt_input.intentional_launch_delta.strict_config_exception,
+      paid_exec_only_flags: options.contract.codex.prompt_input.intentional_launch_delta.paid_exec_only_flags,
+    },
     prompt_metadata: {
       single_turn: true,
       message_count: messages.length,
@@ -4192,7 +4230,7 @@ function preflightControlledModelVisibleOutputs(
   invoke('roster-350-fixture-search', ['--query', query], 'discover');
   invoke('roster-350-fixture-run-record', [
     '--request-hash', requestHash,
-    '--selected-result', 'result-a17f',
+    '--selected-result', 'result-c77f',
     '--brain-citation', 'brain-record-a17f',
     '--brain-citation', 'brain-record-b62c',
     '--brain-citation', 'brain-record-d91e',
@@ -5586,23 +5624,6 @@ export async function runHostLedLearningCertification(
   }
 }
 
-export function modelFreeProbeSummary(options: Readonly<{
-  probe: HostLaunchProbe;
-  contract: HostLedLearningLaunchContract;
-  env: Readonly<Record<string, string>>;
-  host: CertificationHost;
-}>): JsonValue {
-  return canonicalize({
-    host: options.host,
-    probe: options.probe,
-    expected_skills: (options.host === 'claude'
-      ? options.contract.claude.skills
-      : [options.contract.codex.generated_skill, ...options.contract.codex.skills])
-      .map((entry) => entry.name),
-    env: envAttestation(options.env, options.host),
-  });
-}
-
 export function verifyHostLedLearningModelFreeInputs(
   repoRoot = HOST_LED_LEARNING_REPO_ROOT,
 ): JsonValue {
@@ -5617,10 +5638,4 @@ export function verifyHostLedLearningModelFreeInputs(
     prepared_runtime: rebuilt.preparedRuntime,
     codex_workspace_instructions_sha256: rebuilt.codexWorkspaceInstructionsSha256,
   });
-}
-
-
-
-export function currentUserHomeForAudit(): string {
-  return homedir();
 }

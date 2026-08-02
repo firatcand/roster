@@ -262,6 +262,17 @@
         "prompt-input"
       ],
       "literal_prompt_source": "attested-request-positional-argument",
+      "intentional_launch_delta": {
+        "strict_config_exception": "codex-debug-prompt-input-0.144.1-rejects-strict-config",
+        "paid_exec_only_flags": [
+          "--ignore-user-config",
+          "--ignore-rules",
+          "--ephemeral",
+          "--output-schema",
+          "--json",
+          "--color"
+        ]
+      },
       "required_configurable_contributions": [
         "canonical-roster-instructions",
         "expected-project-skills",
