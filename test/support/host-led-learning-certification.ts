@@ -180,6 +180,23 @@ export type HostLedLearningAttestation = Readonly<{
   attestation_sha256: string;
 }>;
 
+export type CertificationInputSnapshot = Readonly<{
+  input_manifest_sha256: string;
+  support_semantics_sha256: string;
+  launch_contract_sha256: string;
+  oracle_sha256: string;
+  package_manifest_sha256: string;
+  package_version: string;
+  roster_bundle_sha256: string;
+  certification_roster_bundle_sha256: string;
+  adapter_bundle_sha256: string;
+  managed_settings_sha256: string;
+  host_binaries: Readonly<Record<CertificationHost, Readonly<{
+    executable_sha256: string;
+    probe_sha256: string;
+  }>>>;
+}>;
+
 export type HostLedLearningLaunchContract = Readonly<{
   schema_version: 1;
   fixture_id: string;
@@ -3871,7 +3888,7 @@ function runBuild(paths: CertificationPaths): void {
   if (!existsSync(paths.rosterBundlePath)) throw new CertificationError('Fresh Roster bundle is missing after build.');
 }
 
-type CertificationBundles = Readonly<{
+export type CertificationBundles = Readonly<{
   adapterPath: string;
   rosterPath: string;
 }>;
@@ -4386,12 +4403,97 @@ export function sameSemanticResults(
   return first;
 }
 
+export function assertDeterministicCertificationArtifacts(
+  outcomes: Readonly<Record<CertificationHost, readonly unknown[]>>,
+): void {
+  const lessonHashes: string[] = [];
+  for (const host of ['claude', 'codex'] as const) {
+    const entries = outcomes[host];
+    if (!Array.isArray(entries) || entries.length !== HOST_LED_LEARNING_PASS_COUNT) {
+      throw new CertificationError(`${host} artifact audit requires exactly three pass outcomes.`);
+    }
+    for (const key of ['final_workspace_sha256', 'learning_state_sha256'] as const) {
+      const hashes = entries.map((entry, index) => {
+        if (!isJsonObject(entry)) {
+          throw new CertificationError(`${host} artifact outcome ${index + 1} is invalid.`);
+        }
+        return requireBareHash(entry[key], `${host} artifact outcome ${index + 1} ${key}`);
+      });
+      if (new Set(hashes).size !== 1) {
+        throw new CertificationError(`${host} passes do not share one deterministic ${key}.`);
+      }
+    }
+    for (const [index, entry] of entries.entries()) {
+      if (!isJsonObject(entry)) throw new CertificationError(`${host} artifact outcome ${index + 1} is invalid.`);
+      lessonHashes.push(requireBareHash(
+        entry['promoted_lesson_sha256'],
+        `${host} artifact outcome ${index + 1} promoted_lesson_sha256`,
+      ));
+    }
+  }
+  if (new Set(lessonHashes).size !== 1) {
+    throw new CertificationError('All six passes do not share one deterministic promoted lesson hash.');
+  }
+}
+
 function certificationInputManifest(paths: CertificationPaths): FileManifest {
   return buildFileManifest([
     { label: 'host-led-learning-fixture', path: paths.fixtureRoot },
     { label: 'host-led-learning-oracle', path: dirname(paths.oraclePath) },
     { label: 'social-manager-context-fixture', path: join(paths.repoRoot, SOCIAL_MANAGER_FIXTURE_PATH) },
   ]);
+}
+
+export function captureCertificationInputSnapshot(options: Readonly<{
+  paths: LiveCertificationPaths;
+  bundles: CertificationBundles;
+  probes: Readonly<Record<CertificationHost, HostLaunchProbe>>;
+}>): CertificationInputSnapshot {
+  const contract = loadHostLedLearningLaunchContract(options.paths.repoRoot);
+  const manifest = certificationInputManifest(options.paths);
+  const managedSettings = inventoryManagedSettings();
+  const hostBinaries = Object.fromEntries((['claude', 'codex'] as const).map((host) => {
+    const binary = host === 'claude' ? options.paths.claudeBin : options.paths.codexBin;
+    const executableSha256 = sha256(readFileSync(binary));
+    if (executableSha256 !== options.probes[host].executable_sha256) {
+      throw new CertificationError(`${host} binary differs from its pre-run launch identity.`);
+    }
+    return [host, Object.freeze({
+      executable_sha256: executableSha256,
+      probe_sha256: sha256(canonicalJson(options.probes[host])),
+    })];
+  })) as Record<CertificationHost, Readonly<{ executable_sha256: string; probe_sha256: string }>>;
+  return Object.freeze({
+    input_manifest_sha256: manifest.sha256,
+    support_semantics_sha256: computeSupportSemanticsHash(options.paths.repoRoot),
+    launch_contract_sha256: sha256(canonicalJson(contract)),
+    oracle_sha256: sha256(canonicalJson(oracle(options.paths))),
+    package_manifest_sha256: sha256(readFileSync(options.paths.packagePath)),
+    package_version: packageVersion(options.paths),
+    roster_bundle_sha256: sha256(readFileSync(options.paths.rosterBundlePath)),
+    certification_roster_bundle_sha256: sha256(readFileSync(options.bundles.rosterPath)),
+    adapter_bundle_sha256: sha256(readFileSync(options.bundles.adapterPath)),
+    managed_settings_sha256: sha256(canonicalJson(managedSettings)),
+    host_binaries: Object.freeze(hostBinaries),
+  });
+}
+
+export function assertCertificationInputSnapshotUnchanged(
+  before: CertificationInputSnapshot,
+  after: CertificationInputSnapshot,
+): void {
+  if (canonicalJson(before) !== canonicalJson(after)) {
+    throw new CertificationError('Certification inputs changed during the paid host run.');
+  }
+}
+
+export function publishAfterCertificationInputRevalidation<T>(options: Readonly<{
+  baseline: CertificationInputSnapshot;
+  capture: () => CertificationInputSnapshot;
+  publish: () => T;
+}>): T {
+  assertCertificationInputSnapshotUnchanged(options.baseline, options.capture());
+  return options.publish();
 }
 
 function commandsForLogCategories(
@@ -4813,12 +4915,11 @@ async function runPass(options: Readonly<{
 function buildAttestation(options: Readonly<{
   paths: CertificationPaths;
   contract: HostLedLearningLaunchContract;
-  manifest: FileManifest;
-  supportSemanticsHash: string;
-  bundles: CertificationBundles;
+  snapshot: CertificationInputSnapshot;
   probes: Readonly<Record<CertificationHost, HostLaunchProbe>>;
   outcomes: Readonly<Record<CertificationHost, readonly CertificationPassOutcome[]>>;
 }>): HostLedLearningAttestation {
+  assertDeterministicCertificationArtifacts(options.outcomes);
   const normalizedResult = sameSemanticResults(options.outcomes);
   const withoutHash = {
     schema_version: HOST_LED_LEARNING_ATTESTATION_SCHEMA_VERSION,
@@ -4828,16 +4929,16 @@ function buildAttestation(options: Readonly<{
     fixture_iteration: options.contract.fixture_iteration,
     certification_platform: 'darwin' as const,
     generated_at: new Date().toISOString(),
-    package_version: packageVersion(options.paths),
+    package_version: options.snapshot.package_version,
     node_version: process.version,
     typescript_version: ts.version,
-    roster_bundle_sha256: sha256(readFileSync(options.paths.rosterBundlePath)),
-    certification_roster_bundle_sha256: sha256(readFileSync(options.bundles.rosterPath)),
-    adapter_bundle_sha256: sha256(readFileSync(options.bundles.adapterPath)),
-    input_manifest_sha256: options.manifest.sha256,
-    support_semantics_sha256: options.supportSemanticsHash,
-    launch_contract_sha256: sha256(canonicalJson(options.contract)),
-    oracle_sha256: sha256(canonicalJson(oracle(options.paths))),
+    roster_bundle_sha256: options.snapshot.roster_bundle_sha256,
+    certification_roster_bundle_sha256: options.snapshot.certification_roster_bundle_sha256,
+    adapter_bundle_sha256: options.snapshot.adapter_bundle_sha256,
+    input_manifest_sha256: options.snapshot.input_manifest_sha256,
+    support_semantics_sha256: options.snapshot.support_semantics_sha256,
+    launch_contract_sha256: options.snapshot.launch_contract_sha256,
+    oracle_sha256: options.snapshot.oracle_sha256,
     probes: options.probes,
     outcomes: options.outcomes,
     normalized_result_sha256: sha256(canonicalJson(normalizedResult)),
@@ -4930,6 +5031,10 @@ export function parseHostLedLearningAttestation(value: unknown): HostLedLearning
       }
     }
   }
+  assertDeterministicCertificationArtifacts({
+    claude: outcomes['claude'] as readonly unknown[],
+    codex: outcomes['codex'] as readonly unknown[],
+  });
   if (sha256(canonicalJson(root['normalized_result'])) !== root['normalized_result_sha256']) {
     throw new CertificationError('Attestation normalized semantic result hash is invalid.');
   }
@@ -5085,8 +5190,6 @@ export async function runHostLedLearningCertification(
   const codexKey = hostApiKey('codex', env);
   inventoryManagedSettings();
   runBuild(paths);
-  const manifest = certificationInputManifest(paths);
-  const supportSemanticsHash = computeSupportSemanticsHash(repoRoot);
   const certificationRoot = createCertificationRoot();
   try {
     const bundles = buildCertificationBundles(paths, certificationRoot);
@@ -5095,6 +5198,11 @@ export async function runHostLedLearningCertification(
       claude: probeHostBinary('claude', paths.claudeBin, join(probeHome, 'claude')),
       codex: probeHostBinary('codex', paths.codexBin, join(probeHome, 'codex')),
     });
+    const snapshot = captureCertificationInputSnapshot({ paths, bundles, probes });
+    if (snapshot.launch_contract_sha256 !== sha256(canonicalJson(contract))
+      || snapshot.oracle_sha256 !== sha256(canonicalJson(expected))) {
+      throw new CertificationError('Certification contract or oracle changed before the paid run began.');
+    }
     const outcomes: Record<CertificationHost, readonly CertificationPassOutcome[]> = {
       claude: [],
       codex: [],
@@ -5103,7 +5211,7 @@ export async function runHostLedLearningCertification(
       const apiKey = host === 'claude' ? claudeKey : codexKey;
       const hostOutcomes: CertificationPassOutcome[] = [];
       for (let pass = 1; pass <= HOST_LED_LEARNING_PASS_COUNT; pass++) {
-        hostOutcomes.push(await runPass({
+        const outcome = await runPass({
           host,
           pass,
           paths,
@@ -5113,7 +5221,11 @@ export async function runHostLedLearningCertification(
           apiKey,
           bundles,
           hostProbe: probes[host],
-        }));
+        });
+        if (outcome.source_manifest_sha256 !== snapshot.input_manifest_sha256) {
+          throw new CertificationError(`${host} pass ${pass} did not use the snapshotted certification inputs.`);
+        }
+        hostOutcomes.push(outcome);
       }
       const initialHashes = new Set(hostOutcomes.map((entry) => entry.initial_workspace_sha256));
       if (initialHashes.size !== 1) {
@@ -5132,17 +5244,26 @@ export async function runHostLedLearningCertification(
       }
       outcomes[host] = Object.freeze(hostOutcomes);
     }
+    assertDeterministicCertificationArtifacts(outcomes);
+    assertCertificationInputSnapshotUnchanged(
+      snapshot,
+      captureCertificationInputSnapshot({ paths, bundles, probes }),
+    );
     const attestation = buildAttestation({
       paths,
       contract,
-      manifest,
-      supportSemanticsHash,
-      bundles,
+      snapshot,
       probes,
       outcomes: Object.freeze(outcomes),
     });
-    writeAttestation(paths.attestationPath, attestation, [claudeKey, codexKey]);
-    return attestation;
+    return publishAfterCertificationInputRevalidation({
+      baseline: snapshot,
+      capture: () => captureCertificationInputSnapshot({ paths, bundles, probes }),
+      publish: () => {
+        writeAttestation(paths.attestationPath, attestation, [claudeKey, codexKey]);
+        return attestation;
+      },
+    });
   } finally {
     rmSync(certificationRoot, { recursive: true, force: true });
   }

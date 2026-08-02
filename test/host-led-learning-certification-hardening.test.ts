@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import test from 'node:test';
 import {
   assertDistinctHostPassTraceHashes,
+  assertDeterministicCertificationArtifacts,
+  assertCertificationInputSnapshotUnchanged,
   assertCodexPromptContributionPins,
   assertCodexSandboxCanaryTrace,
   assertClaudeSandboxCanaryTrace,
@@ -22,6 +24,8 @@ import {
   normalizeHostTrace,
   normalizeCodexCurrentDateContribution,
   parseHostLedLearningLaunchContract,
+  parseHostLedLearningAttestation,
+  publishAfterCertificationInputRevalidation,
   sameSemanticResults,
   tokenizeLiteralHostCommand,
   validateCandidateSemanticMeaning,
@@ -30,6 +34,7 @@ import {
   validateDerivedQueryMeaning,
   validateHostTraceCommands,
   type CertificationHost,
+  type CertificationInputSnapshot,
   type HostLaunchProbe,
   type JsonValue,
   type NormalizedHostTrace,
@@ -37,6 +42,104 @@ import {
 
 function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function certificationSnapshot(seed = 'baseline'): CertificationInputSnapshot {
+  const hash = (label: string): string => digest(`${seed}:${label}`);
+  return {
+    input_manifest_sha256: hash('manifest'),
+    support_semantics_sha256: hash('support'),
+    launch_contract_sha256: hash('contract'),
+    oracle_sha256: hash('oracle'),
+    package_manifest_sha256: hash('package-manifest'),
+    package_version: '2.0.0',
+    roster_bundle_sha256: hash('roster'),
+    certification_roster_bundle_sha256: hash('private-roster'),
+    adapter_bundle_sha256: hash('adapter'),
+    managed_settings_sha256: hash('managed'),
+    host_binaries: {
+      claude: { executable_sha256: hash('claude-bin'), probe_sha256: hash('claude-probe') },
+      codex: { executable_sha256: hash('codex-bin'), probe_sha256: hash('codex-probe') },
+    },
+  };
+}
+
+function syntheticAttestation(): Record<string, unknown> {
+  const inputManifestHash = digest('input-manifest');
+  const semanticResult = {};
+  const semanticResultHash = digest(canonicalJson(semanticResult));
+  const probes = {
+    claude: {
+      executable_sha256: digest('claude-executable'),
+      version: '2.1.220 (Claude Code)',
+      version_output_sha256: digest('claude-version'),
+      help_output_sha256: digest('claude-help'),
+      model: 'claude-opus-5',
+      effort: 'xhigh',
+      capability_sha256: digest('claude-capability'),
+    },
+    codex: {
+      executable_sha256: digest('codex-executable'),
+      version: 'codex-cli 0.144.1',
+      version_output_sha256: digest('codex-version'),
+      help_output_sha256: digest('codex-help'),
+      model: 'gpt-5.6-sol',
+      effort: 'xhigh',
+      capability_sha256: digest('codex-capability'),
+    },
+  };
+  const promotedLessonHash = digest('promoted-lesson');
+  const outcomes = Object.fromEntries((['claude', 'codex'] as const).map((host) => [
+    host,
+    Array.from({ length: 3 }, (_, index) => ({
+      pass: index + 1,
+      initial_workspace_sha256: digest(`${host}-initial`),
+      final_workspace_sha256: digest(`${host}-final`),
+      source_manifest_sha256: inputManifestHash,
+      host_probe_sha256: digest(canonicalJson(probes[host])),
+      turn_one_config_sha256: digest(`${host}-turn-one-config`),
+      turn_two_config_sha256: digest(`${host}-turn-two-config`),
+      sandbox_probe_sha256: digest(`${host}-sandbox`),
+      skill_discovery_sha256: digest(`${host}-skills`),
+      prompt_input_sha256: host === 'codex' ? digest('codex-prompt') : null,
+      turn_one_trace_sha256: digest(`${host}-turn-one-trace-${index + 1}`),
+      turn_two_trace_sha256: digest(`${host}-turn-two-trace-${index + 1}`),
+      learning_state_sha256: digest(`${host}-learning`),
+      promoted_lesson_sha256: promotedLessonHash,
+      semantic_result_sha256: semanticResultHash,
+      semantic_result: semanticResult,
+    })),
+  ]));
+  const withoutHash = {
+    schema_version: 1,
+    status: 'certified',
+    fixture_id: 'host-led-learning',
+    behavior_revision: 'test-revision',
+    fixture_iteration: 1,
+    certification_platform: 'darwin',
+    generated_at: '2026-08-03T00:00:00.000Z',
+    package_version: '2.0.0',
+    node_version: 'v24.1.0',
+    typescript_version: '5.9.3',
+    roster_bundle_sha256: digest('roster-bundle'),
+    certification_roster_bundle_sha256: digest('private-roster-bundle'),
+    adapter_bundle_sha256: digest('adapter-bundle'),
+    input_manifest_sha256: inputManifestHash,
+    support_semantics_sha256: digest('support-semantics'),
+    launch_contract_sha256: digest('launch-contract'),
+    oracle_sha256: digest('oracle'),
+    probes,
+    outcomes,
+    normalized_result_sha256: semanticResultHash,
+    normalized_result: semanticResult,
+  };
+  return { ...withoutHash, attestation_sha256: digest(canonicalJson(withoutHash)) };
+}
+
+function rehashAttestation(value: Record<string, unknown>): Record<string, unknown> {
+  const withoutHash = { ...value };
+  delete withoutHash['attestation_sha256'];
+  return { ...value, attestation_sha256: digest(canonicalJson(withoutHash)) };
 }
 
 function trace(host: CertificationHost, commands: readonly string[]): NormalizedHostTrace {
@@ -988,6 +1091,56 @@ test('the shared parser and generator trace gate rejects replayed pass transcrip
     assert.throws(
       () => assertDistinctHostPassTraceHashes('codex', replayed),
       /must be distinct across all three passes/iu,
+    );
+  }
+});
+
+test('certification publication revalidates every snapshotted input before replacing prior evidence', () => {
+  const baseline = certificationSnapshot();
+  assert.doesNotThrow(() => assertCertificationInputSnapshotUnchanged(baseline, structuredClone(baseline)));
+  const changed = { ...structuredClone(baseline), oracle_sha256: digest('changed-oracle') };
+  assert.throws(
+    () => assertCertificationInputSnapshotUnchanged(baseline, changed),
+    /inputs changed during the paid host run/iu,
+  );
+
+  const root = mkdtempSync(join(tmpdir(), 'roster-350-attestation-guard-'));
+  const path = join(root, 'attestation.json');
+  try {
+    writeFileSync(path, 'prior-attestation\n');
+    let published = false;
+    assert.throws(() => publishAfterCertificationInputRevalidation({
+      baseline,
+      capture: () => changed,
+      publish: () => {
+        published = true;
+        writeFileSync(path, 'replacement-attestation\n');
+      },
+    }), /inputs changed during the paid host run/iu);
+    assert.equal(published, false);
+    assert.equal(readFileSync(path, 'utf8'), 'prior-attestation\n');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('attestation parser rejects nondeterministic durable artifacts after a valid rehash', () => {
+  const valid = syntheticAttestation();
+  assert.doesNotThrow(() => parseHostLedLearningAttestation(valid));
+  const outcomes = valid['outcomes'] as Record<string, Array<Record<string, unknown>>>;
+  assert.doesNotThrow(() => assertDeterministicCertificationArtifacts(outcomes as never));
+
+  for (const [host, field, value] of [
+    ['claude', 'final_workspace_sha256', digest('different-final-workspace')],
+    ['codex', 'learning_state_sha256', digest('different-learning-state')],
+    ['codex', 'promoted_lesson_sha256', digest('different-promoted-lesson')],
+  ] as const) {
+    const changed = structuredClone(valid);
+    const changedOutcomes = changed['outcomes'] as Record<string, Array<Record<string, unknown>>>;
+    changedOutcomes[host]![2]![field] = value;
+    assert.throws(
+      () => parseHostLedLearningAttestation(rehashAttestation(changed)),
+      /deterministic|promoted lesson hash/iu,
     );
   }
 });
