@@ -46,6 +46,8 @@ provides:
 - a hierarchical canonical registry with flat JSON discovery;
 - strict structured-plan schema, reference, scope, and cycle validation alongside
   structural path, ownership, and generated-drift checks;
+- deterministic bounded task-context assembly with complete selected-plan
+  closure, trust-separated fragments, provenance, and exact budget accounting;
 - scope-owned workspace, function, agent, and plan tool-use guidance that resolves
   to one flat, provenance-carrying policy without executing a provider;
 - bounded regular-file reads, component-wise symlink refusal, and atomic writes;
@@ -54,8 +56,7 @@ provides:
 - the existing opt-in company Brain while its v2 identity/source lifecycle is
   upgraded.
 
-Bounded context, portable evidence, and activated Dreamer learning are
-subsequent roadmap tasks.
+Portable evidence and activated Dreamer learning are subsequent roadmap tasks.
 Legacy scheduling and general-operations commands remain temporarily for
 migration safety; they are not part of the v2 product contract and are removed
 by the breaking-simplification phase.
@@ -177,6 +178,37 @@ Plans contain inert guidance, not commands or an expression language. Array
 position is the only step order, and references use local IDs only for
 same-agent records. Cross-agent and nested-plan targets remain fully qualified.
 
+## Bounded task context
+
+The host requests one exact agent target, an optional explicitly selected plan,
+and the current task:
+
+```bash
+roster context gtm/social-manager#opportunity-discovery \
+  --query "Find reply opportunities from the last 24 hours" \
+  --step research \
+  --budget 8000 \
+  --explain \
+  --json
+```
+
+`--query` and `--json` are required. An omitted `#plan` returns agent-only
+context; Roster never infers a plan from the request or step hint. The response
+is one JSON document with `schema_version`, `workspace`, `target`, `request`,
+`agent`, `plan`, `guidelines`, `lessons`, `brain_evidence`, `tool_uses`,
+`skill_refs`, `provenance`, `budget`, and `diagnostics` sections. It deliberately
+has no success `ok` field.
+
+The selected root plan and its complete statically referenced nested-plan
+closure are mandatory and never truncated. Applicable approved lessons and
+cited Brain evidence are optional and ranked under the token budget. If the
+workspace has no Brain binding, context resolution still succeeds with the
+complete local bundle, empty `brain_evidence`, and a `BRAIN_NOT_BOUND` warning.
+
+Claude Code or Codex interprets and executes the returned definitions. Roster
+does not choose a current step, invoke a vendor tool, carry runtime outputs,
+enforce approval, or decide what happens next.
+
 ## Workspace model
 
 Authorship stays hierarchical so ownership remains legible:
@@ -260,14 +292,16 @@ and lesson files are never silently overwritten.
 | `roster scaffold <kind> <id>` | Create one registered authored record |
 | `roster discover [query] --json` | Return compact qualified records and diagnostics |
 | `roster validate [target] --json` | Check registry, identity, paths, ownership, and generated drift |
+| `roster context <function>/<agent>[#plan] --query <task> --json` | Return one bounded, cited, trust-separated task bundle |
 | `roster install --tool claude\|codex --scope project` | Generate the selected host bootstrap |
 | `roster update` | Preflight tool guidance, then synchronize bootstrap files and the portable vendor-skill map |
 | `roster doctor --json` | Report workspace health, generated drift, safety, secrets, and activation assurance |
 | `roster brain <verb>` | Use the opt-in company knowledge Brain |
 | `roster skills sync` | Explicitly install a declared external skill manifest; never run implicitly by v2 update |
 
-Commands return human text by default and stable JSON envelopes with `--json`.
-Machine failures include a code, message, remedy, and JSON-safe details.
+Commands return human text by default and stable JSON envelopes with `--json`;
+`roster context` is agent-facing and requires JSON. Machine failures include a
+code, message, remedy, and JSON-safe details.
 
 ## Company Brain
 
@@ -279,7 +313,8 @@ evidence, feedback, and human decisions with provenance.
 The local repository holds authored operating policy. Remote Postgres/S3 holds
 portable company knowledge and evidence so the same workspace can be used from
 multiple machines. Missing Brain credentials never block local init, scaffold,
-discover, or structural validation.
+discover, structural validation, or the mandatory local portion of task
+context.
 
 The existing Brain CLI is opt-in:
 

@@ -56,6 +56,8 @@ import { executeValidate } from '../commands/validate.ts';
 import { parseScaffoldArgs } from '../lib/scaffold-args.ts';
 import { parseDiscoverArgs } from '../lib/discover-args.ts';
 import { parseValidateArgs } from '../lib/validate-args.ts';
+import { parseContextArgs } from '../lib/context-args.ts';
+import { executeContext } from '../commands/context.ts';
 import { parseBrainArgs } from '../lib/brain-args.ts';
 import {
   executeBrainInit,
@@ -92,15 +94,17 @@ import {
   unsafeWorkspaceMarkerError,
   userCancelledInstall,
   workspaceRequiredError,
+  type JsonValue,
 } from '../lib/errors.ts';
 
-type Subcommand = 'install' | 'init' | 'scaffold' | 'discover' | 'validate' | 'doctor' | 'schedule' | 'review' | 'second-opinion' | 'hooks' | 'migrate' | 'pending' | 'skills' | 'upgrade' | 'update' | 'brain' | 'task' | 'ops' | 'run';
+type Subcommand = 'install' | 'init' | 'scaffold' | 'discover' | 'validate' | 'context' | 'doctor' | 'schedule' | 'review' | 'second-opinion' | 'hooks' | 'migrate' | 'pending' | 'skills' | 'upgrade' | 'update' | 'brain' | 'task' | 'ops' | 'run';
 const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'install',
   'init',
   'scaffold',
   'discover',
   'validate',
+  'context',
   'doctor',
   'schedule',
   'review',
@@ -145,6 +149,7 @@ function printHelp(version: string): void {
     `  roster scaffold <kind> <id>  ${chalk.dim('Create one registered function, agent, plan, subagent, guideline, tool-use, or lesson')}`,
     `  roster discover [query]      ${chalk.dim('Find compact qualified workspace records (--kind, --scope, --exact, --full, --json)')}`,
     `  roster validate [target]     ${chalk.dim('Validate registry, paths, ownership, and generated drift (--json)')}`,
+    `  roster context <function>/<agent>[#plan]  ${chalk.dim('Resolve one bounded task context (--query, --step, --budget, --explain, --json)')}`,
     `  roster update                ${chalk.dim('Synchronize v2 activation and the derived vendor-skill map')}`,
     `  roster upgrade [--dry-run]   ${chalk.dim('Legacy eager-scaffold command; v2 workspaces use roster update')}`,
     `  roster doctor                ${chalk.dim('Audit v2 registry, generated activation, filesystem safety, and secrets')}`,
@@ -197,9 +202,13 @@ function printHelp(version: string): void {
     `  --kind <record-kind>         ${chalk.dim('Filter discovery to one workspace record kind')}`,
     `  --exact                      ${chalk.dim('Require one exact qualified discovery match')}`,
     `  --full                       ${chalk.dim('Include bounded authored content in discovery output')}`,
+    `  --query <task>               ${chalk.dim('Set the required host task for context resolution')}`,
+    `  --step <hint>                ${chalk.dim('Add an optional host-supplied context ranking hint')}`,
+    `  --budget <tokens>            ${chalk.dim('Set the context token budget (default: 8000; maximum: 128000)')}`,
+    `  --explain                    ${chalk.dim('Include bounded context provenance explanations')}`,
     `  --yes, -y                    ${chalk.dim('Skip prompts; use safe defaults (install)')}`,
     `  --tool <name>                ${chalk.dim('Required scheduler tool: claude | codex (schedule install)')}`,
-    `  --json                       ${chalk.dim('Emit machine-readable JSON (install/scaffold/discover/validate/update/doctor and supported legacy commands)')}`,
+    `  --json                       ${chalk.dim('Emit machine-readable JSON (install/scaffold/discover/validate/context/update/doctor and supported legacy commands)')}`,
     `  --fix                        ${chalk.dim('Auto-fix broken symlinks + .env permissions (doctor)')}`,
     `  --cwd <dir>                  ${chalk.dim('Run schedule validate against a different cwd')}`,
     `  --host <name>                ${chalk.dim('Reviewer host: claude | codex | gemini (second-opinion; default: first installed ≠ recommended by skill)')}`,
@@ -534,13 +543,14 @@ async function runInit(args: readonly string[]): Promise<number> {
 }
 
 function commandParseError(
-  command: 'scaffold' | 'discover' | 'validate',
+  command: 'scaffold' | 'discover' | 'validate' | 'context',
   message: string,
   json: boolean,
+  details: Readonly<Record<string, JsonValue>> = {},
 ): number {
   const remedy = `Run roster ${command} --help for usage.`;
   if (json) {
-    console.log(JSON.stringify({ ok: false, code: 'INVALID_ARGS', message, remedy, details: {} }));
+    console.log(JSON.stringify({ ok: false, code: 'INVALID_ARGS', message, remedy, details }));
     return EXIT_ERROR;
   }
   throw new RosterError({
@@ -548,6 +558,8 @@ function commandParseError(
     body: '',
     remedy: `  ${remedy}`,
     exitCode: EXIT_ERROR,
+    code: 'INVALID_ARGS',
+    details,
   });
 }
 
@@ -591,6 +603,21 @@ function runValidate(args: readonly string[]): number {
     cwd: process.cwd(),
     json: parsed.json,
     ...(parsed.target !== undefined ? { target: parsed.target } : {}),
+  });
+}
+
+function runContext(args: readonly string[]): number {
+  const parsed = parseContextArgs(args);
+  if (parsed.kind === 'err') {
+    return commandParseError('context', parsed.message, args.includes('--json'), parsed.details);
+  }
+  return executeContext({
+    root: process.cwd(),
+    target: parsed.target,
+    query: parsed.query,
+    stepHint: parsed.stepHint,
+    budgetTokens: parsed.budgetTokens,
+    explain: parsed.explain,
   });
 }
 
@@ -1068,6 +1095,15 @@ const jsonMode = rawArgs.includes('--json');
 async function main(): Promise<number> {
   const version = getPackageVersion();
   const args = debugMode ? rawArgs.filter((a) => a !== '--debug') : rawArgs;
+  const [first, ...rest] = args;
+
+  if (first === 'context') {
+    if (rest.length === 1 && (rest[0] === '--help' || rest[0] === '-h')) {
+      printHelp(version);
+      return EXIT_OK;
+    }
+    return runContext(rest);
+  }
 
   if (args.includes('--help') || args.includes('-h')) {
     printHelp(version);
@@ -1078,8 +1114,6 @@ async function main(): Promise<number> {
     console.log(version);
     return EXIT_OK;
   }
-
-  const [first, ...rest] = args;
 
   if (first === undefined) {
     return runInstall(rest);
