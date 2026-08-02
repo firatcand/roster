@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import {
+  assertDistinctHostPassTraceHashes,
+  assertClaudeSandboxCanaryTrace,
   buildFileManifest,
   assertHostBinaryMatches,
   HOST_LED_LEARNING_REPO_ROOT,
@@ -46,17 +48,23 @@ function jsonl(events: readonly unknown[]): string {
   return `${events.map((event) => JSON.stringify(event)).join('\n')}\n`;
 }
 
-function normalizeClaude(events: readonly unknown[]): NormalizedHostTrace {
+function normalizeClaudeRaw(events: readonly unknown[]): NormalizedHostTrace {
   return normalizeHostTrace({
     host: 'claude',
     stdout: jsonl([
       { type: 'system', subtype: 'init', tools: ['Bash', 'Skill'] },
       ...events,
-      { type: 'result', structured_output: {} },
     ]),
     pathReplacements: {},
     forbiddenTokens: [],
   });
+}
+
+function normalizeClaude(events: readonly unknown[]): NormalizedHostTrace {
+  return normalizeClaudeRaw([
+    ...events,
+    { type: 'result', subtype: 'success', is_error: false, structured_output: {} },
+  ]);
 }
 
 function normalizeCodex(events: readonly unknown[]): NormalizedHostTrace {
@@ -64,8 +72,13 @@ function normalizeCodex(events: readonly unknown[]): NormalizedHostTrace {
     host: 'codex',
     stdout: jsonl([
       { type: 'thread.started', thread_id: 'thread-test' },
+      { type: 'turn.started' },
       ...events,
       { type: 'item.completed', item: { type: 'agent_message', text: '{}' } },
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+      },
     ]),
     pathReplacements: {},
     forbiddenTokens: [],
@@ -79,11 +92,23 @@ function claudeToolCall(id: string, name: string, input: Record<string, unknown>
   };
 }
 
-function claudeToolResult(id: string, isError = false): unknown {
+function claudeToolResult(id: string, isError = false, content = 'result'): unknown {
   return {
     type: 'user',
-    message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'result', is_error: isError }] },
+    message: { content: [{ type: 'tool_result', tool_use_id: id, content, is_error: isError }] },
   };
+}
+
+function singleQuoteShellWord(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function codexWrappedCommand(
+  command: string,
+  shell: '/bin/bash' | '/bin/zsh' = '/bin/bash',
+  flag: '-c' | '-lc' = '-c',
+): string {
+  return `${shell} ${flag} ${singleQuoteShellWord(command)}`;
 }
 
 function codexCommandEvent(
@@ -92,14 +117,18 @@ function codexCommandEvent(
   command: string,
   status: 'completed' | 'failed' = 'completed',
   exitCode = 0,
+  wrappedCommand = codexWrappedCommand(command),
 ): unknown {
   return {
     type: phase,
     item: {
       type: 'command_execution',
       id,
-      command,
-      ...(phase === 'item.started' ? {} : { status, exit_code: exitCode }),
+      command: wrappedCommand,
+      aggregated_output: '',
+      ...(phase === 'item.started'
+        ? { status: 'in_progress', exit_code: null }
+        : { status, exit_code: exitCode }),
     },
   };
 }
@@ -193,6 +222,16 @@ test('Claude trace normalization rejects non-Bash/Skill actions and requires one
   assert.equal(valid.tool_calls.length, 1);
   assert.equal(valid.tool_results.length, 1);
 
+  const grouped = normalizeClaude([
+    claudeToolCall('call-1', 'Bash', { command }),
+    claudeToolCall('call-2', 'Skill', { skill: 'fixture-dreamer' }),
+    claudeToolResult('call-1'),
+    claudeToolResult('call-2'),
+  ]);
+  assert.deepEqual(grouped.commands, [command]);
+  assert.equal(grouped.tool_calls.length, 2);
+  assert.equal(grouped.tool_results.length, 2);
+
   for (const name of ['Read', 'WebSearch']) {
     assert.throws(() => normalizeClaude([
       claudeToolCall('call-1', name, { file_path: 'AGENTS.md' }),
@@ -200,8 +239,11 @@ test('Claude trace normalization rejects non-Bash/Skill actions and requires one
     ]), /outside the closed Bash\/Skill surface/iu);
   }
 
+  assert.throws(() => normalizeClaude([
+    claudeToolCall('call-1', 'Bash', { command }),
+  ]), /closed one-to-one set/iu);
+
   for (const events of [
-    [claudeToolCall('call-1', 'Bash', { command })],
     [claudeToolResult('call-1')],
     [claudeToolCall('call-1', 'Bash', { command }), claudeToolResult('call-2')],
     [
@@ -210,8 +252,67 @@ test('Claude trace normalization rejects non-Bash/Skill actions and requires one
       claudeToolResult('call-1'),
     ],
   ]) {
-    assert.throws(() => normalizeClaude(events), /closed one-to-one set/iu);
+    assert.throws(() => normalizeClaude(events), /prior unmatched tool call/iu);
   }
+
+  assert.throws(() => normalizeClaude([
+    claudeToolCall('call-1', 'Bash', { command }),
+    claudeToolCall('call-1', 'Bash', { command }),
+  ]), /unique stable identities/iu);
+  assert.throws(() => normalizeClaude([
+    claudeToolCall('call-1', 'Bash', { command }),
+    {
+      type: 'assistant',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'call-1', content: 'result' }] },
+    },
+  ]), /results must originate from a user message/iu);
+  assert.throws(() => normalizeClaude([
+    claudeToolResult('call-1'),
+    claudeToolCall('call-1', 'Bash', { command }),
+  ]), /prior unmatched tool call/iu);
+});
+
+test('Claude trace normalization requires exactly one final successful structured terminal result', () => {
+  const success = { type: 'result', subtype: 'success', is_error: false, structured_output: {} };
+  assert.throws(() => normalizeClaudeRaw([]), /exactly one final terminal result/iu);
+  assert.throws(() => normalizeClaudeRaw([success, success]), /exactly one final terminal result/iu);
+  assert.throws(() => normalizeClaudeRaw([
+    success,
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'late output' }] } },
+  ]), /exactly one final terminal result/iu);
+  assert.throws(() => normalizeClaudeRaw([
+    { type: 'result', subtype: 'error', is_error: true, structured_output: {} },
+  ]), /not one successful structured result/iu);
+  assert.throws(() => normalizeClaudeRaw([
+    { type: 'result', subtype: 'success', is_error: false },
+  ]), /not one successful structured result/iu);
+});
+
+test('Claude sandbox canaries match results by ID and both finish before workflow actions', () => {
+  const canaries = ['printf outside', 'nc loopback'] as const;
+  const workflow = 'roster discover target --exact --json';
+  const grouped = normalizeClaude([
+    claudeToolCall('write-canary', 'Bash', { command: canaries[0] }),
+    claudeToolCall('network-canary', 'Bash', { command: canaries[1] }),
+    claudeToolResult('network-canary', true, 'network blocked by sandbox'),
+    claudeToolResult('write-canary', true, 'write denied by sandbox'),
+    claudeToolCall('workflow', 'Bash', { command: workflow }),
+    claudeToolResult('workflow'),
+  ]);
+  assert.equal(assertClaudeSandboxCanaryTrace(grouped, canaries).length, 2);
+
+  const delayed = normalizeClaude([
+    claudeToolCall('write-canary', 'Bash', { command: canaries[0] }),
+    claudeToolCall('network-canary', 'Bash', { command: canaries[1] }),
+    claudeToolResult('write-canary', true, 'write denied by sandbox'),
+    claudeToolCall('workflow', 'Bash', { command: workflow }),
+    claudeToolResult('network-canary', true, 'network blocked by sandbox'),
+    claudeToolResult('workflow'),
+  ]);
+  assert.throws(
+    () => assertClaudeSandboxCanaryTrace(delayed, canaries),
+    /did not return a sandbox denial/iu,
+  );
 });
 
 test('Codex trace normalization counts a started/completed command once', () => {
@@ -223,6 +324,14 @@ test('Codex trace normalization counts a started/completed command once', () => 
   assert.deepEqual(normalized.commands, [command]);
   assert.equal(normalized.tool_calls.length, 1);
   assert.equal(normalized.events.length, 1);
+
+  const zshCommand = "sed -n '1,200p' .agents/skills/fixture-dreamer/SKILL.md";
+  const zshWrapper = `/bin/zsh -c "${zshCommand}"`;
+  const zsh = normalizeCodex([
+    codexCommandEvent('item.started', 'cmd-zsh', zshCommand, 'completed', 0, zshWrapper),
+    codexCommandEvent('item.completed', 'cmd-zsh', zshCommand, 'completed', 0, zshWrapper),
+  ]);
+  assert.deepEqual(zsh.commands, [zshCommand]);
 });
 
 test('Codex trace normalization rejects actions and failed command lifecycles outside its closed contract', () => {
@@ -232,7 +341,7 @@ test('Codex trace normalization rejects actions and failed command lifecycles ou
       { type: 'item.completed', item: { type, id: 'forbidden-1' } },
     ]), /forbidden/iu);
   }
-  for (const event of [{ type: 'error' }, { type: 'turn.failed' }]) {
+  for (const event of [{ type: 'error' }, { type: 'turn.failed' }, { type: 'item.failed' }]) {
     assert.throws(() => normalizeCodex([event]), /failed top-level trace event/iu);
   }
   for (const events of [
@@ -247,7 +356,7 @@ test('Codex trace normalization rejects actions and failed command lifecycles ou
       codexCommandEvent('item.completed', 'cmd-1', command),
     ],
   ]) {
-    assert.throws(() => normalizeCodex(events), /unmatched, duplicated, or unsuccessful/iu);
+    assert.throws(() => normalizeCodex(events), /unmatched, changed, duplicated, or unsuccessful/iu);
   }
   assert.throws(() => normalizeCodex([
     codexCommandEvent('item.started', 'cmd-1', command),
@@ -259,6 +368,42 @@ test('Codex trace normalization rejects actions and failed command lifecycles ou
   assert.throws(() => normalizeCodex([
     codexCommandEvent('item.updated', 'cmd-1', command),
   ]), /unexpected event phase/iu);
+
+  assert.throws(() => normalizeCodex([
+    codexCommandEvent(
+      'item.started',
+      'cmd-1',
+      command,
+      'completed',
+      0,
+      codexWrappedCommand(command, '/bin/bash', '-lc'),
+    ),
+  ]), /exact non-login bash\/zsh -c wrapper/iu);
+  assert.throws(() => normalizeCodex([
+    codexCommandEvent('item.started', 'cmd-1', command, 'completed', 0, command),
+  ]), /exact non-login bash\/zsh -c wrapper/iu);
+  assert.throws(() => normalizeCodex([
+    {
+      type: 'item.started',
+      item: {
+        type: 'command_execution',
+        id: 'cmd-1',
+        status: 'in_progress',
+        exit_code: null,
+      },
+    },
+  ]), /omitted its exact shell-wrapped command identity/iu);
+  assert.throws(() => normalizeCodex([
+    codexCommandEvent('item.started', 'cmd-1', command),
+    codexCommandEvent(
+      'item.completed',
+      'cmd-1',
+      command,
+      'completed',
+      0,
+      codexWrappedCommand(command, '/bin/zsh'),
+    ),
+  ]), /unmatched, changed, duplicated, or unsuccessful/iu);
 });
 
 test('Codex trace audit permits one exact Dreamer read and rejects extra operands or Roster argv', () => {
@@ -404,6 +549,23 @@ test('candidate semantics reject an opposite recommendation that merely repeats 
     'Avoid attributable practitioner operational problems',
     falsifier,
   ), /positive preference/iu);
+});
+
+test('the shared parser and generator trace gate rejects replayed pass transcripts', () => {
+  const outcomes = Array.from({ length: 3 }, (_, index) => ({
+    turn_one_trace_sha256: digest(`turn-one-${index + 1}`),
+    turn_two_trace_sha256: digest(`turn-two-${index + 1}`),
+  }));
+  assert.doesNotThrow(() => assertDistinctHostPassTraceHashes('claude', outcomes));
+
+  for (const key of ['turn_one_trace_sha256', 'turn_two_trace_sha256'] as const) {
+    const replayed = structuredClone(outcomes);
+    replayed[2]![key] = replayed[0]![key];
+    assert.throws(
+      () => assertDistinctHostPassTraceHashes('codex', replayed),
+      /must be distinct across all three passes/iu,
+    );
+  }
 });
 
 test('host binary proof rejects executable replacement after the launch probe', () => {

@@ -2045,12 +2045,18 @@ function jsonLines(value: string, label: string): JsonValue[] {
 
 function findSemanticResult(host: CertificationHost, events: readonly JsonValue[]): JsonValue {
   if (host === 'claude') {
-    for (let index = events.length - 1; index >= 0; index--) {
-      const event = events[index];
-      if (!isJsonObject(event) || event['type'] !== 'result') continue;
-      if (event['structured_output'] !== undefined) return canonicalize(event['structured_output']);
-      if (typeof event['result'] === 'string') return parseJson(event['result'], 'Claude structured result');
+    const terminal = events.flatMap((event, index) => (
+      isJsonObject(event) && event['type'] === 'result' ? [{ event, index }] : []
+    ));
+    if (terminal.length !== 1 || terminal[0]!.index !== events.length - 1) {
+      throw new CertificationError('Claude did not emit exactly one final terminal result event.');
     }
+    const result = terminal[0]!.event;
+    if (result['subtype'] !== 'success' || result['is_error'] !== false
+      || result['structured_output'] === undefined) {
+      throw new CertificationError('Claude terminal result was not one successful structured result.');
+    }
+    return canonicalize(result['structured_output']);
   } else {
     for (let index = events.length - 1; index >= 0; index--) {
       const event = events[index];
@@ -2069,49 +2075,52 @@ function extractClaudeTrace(events: readonly JsonValue[]): Pick<NormalizedHostTr
   const toolCalls: JsonValue[] = [];
   const toolResults: JsonValue[] = [];
   const commands: string[] = [];
+  const callPositions = new Map<string, Readonly<{ eventOrdinal: number; blockOrdinal: number }>>();
+  const resultIds = new Set<string>();
   for (const [eventOrdinal, event] of events.entries()) {
     if (!isJsonObject(event)) continue;
     if (event['type'] === 'system' && event['subtype'] === 'init') initialization.push(canonicalize(event));
-    if ((event['type'] === 'user' || event['type'] === 'assistant')
-      && isJsonObject(event['message']) && Array.isArray(event['message']['content'])) {
-      for (const [blockOrdinal, block] of event['message']['content'].entries()) {
-        if (isJsonObject(block) && block['type'] === 'tool_result') {
-          const value = canonicalize(block);
-          toolResults.push(value);
-          orderedEvents.push(canonicalize({ kind: 'tool_result', event_ordinal: eventOrdinal, block_ordinal: blockOrdinal, value }));
-        }
-      }
-    }
-    if (event['type'] !== 'assistant' || !isJsonObject(event['message']) || !Array.isArray(event['message']['content'])) continue;
+    if (!isJsonObject(event['message']) || !Array.isArray(event['message']['content'])) continue;
     for (const [blockOrdinal, block] of event['message']['content'].entries()) {
-      if (!isJsonObject(block) || block['type'] !== 'tool_use') continue;
-      if (block['name'] !== 'Bash' && block['name'] !== 'Skill') {
-        throw new CertificationError('Claude used an action outside the closed Bash/Skill surface.');
+      if (!isJsonObject(block) || (block['type'] !== 'tool_use' && block['type'] !== 'tool_result')) continue;
+      if (block['type'] === 'tool_use') {
+        if (event['type'] !== 'assistant') {
+          throw new CertificationError('Claude tool calls must originate from an assistant message.');
+        }
+        if (block['name'] !== 'Bash' && block['name'] !== 'Skill') {
+          throw new CertificationError('Claude used an action outside the closed Bash/Skill surface.');
+        }
+        const id = typeof block['id'] === 'string' ? block['id'] : null;
+        if (id === null || callPositions.has(id)) {
+          throw new CertificationError('Claude tool calls must have unique stable identities.');
+        }
+        callPositions.set(id, Object.freeze({ eventOrdinal, blockOrdinal }));
+        const value = canonicalize(block);
+        toolCalls.push(value);
+        orderedEvents.push(canonicalize({ kind: 'tool_call', event_ordinal: eventOrdinal, block_ordinal: blockOrdinal, value }));
+        if (block['name'] === 'Bash' && isJsonObject(block['input']) && typeof block['input']['command'] === 'string') {
+          commands.push(block['input']['command']);
+        }
+        continue;
       }
+      if (event['type'] !== 'user') {
+        throw new CertificationError('Claude tool results must originate from a user message.');
+      }
+      const id = typeof block['tool_use_id'] === 'string' ? block['tool_use_id'] : null;
+      const callPosition = id === null ? undefined : callPositions.get(id);
+      if (id === null || callPosition === undefined || resultIds.has(id)
+        || eventOrdinal <= callPosition.eventOrdinal) {
+        throw new CertificationError('Claude tool results must follow one prior unmatched tool call.');
+      }
+      resultIds.add(id);
       const value = canonicalize(block);
-      toolCalls.push(value);
-      orderedEvents.push(canonicalize({ kind: 'tool_call', event_ordinal: eventOrdinal, block_ordinal: blockOrdinal, value }));
-      if (block['name'] === 'Bash' && isJsonObject(block['input']) && typeof block['input']['command'] === 'string') {
-        commands.push(block['input']['command']);
-      }
+      toolResults.push(value);
+      orderedEvents.push(canonicalize({ kind: 'tool_result', event_ordinal: eventOrdinal, block_ordinal: blockOrdinal, value }));
     }
   }
   if (initialization.length !== 1) throw new CertificationError('Claude emitted an invalid initialization event count.');
-  const callIds = toolCalls.map((entry) => (
-    isJsonObject(entry) && typeof entry['id'] === 'string' ? entry['id'] : null
-  ));
-  const resultIds = toolResults.map((entry) => (
-    isJsonObject(entry) && typeof entry['tool_use_id'] === 'string' ? entry['tool_use_id'] : null
-  ));
-  if (callIds.some((id) => id === null) || resultIds.some((id) => id === null)) {
-    throw new CertificationError('Claude tool calls and results are not a closed one-to-one set.');
-  }
-  const concreteCallIds = callIds as string[];
-  const concreteResultIds = resultIds as string[];
-  if (new Set(concreteCallIds).size !== concreteCallIds.length
-    || new Set(concreteResultIds).size !== concreteResultIds.length
-    || canonicalJson([...concreteCallIds].sort(compareCodePoints))
-      !== canonicalJson([...concreteResultIds].sort(compareCodePoints))) {
+  if (callPositions.size !== resultIds.size
+    || [...callPositions.keys()].some((id) => !resultIds.has(id))) {
     throw new CertificationError('Claude tool calls and results are not a closed one-to-one set.');
   }
   return {
@@ -2123,20 +2132,119 @@ function extractClaudeTrace(events: readonly JsonValue[]): Pick<NormalizedHostTr
   };
 }
 
+function decodeSingleDisplayedShellWord(value: string): string {
+  if (value.length === 0) throw new CertificationError('Codex shell wrapper omitted its command payload.');
+  let result = '';
+  let state: 'unquoted' | 'single' | 'double' = 'unquoted';
+  let started = false;
+  for (let index = 0; index < value.length; index++) {
+    const character = value[index]!;
+    if (state === 'single') {
+      if (character === "'") state = 'unquoted';
+      else result += character;
+      started = true;
+      continue;
+    }
+    if (state === 'double') {
+      if (character === '"') {
+        state = 'unquoted';
+        started = true;
+        continue;
+      }
+      if (character === '\\') {
+        const next = value[++index];
+        if (next === undefined) throw new CertificationError('Codex shell wrapper has a trailing escape.');
+        result += next;
+        started = true;
+        continue;
+      }
+      result += character;
+      started = true;
+      continue;
+    }
+    if (/\s/u.test(character)) {
+      if (!started || value.slice(index).trim().length > 0) {
+        throw new CertificationError('Codex shell wrapper must contain one quoted command payload.');
+      }
+      break;
+    }
+    if (character === "'") {
+      state = 'single';
+      started = true;
+      continue;
+    }
+    if (character === '"') {
+      state = 'double';
+      started = true;
+      continue;
+    }
+    if (character === '\\') {
+      const next = value[++index];
+      if (next === undefined) throw new CertificationError('Codex shell wrapper has a trailing escape.');
+      result += next;
+      started = true;
+      continue;
+    }
+    result += character;
+    started = true;
+  }
+  if (!started || state !== 'unquoted' || result.length === 0) {
+    throw new CertificationError('Codex shell wrapper has an invalid quoted command payload.');
+  }
+  return result;
+}
+
+function decodeCodexShellWrappedCommand(
+  value: unknown,
+  allowNormalizedMarkers = false,
+): string {
+  if (typeof value !== 'string') {
+    throw new CertificationError('Codex command item omitted its exact shell-wrapped command identity.');
+  }
+  const match = /^\/bin\/(?:bash|zsh) -c ([\s\S]+)$/u.exec(value);
+  if (match === null) {
+    throw new CertificationError('Codex command item did not use the exact non-login bash/zsh -c wrapper.');
+  }
+  const decoded = decodeSingleDisplayedShellWord(match[1]!);
+  tokenizeLiteralHostCommand(decoded, allowNormalizedMarkers);
+  return decoded;
+}
+
 function extractCodexTrace(events: readonly JsonValue[]): Pick<NormalizedHostTrace, 'initialization' | 'events' | 'tool_calls' | 'tool_results' | 'commands'> {
   const toolCalls: JsonValue[] = [];
   const orderedEvents: JsonValue[] = [];
   const commands: string[] = [];
   const initialization: JsonValue[] = [];
-  const startedCommands = new Set<string>();
+  const startedCommands = new Map<string, Readonly<{ raw: string; decoded: string }>>();
   const completedCommands = new Set<string>();
+  const threadStarts: number[] = [];
+  const turnStarts: number[] = [];
+  const turnCompletions: number[] = [];
+  const itemOrdinals: number[] = [];
   for (const [eventOrdinal, event] of events.entries()) {
-    if (!isJsonObject(event)) continue;
-    if (event['type'] === 'error' || event['type'] === 'turn.failed') {
+    if (!isJsonObject(event) || typeof event['type'] !== 'string') {
+      throw new CertificationError('Codex emitted a non-object or untyped JSONL event.');
+    }
+    const eventType = event['type'];
+    if (eventType === 'error' || eventType.endsWith('.failed')) {
       throw new CertificationError('Codex emitted a failed top-level trace event.');
     }
-    if (event['type'] === 'thread.started') initialization.push(canonicalize(event));
-    if (!isJsonObject(event['item'])) continue;
+    if (eventType === 'thread.started') {
+      initialization.push(canonicalize(event));
+      threadStarts.push(eventOrdinal);
+    }
+    if (eventType === 'turn.started') turnStarts.push(eventOrdinal);
+    if (eventType === 'turn.completed') turnCompletions.push(eventOrdinal);
+    if (!isJsonObject(event['item'])) {
+      if (eventType !== 'thread.started' && eventType !== 'turn.started' && eventType !== 'turn.completed') {
+        throw new CertificationError('Codex emitted an event outside the closed turn lifecycle.');
+      }
+      continue;
+    }
+    if (eventType !== 'item.started' && eventType !== 'item.updated' && eventType !== 'item.completed') {
+      throw new CertificationError('Codex item used an unexpected event phase.');
+    }
+    itemOrdinals.push(eventOrdinal);
     const item = event['item'];
     const itemType = item['type'];
     if (itemType === 'file_change' || itemType === 'mcp_tool_call' || itemType === 'web_search') {
@@ -2146,36 +2254,49 @@ function extractCodexTrace(events: readonly JsonValue[]): Pick<NormalizedHostTra
       throw new CertificationError('Codex emitted an item outside the closed trace contract.');
     }
     if (itemType !== 'command_execution') continue;
-    if (event['type'] !== 'item.started' && event['type'] !== 'item.completed') {
+    if (eventType !== 'item.started' && eventType !== 'item.completed') {
       throw new CertificationError('Codex command item used an unexpected event phase.');
     }
     const itemId = typeof item['id'] === 'string' ? item['id'] : null;
     if (itemId === null) throw new CertificationError('Codex command item has no stable identity.');
-    if (event['type'] === 'item.started') {
+    const rawCommand = item['command'];
+    const decodedCommand = decodeCodexShellWrappedCommand(rawCommand);
+    if (eventType === 'item.started') {
       if (startedCommands.has(itemId)) throw new CertificationError('Codex emitted a duplicate command start.');
-      startedCommands.add(itemId);
+      if (item['status'] !== 'in_progress'
+        || (item['exit_code'] !== undefined && item['exit_code'] !== null)) {
+        throw new CertificationError('Codex command start has an invalid in-progress state.');
+      }
+      startedCommands.set(itemId, Object.freeze({ raw: rawCommand as string, decoded: decodedCommand }));
       continue;
     }
-    if (event['type'] === 'item.completed') {
-      if (!startedCommands.has(itemId) || completedCommands.has(itemId)
+    if (eventType === 'item.completed') {
+      const started = startedCommands.get(itemId);
+      if (started === undefined || completedCommands.has(itemId)
+        || started.raw !== rawCommand || started.decoded !== decodedCommand
         || item['status'] !== 'completed' || item['exit_code'] !== 0) {
-        throw new CertificationError('Codex command completion is unmatched, duplicated, or unsuccessful.');
+        throw new CertificationError('Codex command completion is unmatched, changed, duplicated, or unsuccessful.');
       }
       completedCommands.add(itemId);
       const value = canonicalize(item);
       toolCalls.push(value);
       orderedEvents.push(canonicalize({ kind: 'tool_call', event_ordinal: eventOrdinal, block_ordinal: 0, value }));
-      const command = typeof item['command'] === 'string'
-        ? item['command']
-        : Array.isArray(item['command']) && item['command'].every((entry) => typeof entry === 'string')
-          ? item['command'].join(' ')
-          : null;
-      if (command !== null) commands.push(command);
+      commands.push(decodedCommand);
     }
   }
   if (initialization.length !== 1) throw new CertificationError('Codex emitted an invalid initialization event count.');
+  const turnStart = turnStarts[0];
+  const turnCompletion = turnCompletions[0];
+  if (threadStarts.length !== 1 || threadStarts[0] !== 0
+    || turnStarts.length !== 1 || turnCompletions.length !== 1
+    || turnStart === undefined || turnCompletion === undefined
+    || turnStart <= threadStarts[0]! || turnStart >= turnCompletion
+    || turnCompletion !== events.length - 1
+    || itemOrdinals.some((ordinal) => ordinal <= turnStart || ordinal >= turnCompletion)) {
+    throw new CertificationError('Codex emitted an invalid closed turn lifecycle.');
+  }
   if (startedCommands.size !== completedCommands.size
-    || [...startedCommands].some((id) => !completedCommands.has(id))) {
+    || [...startedCommands.keys()].some((id) => !completedCommands.has(id))) {
     throw new CertificationError('Codex left an incomplete command item in the trace.');
   }
   return {
@@ -2253,6 +2374,48 @@ function orderedTraceValue(entry: JsonValue, kind: 'tool_call' | 'tool_result'):
   return entry['value'];
 }
 
+export function assertClaudeSandboxCanaryTrace(
+  trace: NormalizedHostTrace,
+  expectedCommands: readonly [string, string],
+): readonly Readonly<{ id_sha256: string; result_sha256: string }>[] {
+  const calls = trace.events.flatMap((entry, index) => {
+    const call = orderedTraceValue(entry, 'tool_call');
+    return call === null ? [] : [{ call, index }];
+  });
+  const workflowCallIndex = calls[2]?.index;
+  if (workflowCallIndex === undefined) {
+    throw new CertificationError('Claude did not run controlled workflow commands after both sandbox canaries.');
+  }
+  const proofs = expectedCommands.map((expectedCommand, index) => {
+    const matchingCalls = calls.filter(({ call }) => (
+      call['name'] === 'Bash'
+      && isJsonObject(call['input'])
+      && call['input']['command'] === expectedCommand
+    ));
+    const callEntry = calls[index];
+    const call = callEntry?.call;
+    if (call?.['name'] !== 'Bash' || !isJsonObject(call['input'])
+      || call['input']['command'] !== expectedCommand || matchingCalls.length !== 1) {
+      throw new CertificationError(`Claude sandbox canary ${index + 1} was not the next unique exact tool call.`);
+    }
+    const id = toolCallId(call);
+    if (id === null) throw new CertificationError('Claude sandbox canary has no tool-use ID.');
+    const resultIndex = trace.events.findIndex((entry, eventIndex) => {
+      const result = orderedTraceValue(entry, 'tool_result');
+      return eventIndex > callEntry.index && result?.['tool_use_id'] === id;
+    });
+    const result = resultIndex < 0 ? null : orderedTraceValue(trace.events[resultIndex]!, 'tool_result');
+    const serialized = canonicalJson(result);
+    if (result === null || result['tool_use_id'] !== id || result['is_error'] !== true
+      || resultIndex >= workflowCallIndex
+      || !/sandbox|denied|not permitted|blocked/iu.test(serialized)) {
+      throw new CertificationError(`Claude sandbox canary ${index + 1} did not return a sandbox denial.`);
+    }
+    return { id_sha256: sha256(id), result_sha256: sha256(serialized) };
+  });
+  return Object.freeze(proofs);
+}
+
 function assertClaudeSandboxProof(
   trace: NormalizedHostTrace,
   probe: ReturnType<typeof claudeSandboxCanaries>,
@@ -2260,23 +2423,8 @@ function assertClaudeSandboxProof(
   if (existsSync(probe.outsidePath)) {
     throw new CertificationError('Claude did not run both sandbox canaries before controlled workflow commands.');
   }
-  const expectedCommands = [probe.writeCommand, probe.networkCommand];
-  const proofs = expectedCommands.map((expectedCommand, index) => {
-    const call = orderedTraceValue(trace.events[index * 2]!, 'tool_call');
-    const result = orderedTraceValue(trace.events[(index * 2) + 1]!, 'tool_result');
-    if (call?.['name'] !== 'Bash' || !isJsonObject(call['input'])
-      || call['input']['command'] !== expectedCommand) {
-      throw new CertificationError(`Claude sandbox canary ${index + 1} was not the next exact tool call.`);
-    }
-    const id = toolCallId(call);
-    if (id === null) throw new CertificationError('Claude sandbox canary has no tool-use ID.');
-    const serialized = canonicalJson(result);
-    if (result === null || result['tool_use_id'] !== id || result['is_error'] !== true
-      || !/sandbox|denied|not permitted|blocked/iu.test(serialized)) {
-      throw new CertificationError(`Claude sandbox canary ${index + 1} did not return a sandbox denial.`);
-    }
-    return { id_sha256: sha256(id), result_sha256: sha256(serialized) };
-  });
+  const expectedCommands = [probe.writeCommand, probe.networkCommand] as const;
+  const proofs = assertClaudeSandboxCanaryTrace(trace, expectedCommands);
   return sha256(canonicalJson({
     canary_order: ['outside-workspace-write', 'loopback-network-connect'],
     outside_control_sha256: probe.outsideControlSha256,
@@ -2340,13 +2488,8 @@ function assertCodexDreamerProof(
   if (readIndex < 0) throw new CertificationError('Codex JSONL did not prove a full read of the exact Dreamer skill bytes.');
   const candidateIndex = trace.tool_calls.findIndex((entry, index) => {
     if (index <= readIndex || !isJsonObject(entry) || entry['type'] !== 'command_execution') return false;
-    const command = entry['command'];
-    const commandText = typeof command === 'string'
-      ? command
-      : Array.isArray(command) && command.every((part) => typeof part === 'string')
-        ? command.join(' ')
-        : '';
-    if (commandText.length === 0 || entry['status'] !== 'completed' || entry['exit_code'] !== 0) return false;
+    const commandText = decodeCodexShellWrappedCommand(entry['command'], true);
+    if (entry['status'] !== 'completed' || entry['exit_code'] !== 0) return false;
     const tokens = tokenizeLiteralHostCommand(commandText, true);
     const challengeIndex = tokens.indexOf('--skill-challenge');
     return tokens[0]?.split('/').at(-1) === 'roster-350-fixture-candidate-create'
@@ -2366,14 +2509,8 @@ function codexSkillReadIndex(
   const expectedBytes = readFileSync(join(workspace, relativeSkillPath), 'utf8').replace(/\r\n?/gu, '\n');
   return trace.tool_calls.findIndex((entry) => {
     if (!isJsonObject(entry) || entry['type'] !== 'command_execution') return false;
-    const command = entry['command'];
     const output = entry['aggregated_output'];
-    const commandText = typeof command === 'string'
-      ? command
-      : Array.isArray(command) && command.every((part) => typeof part === 'string')
-        ? command.join(' ')
-        : '';
-    if (commandText.length === 0) return false;
+    const commandText = decodeCodexShellWrappedCommand(entry['command'], true);
     const tokens = tokenizeLiteralHostCommand(commandText, true);
     return isExactCodexSkillRead(tokens, relativeSkillPath)
       && entry['status'] === 'completed'
@@ -2393,13 +2530,7 @@ function assertCodexPrimarySkillProof(
   const readIndex = codexSkillReadIndex(trace, workspace, primary.path);
   const controlledIndex = trace.tool_calls.findIndex((entry) => {
     if (!isJsonObject(entry) || entry['type'] !== 'command_execution') return false;
-    const command = entry['command'];
-    const commandText = typeof command === 'string'
-      ? command
-      : Array.isArray(command) && command.every((part) => typeof part === 'string')
-        ? command.join(' ')
-        : '';
-    if (commandText === '') return false;
+    const commandText = decodeCodexShellWrappedCommand(entry['command'], true);
     const name = tokenizeLiteralHostCommand(commandText, true)[0]?.split('/').at(-1);
     return name !== undefined && controlledCommands(contract).includes(name);
   });
@@ -3915,6 +4046,7 @@ export function parseHostLedLearningAttestation(value: unknown): HostLedLearning
       throw new CertificationError(`Attestation ${host} outcomes must contain exactly three passes.`);
     }
     hostOutcomes.forEach((entry, index) => validateAttestedOutcome(entry, host, index + 1, root));
+    assertDistinctHostPassTraceHashes(host, hostOutcomes);
     const initialHashes = new Set(hostOutcomes.map((entry) => (
       isJsonObject(entry) ? entry['initial_workspace_sha256'] : null
     )));
@@ -3953,6 +4085,26 @@ function requireBareHash(value: unknown, label: string): string {
   const parsed = requiredString(value, label);
   if (!/^[a-f0-9]{64}$/u.test(parsed)) throw new CertificationError(`${label} is not a SHA-256 digest.`);
   return parsed;
+}
+
+export function assertDistinctHostPassTraceHashes(
+  host: CertificationHost,
+  outcomes: readonly unknown[],
+): void {
+  if (outcomes.length !== HOST_LED_LEARNING_PASS_COUNT) {
+    throw new CertificationError(`${host} trace replay audit requires exactly three pass outcomes.`);
+  }
+  for (const key of ['turn_one_trace_sha256', 'turn_two_trace_sha256'] as const) {
+    const hashes = outcomes.map((outcome, index) => {
+      if (!isJsonObject(outcome)) {
+        throw new CertificationError(`${host} pass ${index + 1} is not a trace-bearing outcome.`);
+      }
+      return requireBareHash(outcome[key], `${host} pass ${index + 1} ${key}`);
+    });
+    if (new Set(hashes).size !== HOST_LED_LEARNING_PASS_COUNT) {
+      throw new CertificationError(`${host} ${key} must be distinct across all three passes.`);
+    }
+  }
 }
 
 function validateAttestedOutcome(
@@ -4112,6 +4264,7 @@ export async function runHostLedLearningCertification(
       if (initialHashes.size !== 1) {
         throw new CertificationError(`${host} passes did not start from identical workspace bytes.`);
       }
+      assertDistinctHostPassTraceHashes(host, hostOutcomes);
       const skillDiscoveryHashes = new Set(hostOutcomes.map((entry) => entry.skill_discovery_sha256));
       if (skillDiscoveryHashes.size !== 1 || skillDiscoveryHashes.has(null)) {
         throw new CertificationError(`${host} passes did not share one skill-discovery proof.`);
