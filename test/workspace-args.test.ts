@@ -13,7 +13,17 @@ test('scaffold parser enforces kind-specific scope and normalizes aliases', () =
   });
   assert.equal(parseScaffoldArgs(['plan', 'discover', '--scope', 'function:gtm']).kind, 'err');
   assert.equal(parseScaffoldArgs(['function', 'GTm']).kind, 'err');
-  assert.equal(parseScaffoldArgs(['tool-use', 'search', '--scope', 'plan:gtm/social#discover']).kind, 'ok');
+  for (const scope of [
+    'workspace',
+    'function:gtm',
+    'agent:gtm/social',
+    'plan:gtm/social#discover',
+  ]) {
+    assert.equal(parseScaffoldArgs(['tool-use', 'search', '--scope', scope]).kind, 'ok', scope);
+  }
+  assert.equal(parseScaffoldArgs(['tool-use', 'search']).kind, 'err');
+  assert.equal(parseScaffoldArgs(['tool-use', 'search', '--scope', 'workspace:gtm']).kind, 'err');
+  assert.equal(parseScaffoldArgs(['agent', 'social', '--function', 'tools']).kind, 'err');
 });
 
 test('discover and validate parsers remain command-local and bounded', () => {
@@ -22,6 +32,10 @@ test('discover and validate parsers remain command-local and bounded', () => {
   });
   assert.equal(parseDiscoverArgs(['--exact']).kind, 'err');
   assert.equal(parseDiscoverArgs(['one', 'two']).kind, 'err');
+  assert.deepEqual(parseDiscoverArgs(['--scope', 'workspace']), {
+    kind: 'ok', scope: 'workspace', exact: false, full: false, json: false,
+  });
+  assert.equal(parseDiscoverArgs(['--scope', 'workspace:gtm']).kind, 'err');
   assert.deepEqual(parseValidateArgs(['gtm/social', '--json']), { kind: 'ok', target: 'gtm/social', json: true });
   assert.equal(parseValidateArgs(['one', 'two']).kind, 'err');
 });

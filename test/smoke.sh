@@ -33,7 +33,16 @@ CODEX_HOME="$SMOKE_DIR/codex"
 GEMINI_HOME="$SMOKE_DIR/gemini"
 WORKSPACE="$SMOKE_DIR/workspace"
 FAKE_HOME="$SMOKE_DIR/fake-home"
-mkdir -p "$NPM_PREFIX" "$CLAUDE_HOME" "$CODEX_HOME" "$GEMINI_HOME" "$WORKSPACE" "$FAKE_HOME"
+PROVIDER_STUB_DIR="$SMOKE_DIR/provider-stub"
+PROVIDER_MARKER="$SMOKE_DIR/provider-called"
+mkdir -p "$NPM_PREFIX" "$CLAUDE_HOME" "$CODEX_HOME" "$GEMINI_HOME" "$WORKSPACE" "$FAKE_HOME" "$PROVIDER_STUB_DIR"
+
+cat > "$PROVIDER_STUB_DIR/exa" <<'STUB'
+#!/usr/bin/env bash
+touch "${ROSTER_SMOKE_PROVIDER_MARKER:?}"
+exit 99
+STUB
+chmod +x "$PROVIDER_STUB_DIR/exa"
 
 cleanup() {
   local rc=$?
@@ -205,14 +214,20 @@ assert "\"\$(shasum -a 256 ROSTER.md | awk '{print \$1}')\" = '$INIT_BOOTSTRAP_H
 "$ROSTER_BIN" scaffold plan opportunity-discovery --scope agent:gtm/social-manager --purpose "Find reply opportunities" --json > /dev/null
 "$ROSTER_BIN" scaffold plan history-screen --scope agent:gtm/social-manager --purpose "Screen prior interactions" --json > /dev/null
 "$ROSTER_BIN" scaffold subagent researcher --scope agent:gtm/social-manager --purpose "Collect evidence" --json > /dev/null
-"$ROSTER_BIN" scaffold tool-use social-search --scope plan:gtm/social-manager#opportunity-discovery --purpose "Use the selected search source" --json > /dev/null
+"$ROSTER_BIN" scaffold tool-use workspace-search --scope workspace --purpose "Workspace search policy" --json > /dev/null
+"$ROSTER_BIN" scaffold tool-use function-search --scope function:gtm --purpose "GTM search policy" --json > /dev/null
+"$ROSTER_BIN" scaffold tool-use social-opportunity-research --scope agent:gtm/social-manager --purpose "Social opportunity research" --json > /dev/null
+"$ROSTER_BIN" scaffold tool-use social-opportunity-research --scope plan:gtm/social-manager#opportunity-discovery --purpose "Opportunity discovery search" --json > /dev/null
 "$ROSTER_BIN" scaffold lesson strong-hook --scope agent:gtm/social-manager --purpose "Approved hook pattern" --json > /dev/null
 
 assert "-f functions/gtm/function.yaml" "function scaffold creates only the registered function"
 assert "-f functions/gtm/agents/social-manager/agent.yaml" "agent scaffold creates its qualified record"
 assert "-f functions/product/agents/social-manager/agent.yaml" "same local agent id works in another function"
 assert "-f functions/gtm/agents/social-manager/plans/opportunity-discovery.yaml" "plan scaffold creates one structured plan"
-assert "-f functions/gtm/agents/social-manager/tools/social-search.yaml" "plan-scoped tool guidance lands under its agent"
+assert "-f tools/workspace-search.yaml" "workspace tool guidance has an explicit root"
+assert "-f functions/gtm/tools/function-search.yaml" "function tool guidance stays with its function"
+assert "-f functions/gtm/agents/social-manager/tools/social-opportunity-research.yaml" "agent tool guidance stays with its agent"
+assert "-f functions/gtm/agents/social-manager/plans/opportunity-discovery/tools/social-opportunity-research.yaml" "plan tool guidance stays with its plan companion"
 assert "-f functions/gtm/agents/social-manager/playbook/strong-hook.md" "lesson scaffold creates one authored lesson"
 assert "! -e functions/product/agents/social-manager/plans" "unused agent slots remain absent"
 assert "! -e functions/gtm/agents/social-manager/logs" "scaffolding creates no runtime log forest"
@@ -233,6 +248,7 @@ purpose: Screen prior interactions before recommending a reply.
 inputs: {}
 brain_selectors: {}
 guidelines: []
+tool_uses: []
 artifacts: {}
 caps: {}
 steps:
@@ -262,6 +278,8 @@ brain_selectors:
     required: false
 guidelines:
   - gtm/guidelines/voice
+tool_uses:
+  - social-opportunity-research
 artifacts:
   search-brief:
     description: Filters prepared by the host for the selected search tool.
@@ -299,7 +317,7 @@ steps:
   - id: search
     kind: tool
     instruction: Use the company-defined social search use case.
-    tool_use: social-search
+    tool_use: social-opportunity-research
     retry_guidance:
       max_attempts: 2
       instruction: Narrow the host-prepared filters before retrying.
@@ -320,18 +338,116 @@ completion:
     - The human approved the shortlist.
 PLAN
 
+cat > tools/workspace-search.yaml <<'TOOL'
+schema_version: 2
+id: workspace-search
+scope: {}
+purpose: Search attributable public sources for company work.
+skill_ref: exa:search
+TOOL
+
+cat > functions/gtm/tools/function-search.yaml <<'TOOL'
+schema_version: 2
+id: function-search
+scope:
+  function: gtm
+purpose: Search attributable public sources for GTM work.
+skill_ref: exa:search
+TOOL
+
+cat > functions/gtm/agents/social-manager/tools/social-opportunity-research.yaml <<'TOOL'
+schema_version: 2
+id: social-opportunity-research
+scope:
+  function: gtm
+  agent: social-manager
+purpose: Find timely public posts matching company positioning.
+skill_ref: exa:search
+when:
+  - discovering public reply opportunities
+capabilities:
+  - web-search
+  - content-retrieval
+filters:
+  - exclude previously presented canonical URLs
+  - exclude cryptocurrency topics
+rules:
+  - require canonical URLs and attributable provenance
+  - never perform an external write
+brain:
+  read:
+    - previously-presented-opportunities
+effects:
+  allowed:
+    - external-read
+    - brain-read
+    - brain-write
+approval:
+  requirement: none
+  guidance: []
+evidence:
+  required:
+    - source_url
+    - retrieved_at
+    - skill_revision
+  guidance:
+    - preserve query and filter summaries without secret material
+TOOL
+
+cat > functions/gtm/agents/social-manager/plans/opportunity-discovery/tools/social-opportunity-research.yaml <<'TOOL'
+schema_version: 2
+id: social-opportunity-research
+scope:
+  function: gtm
+  agent: social-manager
+  plan: opportunity-discovery
+purpose: Rank timely LinkedIn and public-web opportunities for the current request.
+skill_ref: exa:search
+when:
+  - running opportunity discovery for the social manager
+how:
+  - start with a 24-hour lookback and expand only as far as 72 hours
+  - rank candidates by ICP relevance
+filters:
+  - reject profile and company-homepage URLs as candidate post URLs
+output_expectations:
+  required:
+    - canonical_url
+    - author
+    - published_at
+    - relevance_reason
+  guidance:
+    - return evidence rather than drafting a reply
+brain:
+  write:
+    - discovered-opportunity
+    - retrieval-provenance
+effects:
+  allowed:
+    - external-read
+    - brain-read
+    - brain-write
+approval:
+  requirement: none
+  guidance: []
+TOOL
+
 DISCOVER_JSON=$("$ROSTER_BIN" discover social-manager --kind agent --json)
 if node -e 'const x=JSON.parse(process.argv[1]); const ids=x.records.map(r=>r.qualified_id); if(!x.ok || ids.length!==2 || !ids.includes("gtm/social-manager") || !ids.includes("product/social-manager")) process.exit(1)' "$DISCOVER_JSON"; then
   pass "discovery returns both qualified same-name agents"
 else
   fail "discovery returns both qualified same-name agents"
 fi
-VALIDATE_JSON=$("$ROSTER_BIN" validate --json)
+ROSTER_SMOKE_PROVIDER_MARKER="$PROVIDER_MARKER" PATH="$PROVIDER_STUB_DIR:$PATH" \
+  "$ROSTER_BIN" update > /dev/null
+VALIDATE_JSON=$(ROSTER_SMOKE_PROVIDER_MARKER="$PROVIDER_MARKER" PATH="$PROVIDER_STUB_DIR:$PATH" \
+  "$ROSTER_BIN" validate --json)
 if node -e 'const x=JSON.parse(process.argv[1]); if(!x.ok || x.diagnostics.some(d=>d.severity==="error")) process.exit(1)' "$VALIDATE_JSON"; then
-  pass "validate accepts the registered sparse workspace"
+  pass "validate resolves the Social Manager plan through agent and plan Exa guidance"
 else
-  fail "validate accepts the registered sparse workspace"
+  fail "validate resolves the Social Manager plan through agent and plan Exa guidance"
 fi
+assert "! -e '$PROVIDER_MARKER'" "static tool guidance never invokes the Exa provider"
 
 # 5b. Explicit v2 project activation works without user-level host homes.
 echo ""
@@ -350,7 +466,15 @@ assert "-f .agents/skills/roster/SKILL.md" "Codex activation creates its project
 assert_contains roster.yaml "claude: enabled" "Claude activation is registered"
 assert_contains roster.yaml "codex: enabled" "Codex activation is registered"
 
-"$ROSTER_BIN" update > /dev/null
+ROSTER_SMOKE_PROVIDER_MARKER="$PROVIDER_MARKER" PATH="$PROVIDER_STUB_DIR:$PATH" \
+  "$ROSTER_BIN" update > /dev/null
+assert "-f .roster/vendor-skill-map.json" "update emits the portable vendor-skill map"
+if node -e 'const fs=require("node:fs"); const m=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); const e=m.skills.find(x=>x.skill_ref==="exa:search"); if(!e || e.hosts.claude?.kind!=="host-native" || e.hosts.codex?.kind!=="host-native" || e.hosts.claude.identity!=="exa:search" || e.hosts.codex.identity!=="exa:search") process.exit(1)' .roster/vendor-skill-map.json; then
+  pass "Exa maps to identical advisory host-native identities for Claude and Codex"
+else
+  fail "Exa maps to identical advisory host-native identities for Claude and Codex"
+fi
+assert "! -e '$PROVIDER_MARKER'" "update generates guidance without invoking Exa"
 assert "! -e .claude/skills" "v2 update does not copy the legacy skill forest"
 assert "! -e brain" "v2 update does not create optional Brain files"
 assert "! -e pending" "v2 update does not create approval or operations queues"
@@ -458,7 +582,8 @@ cat > founder-skills.yaml <<'EOF'
 source: github:firatcand/founder-skills
 ref: v1.0.0
 skills:
-  - pricing
+  - name: pricing
+    skill_ref: exa:search
 EOF
 HOME="$FAKE_HOME" ROSTER_CLAUDE_HOME="$CLAUDE_HOME" ROSTER_CODEX_HOME="$CODEX_HOME" \
   PATH="$STUBBIN:$PATH" "$ROSTER_BIN" skills sync --silent > /dev/null 2>&1
@@ -466,6 +591,14 @@ assert "-f .claude/skills/pricing/SKILL.md" "sync installs pricing into .claude/
 assert "-f .agents/skills/pricing/SKILL.md" "sync installs pricing into .agents/skills/ (codex)"
 assert "-f founder-skills.lock" "sync writes founder-skills.lock"
 assert "! -e \"$FAKE_HOME/.claude/skills/pricing\"" "sync does NOT install founder skills into home dir"
+ROSTER_SMOKE_PROVIDER_MARKER="$PROVIDER_MARKER" PATH="$PROVIDER_STUB_DIR:$PATH" \
+  "$ROSTER_BIN" update > /dev/null
+if node -e 'const fs=require("node:fs"); const m=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); const e=m.skills.find(x=>x.skill_ref==="exa:search"); if(!e || e.hosts.claude?.kind!=="workspace-relative" || e.hosts.codex?.kind!=="workspace-relative" || e.hosts.claude.assurance!=="verified" || e.hosts.codex.assurance!=="verified" || e.hosts.claude.path!==".claude/skills/pricing" || e.hosts.codex.path!==".agents/skills/pricing") process.exit(1)' .roster/vendor-skill-map.json; then
+  pass "project-materialized Exa mapping is portable and independently verified per host"
+else
+  fail "project-materialized Exa mapping is portable and independently verified per host"
+fi
+assert "! -e '$PROVIDER_MARKER'" "project-relative map generation never invokes Exa"
 
 # 8d. Drop the skill from the manifest → re-sync prunes it (full reconcile).
 cat > founder-skills.yaml <<'EOF'

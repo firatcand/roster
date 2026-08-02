@@ -26,7 +26,7 @@ Roster has three pillars:
 |---|---|
 | Working directory | Sparse functions, role agents, structured plans, subagents, guidelines, tool-use definitions, approved lessons, discovery, and static validation |
 | Company Brain | Remote Postgres/S3 knowledge, source versions, indexes, graph-shaped facts, retrieval, citations, portable evidence, and learning state |
-| Tool guidance | Company-specific why/when/how guidance and vendor-skill references; the host still loads and executes the vendor tool |
+| Tool guidance | Company-specific purpose/when/how guidance and canonical vendor-skill references; the host still loads and executes the vendor tool |
 
 Claude Code or Codex remains responsible for reasoning, interpreting plans,
 carrying outputs between steps, invoking subagents and external tools, retries,
@@ -46,14 +46,16 @@ provides:
 - a hierarchical canonical registry with flat JSON discovery;
 - strict structured-plan schema, reference, scope, and cycle validation alongside
   structural path, ownership, and generated-drift checks;
+- scope-owned workspace, function, agent, and plan tool-use guidance that resolves
+  to one flat, provenance-carrying policy without executing a provider;
 - bounded regular-file reads, component-wise symlink refusal, and atomic writes;
 - minimal generated Claude Code and Codex activation that mentions only commands
   available today; and
 - the existing opt-in company Brain while its v2 identity/source lifecycle is
   upgraded.
 
-Scoped tool-use precedence, bounded context, portable evidence, and activated
-Dreamer learning are subsequent roadmap tasks.
+Bounded context, portable evidence, and activated Dreamer learning are
+subsequent roadmap tasks.
 Legacy scheduling and general-operations commands remain temporarily for
 migration safety; they are not part of the v2 product contract and are removed
 by the breaking-simplification phase.
@@ -100,7 +102,9 @@ roster scaffold plan opportunity-discovery \
   --purpose "Produce a reviewed list of relevant reply opportunities"
 roster scaffold guideline brand-voice \
   --scope agent:gtm/social-manager
-roster scaffold tool-use social-opportunity-search \
+roster scaffold tool-use social-opportunity-research \
+  --scope agent:gtm/social-manager
+roster scaffold tool-use social-opportunity-research \
   --scope plan:gtm/social-manager#opportunity-discovery
 ```
 
@@ -121,6 +125,11 @@ A scaffolded plan is an editable draft. It is discoverable immediately, but
 and actionable completion guidance. Roster validates and returns the complete
 guide; Claude Code or Codex interprets it and performs the work.
 
+A scaffolded tool-use definition is also a discoverable draft. It contains an
+explicit empty `skill_ref` until the host-guided expert chooses the canonical
+vendor skill and authors the company policy; update and validation fail closed
+while that draft remains incomplete.
+
 ```yaml
 schema_version: 2
 id: opportunity-discovery
@@ -135,6 +144,8 @@ brain_selectors:
     description: Examples of successful prior replies.
     required: false
 guidelines: []
+tool_uses:
+  - social-opportunity-research
 artifacts:
   shortlist:
     description: The human-reviewed opportunity shortlist.
@@ -149,7 +160,7 @@ steps:
   - id: search
     kind: tool
     instruction: Use the company-defined social search use case.
-    tool_use: social-opportunity-search
+    tool_use: social-opportunity-research
   - id: approve
     kind: approval
     instruction: Present the shortlist and pause.
@@ -173,22 +184,35 @@ Authorship stays hierarchical so ownership remains legible:
 ```text
 roster.yaml
 ROSTER.md
+tools/<tool-use>.yaml
 functions/<function>/
   function.yaml
   guidelines/<guideline>.md
+  tools/<tool-use>.yaml
   agents/<agent>/
     agent.yaml
     guidelines/<guideline>.md
     plans/<plan>.yaml
+    plans/<plan>/tools/<tool-use>.yaml
     subagents/<subagent>.yaml
     tools/<tool-use>.yaml
     playbook/<lesson>.md
 ```
 
-Only `roster.yaml` registers function roots. Each `function.yaml` registers its
-agents and guidelines; each `agent.yaml` registers its owned records. Discovery
-follows those declarations and returns one flat, stable list. It never treats an
-arbitrary directory scan as authority.
+Only `roster.yaml` registers function roots. The workspace, function, agent,
+and plan registries each declare the tool-use records they own. Discovery
+follows those declarations and returns one flat, stable list. It never treats
+an arbitrary directory scan as authority.
+
+Tool-use identities remain unambiguous even when the same local use-case ID is
+specialized at every scope:
+
+| Owner | Qualified identity |
+|---|---|
+| Workspace | `tools/<id>` |
+| Function | `<function>/tools/<id>` |
+| Agent | `<function>/<agent>/tools/<id>` |
+| Plan | `<function>/<agent>#<plan>/tools/<id>` |
 
 Optional directories appear on first use. Scaffolding one agent does not create
 empty plan, playbook, tool, log, pending, or host trees.
@@ -221,9 +245,12 @@ The Codex skill fallback is discoverable but is not attested as automatic
 project activation. Missing binaries, different host patches, and authored
 Codex root instructions therefore remain `advisory-manual`.
 
-`roster update` on a v2 workspace synchronizes only unedited generated bootstrap
-files. An edited generated file is preserved and reported per path. Authored
-registry, policy, plan, and lesson files are never silently overwritten.
+`roster update` on a v2 workspace first preflights the complete authored
+tool-use catalog and vendor-skill provenance. If any definition is an unfinished
+draft or the portable map cannot be derived safely, it writes nothing. A valid
+update synchronizes only unedited generated bootstrap files and atomically
+regenerates `.roster/vendor-skill-map.json`. Authored registry, policy, plan,
+and lesson files are never silently overwritten.
 
 ## Common v2 commands
 
@@ -234,7 +261,7 @@ registry, policy, plan, and lesson files are never silently overwritten.
 | `roster discover [query] --json` | Return compact qualified records and diagnostics |
 | `roster validate [target] --json` | Check registry, identity, paths, ownership, and generated drift |
 | `roster install --tool claude\|codex --scope project` | Generate the selected host bootstrap |
-| `roster update` | Safely synchronize enabled generated bootstrap files |
+| `roster update` | Preflight tool guidance, then synchronize bootstrap files and the portable vendor-skill map |
 | `roster doctor --json` | Report workspace health, generated drift, safety, secrets, and activation assurance |
 | `roster brain <verb>` | Use the opt-in company knowledge Brain |
 | `roster skills sync` | Explicitly install a declared external skill manifest; never run implicitly by v2 update |
@@ -273,16 +300,86 @@ Vendor skills remain authoritative for installation, authentication, syntax,
 parsing, compatibility, and generic best practices. A Roster tool-use definition
 adds only the company-specific application:
 
-- why and when this workspace uses the tool;
+- the purpose and situations in which this workspace uses the tool;
 - the relevant subset of capabilities;
 - company filters and safety rules;
-- expected results;
+- expected-output guidance;
 - Brain reads/writes and evidence requirements; and
-- the canonical external `skill_ref`.
+- a canonical external `skill_ref` in `<package>:<skill>` form.
+
+Definitions may be owned by the workspace, function, agent, or plan. Roster
+resolves only the exact ancestry for the requested context. `purpose` is
+replaced by the most specific definition; applicability, procedure, filters,
+rules, output expectations, evidence, and approval guidance accumulate in
+broad-to-narrow order. Effects may only narrow, approval may only become more
+strict, Brain intent is append-only, and every layer must retain the same
+`skill_ref`. The result is one flat effective definition with field-level
+provenance and a deterministic semantic hash. A narrower layer can never relax
+broader safety. Brain read/write entries are requested intent, never grants;
+the independently loaded Brain binding and scope still authorize access.
+
+For example, Social Manager can own the reusable Exa ceiling in
+`functions/gtm/agents/social-manager/tools/social-opportunity-research.yaml`:
+
+```yaml
+schema_version: 2
+id: social-opportunity-research
+scope: { function: gtm, agent: social-manager }
+purpose: Find timely public posts matching company positioning.
+skill_ref: exa:search
+filters:
+  - exclude previously presented canonical URLs
+  - exclude cryptocurrency topics
+rules:
+  - require canonical URLs and attributable provenance
+brain:
+  read: [previously-presented-opportunities]
+effects:
+  allowed: [external-read, brain-read, brain-write]
+```
+
+Its `opportunity-discovery` plan can then own a same-ID overlay beneath
+`plans/opportunity-discovery/tools/`:
+
+```yaml
+schema_version: 2
+id: social-opportunity-research
+scope: { function: gtm, agent: social-manager, plan: opportunity-discovery }
+purpose: Rank timely LinkedIn and public-web opportunities for this request.
+skill_ref: exa:search
+how:
+  - start with a 24-hour lookback and expand only as far as 72 hours
+  - rank candidates by ICP relevance
+filters:
+  - reject profile and company-homepage URLs as candidate post URLs
+output_expectations:
+  required: [canonical_url, author, published_at, relevance_reason]
+brain:
+  write: [discovered-opportunity, retrieval-provenance]
+effects:
+  allowed: [external-read, brain-read, brain-write]
+```
+
+`.roster/vendor-skill-map.json` maps each canonical ref for the workspace's
+committed hosts. Each entry also carries sorted `authored_paths`: secret-free,
+workspace-relative tool-use paths used only to prove which generated-map drift
+belongs to an explicitly ignored unrelated draft during targeted validation.
+They are validation provenance, not locators, policy, or semantic authority. A
+`host-native` locator is advisory: Claude Code, Codex, or its
+plugin manager decides whether that identity is installed and resolves it.
+Only an explicitly project-materialized, workspace-confined locator is marked
+`verified` by Roster. Roster neither scans global host caches nor installs a
+global plugin.
+
+Project-relative verification requires a canonical per-host content hash in
+`founder-skills.lock`. Legacy aggregate-only lock entries fail closed even when
+their bytes appear unchanged; run `roster skills sync` to rewrite reviewed lock
+metadata with the bounded, symlink-safe hash format before updating the map.
 
 The host derives request-specific filters and executes the tool. Roster does not
 spawn a provider command, inject the provider secret, choose fallbacks, or judge
-provider output as a workflow transition.
+provider output as a workflow transition. Expected output remains guidance for
+the host, never a Roster-owned provider result gate.
 
 ## Safety and ownership
 

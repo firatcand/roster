@@ -1,13 +1,17 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { parse as parseYaml } from 'yaml';
 import { parseFrontMatter } from '../front-matter.ts';
-import { founderManifestSchema, normalizeManifest } from './manifest-schema.ts';
+import { readFounderSkillsManifest } from './manifest-schema.ts';
 import { readLockfile } from './lockfile.ts';
-import { hashSkillDir } from './lockfile.ts';
-import { isSupportedFounderTool, targetDirFor } from './tool-targets.ts';
-import { manifestPath, MANIFEST_NAME } from './sync.ts';
+import {
+  isSupportedFounderTool,
+  projectSkillPathFor,
+  targetDirFor,
+} from './tool-targets.ts';
+import { MANIFEST_NAME } from './sync.ts';
 import { detectTools } from '../tools.ts';
+import { hashProjectSkillForHost } from '../vendor-skills/adapter-map.ts';
+import { tryReadWorkspaceFile } from '../workspace-io.ts';
 
 export type DriftFinding = {
   kind:
@@ -18,6 +22,8 @@ export type DriftFinding = {
     | 'source-mismatch'
     | 'malformed-frontmatter'
     | 'no-lock'
+    | 'lock-parse-error'
+    | 'skill-ref-mismatch'
     | 'manifest-parse-error';
   skill: string | null;
   message: string;
@@ -32,26 +38,32 @@ export type FounderSkillsDriftResult =
 // silent-skip a missing dir). Returns not-applicable only when there is no
 // manifest (clean opt-out).
 export function auditFounderSkillsDrift(cwd: string): FounderSkillsDriftResult {
-  if (!existsSync(manifestPath(cwd))) {
-    return { status: 'not-applicable' };
-  }
-
   const findings: DriftFinding[] = [];
 
   let normalized;
   try {
-    const raw = parseYaml(readFileSync(manifestPath(cwd), 'utf8')) as unknown;
-    normalized = normalizeManifest(founderManifestSchema.parse(raw ?? {}));
-  } catch (err) {
+    normalized = readFounderSkillsManifest(cwd);
+  } catch {
     findings.push({
       kind: 'manifest-parse-error',
       skill: null,
-      message: `${MANIFEST_NAME} is invalid: ${(err as Error).message}`,
+      message: `${MANIFEST_NAME} contains invalid or forbidden metadata`,
     });
     return { status: 'checked', findings, hasFailure: true };
   }
+  if (normalized === null) return { status: 'not-applicable' };
 
-  const lock = readLockfile(cwd);
+  let lock;
+  try {
+    lock = readLockfile(cwd);
+  } catch {
+    findings.push({
+      kind: 'lock-parse-error',
+      skill: null,
+      message: 'founder-skills.lock contains invalid or forbidden metadata',
+    });
+    return { status: 'checked', findings, hasFailure: true };
+  }
   if (!lock) {
     findings.push({
       kind: 'no-lock',
@@ -89,25 +101,59 @@ export function auditFounderSkillsDrift(cwd: string): FounderSkillsDriftResult {
         message: `'${skill.name}' lock ref '${locked.ref}' != manifest ref '${skill.ref}'`,
       });
     }
+    if (locked && locked.skill_ref !== skill.skillRef) {
+      findings.push({
+        kind: 'skill-ref-mismatch',
+        skill: skill.name,
+        message: `'${skill.name}' lock skill_ref does not match the manifest`,
+      });
+    }
 
     let installedSomewhere = false;
     for (const toolKey of tools) {
       const dir = join(targetDirFor(cwd, toolKey), skill.name);
       if (!existsSync(dir)) continue;
       installedSomewhere = true;
+      let actualHash: string;
+      try {
+        actualHash = hashProjectSkillForHost({
+          workspaceRoot: cwd,
+          host: toolKey,
+          skillName: skill.name,
+        }).contentHash;
+      } catch {
+        findings.push({
+          kind: 'hash-mismatch',
+          skill: skill.name,
+          message: `'${skill.name}' content in ${toolKey} cannot be verified safely`,
+        });
+        continue;
+      }
       if (locked) {
-        const h = hashSkillDir(dir);
-        if (h !== locked.contentHash) {
+        const expectedHash = locked.contentHashes?.[toolKey];
+        if (expectedHash === undefined || actualHash !== expectedHash) {
           findings.push({
             kind: 'hash-mismatch',
             skill: skill.name,
-            message: `'${skill.name}' content in ${toolKey} differs from the lockfile`,
+            message: expectedHash === undefined
+              ? `'${skill.name}' has no canonical per-host hash for ${toolKey} — run roster skills sync`
+              : `'${skill.name}' content in ${toolKey} differs from the lockfile`,
           });
         }
       }
-      const skillMd = join(dir, 'SKILL.md');
-      if (existsSync(skillMd)) {
-        const { frontMatter } = parseFrontMatter(readFileSync(skillMd, 'utf8'));
+      let skillMd: Buffer | null;
+      try {
+        skillMd = tryReadWorkspaceFile(cwd, `${projectSkillPathFor(toolKey, skill.name)}/SKILL.md`);
+      } catch {
+        findings.push({
+          kind: 'hash-mismatch',
+          skill: skill.name,
+          message: `'${skill.name}' SKILL.md in ${toolKey} cannot be read safely`,
+        });
+        continue;
+      }
+      if (skillMd !== null) {
+        const { frontMatter } = parseFrontMatter(skillMd.toString('utf8'));
         if (typeof frontMatter['name'] !== 'string' || typeof frontMatter['description'] !== 'string') {
           findings.push({
             kind: 'malformed-frontmatter',

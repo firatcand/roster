@@ -29,6 +29,7 @@ function definition(id: string, agent = 'gtm/social'): Record<string, unknown> {
     inputs: {},
     brain_selectors: {},
     guidelines: [],
+    tool_uses: [],
     artifacts: {},
     caps: {},
     steps: [{ id: 'prepare', kind: 'reasoning', instruction: 'Prepare the work.' }],
@@ -124,7 +125,8 @@ test('complete Social Media Manager plan validates all seven host-interpreted st
   ];
 
   const result = validateStructuredPlans(records, ['gtm/social#opportunity-discovery']);
-  assert.deepEqual(result.diagnostics, []);
+  assert.equal(result.diagnostics.length, 1);
+  assert.equal(result.diagnostics[0]?.code, 'TOOL_USE_SNAPSHOT_INCOMPLETE');
   assert.deepEqual(result.selected_plan_ids, ['gtm/social#history-screen', 'gtm/social#opportunity-discovery']);
   assert.deepEqual(result.plans.find((plan) => plan.id === 'opportunity-discovery')?.steps.map((step) => step.kind), [
     'reasoning',
@@ -135,7 +137,7 @@ test('complete Social Media Manager plan validates all seven host-interpreted st
     'approval',
     'artifact',
   ]);
-  assert.equal(resolveValidatedPlan(records, 'gtm/social#opportunity-discovery').completion.artifacts[0], 'shortlist');
+  assert.throws(() => resolveValidatedPlan(records, 'gtm/social#opportunity-discovery'));
 });
 
 test('draft, forbidden runtime fields, unknown fields, and inert prose stay distinct', () => {
@@ -275,7 +277,8 @@ test('reference validation aggregates missing and inapplicable references', () =
     planRecord(value),
   ]);
   assert.ok(result.diagnostics.filter((entry) => entry.code === 'REFERENCE_NOT_FOUND').length >= 8);
-  assert.equal(result.diagnostics.filter((entry) => entry.code === 'REFERENCE_NOT_APPLICABLE').length, 1);
+  assert.equal(result.diagnostics.filter((entry) => entry.code === 'REFERENCE_NOT_APPLICABLE').length, 0);
+  assert.equal(result.diagnostics.filter((entry) => entry.code === 'TOOL_USE_SNAPSHOT_INCOMPLETE').length, 1);
   assert.ok(result.diagnostics.every((entry) => entry.path?.endsWith('/references.yaml')));
 });
 

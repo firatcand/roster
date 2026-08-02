@@ -15,7 +15,7 @@ export const WORKSPACE_RECORD_KINDS = [
 ] as const;
 
 export type WorkspaceRecordKind = (typeof WORKSPACE_RECORD_KINDS)[number];
-export type ScopeKind = 'function' | 'agent' | 'plan';
+export type ScopeKind = 'workspace' | 'function' | 'agent' | 'plan';
 
 export type WorkspaceScope = {
   function?: string;
@@ -26,7 +26,7 @@ export type WorkspaceScope = {
 export type ParsedScope = {
   kind: ScopeKind;
   qualifiedId: string;
-  scope: Required<Pick<WorkspaceScope, 'function'>> & WorkspaceScope;
+  scope: WorkspaceScope;
 };
 
 const WINDOWS_RESERVED = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
@@ -45,7 +45,10 @@ export const ROSTER_RESERVED_PATHS = Object.freeze([
   'config/project.yaml',
   'roster.yaml',
   'roster',
+  'tools',
 ] as const);
+
+export const WORKSPACE_TOOL_USES_ROOT = 'tools';
 
 const RESERVED_FIRST_COMPONENTS = new Set(
   ROSTER_RESERVED_PATHS.map((path) => path.split('/')[0]!.toLocaleLowerCase('en-US')),
@@ -80,6 +83,13 @@ export function assertWorkspaceId(value: string): string {
   return value;
 }
 
+export function assertFunctionId(value: string): string {
+  if (!isRecordId(value) || value === WORKSPACE_TOOL_USES_ROOT) {
+    identityFailure(value, 'function id');
+  }
+  return value;
+}
+
 export function isWorkspaceRecordKind(value: string): value is WorkspaceRecordKind {
   return (WORKSPACE_RECORD_KINDS as readonly string[]).includes(value);
 }
@@ -87,7 +97,7 @@ export function isWorkspaceRecordKind(value: string): value is WorkspaceRecordKi
 export function parseAgentQualifiedId(value: string): { functionId: string; agentId: string } {
   const parts = value.split('/');
   if (parts.length !== 2) identityFailure(value, 'agent qualified id');
-  return { functionId: assertRecordId(parts[0]!), agentId: assertRecordId(parts[1]!) };
+  return { functionId: assertFunctionId(parts[0]!), agentId: assertRecordId(parts[1]!) };
 }
 
 export function parsePlanQualifiedId(value: string): {
@@ -102,12 +112,15 @@ export function parsePlanQualifiedId(value: string): {
 }
 
 export function parseScope(value: string): ParsedScope {
+  if (value === 'workspace') {
+    return { kind: 'workspace', qualifiedId: 'workspace', scope: {} };
+  }
   const separator = value.indexOf(':');
   if (separator <= 0 || separator !== value.lastIndexOf(':')) identityFailure(value, 'scope');
   const kind = value.slice(0, separator);
   const qualifiedId = value.slice(separator + 1);
   if (kind === 'function') {
-    const functionId = assertRecordId(qualifiedId);
+    const functionId = assertFunctionId(qualifiedId);
     return { kind, qualifiedId: functionId, scope: { function: functionId } };
   }
   if (kind === 'agent') {
@@ -136,7 +149,7 @@ export function normalizeScopeAlias(options: {
 }): string | undefined {
   const aliases: string[] = [];
   if (options.scope !== undefined) aliases.push(options.scope);
-  if (options.functionId !== undefined) aliases.push(`function:${assertRecordId(options.functionId)}`);
+  if (options.functionId !== undefined) aliases.push(`function:${assertFunctionId(options.functionId)}`);
   if (options.agent !== undefined) {
     const parsed = parseAgentQualifiedId(options.agent);
     aliases.push(`agent:${parsed.functionId}/${parsed.agentId}`);
@@ -161,6 +174,55 @@ export function agentRecordPath(functionRoot: string, agentId: string): string {
   return posix.join(functionRoot, 'agents', assertRecordId(agentId), 'agent.yaml');
 }
 
+export function planRecordPath(functionRoot: string, agentId: string, planId: string): string {
+  return posix.join(
+    functionRoot,
+    'agents',
+    assertRecordId(agentId),
+    'plans',
+    `${assertRecordId(planId)}.yaml`,
+  );
+}
+
+export function planCompanionPath(functionRoot: string, agentId: string, planId: string): string {
+  return posix.join(
+    functionRoot,
+    'agents',
+    assertRecordId(agentId),
+    'plans',
+    assertRecordId(planId),
+  );
+}
+
+export function planToolUseSlotPath(functionRoot: string, agentId: string, planId: string): string {
+  return posix.join(planCompanionPath(functionRoot, agentId, planId), WORKSPACE_TOOL_USES_ROOT);
+}
+
+function toolUseRecordPath(
+  functionRoot: string,
+  agentId: string,
+  id: string,
+  scope: WorkspaceScope | undefined,
+): string {
+  const safeId = assertRecordId(id);
+  if (scope === undefined) {
+    return posix.join(functionRoot, 'agents', assertRecordId(agentId), WORKSPACE_TOOL_USES_ROOT, `${safeId}.yaml`);
+  }
+  if (scope.plan !== undefined && scope.agent === undefined) identityFailure(scope.plan, 'tool-use plan scope');
+  if (scope.agent !== undefined && scope.function === undefined) identityFailure(scope.agent, 'tool-use agent scope');
+  if (scope.plan !== undefined) {
+    return posix.join(planToolUseSlotPath(functionRoot, scope.agent!, scope.plan), `${safeId}.yaml`);
+  }
+  if (scope.agent !== undefined) {
+    return posix.join(functionRoot, 'agents', assertRecordId(scope.agent), WORKSPACE_TOOL_USES_ROOT, `${safeId}.yaml`);
+  }
+  if (scope.function !== undefined) {
+    assertFunctionId(scope.function);
+    return posix.join(functionRoot, WORKSPACE_TOOL_USES_ROOT, `${safeId}.yaml`);
+  }
+  return posix.join(WORKSPACE_TOOL_USES_ROOT, `${safeId}.yaml`);
+}
+
 export function childRecordPath(
   functionRoot: string,
   agentId: string,
@@ -172,10 +234,10 @@ export function childRecordPath(
   if (kind === 'guideline' && scope?.agent === undefined) {
     return posix.join(functionRoot, 'guidelines', `${safeId}.md`);
   }
+  if (kind === 'tool-use') return toolUseRecordPath(functionRoot, agentId, safeId, scope);
   const base = posix.join(functionRoot, 'agents', assertRecordId(agentId));
-  if (kind === 'plan') return posix.join(base, 'plans', `${safeId}.yaml`);
+  if (kind === 'plan') return planRecordPath(functionRoot, agentId, safeId);
   if (kind === 'subagent') return posix.join(base, 'subagents', `${safeId}.yaml`);
-  if (kind === 'tool-use') return posix.join(base, 'tools', `${safeId}.yaml`);
   if (kind === 'lesson') return posix.join(base, 'playbook', `${safeId}.md`);
   if (kind === 'guideline') {
     return posix.join(base, 'guidelines', `${safeId}.md`);
@@ -185,9 +247,26 @@ export function childRecordPath(
 
 export function qualifiedRecordId(
   kind: WorkspaceRecordKind,
-  ids: { functionId: string; agentId?: string; localId?: string },
+  ids: { functionId?: string; agentId?: string; planId?: string; localId?: string },
 ): string {
-  const functionId = assertRecordId(ids.functionId);
+  if (kind === 'tool-use') {
+    const localId = assertRecordId(ids.localId ?? '');
+    if (ids.functionId === undefined) {
+      if (ids.agentId !== undefined || ids.planId !== undefined) identityFailure(localId, 'tool-use qualified id');
+      return `${WORKSPACE_TOOL_USES_ROOT}/${localId}`;
+    }
+    const functionId = assertFunctionId(ids.functionId);
+    if (ids.agentId === undefined) {
+      if (ids.planId !== undefined) identityFailure(localId, 'tool-use qualified id');
+      return `${functionId}/${WORKSPACE_TOOL_USES_ROOT}/${localId}`;
+    }
+    const agentId = assertRecordId(ids.agentId);
+    if (ids.planId !== undefined) {
+      return `${functionId}/${agentId}#${assertRecordId(ids.planId)}/${WORKSPACE_TOOL_USES_ROOT}/${localId}`;
+    }
+    return `${functionId}/${agentId}/${WORKSPACE_TOOL_USES_ROOT}/${localId}`;
+  }
+  const functionId = assertFunctionId(ids.functionId ?? '');
   if (kind === 'function') return functionId;
   if (kind === 'guideline' && ids.agentId === undefined) {
     const localId = assertRecordId(ids.localId ?? '');
@@ -201,7 +280,6 @@ export function qualifiedRecordId(
   if (kind === 'guideline') {
     return `${functionId}/${agentId}/guidelines/${localId}`;
   }
-  if (kind === 'tool-use') return `${functionId}/${agentId}/tools/${localId}`;
   return `${functionId}/${agentId}/playbook/${localId}`;
 }
 

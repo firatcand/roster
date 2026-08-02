@@ -1,10 +1,23 @@
-import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { join } from 'node:path';
+import YAML, { stringify as stringifyYaml } from 'yaml';
+import { z } from 'zod';
 import type { ToolKey } from '../tools.ts';
 import { atomicWriteFile } from '../schedule-yaml.ts';
+import { detectAuthoredSecretMaterial } from '../authored-secret-detector.ts';
+import { tryReadWorkspaceFile } from '../workspace-io.ts';
+import {
+  isWorkspaceFailure,
+  workspaceFailure,
+} from '../workspace-diagnostics.ts';
 import { FOUNDER_SKILLS_LOCK_VERSION, isSafeSkillName } from './manifest-schema.ts';
+import {
+  normalizeFounderRevision,
+  normalizeFounderSource,
+} from '../vendor-skills/provenance.ts';
+import {
+  parseSkillRef,
+  type CanonicalSkillRef,
+} from '../vendor-skills/skill-ref.ts';
 
 export const LOCKFILE_NAME = 'founder-skills.lock';
 
@@ -12,7 +25,9 @@ export type LockedSkill = {
   name: string;
   ref: string;
   contentHash: string;
+  contentHashes?: Partial<Record<ToolKey, string>>;
   tools: ToolKey[];
+  skill_ref?: CanonicalSkillRef;
 };
 
 export type Lockfile = {
@@ -25,62 +40,114 @@ export function lockfilePath(workspaceRoot: string): string {
   return join(workspaceRoot, LOCKFILE_NAME);
 }
 
-// Deterministic sha256 over a skill dir's file tree: sorted relative paths, each
-// mixed with its bytes. Returns 'absent' when the dir doesn't exist so drift can
-// distinguish "declared but not installed" from a real hash mismatch.
-export function hashSkillDir(dir: string): string {
-  if (!existsSync(dir)) return 'absent';
-  const files: string[] = [];
-  const walk = (d: string): void => {
-    for (const name of readdirSync(d).sort()) {
-      const full = join(d, name);
-      const st = statSync(full);
-      if (st.isDirectory()) walk(full);
-      else if (st.isFile()) files.push(full);
+const lockSkillSchema = z.object({
+  name: z.string().refine(isSafeSkillName),
+  ref: z.string().transform((value) => normalizeFounderRevision(value, {
+    path: LOCKFILE_NAME,
+  })),
+  contentHash: z.string().refine((value) =>
+    value === 'absent' || /^sha256:[a-f0-9]{64}$/.test(value)),
+  contentHashes: z.object({
+    claude: z.string().refine((value) => /^sha256:[a-f0-9]{64}$/.test(value)).optional(),
+    codex: z.string().refine((value) => /^sha256:[a-f0-9]{64}$/.test(value)).optional(),
+  }).strict().optional(),
+  tools: z.array(z.enum(['claude', 'codex'])).max(2),
+  skill_ref: z.string().transform((value) => parseSkillRef(value, {
+    path: LOCKFILE_NAME,
+  })).optional(),
+}).strict();
+
+const lockfileSchema = z.object({
+  version: z.literal(FOUNDER_SKILLS_LOCK_VERSION),
+  source: z.string().transform((value) => normalizeFounderSource(value, {
+    path: LOCKFILE_NAME,
+  })),
+  skills: z.array(lockSkillSchema).max(512),
+}).strict();
+
+function normalizeLockfile(value: unknown): Lockfile {
+  try {
+    const parsed = lockfileSchema.parse(value);
+    const names = new Set<string>();
+    for (const skill of parsed.skills) {
+      if (names.has(skill.name) || new Set(skill.tools).size !== skill.tools.length) {
+        throw workspaceFailure(
+          'SKILL_REF_INVALID',
+          'The founder-skills lock metadata is invalid.',
+          'Regenerate founder-skills.lock with roster skills sync.',
+          { path: LOCKFILE_NAME, reason: 'duplicate-lock-metadata' },
+        );
+      }
+      names.add(skill.name);
     }
-  };
-  walk(dir);
-  const hash = createHash('sha256');
-  for (const f of files.sort()) {
-    hash.update(relative(dir, f).split(sep).join('/'));
-    hash.update('\0');
-    hash.update(readFileSync(f));
-    hash.update('\0');
+    return parsed;
+  } catch (error) {
+    if (isWorkspaceFailure(error)) throw error;
+    throw workspaceFailure(
+      'SKILL_REF_INVALID',
+      'The founder-skills lock metadata is invalid.',
+      'Regenerate founder-skills.lock with roster skills sync.',
+      { path: LOCKFILE_NAME, reason: 'lock-schema' },
+    );
   }
-  return `sha256:${hash.digest('hex')}`;
 }
 
 export function readLockfile(workspaceRoot: string): Lockfile | null {
-  const path = lockfilePath(workspaceRoot);
-  if (!existsSync(path)) return null;
-  try {
-    const parsed = parseYaml(readFileSync(path, 'utf8')) as unknown;
-    if (parsed === null || typeof parsed !== 'object') return null;
-    const obj = parsed as Partial<Lockfile>;
-    if (!Array.isArray(obj.skills)) return null;
-    // Drop any entry whose name is not a safe kebab-case skill name. The
-    // lockfile is on-disk and could be hand-edited; downstream code turns
-    // `name` into a filesystem path (incl. rmSync during prune), so a name
-    // containing `..` or `/` must never survive the read boundary.
-    const skills = (obj.skills as unknown[]).filter(
-      (s): s is LockedSkill =>
-        s !== null && typeof s === 'object' && isSafeSkillName((s as { name?: unknown }).name),
+  const bytes = tryReadWorkspaceFile(workspaceRoot, LOCKFILE_NAME, { maxBytes: 256 * 1024 });
+  if (bytes === null) return null;
+  const secret = detectAuthoredSecretMaterial(bytes)[0];
+  if (secret !== undefined) {
+    throw workspaceFailure(
+      'SECRET_MATERIAL_FORBIDDEN',
+      'Founder-skill lock metadata contains forbidden secret material.',
+      'Remove the credential material and regenerate founder-skills.lock with roster skills sync.',
+      {
+        path: LOCKFILE_NAME,
+        detector_id: secret.detector_id,
+        byte_offset: secret.byte_offset,
+        match_length: secret.match_length,
+      },
     );
-    return {
-      version: typeof obj.version === 'number' ? obj.version : FOUNDER_SKILLS_LOCK_VERSION,
-      source: typeof obj.source === 'string' ? obj.source : '',
-      skills,
-    };
-  } catch {
-    return null;
+  }
+  try {
+    const document = YAML.parseDocument(bytes.toString('utf8'), {
+      strict: true,
+      uniqueKeys: true,
+    });
+    if (document.errors.length > 0 || document.warnings.length > 0) throw new TypeError('invalid YAML');
+    return normalizeLockfile(document.toJS({ maxAliasCount: 0 }));
+  } catch (error) {
+    if (isWorkspaceFailure(error)) throw error;
+    throw workspaceFailure(
+      'SKILL_REF_INVALID',
+      'The founder-skills lock metadata is invalid.',
+      'Regenerate founder-skills.lock with roster skills sync.',
+      { path: LOCKFILE_NAME, reason: 'lock-parse' },
+    );
   }
 }
 
 export function writeLockfile(workspaceRoot: string, lock: Lockfile): void {
+  const normalized = normalizeLockfile(lock);
   const ordered: Lockfile = {
-    version: lock.version,
-    source: lock.source,
-    skills: [...lock.skills].sort((a, b) => a.name.localeCompare(b.name)),
+    version: normalized.version,
+    source: normalized.source,
+    skills: [...normalized.skills]
+      .sort((a, b) => a.name.localeCompare(b.name, 'en'))
+      .map((skill) => ({
+        name: skill.name,
+        ref: skill.ref,
+        contentHash: skill.contentHash,
+        ...(skill.contentHashes === undefined
+          ? {}
+          : {
+              contentHashes: Object.fromEntries(
+                Object.entries(skill.contentHashes).sort(([a], [b]) => a.localeCompare(b, 'en')),
+              ),
+            }),
+        tools: [...skill.tools].sort((a, b) => a.localeCompare(b, 'en')),
+        ...(skill.skill_ref === undefined ? {} : { skill_ref: skill.skill_ref }),
+      })),
   };
   const banner = '# Generated by `roster skills sync`. Do not edit by hand.\n';
   atomicWriteFile(lockfilePath(workspaceRoot), banner + stringifyYaml(ordered), workspaceRoot);

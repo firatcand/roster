@@ -1,6 +1,7 @@
 import YAML from 'yaml';
 import {
   WORKSPACE_SCHEMA_VERSION,
+  assertFunctionId,
   assertFunctionRootPath,
   assertNonOverlappingFunctionRoots,
   assertRecordId,
@@ -21,7 +22,10 @@ export type WorkspaceRegistry = {
   brain?: { binding: string };
   functions: Record<string, { path: string }>;
   hosts: Record<string, 'enabled'>;
+  tool_uses: string[];
 };
+
+export type EnabledV2Host = 'claude' | 'codex';
 
 export type FunctionDefinition = {
   schema_version: 2;
@@ -29,6 +33,7 @@ export type FunctionDefinition = {
   purpose: string;
   agents: string[];
   guidelines: string[];
+  tool_uses: string[];
 };
 
 export type AgentDefinition = {
@@ -49,7 +54,6 @@ export type ChildDefinition = {
   id: string;
   purpose: string;
   agent: string;
-  scope?: WorkspaceScope;
   value: Record<string, unknown>;
 };
 
@@ -58,6 +62,7 @@ export type PlanEnvelope = {
   id: string;
   purpose: string;
   agent: string;
+  tool_uses: string[];
   value: Record<string, unknown>;
 };
 
@@ -104,9 +109,14 @@ function parseSimpleScalar(source: string): unknown | typeof SIMPLE_YAML_UNSUPPO
 const SIMPLE_YAML_UNSUPPORTED = Symbol('simple-yaml-unsupported');
 
 function tryParseSimpleYaml(text: string): Record<string, unknown> | undefined {
-  if (text.includes('\r') || text.includes('\t') || text.includes('#')) return undefined;
+  if (text.includes('\r') || text.includes('\t')) return undefined;
   const sourceLines = text.endsWith('\n') ? text.slice(0, -1).split('\n') : text.split('\n');
-  if (sourceLines.length === 0 || sourceLines.some((line) => line.length === 0)) return undefined;
+  if (sourceLines.length === 0 || sourceLines.some((line) => (
+    line.length === 0
+    || line.endsWith(' ')
+    || line.trimStart().startsWith('#')
+    || /[ ]#/.test(line)
+  ))) return undefined;
   const lines: SimpleYamlLine[] = [];
   for (const line of sourceLines) {
     const whitespace = line.match(/^ */)![0].length;
@@ -114,44 +124,71 @@ function tryParseSimpleYaml(text: string): Record<string, unknown> | undefined {
     lines.push({ indent: whitespace, content: line.slice(whitespace) });
   }
   let cursor = 0;
-  const parseList = (indent: number): unknown[] | typeof SIMPLE_YAML_UNSUPPORTED => {
+  const parseBlock = (indent: number): unknown | typeof SIMPLE_YAML_UNSUPPORTED => (
+    lines[cursor]?.content.startsWith('- ')
+      ? parseList(indent)
+      : parseMap(indent)
+  );
+  const assignPair = (
+    result: Record<string, unknown>,
+    content: string,
+    childIndent: number,
+  ): boolean => {
+    const match = /^([A-Za-z0-9_-]+):(.*)$/.exec(content);
+    if (match === null || Object.hasOwn(result, match[1]!)) return false;
+    const key = match[1]!;
+    const remainder = match[2]!;
+    if (remainder.length > 0) {
+      if (!remainder.startsWith(' ')) return false;
+      const value = parseSimpleScalar(remainder.slice(1));
+      if (value === SIMPLE_YAML_UNSUPPORTED) return false;
+      result[key] = value;
+      return true;
+    }
+    const next = lines[cursor];
+    if (next === undefined || next.indent !== childIndent) return false;
+    const child = parseBlock(childIndent);
+    if (child === SIMPLE_YAML_UNSUPPORTED) return false;
+    result[key] = child;
+    return true;
+  };
+  function parseList(indent: number): unknown[] | typeof SIMPLE_YAML_UNSUPPORTED {
     const result: unknown[] = [];
     while (cursor < lines.length && lines[cursor]!.indent === indent) {
       const content = lines[cursor]!.content;
       if (!content.startsWith('- ')) return SIMPLE_YAML_UNSUPPORTED;
-      const value = parseSimpleScalar(content.slice(2));
+      const item = content.slice(2);
+      const pair = /^([A-Za-z0-9_-]+):(.*)$/.exec(item);
+      if (pair !== null && (pair[2] === '' || pair[2]!.startsWith(' '))) {
+        const mapping = Object.create(null) as Record<string, unknown>;
+        cursor++;
+        if (!assignPair(mapping, item, indent + 4)) return SIMPLE_YAML_UNSUPPORTED;
+        while (cursor < lines.length && lines[cursor]!.indent === indent + 2) {
+          const continuation = lines[cursor]!.content;
+          if (continuation.startsWith('- ')) return SIMPLE_YAML_UNSUPPORTED;
+          cursor++;
+          if (!assignPair(mapping, continuation, indent + 4)) return SIMPLE_YAML_UNSUPPORTED;
+        }
+        result.push(mapping);
+        continue;
+      }
+      const value = parseSimpleScalar(item);
       if (value === SIMPLE_YAML_UNSUPPORTED) return value;
       result.push(value);
       cursor++;
     }
     return result;
-  };
-  const parseMap = (indent: number): Record<string, unknown> | typeof SIMPLE_YAML_UNSUPPORTED => {
+  }
+  function parseMap(indent: number): Record<string, unknown> | typeof SIMPLE_YAML_UNSUPPORTED {
     const result = Object.create(null) as Record<string, unknown>;
     while (cursor < lines.length && lines[cursor]!.indent === indent) {
-      const line = lines[cursor]!;
-      const match = /^([A-Za-z0-9_-]+):(.*)$/.exec(line.content);
-      if (match === null || Object.hasOwn(result, match[1]!)) return SIMPLE_YAML_UNSUPPORTED;
-      const key = match[1]!;
-      const remainder = match[2]!;
+      const content = lines[cursor]!.content;
+      if (content.startsWith('- ')) return SIMPLE_YAML_UNSUPPORTED;
       cursor++;
-      if (remainder.length > 0) {
-        if (!remainder.startsWith(' ')) return SIMPLE_YAML_UNSUPPORTED;
-        const value = parseSimpleScalar(remainder.slice(1));
-        if (value === SIMPLE_YAML_UNSUPPORTED) return value;
-        result[key] = value;
-        continue;
-      }
-      const next = lines[cursor];
-      if (next === undefined || next.indent !== indent + 2) return SIMPLE_YAML_UNSUPPORTED;
-      const child = next.content.startsWith('- ')
-        ? parseList(indent + 2)
-        : parseMap(indent + 2);
-      if (child === SIMPLE_YAML_UNSUPPORTED) return child;
-      result[key] = child;
+      if (!assignPair(result, content, indent + 2)) return SIMPLE_YAML_UNSUPPORTED;
     }
     return result;
-  };
+  }
   const parsed = parseMap(0);
   return parsed === SIMPLE_YAML_UNSUPPORTED || cursor !== lines.length ? undefined : parsed;
 }
@@ -268,12 +305,12 @@ function parseScopeMapping(value: unknown, path: string): WorkspaceScope {
 
 export function parseWorkspaceRegistry(text: string, path = 'roster.yaml'): WorkspaceRegistry {
   const { value } = parseYaml(text, path);
-  assertKnownFields(value, ['schema_version', 'workspace_id', 'brain', 'functions', 'hosts'], path);
+  assertKnownFields(value, ['schema_version', 'workspace_id', 'brain', 'functions', 'hosts', 'tool_uses'], path);
   const functionsRaw = requireObject(value.functions, path, 'functions');
   const functions: Record<string, { path: string }> = Object.create(null) as Record<string, { path: string }>;
   const caseFolded = new Set<string>();
   for (const [rawId, rawEntry] of Object.entries(functionsRaw)) {
-    const id = assertRecordId(rawId);
+    const id = assertFunctionId(rawId);
     const lower = id.toLocaleLowerCase('en-US');
     if (caseFolded.has(lower)) {
       throw workspaceFailure('DUPLICATE_IDENTITY', `${path}: function '${id}' is duplicated by case.`, 'Keep one canonical lowercase function identity.', { path, id });
@@ -304,18 +341,36 @@ export function parseWorkspaceRegistry(text: string, path = 'roster.yaml'): Work
     ...(brain === undefined ? {} : { brain }),
     functions,
     hosts,
+    tool_uses: requireStringArray(value.tool_uses, path, 'tool_uses'),
   };
+}
+
+export function enabledV2Hosts(registry: Pick<WorkspaceRegistry, 'hosts'>): EnabledV2Host[] {
+  const hosts = Object.keys(registry.hosts);
+  const unsupported = hosts.filter((host) => host !== 'claude' && host !== 'codex').sort((a, b) => a.localeCompare(b, 'en'));
+  if (unsupported.length > 0) {
+    throw workspaceFailure(
+      'UNKNOWN_FIELD',
+      `Host '${unsupported[0]}' has no v2 activation contract.`,
+      'Use project activation only for claude or codex; Gemini remains quarantined.',
+      { path: 'roster.yaml', hosts: unsupported },
+    );
+  }
+  return hosts
+    .filter((host): host is EnabledV2Host => host === 'claude' || host === 'codex')
+    .sort((a, b) => a.localeCompare(b, 'en'));
 }
 
 export function parseFunctionDefinition(text: string, path: string): FunctionDefinition {
   const { value } = parseYaml(text, path);
-  assertKnownFields(value, ['schema_version', 'id', 'purpose', 'agents', 'guidelines'], path);
+  assertKnownFields(value, ['schema_version', 'id', 'purpose', 'agents', 'guidelines', 'tool_uses'], path);
   return {
     schema_version: requireSchemaVersion(value.schema_version, path),
-    id: assertRecordId(requireString(value.id, path, 'id')),
+    id: assertFunctionId(requireString(value.id, path, 'id')),
     purpose: requireString(value.purpose, path, 'purpose'),
     agents: requireStringArray(value.agents, path, 'agents'),
     guidelines: requireStringArray(value.guidelines, path, 'guidelines'),
+    tool_uses: requireStringArray(value.tool_uses, path, 'tool_uses'),
   };
 }
 
@@ -336,7 +391,7 @@ export function parseAgentDefinition(text: string, path: string): AgentDefinitio
   return {
     schema_version: requireSchemaVersion(value.schema_version, path),
     id: assertRecordId(requireString(value.id, path, 'id')),
-    function: assertRecordId(requireString(value.function, path, 'function')),
+    function: assertFunctionId(requireString(value.function, path, 'function')),
     purpose: requireString(value.purpose, path, 'purpose'),
     plans: requireStringArray(value.plans, path, 'plans'),
     subagents: requireStringArray(value.subagents, path, 'subagents'),
@@ -347,51 +402,31 @@ export function parseAgentDefinition(text: string, path: string): AgentDefinitio
   };
 }
 
-const CHILD_FIELDS: Readonly<Record<'subagent' | 'tool-use', readonly string[]>> = {
-  subagent: ['schema_version', 'id', 'agent', 'purpose'],
-  'tool-use': [
-    'schema_version',
-    'id',
-    'agent',
-    'purpose',
-    'scope',
-    'skill_ref',
-    'why',
-    'when',
-    'capabilities',
-    'how',
-    'output_expectations',
-    'brain',
-    'effects',
-    'approval',
-  ],
-};
-
 export function parseChildDefinition(
-  kind: 'subagent' | 'tool-use',
+  kind: 'subagent',
   text: string,
   path: string,
 ): ChildDefinition {
+  if (kind !== 'subagent') schemaFailure(path, `unsupported child kind '${String(kind)}'`);
   const { value } = parseYaml(text, path);
-  assertKnownFields(value, CHILD_FIELDS[kind], path);
-  const scope = value.scope === undefined ? undefined : parseScopeMapping(value.scope, path);
+  assertKnownFields(value, ['schema_version', 'id', 'agent', 'purpose'], path);
   return {
     schema_version: requireSchemaVersion(value.schema_version, path),
     id: assertRecordId(requireString(value.id, path, 'id')),
     purpose: requireString(value.purpose, path, 'purpose'),
     agent: requireString(value.agent, path, 'agent'),
-    ...(scope === undefined ? {} : { scope }),
     value,
   };
 }
 
 export function parsePlanEnvelope(text: string, path: string): PlanEnvelope {
-  const { value } = parseYaml(text, path, MAX_AUTHORED_YAML_BYTES, false, false);
+  const { value } = parseYaml(text, path, MAX_AUTHORED_YAML_BYTES);
   return {
     schema_version: requireSchemaVersion(value.schema_version, path),
     id: assertRecordId(requireString(value.id, path, 'id')),
     purpose: requireString(value.purpose, path, 'purpose'),
     agent: requireString(value.agent, path, 'agent'),
+    tool_uses: requireStringArray(value.tool_uses, path, 'tool_uses'),
     value,
   };
 }
@@ -428,10 +463,11 @@ function stringify(value: unknown): string {
 export function renderFunctionDefinition(id: string, purpose: string): string {
   return stringify({
     schema_version: WORKSPACE_SCHEMA_VERSION,
-    id: assertRecordId(id),
+    id: assertFunctionId(id),
     purpose,
     agents: [],
     guidelines: [],
+    tool_uses: [],
   });
 }
 
@@ -439,7 +475,7 @@ export function renderAgentDefinition(functionId: string, id: string, purpose: s
   return stringify({
     schema_version: WORKSPACE_SCHEMA_VERSION,
     id: assertRecordId(id),
-    function: assertRecordId(functionId),
+    function: assertFunctionId(functionId),
     purpose,
     plans: [],
     subagents: [],
@@ -451,14 +487,13 @@ export function renderAgentDefinition(functionId: string, id: string, purpose: s
 }
 
 export function renderChildDefinition(
-  kind: 'plan' | 'subagent' | 'tool-use',
+  kind: 'plan' | 'subagent',
   functionId: string,
   agentId: string,
   id: string,
   purpose: string,
-  scope?: WorkspaceScope,
 ): string {
-  const agent = `${assertRecordId(functionId)}/${assertRecordId(agentId)}`;
+  const agent = `${assertFunctionId(functionId)}/${assertRecordId(agentId)}`;
   const localId = assertRecordId(id);
   if (kind === 'plan') {
     return stringify({
@@ -469,6 +504,7 @@ export function renderChildDefinition(
       inputs: {},
       brain_selectors: {},
       guidelines: [],
+      tool_uses: [],
       artifacts: {},
       caps: {},
       steps: [],
@@ -478,21 +514,43 @@ export function renderChildDefinition(
   if (kind === 'subagent') {
     return stringify({ schema_version: WORKSPACE_SCHEMA_VERSION, id: localId, agent, purpose });
   }
+  return kind satisfies never;
+}
+
+function normalizedToolUseScope(scope: WorkspaceScope): WorkspaceScope {
+  if (scope.function === undefined) {
+    if (scope.agent !== undefined || scope.plan !== undefined) {
+      throw workspaceFailure(
+        'IDENTITY_INVALID',
+        'Tool-use scope has an agent or plan without a function.',
+        'Use workspace scope {}, or provide the complete function/agent/plan ancestry.',
+      );
+    }
+    return {};
+  }
+  const functionId = assertFunctionId(scope.function);
+  if (scope.agent === undefined) {
+    if (scope.plan !== undefined) {
+      throw workspaceFailure(
+        'IDENTITY_INVALID',
+        'Tool-use plan scope has no agent.',
+        'Provide the complete function/agent/plan ancestry.',
+      );
+    }
+    return { function: functionId };
+  }
+  const agentId = assertRecordId(scope.agent);
+  if (scope.plan === undefined) return { function: functionId, agent: agentId };
+  return { function: functionId, agent: agentId, plan: assertRecordId(scope.plan) };
+}
+
+export function renderToolUseDraft(id: string, purpose: string, scope: WorkspaceScope): string {
   return stringify({
     schema_version: WORKSPACE_SCHEMA_VERSION,
-    id: localId,
-    agent,
+    id: assertRecordId(id),
+    scope: normalizedToolUseScope(scope),
     purpose,
-    scope: scope ?? { function: functionId, agent: agentId },
     skill_ref: '',
-    why: purpose,
-    when: [],
-    capabilities: [],
-    how: [],
-    output_expectations: {},
-    brain: { read: [], write: [] },
-    effects: 'read-only',
-    approval: 'none',
   });
 }
 

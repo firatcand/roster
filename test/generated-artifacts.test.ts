@@ -286,6 +286,7 @@ function fixture(): { root: string; cleanup: () => void } {
   writeFileSync(join(root, 'roster.yaml'), [
     'schema_version: 2',
     'workspace_id: generated-test',
+    'tool_uses: []',
     'functions: {}',
     'hosts: {}',
     '',
@@ -302,6 +303,7 @@ function disableAllHosts(root: string): void {
   writeFileSync(at(root, 'roster.yaml'), [
     'schema_version: 2',
     'workspace_id: generated-test',
+    'tool_uses: []',
     'functions: {}',
     'hosts: {}',
     '',
@@ -1018,6 +1020,7 @@ test('v2 update refuses an authored host without an activation contract', () => 
     writeFileSync(at(fx.root, 'roster.yaml'), [
       'schema_version: 2',
       'workspace_id: generated-test',
+      'tool_uses: []',
       'functions: {}',
       'hosts:',
       '  gemini: enabled',

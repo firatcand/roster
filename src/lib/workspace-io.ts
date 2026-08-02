@@ -1257,19 +1257,31 @@ export function replaceWorkspaceFile(
   content: Buffer | string,
   options: {
     expectedHash: string;
+    expectedIdentity?: WorkspaceFileIdentityToken;
+    maxBytes?: number;
     durabilityFs?: WorkspaceDurabilityFs;
     mutationFs?: WorkspaceMutationFs;
     beforePublish?: () => void;
     afterMutation?: () => void;
+    capturePublication?: (token: WorkspaceFileIdentityToken) => void;
   },
 ): void {
   const normalized = normalizeWorkspaceRelativePath(relativePath);
   const bytes = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8');
+  const maxBytes = options.maxBytes ?? MAX_WORKSPACE_FILE_BYTES;
+  if (bytes.byteLength > maxBytes) {
+    throw workspaceFailure(
+      'READ_LIMIT_EXCEEDED',
+      `Replacement for '${normalized}' exceeds the ${maxBytes}-byte file limit.`,
+      'Reduce the replacement bytes or use the bounded limit owned by this artifact contract.',
+      { path: normalized, maxBytes, size: bytes.byteLength },
+    );
+  }
   const parent = directoryIdentity(assertSafeParent(root, normalized), posix.dirname(normalized));
   const target = basename(normalized);
   const mutationFs = options.mutationFs ?? realWorkspaceMutationFs;
   withAnchoredDirectory(parent, () => {
-    const before = readAnchoredWorkspaceFile(parent, target, normalized, MAX_WORKSPACE_FILE_BYTES);
+    const before = readAnchoredWorkspaceFile(parent, target, normalized, maxBytes);
     if (hashWorkspaceBytes(before) !== options.expectedHash) {
       throw workspaceFailure('WRITE_CONFLICT', `File '${normalized}' changed before update.`, 'Re-read the parent registry and retry the requested mutation.', { path: normalized, expectedHash: options.expectedHash, actualHash: hashWorkspaceBytes(before) });
     }
@@ -1287,7 +1299,7 @@ export function replaceWorkspaceFile(
       try {
         if (!rollbackAvailable) throw new Error('rollback bytes are unavailable');
         const current = mutationStat(mutationFs, target, normalized, 'inspect replacement target for rollback');
-        const currentBytes = readAnchoredWorkspaceFile(parent, target, normalized, Math.max(bytes.byteLength, 1));
+        const currentBytes = readAnchoredWorkspaceFile(parent, target, normalized, maxBytes);
         if (
           current.isSymbolicLink()
           || !current.isFile()
@@ -1301,7 +1313,7 @@ export function replaceWorkspaceFile(
         rollbackAvailable = false;
         replacementCommitted = false;
         syncWorkspaceDirectory('.', options.durabilityFs ?? realWorkspaceDurabilityFs);
-        const restored = readAnchoredWorkspaceFile(parent, target, normalized, MAX_WORKSPACE_FILE_BYTES);
+        const restored = readAnchoredWorkspaceFile(parent, target, normalized, maxBytes);
         if (!restored.equals(before)) throw new Error('restored bytes do not match original');
       } catch (rollbackError) {
         preserveRollback = rollbackAvailable;
@@ -1329,13 +1341,25 @@ export function replaceWorkspaceFile(
       throw originalError;
     };
     try {
-      const rechecked = readAnchoredWorkspaceFile(parent, target, normalized, MAX_WORKSPACE_FILE_BYTES);
+      const rechecked = readAnchoredWorkspaceFile(parent, target, normalized, maxBytes);
       if (hashWorkspaceBytes(rechecked) !== options.expectedHash) {
         throw workspaceFailure('WRITE_CONFLICT', `File '${normalized}' changed during update.`, 'Re-read the parent registry and retry the requested mutation.', { path: normalized, expectedHash: options.expectedHash, actualHash: hashWorkspaceBytes(rechecked) });
       }
-      const expectedIdentity = mutationStat(mutationFs, target, normalized, 'inspect replacement source');
-      if (expectedIdentity.isSymbolicLink() || !expectedIdentity.isFile()) {
+      const sourceIdentity = mutationStat(mutationFs, target, normalized, 'inspect replacement source');
+      if (sourceIdentity.isSymbolicLink() || !sourceIdentity.isFile()) {
         throw workspaceFailure('WRITE_CONFLICT', `File '${normalized}' changed type during update.`, 'Restore the regular parent registry and retry.', { path: normalized });
+      }
+      if (options.expectedIdentity !== undefined && (
+        sourceIdentity.dev !== options.expectedIdentity.dev
+        || sourceIdentity.ino !== options.expectedIdentity.ino
+        || options.expectedHash !== options.expectedIdentity.hash
+      )) {
+        throw workspaceFailure(
+          'WRITE_CONFLICT',
+          `File '${normalized}' was replaced before identity-guarded update.`,
+          'Preserve the concurrent bytes and retry from a fresh workspace read.',
+          { path: normalized },
+        );
       }
       options.beforePublish?.();
       assertCurrentDirectoryIdentity(parent);
@@ -1344,11 +1368,11 @@ export function replaceWorkspaceFile(
       if (
         publishIdentity.isSymbolicLink()
         || !publishIdentity.isFile()
-        || publishIdentity.dev !== expectedIdentity.dev
-        || publishIdentity.ino !== expectedIdentity.ino
-        || publishIdentity.size !== expectedIdentity.size
-        || publishIdentity.mtimeMs !== expectedIdentity.mtimeMs
-        || publishIdentity.ctimeMs !== expectedIdentity.ctimeMs
+        || publishIdentity.dev !== sourceIdentity.dev
+        || publishIdentity.ino !== sourceIdentity.ino
+        || publishIdentity.size !== sourceIdentity.size
+        || publishIdentity.mtimeMs !== sourceIdentity.mtimeMs
+        || publishIdentity.ctimeMs !== sourceIdentity.ctimeMs
       ) {
         throw workspaceFailure('WRITE_CONFLICT', `File '${normalized}' was replaced before publication.`, 'Preserve the concurrent bytes, re-read the parent registry, and retry.', { path: normalized });
       }
@@ -1361,12 +1385,12 @@ export function replaceWorkspaceFile(
         }
         mutationFailure(normalized, 'retain rollback bytes for', error);
       }
-      const rollbackBytes = readAnchoredWorkspaceFile(parent, rollback, normalized, MAX_WORKSPACE_FILE_BYTES);
+      const rollbackBytes = readAnchoredWorkspaceFile(parent, rollback, normalized, maxBytes);
       const rollbackIdentity = mutationStat(mutationFs, rollback, rollbackRelative, 'inspect replacement rollback file');
       if (
         !rollbackBytes.equals(before)
-        || rollbackIdentity.dev !== expectedIdentity.dev
-        || rollbackIdentity.ino !== expectedIdentity.ino
+        || rollbackIdentity.dev !== sourceIdentity.dev
+        || rollbackIdentity.ino !== sourceIdentity.ino
       ) {
         throw workspaceFailure('WRITE_CONFLICT', `Rollback bytes for '${normalized}' changed before publication.`, 'Stop the concurrent writer and retry from a fresh registry read.', { path: normalized });
       }
@@ -1380,14 +1404,14 @@ export function replaceWorkspaceFile(
         const durabilityFs = options.durabilityFs ?? realWorkspaceDurabilityFs;
         syncAnchoredWorkspaceFile(parent, target, normalized, temporaryIdentity, durabilityFs);
         syncWorkspaceDirectory('.', durabilityFs);
-        const published = readAnchoredWorkspaceFile(parent, target, normalized, Math.max(bytes.byteLength, 1));
+        const published = readAnchoredWorkspaceFile(parent, target, normalized, maxBytes);
         if (!published.equals(bytes)) {
           throw workspaceFailure('WRITE_CONFLICT', `File '${normalized}' did not persist expected bytes.`, 'Inspect filesystem durability and retry from a clean registry read.', { path: normalized });
         }
         options.afterMutation?.();
         assertDirectoryBinding(parent);
         const finalIdentity = mutationStat(mutationFs, target, normalized, 'verify replaced file');
-        const finalBytes = readAnchoredWorkspaceFile(parent, target, normalized, Math.max(bytes.byteLength, 1));
+        const finalBytes = readAnchoredWorkspaceFile(parent, target, normalized, maxBytes);
         if (
           finalIdentity.isSymbolicLink()
           || !finalIdentity.isFile()
@@ -1402,6 +1426,11 @@ export function replaceWorkspaceFile(
             { path: normalized },
           );
         }
+        options.capturePublication?.({
+          dev: finalIdentity.dev,
+          ino: finalIdentity.ino,
+          hash: hashWorkspaceBytes(bytes),
+        });
       } catch (error) {
         return rollbackReplacement(error);
       }
@@ -1430,6 +1459,7 @@ export function replaceWorkspaceFile(
 }
 
 type WorkspaceRemovalOptions = {
+  maxBytes?: number;
   durabilityFs?: WorkspaceDurabilityFs;
   mutationFs?: WorkspaceMutationFs;
   expectedIdentity?: WorkspaceFileIdentityToken;
@@ -1446,6 +1476,7 @@ function removeWorkspaceFile(
   const normalized = normalizeWorkspaceRelativePath(relativePath);
   const parent = directoryIdentity(assertSafeParent(root, normalized), posix.dirname(normalized));
   const target = basename(normalized);
+  const maxBytes = options.maxBytes ?? MAX_WORKSPACE_FILE_BYTES;
   const mutationFs = options.mutationFs ?? realWorkspaceMutationFs;
   const durabilityFs = options.durabilityFs ?? realWorkspaceDurabilityFs;
   const removed = withAnchoredDirectory(parent, () => {
@@ -1457,7 +1488,7 @@ function removeWorkspaceFile(
       mutationFailure(normalized, 'inspect file for removal', error);
     }
     if (identity.isSymbolicLink() || !identity.isFile()) return false;
-    const existing = readAnchoredWorkspaceFile(parent, target, normalized, MAX_WORKSPACE_FILE_BYTES);
+    const existing = readAnchoredWorkspaceFile(parent, target, normalized, maxBytes);
     if (hashWorkspaceBytes(existing) !== expectedHash) return false;
     if (
       options.expectedIdentity !== undefined
@@ -1493,7 +1524,7 @@ function removeWorkspaceFile(
       try {
         mutationFs.linkSync(quarantine, target);
         syncWorkspaceDirectory('.', durabilityFs);
-        const restored = readAnchoredWorkspaceFile(parent, target, normalized, MAX_WORKSPACE_FILE_BYTES);
+        const restored = readAnchoredWorkspaceFile(parent, target, normalized, maxBytes);
         if (hashWorkspaceBytes(restored) !== expectedHash) throw new Error('restored bytes do not match expected hash');
         try {
           mutationFs.unlinkSync(quarantine);
@@ -1527,7 +1558,7 @@ function removeWorkspaceFile(
     let quarantined: Buffer;
     let quarantinedIdentity;
     try {
-      quarantined = readAnchoredWorkspaceFile(parent, quarantine, quarantineRelative, MAX_WORKSPACE_FILE_BYTES);
+      quarantined = readAnchoredWorkspaceFile(parent, quarantine, quarantineRelative, maxBytes);
       quarantinedIdentity = mutationStat(mutationFs, quarantine, quarantineRelative, 'inspect removal quarantine');
     } catch {
       return restoreQuarantine();

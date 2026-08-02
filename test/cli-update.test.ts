@@ -1,6 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, existsSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -24,7 +32,7 @@ function runCli(args: readonly string[], cwd: string, env: Record<string, string
   return { status: out.status ?? -1, stdout: out.stdout, stderr: out.stderr };
 }
 
-test('update: in a v2 workspace synchronizes only enabled generated activation', () => {
+test('update: in a v2 workspace synchronizes activation and the vendor-skill map', () => {
   const root = mkdtempSync(join(tmpdir(), 'roster-update-'));
   const claudeHome = join(root, '.h-claude');
   const fakeHome = join(root, '.home');
@@ -43,8 +51,77 @@ test('update: in a v2 workspace synchronizes only enabled generated activation',
     assert.ok(existsSync(join(root, '.roster', 'generated-manifest.json')), 'portable generated manifest exists');
     assert.equal(existsSync(join(root, '.roster', 'scaffold-manifest.json')), false);
     assert.equal(existsSync(join(root, '.claude', 'skills', 'inbox', 'SKILL.md')), false);
-    assert.match(r.stdout, /v2 generated activation/);
+    assert.match(r.stdout, /v2 activation \+ vendor-skill map/);
+    assert.ok(existsSync(join(root, '.roster', 'vendor-skill-map.json')));
     assert.doesNotMatch(r.stdout, /Founder skills|Scaffold files|hooks/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('update: an incomplete tool draft blocks every activation and map write', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-update-draft-'));
+  const claudeHome = join(root, '.h-claude');
+  const fakeHome = join(root, '.home');
+  mkdirSync(claudeHome, { recursive: true });
+  mkdirSync(fakeHome, { recursive: true });
+  try {
+    const env = { HOME: fakeHome, ROSTER_CLAUDE_HOME: claudeHome };
+    assert.equal(runCli(['init', 'tw', '--silent'], root, env).status, 0);
+    assert.equal(runCli(['install', '--tool', 'claude', '--scope', 'project', '--yes', '--silent'], root, env).status, 0);
+    assert.equal(runCli([
+      'scaffold',
+      'tool-use',
+      'search',
+      '--scope',
+      'workspace',
+      '--purpose',
+      'Search public sources.',
+    ], root, env).status, 0);
+    const manifestPath = join(root, '.roster', 'generated-manifest.json');
+    const manifestBefore = readFileSync(manifestPath);
+    const activationPath = join(root, '.claude', 'CLAUDE.md');
+    rmSync(activationPath);
+
+    const result = runCli(['update'], root, env);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /TOOL_USE_DRAFT_INCOMPLETE|incomplete scaffold draft/i);
+    assert.equal(existsSync(activationPath), false);
+    assert.equal(existsSync(join(root, '.roster', 'vendor-skill-map.json')), false);
+    assert.deepEqual(readFileSync(manifestPath), manifestBefore);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('update: a symlinked vendor map target fails before activation and preserves outside bytes', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-update-map-link-'));
+  const claudeHome = join(root, '.h-claude');
+  const fakeHome = join(root, '.home');
+  mkdirSync(claudeHome, { recursive: true });
+  mkdirSync(fakeHome, { recursive: true });
+  try {
+    const env = { HOME: fakeHome, ROSTER_CLAUDE_HOME: claudeHome };
+    assert.equal(runCli(['init', 'tw', '--silent'], root, env).status, 0);
+    assert.equal(
+      runCli(['install', '--tool', 'claude', '--scope', 'project', '--yes', '--silent'], root, env).status,
+      0,
+    );
+    const activationPath = join(root, '.claude', 'CLAUDE.md');
+    const manifestPath = join(root, '.roster', 'generated-manifest.json');
+    const activationBefore = readFileSync(activationPath);
+    const manifestBefore = readFileSync(manifestPath);
+    const outside = join(root, 'outside-map.json');
+    const sentinel = 'outside bytes must remain untouched\n';
+    writeFileSync(outside, sentinel);
+    symlinkSync(outside, join(root, '.roster', 'vendor-skill-map.json'));
+
+    const result = runCli(['update'], root, env);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /symlink/i);
+    assert.deepEqual(readFileSync(activationPath), activationBefore);
+    assert.deepEqual(readFileSync(manifestPath), manifestBefore);
+    assert.equal(readFileSync(outside, 'utf8'), sentinel);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

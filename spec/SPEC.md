@@ -246,38 +246,68 @@ Array position is the only sequence; the schema has no output binding, dependenc
 ```yaml
 schema_version: 2
 id: social-opportunity-research
+scope: {}
+skill_ref: exa:search
+purpose: Find timely, credible posts that match our audience and positioning.
+when:
+  - discovering reply opportunities
+capabilities:
+  - web-search
+  - content-retrieval
+rules:
+  - use attributable public sources
+output_expectations:
+  required: [canonical_url, author, published_at, relevance_reason]
+  guidance: [reject profile and company-homepage URLs as candidate posts]
+brain:
+  read: [icp, messaging, previously-presented-opportunities]
+  write: [discovered-opportunity, retrieval-provenance]
+effects:
+  allowed: [external-read, brain-read, brain-write]
+approval:
+  requirement: none
+evidence:
+  required: [canonical_url, retrieved_at]
+```
+
+The plan can own a same-ID overlay at its registered plan tool path:
+
+```yaml
+schema_version: 2
+id: social-opportunity-research
 scope:
   function: gtm
   agent: social-manager
   plan: opportunity-discovery
 skill_ref: exa:search
-why: Find timely, credible posts that match our audience and positioning.
-when:
-  - discovering reply opportunities
-capabilities:
-  - web and social search
+purpose: Rank timely opportunities for this discovery request.
 how:
   - search first-party and high-credibility sources for the requested lookback
   - exclude previously presented URLs using Brain history
   - rank by ICP relevance before engagement volume
-output_expectations:
-  required: [canonical_url, author, published_at, relevance_reason]
-brain:
-  read: [icp, messaging, previously-presented-opportunities]
-  write: [discovered-opportunity, retrieval-provenance]
-effects: read-only
-approval: none
+filters:
+  - exclude URLs already presented according to Brain history
+approval:
+  requirement: human
+  guidance: [wait for the human before any engagement]
 ```
 
 The definition may reference the relevant subset of a vendor skill but must not duplicate provider setup, credentials, syntax, or generic best practices. Raw secret material is forbidden. Effects and approval are policy guidance presented to the host, not Roster enforcement.
 
-Tool-use precedence is most-specific-wins among compatible definitions:
+Tool-use ancestry is resolved broad-to-narrow:
 
 ```text
-plan > agent > function > workspace
+workspace → function → agent → plan
 ```
 
-Narrower definitions may add restrictions or specificity but cannot relax a broader safety rule without an explicit authored override that validation reports.
+Only `purpose` uses most-specific replacement. `skill_ref` must remain identical;
+`when`, `how`, capabilities, filters, rules, output guidance, approval guidance,
+and evidence accumulate with stable deduplication; Brain selectors are additive
+requested intent, never authorization. An explicit `effects.allowed` set may only
+narrow an inherited set, and approval may only become stricter from `none` to
+`human`. There is no override, clear, negation, or safety-relaxation syntax.
+The flat result retains contributor and field provenance, while expected output
+remains host guidance rather than a provider result gate.
 
 ## Discovery and validation
 

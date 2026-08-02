@@ -8,6 +8,11 @@ import {
 } from './workspace-diagnostics.ts';
 import { isRecordId } from './workspace-layout.ts';
 import { parsePlanEnvelope, type PlanEnvelope } from './workspace-record.ts';
+import {
+  assertCompleteWorkspaceSnapshot,
+  resolveToolUse,
+  type CompleteWorkspaceSnapshot,
+} from './workspace-tool-use.ts';
 
 export const MAX_PLAN_COLLECTION_ITEMS = 256;
 export const MAX_PLAN_RETRY_ATTEMPTS = 256;
@@ -83,6 +88,7 @@ export type StructuredPlan = {
   inputs: Record<string, PlanInputDefinition>;
   brain_selectors: Record<string, PlanBrainSelector>;
   guidelines: string[];
+  tool_uses: string[];
   artifacts: Record<string, PlanArtifactDefinition>;
   caps: Record<string, PlanCapDefinition>;
   steps: PlanStep[];
@@ -447,6 +453,7 @@ function parseStructuredPlanEnvelope(envelope: PlanEnvelope, path: string): Stru
     'inputs',
     'brain_selectors',
     'guidelines',
+    'tool_uses',
     'artifacts',
     'caps',
     'steps',
@@ -457,6 +464,7 @@ function parseStructuredPlanEnvelope(envelope: PlanEnvelope, path: string): Stru
   const inputs = parseInputs(value.inputs, path);
   const brainSelectors = parseBrainSelectors(value.brain_selectors, path);
   const guidelines = requireUniqueReferences(value.guidelines, path, 'guidelines', requireGuidelineId);
+  const toolUses = requireUniqueReferences(value.tool_uses, path, 'tool_uses', requireLocalId);
   const artifacts = parseArtifacts(value.artifacts, path);
   const caps = parseCaps(value.caps, path);
   const rawSteps = requireArray(value.steps, path, 'steps');
@@ -496,6 +504,7 @@ function parseStructuredPlanEnvelope(envelope: PlanEnvelope, path: string): Stru
     inputs,
     brain_selectors: brainSelectors,
     guidelines,
+    tool_uses: toolUses,
     artifacts,
     caps,
     steps,
@@ -696,7 +705,7 @@ function validatePlanReferences(
     plans: ReadonlySet<string>;
     subagents: ReadonlySet<string>;
     guidelines: ReadonlySet<string>;
-    tools: ReadonlyMap<string, PlanWorkspaceRecord>;
+    toolSnapshot?: CompleteWorkspaceSnapshot;
   },
 ): WorkspaceDiagnostic[] {
   const diagnostics: WorkspaceDiagnostic[] = [];
@@ -723,12 +732,47 @@ function validatePlanReferences(
     } else if (step.kind === 'nested-plan') {
       if (!catalogs.plans.has(step.plan)) diagnostics.push(referenceDiagnostic('REFERENCE_NOT_FOUND', plan, `${stepPath}.plan`, step.plan, 'plan', step.id));
     } else if (step.kind === 'tool') {
-      const qualified = `${plan.agent}/tools/${step.tool_use}`;
-      const tool = catalogs.tools.get(qualified);
-      if (tool === undefined) {
-        diagnostics.push(referenceDiagnostic('REFERENCE_NOT_FOUND', plan, `${stepPath}.tool_use`, step.tool_use, 'tool-use', step.id));
-      } else if (tool.scope['plan'] !== undefined && tool.scope['plan'] !== plan.id) {
-        diagnostics.push(referenceDiagnostic('REFERENCE_NOT_APPLICABLE', plan, `${stepPath}.tool_use`, step.tool_use, 'tool-use', step.id));
+      if (catalogs.toolSnapshot === undefined) {
+        diagnostics.push(workspaceDiagnostic(
+          'TOOL_USE_SNAPSHOT_INCOMPLETE',
+          `${plan.path}: tool-use references require a complete attested workspace snapshot.`,
+          {
+            path: plan.path,
+            remedy: 'Collect the unfiltered full workspace snapshot before validating tool steps.',
+            details: {
+              source_plan: plan.qualified_id,
+              field_path: `${stepPath}.tool_use`,
+              reference: step.tool_use,
+              step_id: step.id,
+            },
+          },
+        ));
+      } else {
+        const [functionId, agentId] = plan.agent.split('/');
+        try {
+          resolveToolUse(catalogs.toolSnapshot, {
+            function: functionId!,
+            agent: agentId!,
+            plan: plan.id,
+          }, step.tool_use);
+        } catch (error) {
+          if (!isWorkspaceFailure(error)) throw error;
+          if (error.code === 'REFERENCE_NOT_FOUND' || error.code === 'REFERENCE_NOT_APPLICABLE') {
+            diagnostics.push(referenceDiagnostic(error.code, plan, `${stepPath}.tool_use`, step.tool_use, 'tool-use', step.id));
+          } else {
+            diagnostics.push(workspaceDiagnostic(error.code, error.header.replace(/^roster:\s*/, ''), {
+              path: plan.path,
+              remedy: error.remedy,
+              details: {
+                ...error.details,
+                source_plan: plan.qualified_id,
+                field_path: `${stepPath}.tool_use`,
+                reference: step.tool_use,
+                step_id: step.id,
+              },
+            }));
+          }
+        }
       }
     } else if (step.kind === 'artifact') {
       checkArtifact(step.artifact, `${stepPath}.artifact`, step.id);
@@ -760,8 +804,32 @@ function validatePlanReferences(
 export function validateStructuredPlans(
   records: readonly PlanWorkspaceRecord[],
   selectedRoots?: readonly string[],
+  toolSnapshot?: CompleteWorkspaceSnapshot,
 ): StructuredPlanValidationResult {
-  const planRecords = records.filter((record) => record.kind === 'plan');
+  if (toolSnapshot !== undefined) {
+    try {
+      assertCompleteWorkspaceSnapshot(toolSnapshot);
+    } catch (error) {
+      if (!isWorkspaceFailure(error)) throw error;
+      return { plans: [], selected_plan_ids: [], diagnostics: [diagnosticFromFailure(error)] };
+    }
+    if (records !== toolSnapshot.records) {
+      return {
+        plans: [],
+        selected_plan_ids: [],
+        diagnostics: [workspaceDiagnostic(
+          'TOOL_USE_SNAPSHOT_INCOMPLETE',
+          'Structured-plan validation and tool resolution require the same attested record collection.',
+          {
+            remedy: 'Pass the exact records array from the complete workspace snapshot.',
+            details: { requirement: 'snapshot-record-identity' },
+          },
+        )],
+      };
+    }
+  }
+  const validationRecords = toolSnapshot?.records ?? records;
+  const planRecords = validationRecords.filter((record) => record.kind === 'plan');
   const parsed = new Map<string, StructuredPlan>();
   const failures = new Map<string, WorkspaceDiagnostic>();
   for (const record of [...planRecords].sort((a, b) => a.qualified_id.localeCompare(b.qualified_id, 'en'))) {
@@ -798,11 +866,11 @@ export function validateStructuredPlans(
     .sort((a, b) => a.localeCompare(b, 'en'))
     .flatMap((planId) => failures.get(planId) === undefined ? [] : [failures.get(planId)!]));
   const catalogs = {
-    agents: new Set(records.filter((record) => record.kind === 'agent').map((record) => record.qualified_id)),
+    agents: new Set(validationRecords.filter((record) => record.kind === 'agent').map((record) => record.qualified_id)),
     plans: new Set(planIds),
-    subagents: new Set(records.filter((record) => record.kind === 'subagent').map((record) => record.qualified_id)),
-    guidelines: new Set(records.filter((record) => record.kind === 'guideline').map((record) => record.qualified_id)),
-    tools: new Map(records.filter((record) => record.kind === 'tool-use').map((record) => [record.qualified_id, record] as const)),
+    subagents: new Set(validationRecords.filter((record) => record.kind === 'subagent').map((record) => record.qualified_id)),
+    guidelines: new Set(validationRecords.filter((record) => record.kind === 'guideline').map((record) => record.qualified_id)),
+    ...(toolSnapshot === undefined ? {} : { toolSnapshot }),
   };
   for (const planId of [...selected].sort((a, b) => a.localeCompare(b, 'en'))) {
     const plan = parsed.get(planId);
@@ -825,8 +893,9 @@ export function validateStructuredPlans(
 export function resolveValidatedPlan(
   records: readonly PlanWorkspaceRecord[],
   qualifiedId: string,
+  toolSnapshot?: CompleteWorkspaceSnapshot,
 ): StructuredPlan {
-  const result = validateStructuredPlans(records, [qualifiedId]);
+  const result = validateStructuredPlans(records, [qualifiedId], toolSnapshot);
   if (result.diagnostics.length > 0) {
     const first = result.diagnostics.find((diagnostic) => diagnostic.details['source_plan'] === qualifiedId)
       ?? result.diagnostics[0]!;

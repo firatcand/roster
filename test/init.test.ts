@@ -79,7 +79,7 @@ test('executeInit writes the canonical registry and valid self-hashed bootstrap'
     await executeInit({ cwd: root, name: 'my-roster', silent: true });
     assert.equal(
       readFileSync(join(root, 'roster.yaml'), 'utf8'),
-      'schema_version: 2\nworkspace_id: my-roster\nfunctions: {}\nhosts: {}\n',
+      'schema_version: 2\nworkspace_id: my-roster\ntool_uses: []\nfunctions: {}\nhosts: {}\n',
     );
     const parsed = parseGeneratedMarkdown(readFileSync(join(root, 'ROSTER.md'), 'utf8'));
     assert.ok(parsed);
@@ -125,7 +125,7 @@ test('executeInit refuses a different workspace id without overwriting bytes', a
 test('a differing registry-only target is refused before bootstrap publication', async () => {
   const { root, cleanup } = workspace();
   try {
-    const existing = 'schema_version: 2\nworkspace_id: first\nfunctions: {}\nhosts: {}\n';
+    const existing = 'schema_version: 2\nworkspace_id: first\ntool_uses: []\nfunctions: {}\nhosts: {}\n';
     writeFileSync(join(root, 'roster.yaml'), existing);
     await expectRosterError(
       () => executeInit({ cwd: root, name: 'second', silent: true }),
@@ -141,7 +141,7 @@ test('a differing registry-only target is refused before bootstrap publication',
 test('an identical registry-only target adopts the sentinel and creates the bootstrap', async () => {
   const { root, cleanup } = workspace();
   try {
-    const existing = 'schema_version: 2\nworkspace_id: acme\nfunctions: {}\nhosts: {}\n';
+    const existing = 'schema_version: 2\nworkspace_id: acme\ntool_uses: []\nfunctions: {}\nhosts: {}\n';
     writeFileSync(join(root, 'roster.yaml'), existing);
     const result = await executeInit({ cwd: root, name: 'acme', silent: true });
     assert.deepEqual(result.filesWritten, ['ROSTER.md']);
@@ -251,7 +251,7 @@ test('registry durability failure rolls back canonical init files and preserves 
 
 test('late adopted-registry durability failure removes the invocation bootstrap', async () => {
   const { root, cleanup } = workspace();
-  const registry = 'schema_version: 2\nworkspace_id: acme\nfunctions: {}\nhosts: {}\n';
+  const registry = 'schema_version: 2\nworkspace_id: acme\ntool_uses: []\nfunctions: {}\nhosts: {}\n';
   try {
     writeFileSync(join(root, 'roster.yaml'), registry);
     let durabilitySyncs = 0;

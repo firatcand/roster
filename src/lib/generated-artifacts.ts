@@ -18,10 +18,9 @@ import {
 import {
   isWorkspaceFailure,
   workspaceDiagnostic,
-  workspaceFailure,
   type WorkspaceDiagnostic,
 } from './workspace-diagnostics.ts';
-import { addWorkspaceHost, parseWorkspaceRegistry } from './workspace-record.ts';
+import { addWorkspaceHost, enabledV2Hosts, parseWorkspaceRegistry } from './workspace-record.ts';
 import { probeWorkspace } from './workspace-probe.ts';
 import {
   legacyWorkspaceError,
@@ -29,6 +28,10 @@ import {
   unsafeWorkspaceMarkerError,
   workspaceRequiredError,
 } from './errors.ts';
+import {
+  assertWorkspaceUpdateLock,
+  type WorkspaceUpdateLockToken,
+} from './internal/workspace-update-lock.ts';
 
 export type ActivationAssurance = 'auto-loaded' | 'advisory-manual' | 'missing';
 export type GeneratedArtifactHost = 'neutral' | 'claude' | 'codex';
@@ -432,8 +435,9 @@ function renderHostBootstrapBody(hostName: string): string {
     '',
     '1. Read `ROSTER.md` before Roster-managed work.',
     '2. Use `roster discover --json` to resolve the requested function, agent, plan, or supporting record.',
-    '3. Use `roster scaffold` only when the user asks to create an authored structure.',
-    '4. Never treat Roster as a plan executor, scheduler, provider router, or approval authority.',
+    '3. For tool use, resolve the canonical `skill_ref` through `.roster/vendor-skill-map.json`; read a verified workspace-relative skill or let the host resolve a host-native identity.',
+    '4. Use `roster scaffold` only when the user asks to create an authored structure.',
+    '5. Never treat Roster as a plan executor, scheduler, provider router, or approval authority.',
     '',
   ].join('\n');
 }
@@ -468,7 +472,7 @@ export function renderCodexRosterSkill(assurance: ResolvedActivationAssurance): 
     [
       '# Roster',
       '',
-      'Read `ROSTER.md`, resolve records with `roster discover --json`, and create authored structures only through `roster scaffold`.',
+      'Read `ROSTER.md`, resolve records with `roster discover --json`, resolve tool `skill_ref` values through `.roster/vendor-skill-map.json`, and create authored structures only through `roster scaffold`.',
       '',
     ].join('\n'),
     frontmatter,
@@ -1277,7 +1281,7 @@ export function inspectGeneratedActivationState(root: string): {
   manifest: GeneratedArtifactManifest;
   diagnostics: WorkspaceDiagnostic[];
 } {
-  const enabledHosts = enabledV2Hosts(readWorkspaceText(root, 'roster.yaml'));
+  const enabledHosts = enabledV2Hosts(parseWorkspaceRegistry(readWorkspaceText(root, 'roster.yaml'), 'roster.yaml'));
   const scanned = scanGeneratedEntries(root);
   const diagnostics = [...scanned.diagnostics];
   const canonicalEntries = scanned.entries.filter((entry) => {
@@ -1433,26 +1437,9 @@ function assertV2Workspace(root: string): void {
   throw workspaceRequiredError(root);
 }
 
-function enabledV2Hosts(registryText: string): Array<'claude' | 'codex'> {
-  const registry = parseWorkspaceRegistry(registryText, 'roster.yaml');
-  const hosts = Object.keys(registry.hosts);
-  const unsupported = hosts.filter((host) => host !== 'claude' && host !== 'codex');
-  if (unsupported.length > 0) {
-    throw workspaceFailure(
-      'UNKNOWN_FIELD',
-      `Host '${unsupported[0]}' has no v2 activation contract.`,
-      'Use project activation only for claude or codex; Gemini remains quarantined.',
-      { path: 'roster.yaml', hosts: unsupported },
-    );
-  }
-  return hosts
-    .filter((host): host is 'claude' | 'codex' => host === 'claude' || host === 'codex')
-    .sort((a, b) => a.localeCompare(b, 'en'));
-}
-
 function tryCurrentEnabledV2Hosts(root: string): Array<'claude' | 'codex'> | null {
   try {
-    return enabledV2Hosts(readWorkspaceText(root, 'roster.yaml'));
+    return enabledV2Hosts(parseWorkspaceRegistry(readWorkspaceText(root, 'roster.yaml'), 'roster.yaml'));
   } catch {
     return null;
   }
@@ -1477,7 +1464,7 @@ export function installV2ProjectActivation(options: {
   assertV2Workspace(options.root);
   return withWorkspaceLock(options.root, () => {
     const registryText = readWorkspaceText(options.root, 'roster.yaml');
-    const enabledBefore = enabledV2Hosts(registryText);
+    const enabledBefore = enabledV2Hosts(parseWorkspaceRegistry(registryText, 'roster.yaml'));
     const enabledCandidate = [...new Set([...enabledBefore, options.host])];
     const hostVersions = { ...options.hostVersions };
     if (options.hostVersion !== undefined) hostVersions[options.host] = options.hostVersion;
@@ -1563,29 +1550,45 @@ export function installV2ProjectActivation(options: {
   });
 }
 
-export function updateV2ProjectActivations(options: {
+type V2ProjectActivationUpdateOptions = {
   root: string;
   hostVersions?: Partial<Record<'claude' | 'codex', string>>;
   attestations?: readonly HostActivationAttestation[];
-}): ProjectActivationUpdateResult {
+};
+
+function updateV2ProjectActivationsUnlocked(
+  options: V2ProjectActivationUpdateOptions,
+): ProjectActivationUpdateResult {
   assertV2Workspace(options.root);
-  return withWorkspaceLock(options.root, () => {
-    const enabledHosts = enabledV2Hosts(readWorkspaceText(options.root, 'roster.yaml'));
-    const deactivationDiagnostics = deactivateDisabledHostArtifacts(options.root, enabledHosts);
-    const synchronized = synchronizeGeneratedActivations({
-      root: options.root,
-      enabledHosts,
-      ...(options.hostVersions === undefined ? {} : { hostVersions: options.hostVersions }),
-      ...(options.attestations === undefined ? {} : { attestations: options.attestations }),
-    });
-    synchronized.diagnostics.unshift(...deactivationDiagnostics);
-    const manifest = synchronized.results[0]?.manifest
-      ?? syncGeneratedManifest(options.root, enabledHosts).manifest;
-    const ok = manifest !== null
-      && synchronized.results.every((result) => result.assurance !== 'missing')
-      && !synchronized.diagnostics.some((diagnostic) => diagnostic.severity === 'error');
-    return { ok, results: synchronized.results, diagnostics: synchronized.diagnostics, manifest };
+  const enabledHosts = enabledV2Hosts(parseWorkspaceRegistry(readWorkspaceText(options.root, 'roster.yaml'), 'roster.yaml'));
+  const deactivationDiagnostics = deactivateDisabledHostArtifacts(options.root, enabledHosts);
+  const synchronized = synchronizeGeneratedActivations({
+    root: options.root,
+    enabledHosts,
+    ...(options.hostVersions === undefined ? {} : { hostVersions: options.hostVersions }),
+    ...(options.attestations === undefined ? {} : { attestations: options.attestations }),
   });
+  synchronized.diagnostics.unshift(...deactivationDiagnostics);
+  const manifest = synchronized.results[0]?.manifest
+    ?? syncGeneratedManifest(options.root, enabledHosts).manifest;
+  const ok = manifest !== null
+    && synchronized.results.every((result) => result.assurance !== 'missing')
+    && !synchronized.diagnostics.some((diagnostic) => diagnostic.severity === 'error');
+  return { ok, results: synchronized.results, diagnostics: synchronized.diagnostics, manifest };
+}
+
+export function updateV2ProjectActivationsWithLockToken(
+  options: V2ProjectActivationUpdateOptions,
+  token: WorkspaceUpdateLockToken,
+): ProjectActivationUpdateResult {
+  assertWorkspaceUpdateLock(options.root, token);
+  return updateV2ProjectActivationsUnlocked(options);
+}
+
+export function updateV2ProjectActivations(
+  options: V2ProjectActivationUpdateOptions,
+): ProjectActivationUpdateResult {
+  return withWorkspaceLock(options.root, () => updateV2ProjectActivationsUnlocked(options));
 }
 
 const CANONICAL_GENERATED_PATHS = new Set(Object.keys(GENERATED_PATH_IDENTITIES));
@@ -1859,6 +1862,7 @@ export function renderRosterBootstrap(): string {
       '',
       '- Read `roster.yaml` for the workspace registry.',
       '- Use `roster discover --json` to resolve purpose-built agents and records.',
+      '- Resolve canonical tool `skill_ref` values through `.roster/vendor-skill-map.json`; read verified workspace-relative skills and let the host resolve host-native identities.',
       '- Use `roster scaffold` to add one explicitly requested authored record at a time.',
       '- Preserve authored files and report generated-file drift instead of overwriting user changes.',
       '',

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { auditFounderSkillsDrift } from '../src/lib/founder-skills/drift.ts';
@@ -10,6 +10,7 @@ import {
 } from '../src/lib/generated-artifacts.ts';
 import { syncFounderSkills } from '../src/lib/founder-skills/sync.ts';
 import type { SkillsInstaller } from '../src/lib/founder-skills/installer.ts';
+import { readLockfile, writeLockfile } from '../src/lib/founder-skills/lockfile.ts';
 
 function fakeInstaller(opts?: { malformed?: boolean }): SkillsInstaller {
   const sub: Record<'claude' | 'codex', string[]> = {
@@ -34,7 +35,7 @@ async function withWorkspace(fn: (cwd: string) => Promise<void>): Promise<void> 
   const cwd = mkdtempSync(join(tmpdir(), 'roster-fs-drift-'));
   const claudeHome = join(cwd, '.h-claude');
   mkdirSync(claudeHome, { recursive: true });
-  writeFileSync(join(cwd, 'roster.yaml'), 'schema_version: 2\nworkspace_id: test\nfunctions: {}\nhosts: {}\n');
+  writeFileSync(join(cwd, 'roster.yaml'), 'schema_version: 2\nworkspace_id: test\ntool_uses: []\nfunctions: {}\nhosts: {}\n');
   writeFileSync(join(cwd, 'ROSTER.md'), renderRosterBootstrap());
   assert.equal(updateV2ProjectActivations({ root: cwd }).ok, true);
   const saved = {
@@ -65,6 +66,18 @@ test('no manifest → not-applicable, no findings', async () => {
   });
 });
 
+test('a dangling manifest symlink is a fail-loud parse finding, not an opt-out', async () => {
+  await withWorkspace(async (cwd) => {
+    symlinkSync('missing-founder-skills.yaml', join(cwd, 'founder-skills.yaml'));
+    const result = auditFounderSkillsDrift(cwd);
+    assert.equal(result.status, 'checked');
+    if (result.status === 'checked') {
+      assert.equal(result.hasFailure, true);
+      assert.deepEqual(result.findings.map((finding) => finding.kind), ['manifest-parse-error']);
+    }
+  });
+});
+
 test('healthy synced workspace → no drift', async () => {
   await withWorkspace(async (cwd) => {
     manifest(cwd, 'ref: v1\nskills:\n  - pricing\n');
@@ -72,6 +85,29 @@ test('healthy synced workspace → no drift', async () => {
     const r = auditFounderSkillsDrift(cwd);
     assert.equal(r.status, 'checked');
     if (r.status === 'checked') assert.equal(r.hasFailure, false);
+  });
+});
+
+test('legacy aggregate-only hash cannot satisfy drift even when its bytes match the installed tree', async () => {
+  await withWorkspace(async (cwd) => {
+    manifest(cwd, 'ref: v1\nskills:\n  - pricing\n');
+    await syncFounderSkills({ cwd, installer: fakeInstaller() });
+    const lock = readLockfile(cwd)!;
+    assert.ok(lock.skills[0]?.contentHashes?.claude);
+    writeLockfile(cwd, {
+      ...lock,
+      skills: lock.skills.map(({ contentHashes: _contentHashes, ...skill }) => skill),
+    });
+
+    const result = auditFounderSkillsDrift(cwd);
+    assert.equal(result.status, 'checked');
+    if (result.status === 'checked') {
+      assert.equal(result.hasFailure, true);
+      assert.ok(result.findings.some((finding) => (
+        finding.kind === 'hash-mismatch'
+        && finding.message.includes('no canonical per-host hash')
+      )));
+    }
   });
 });
 
