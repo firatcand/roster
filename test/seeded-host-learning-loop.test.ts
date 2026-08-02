@@ -17,6 +17,7 @@ import {
 } from '../src/lib/workspace-registry.ts';
 import { getPackageVersion } from '../src/lib/paths.ts';
 import { buildSocialManagerContextFixture } from './fixtures/social-manager-context/_setup.ts';
+import { hostLedLearningAdapterTestApi } from './support/host-led-learning-adapter.ts';
 import {
   SeededLearningStoreError,
   hashSeededLearningValue,
@@ -330,6 +331,10 @@ test('seeded host-led learning uses product context and lesson seams around boun
     assert.deepEqual(due.feedback_ids, [feedback.id]);
     assert.deepEqual(store.status(), due);
     assert.deepEqual(store.snapshot().candidates, []);
+    assert.throws(
+      () => hostLedLearningAdapterTestApi.stateShowProjection(store),
+      /pending candidate does not exist/u,
+    );
 
     const meaning: SeededCandidateMeaning = {
       disposition: 'prefer',
@@ -360,6 +365,17 @@ test('seeded host-led learning uses product context and lesson seams around boun
       falsifiable_by: createdCandidate.record.falsifiable_by,
     }, renderSeededCandidateMeaning(meaning));
     store = openSeededLearningStore(statePath);
+    const stateShow = hostLedLearningAdapterTestApi.stateShowProjection(store);
+    assert.deepEqual(Object.keys(stateShow).sort(), ['pending_candidate', 'state', 'status']);
+    assert.deepEqual(
+      Object.keys(stateShow.pending_candidate).sort(),
+      ['content_hash', 'record', 'status'],
+    );
+    assert.equal(stateShow.pending_candidate.status, 'existing');
+    assert.equal(stateShow.pending_candidate.content_hash, createdCandidate.content_hash);
+    assert.deepEqual(stateShow.pending_candidate.record, lessonCandidate);
+    assert.deepEqual(stateShow.state.candidates, [lessonCandidate]);
+    assert.equal(Object.isFrozen(stateShow), true);
     assert.equal(store.status().status, 'not_due');
     assert.equal(store.snapshot().candidates.length, 1);
     assert.deepEqual(store.snapshot().candidates[0], lessonCandidate);

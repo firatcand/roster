@@ -476,6 +476,7 @@ export const hostLedLearningAdapterTestApi = Object.freeze({
   requireContractedRosterArgv,
   parseArguments,
   appendLog,
+  stateShowProjection,
 });
 
 function invokePreparedRoster(options: {
@@ -535,6 +536,27 @@ function localContextProjection(value: unknown): unknown {
     tool_uses: record['tool_uses'],
     skill_refs: record['skill_refs'],
   };
+}
+
+function stateShowProjection(store: ReturnType<typeof openSeededLearningStore>): Readonly<{
+  status: ReturnType<typeof store.status>;
+  state: ReturnType<typeof store.snapshot>;
+  pending_candidate: NonNullable<ReturnType<typeof store.candidate>>;
+}> {
+  const pendingCandidate = store.candidate(CANDIDATE_ID);
+  if (pendingCandidate === null) fail('pending candidate does not exist');
+  const state = store.snapshot();
+  if (pendingCandidate.status !== 'existing'
+    || state.candidates.length !== 1
+    || canonicalJson(state.candidates[0]) !== canonicalJson(pendingCandidate.record)
+    || hashSeededLearningValue(state.candidates[0]) !== pendingCandidate.content_hash) {
+    fail('pending candidate projection does not match the bounded state');
+  }
+  return Object.freeze({
+    status: store.status(),
+    state,
+    pending_candidate: pendingCandidate,
+  });
 }
 
 function runRoster(options: {
@@ -728,7 +750,7 @@ function runAdapter(options: {
       break;
     }
     case 'roster-350-fixture-state-show':
-      output = { status: store.status(), state: store.snapshot() };
+      output = stateShowProjection(store);
       break;
     case 'roster-350-fixture-candidate-promote': {
       const candidateId = one(parsed, '--candidate-id');
