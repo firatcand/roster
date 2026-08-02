@@ -233,7 +233,6 @@ export type HostLedLearningLaunchContract = Readonly<{
     tool_results: string;
     discover_output_schema: string;
     approve_output_schema: string;
-    lifecycle: string;
   }>;
   roster: Readonly<{
     executable: string;
@@ -289,6 +288,7 @@ export type HostLedLearningLaunchContract = Readonly<{
       required_configurable_contributions: readonly string[];
       pinned_contribution_sha256: Readonly<{
         permissions: string;
+        sandbox_instructions: string;
         skills: string;
         binary_collaboration: string;
         binary_multi_agent: string;
@@ -494,7 +494,7 @@ function requiredObject(
 function parseContractPathMap(value: unknown): HostLedLearningLaunchContract['host_readable_inputs'] {
   const record = requiredObject(value, 'host_readable_inputs', [
     'discover_request', 'approval_request', 'brain_evidence', 'tool_results',
-    'discover_output_schema', 'approve_output_schema', 'lifecycle',
+    'discover_output_schema', 'approve_output_schema',
   ]);
   return Object.freeze(Object.fromEntries(Object.keys(record).map((key) => [
     key,
@@ -652,7 +652,7 @@ export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearn
     promptInput['pinned_contribution_sha256'],
     'codex.prompt_input.pinned_contribution_sha256',
     [
-      'permissions', 'skills', 'binary_collaboration', 'binary_multi_agent',
+      'permissions', 'sandbox_instructions', 'skills', 'binary_collaboration', 'binary_multi_agent',
       'workspace_instructions', 'environment',
     ],
   );
@@ -758,8 +758,17 @@ export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearn
     || canonicalJson(contract.codex.prompt_input.command) !== canonicalJson(['codex', 'debug', 'prompt-input'])
     || contract.codex.prompt_input.literal_prompt_source !== 'attested-request-positional-argument'
     || canonicalJson(contract.codex.prompt_input.required_configurable_contributions)
-      !== canonicalJson(['canonical-roster-instructions', 'expected-project-skills', 'literal-human-request'])) {
+      !== canonicalJson([
+        'canonical-roster-instructions',
+        'expected-project-skills',
+        'sandbox-canary-instructions',
+        'literal-human-request',
+      ])) {
     throw new CertificationError('Codex prompt-input contract differs from the exact model-free probe.');
+  }
+  if (contract.codex.prompt_input.pinned_contribution_sha256.sandbox_instructions
+    !== sha256(codexSandboxDeveloperInstructions())) {
+    throw new CertificationError('Codex sandbox developer-instruction pin differs from its exact renderer.');
   }
   if (canonicalJson(contract.codex.generated_skill) !== canonicalJson({
     name: 'roster',
@@ -1240,8 +1249,12 @@ function prepareWorkspace(
   const fixturePackageRoot = join(passPaths.workspace, '.fixture');
   const runtimeRoot = join(fixturePackageRoot, 'runtime');
   mkdirSync(runtimeRoot, { recursive: true, mode: 0o700 });
-  copyFileSync(bundles.rosterPath, join(runtimeRoot, 'roster.js'));
-  copyFileSync(paths.contractPath, join(runtimeRoot, 'host-launch-contract.json'));
+  const runtimeRosterPath = join(runtimeRoot, 'roster.js');
+  const runtimeContractPath = join(runtimeRoot, 'host-launch-contract.json');
+  copyFileSync(bundles.rosterPath, runtimeRosterPath);
+  chmodSync(runtimeRosterPath, 0o700);
+  copyFileSync(paths.contractPath, runtimeContractPath);
+  chmodSync(runtimeContractPath, 0o600);
   for (const directory of ['agents', 'data', 'skills', 'templates'] as const) {
     cpSync(join(paths.repoRoot, directory), join(fixturePackageRoot, directory), {
       recursive: true,
@@ -1267,7 +1280,6 @@ function prepareWorkspace(
     passPaths.turnTwoConfig,
     passPaths.turnTwoTmp,
   ]) mkdirSync(directory, { recursive: true, mode: 0o700 });
-  if (host === 'codex') installCodexSandboxCanaryInstructions(passPaths.workspace);
   initializeGitRoot(passPaths.workspace, minimalProbeEnv(passPaths.turnOneHome, '/usr/bin:/bin'));
 }
 
@@ -1564,10 +1576,8 @@ function controlledCommands(contract: HostLedLearningLaunchContract): readonly s
 const CODEX_SANDBOX_WRITE_COMMAND = '/usr/bin/touch ../codex-outside-write-canary';
 const CODEX_SANDBOX_NETWORK_COMMAND = '/usr/bin/nc -zU ../codex-network-canary.sock';
 
-function installCodexSandboxCanaryInstructions(workspace: string): void {
-  const path = join(workspace, 'AGENTS.md');
-  const existing = readFileSync(path, 'utf8').trimEnd();
-  const instructions = [
+export function codexSandboxDeveloperInstructions(): string {
+  return [
     '## Certification sandbox preflight',
     '',
     'Only for the natural discovery-and-learning request, before reading a skill or running any workflow command,',
@@ -1576,7 +1586,6 @@ function installCodexSandboxCanaryInstructions(workspace: string): void {
     'Continue the requested discovery only after both denials. Do not run these preflight commands for the later',
     'approval-only request.',
   ].join('\n');
-  writeFileSync(path, `${existing}\n\n${instructions}\n`, { mode: 0o600 });
 }
 
 function codexSandboxCanaries(hostRoot: string, workspace: string): Readonly<{
@@ -1860,6 +1869,29 @@ export function codexStrictGlobalLaunchArgs(
   ]);
 }
 
+export function codexTurnLaunchArgs(
+  workspace: string,
+  env: Readonly<Record<string, string>>,
+): readonly string[] {
+  const [approvalFlag, approvalPolicy, ...controlledArgs] = codexGlobalLaunchArgs(workspace, env);
+  return Object.freeze([
+    approvalFlag!, approvalPolicy!,
+    '--strict-config',
+    ...controlledArgs,
+    '-c', `developer_instructions=${JSON.stringify(codexSandboxDeveloperInstructions())}`,
+  ]);
+}
+
+export function codexPromptLaunchArgs(
+  workspace: string,
+  env: Readonly<Record<string, string>>,
+): readonly string[] {
+  return Object.freeze([
+    ...codexGlobalLaunchArgs(workspace, env),
+    '-c', `developer_instructions=${JSON.stringify(codexSandboxDeveloperInstructions())}`,
+  ]);
+}
+
 function codexArgs(
   paths: CertificationPaths,
   pass: HostPassPaths,
@@ -1875,7 +1907,7 @@ function codexArgs(
       : contract.host_readable_inputs.approve_output_schema,
   );
   return Object.freeze([
-    ...codexStrictGlobalLaunchArgs(pass.workspace, env),
+    ...codexTurnLaunchArgs(pass.workspace, env),
     'exec',
     '--ignore-user-config',
     '--ignore-rules',
@@ -2256,7 +2288,7 @@ function captureCodexPromptInputSummary(options: Readonly<{
   const result = requireSuccess(runCapturedProcess({
     command: options.paths.codexBin,
     args: [
-      ...codexGlobalLaunchArgs(options.workspace, options.env),
+      ...codexPromptLaunchArgs(options.workspace, options.env),
       ...commandArgs,
       options.prompt,
     ],
@@ -2334,7 +2366,7 @@ export function validateCodexPromptInputContributions(options: Readonly<{
       }),
     };
   });
-  if (messages[0]!.role !== 'developer' || messages[0]!.texts.length !== 2
+  if (messages[0]!.role !== 'developer' || messages[0]!.texts.length !== 3
     || messages[1]!.role !== 'developer' || messages[1]!.texts.length !== 1
     || messages[2]!.role !== 'developer' || messages[2]!.texts.length !== 1
     || messages[3]!.role !== 'user' || messages[3]!.texts.length !== 2
@@ -2344,7 +2376,7 @@ export function validateCodexPromptInputContributions(options: Readonly<{
   if (new Set(messages.map((message) => message.turnId)).size !== 1) {
     throw new CertificationError('Codex prompt-input messages do not share one exact turn identity.');
   }
-  const [permissions, skills] = messages[0]!.texts;
+  const [permissions, sandboxInstructions, skills] = messages[0]!.texts;
   const [binaryCollaboration] = messages[1]!.texts;
   const [binaryMultiAgent] = messages[2]!.texts;
   const [instructions, rawEnvironment] = messages[3]!.texts;
@@ -2358,6 +2390,7 @@ export function validateCodexPromptInputContributions(options: Readonly<{
     || !permissions.includes('$WORKSPACE')
     || skills === undefined || !skills.startsWith('<skills_instructions>')
     || !skills.endsWith('</skills_instructions>')
+    || sandboxInstructions !== codexSandboxDeveloperInstructions()
     || binaryCollaboration === undefined || binaryCollaboration.length === 0
     || binaryMultiAgent === undefined || binaryMultiAgent.length === 0) {
     throw new CertificationError('Codex prompt-input permission or skill contribution is not exact and isolated.');
@@ -2392,6 +2425,7 @@ export function validateCodexPromptInputContributions(options: Readonly<{
     !== canonicalJson([
       'canonical-roster-instructions',
       'expected-project-skills',
+      'sandbox-canary-instructions',
       'literal-human-request',
     ])) {
     throw new CertificationError('Codex prompt-input configurable contribution contract drifted.');
@@ -2403,11 +2437,12 @@ export function validateCodexPromptInputContributions(options: Readonly<{
     },
     message_roles: messages.map((message) => message.role),
     contribution_order: [
-      'permissions', 'skills', 'binary-collaboration', 'binary-multi-agent',
+      'permissions', 'sandbox-instructions', 'skills', 'binary-collaboration', 'binary-multi-agent',
       'workspace-instructions', 'environment', 'literal-human-request',
     ],
     contribution_sha256: {
       permissions: sha256(permissions),
+      sandbox_instructions: sha256(sandboxInstructions),
       skills: sha256(skills),
       binary_collaboration: sha256(binaryCollaboration),
       binary_multi_agent: sha256(binaryMultiAgent),
@@ -2444,7 +2479,7 @@ export function assertCodexPromptContributionPins(
     throw new CertificationError('Codex prompt-input contribution summary is invalid.');
   }
   const actual = requiredObject(summary['contribution_sha256'], 'Codex prompt contribution hashes', [
-    'permissions', 'skills', 'binary_collaboration', 'binary_multi_agent',
+    'permissions', 'sandbox_instructions', 'skills', 'binary_collaboration', 'binary_multi_agent',
     'workspace_instructions', 'environment', 'literal_human_request',
   ]);
   for (const [key, hash] of Object.entries(expected)) {
@@ -4202,6 +4237,12 @@ function rebuildModelFreeCertificationInputs(
     maximum_characters: number;
     output_count: number;
   }>>>;
+  preparedRuntime: Readonly<Record<CertificationHost, Readonly<{
+    roster_mode: number;
+    contract_mode: number;
+    lifecycle_present: boolean;
+  }>>>;
+  codexWorkspaceInstructionsSha256: string;
 }> {
   const root = createCertificationRoot();
   try {
@@ -4210,9 +4251,35 @@ function rebuildModelFreeCertificationInputs(
       maximum_characters: number;
       output_count: number;
     }>>> = {};
+    const preparedRuntime: Partial<Record<CertificationHost, Readonly<{
+      roster_mode: number;
+      contract_mode: number;
+      lifecycle_present: boolean;
+    }>>> = {};
+    let codexWorkspaceInstructionsSha256: string | null = null;
     const initialWorkspaceSha256 = Object.fromEntries((['claude', 'codex'] as const).map((host) => {
       const currentPaths = passPaths(root, host);
       prepareWorkspace(host, paths, currentPaths, contract, bundles);
+      const rosterMode = lstatSync(join(currentPaths.workspace, '.fixture/runtime/roster.js')).mode & 0o777;
+      const contractMode = lstatSync(join(
+        currentPaths.workspace,
+        '.fixture/runtime/host-launch-contract.json',
+      )).mode & 0o777;
+      const lifecyclePresent = existsSync(join(currentPaths.workspace, '.fixture/fixture-lifecycle.md'));
+      if (rosterMode !== 0o700 || contractMode !== 0o600 || lifecyclePresent) {
+        throw new CertificationError('Prepared runtime modes or lifecycle-file boundary drifted.');
+      }
+      if (host === 'codex') {
+        const agentInstructions = readFileSync(join(currentPaths.workspace, 'AGENTS.md'), 'utf8');
+        codexWorkspaceInstructionsSha256 = sha256(
+          `# AGENTS.md instructions for $WORKSPACE\n\n<INSTRUCTIONS>\n${agentInstructions}\n</INSTRUCTIONS>`,
+        );
+      }
+      preparedRuntime[host] = Object.freeze({
+        roster_mode: rosterMode,
+        contract_mode: contractMode,
+        lifecycle_present: lifecyclePresent,
+      });
       const manifest = buildFileManifest([{
         label: `${host}-workspace`,
         path: currentPaths.workspace,
@@ -4222,6 +4289,9 @@ function rebuildModelFreeCertificationInputs(
       probePreparedRosterAdapterRuntime(paths, currentPaths, contract);
       return [host, manifest.sha256];
     })) as Record<CertificationHost, string>;
+    if (codexWorkspaceInstructionsSha256 === null) {
+      throw new CertificationError('Model-free rebuild omitted Codex workspace instructions.');
+    }
     return Object.freeze({
       adapterBundleSha256: sha256(readFileSync(bundles.adapterPath)),
       certificationRosterBundleSha256: sha256(readFileSync(bundles.rosterPath)),
@@ -4230,6 +4300,12 @@ function rebuildModelFreeCertificationInputs(
         maximum_characters: number;
         output_count: number;
       }>>>,
+      preparedRuntime: Object.freeze(preparedRuntime) as Readonly<Record<CertificationHost, Readonly<{
+        roster_mode: number;
+        contract_mode: number;
+        lifecycle_present: boolean;
+      }>>>,
+      codexWorkspaceInstructionsSha256,
     });
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -5538,6 +5614,8 @@ export function verifyHostLedLearningModelFreeInputs(
     certification_roster_bundle_sha256: rebuilt.certificationRosterBundleSha256,
     initial_workspace_sha256: rebuilt.initialWorkspaceSha256,
     model_visible_json: rebuilt.modelVisibleJson,
+    prepared_runtime: rebuilt.preparedRuntime,
+    codex_workspace_instructions_sha256: rebuilt.codexWorkspaceInstructionsSha256,
   });
 }
 

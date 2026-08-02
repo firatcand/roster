@@ -13,8 +13,8 @@ non-normative examples. `test/` is outside the package allowlist.
 ## Layout
 
 - `common/` contains the host-readable requests, untrusted data, separate
-  closed discovery/approval output schemas, launch contract, lifecycle
-  supplement, and canonical skill bytes.
+  closed discovery/approval output schemas, launch contract, and canonical
+  skill bytes.
 - `claude-plugin/` is the only local plugin passed to Claude with
   `--plugin-dir`.
 - `codex-project/` is copied into the fresh Codex project root so Codex can
@@ -54,11 +54,20 @@ Claude receives each human request through stdin. Codex receives each request
 as one positional prompt in both its paid turn and its matching model-free
 `debug prompt-input` probe. For Codex 0.144.1, the probe accepts exactly five
 messages: permissions and the exact eight-skill inventory (five system, the
-generated Roster skill, and two fixture skills), two binary-owned developer
-contributions, workspace instructions/environment, and the literal request.
+generated Roster skill, and two fixture skills), the exact sandbox-canary
+developer instruction, two binary-owned developer contributions, workspace
+instructions/environment, and the literal request.
 Discovery and approval are probed separately. Every plugin, skill, prompt, and
 sandbox probe uses its own clean home/config/temp roots and never shares host
 state with a paid turn.
+
+Context commands retain the complete seeded Roster result as the integrity
+source, while the test adapter exposes a closed actionable projection to the
+host. The projection carries the full raw-context digest and every controlled
+JSON result is rehearsed below 28,000 JavaScript characters before a paid
+turn. Claude also receives `BASH_MAX_OUTPUT_LENGTH=150000` as defense against
+its first Bash limiter; the projection is what stays below its independent
+foreground-result persistence ceiling.
 
 The exact model versions, binary hashes, Node version, non-secret launch
 configuration, run date, input manifest, and normalized outcomes belong only in

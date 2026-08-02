@@ -21,7 +21,10 @@ import {
   canonicalJson,
   classifyCodexAppServerFrame,
   codexGlobalLaunchArgs,
+  codexPromptLaunchArgs,
+  codexSandboxDeveloperInstructions,
   codexStrictGlobalLaunchArgs,
+  codexTurnLaunchArgs,
   createHostProbePaths,
   explicitHostEnv,
   HOST_LED_LEARNING_REPO_ROOT,
@@ -39,6 +42,7 @@ import {
   validateDerivedQueryMeaning,
   validateHostTraceCommands,
   validatePersistedContextQuery,
+  verifyHostLedLearningModelFreeInputs,
   type CertificationHost,
   type CertificationInputSnapshot,
   type HostLaunchProbe,
@@ -310,7 +314,7 @@ function canonicalCodexPromptInput(prompt: string): JsonValue[] {
     '</environment_context>',
   ].join('\n');
   return [
-    promptMessage('developer', [permissions, skills]),
+    promptMessage('developer', [permissions, codexSandboxDeveloperInstructions(), skills]),
     promptMessage('developer', ['binary-owned collaboration instructions']),
     promptMessage('developer', ['<multi_agent_mode>disabled for this run</multi_agent_mode>']),
     promptMessage('user', [instructions, environment]),
@@ -339,6 +343,10 @@ test('host launch contract rejects duplicate arrays, protocol drift, and version
   const optionalRepeatAdapters = optionalRepeat['adapters'] as Array<Record<string, unknown>>;
   optionalRepeatAdapters[0]!['repeatable_flags'] = ['--not-required'];
   assert.throws(() => parseHostLedLearningLaunchContract(optionalRepeat), /repeatable flag that is not required/iu);
+
+  const staleLifecycle = contractClone();
+  (staleLifecycle['host_readable_inputs'] as Record<string, unknown>)['lifecycle'] = 'common/fixture-lifecycle.md';
+  assert.throws(() => parseHostLedLearningLaunchContract(staleLifecycle), /closed contract/iu);
 });
 
 test('semantic oracle lesson IDs use exact normalized code-point order', () => {
@@ -755,6 +763,28 @@ test('Claude alone pins the first Bash limiter defense in the explicit host envi
   assert.equal(explicitHostEnv({ ...options, host: 'codex' })['BASH_MAX_OUTPUT_LENGTH'], undefined);
 });
 
+test('model-free rehearsal covers every output and pins prepared runtime boundaries', () => {
+  const summary = verifyHostLedLearningModelFreeInputs() as Record<string, JsonValue>;
+  const contract = loadHostLedLearningLaunchContract();
+  assert.equal(
+    summary['codex_workspace_instructions_sha256'],
+    contract.codex.prompt_input.pinned_contribution_sha256.workspace_instructions,
+  );
+  const outputs = summary['model_visible_json'] as Record<CertificationHost, Record<string, JsonValue>>;
+  const runtime = summary['prepared_runtime'] as Record<CertificationHost, Record<string, JsonValue>>;
+  for (const host of ['claude', 'codex'] as const) {
+    assert.equal(outputs[host]!['output_count'], 10);
+    assert.equal(typeof outputs[host]!['maximum_characters'], 'number');
+    assert.ok((outputs[host]!['maximum_characters'] as number) > 0);
+    assert.ok((outputs[host]!['maximum_characters'] as number) <= 28_000);
+    assert.deepEqual(runtime[host], {
+      contract_mode: 0o600,
+      lifecycle_present: false,
+      roster_mode: 0o700,
+    });
+  }
+});
+
 test('Codex trace audit permits one exact Dreamer read and rejects extra operands or Roster argv', () => {
   const contract = loadHostLedLearningLaunchContract();
   const required = contract.turn_expectations.discover.required_log_categories.map((category) => (
@@ -884,6 +914,26 @@ test('Codex prompt-input validation rejects extra and injected contributions', (
     contract,
     expectedUtcDate,
   }));
+  const finalMessage = canonical[4] as Record<string, JsonValue>;
+  assert.equal(finalMessage['role'], 'user');
+  assert.deepEqual(finalMessage['content'], [{ type: 'input_text', text: prompt }]);
+
+  for (const mutate of [
+    (content: Array<Record<string, unknown>>) => { content[1]!['text'] = 'changed sandbox instructions'; },
+    (content: Array<Record<string, unknown>>) => { content.splice(1, 1); },
+    (content: Array<Record<string, unknown>>) => { [content[1], content[2]] = [content[2]!, content[1]!]; },
+    (content: Array<Record<string, unknown>>) => { content.splice(1, 0, structuredClone(content[1]!)); },
+  ]) {
+    const drifted = structuredClone(canonical) as Array<Record<string, unknown>>;
+    mutate(drifted[0]!['content'] as Array<Record<string, unknown>>);
+    assert.throws(() => validateCodexPromptInputContributions({
+      value: drifted as unknown as JsonValue,
+      workspace: HOST_LED_LEARNING_REPO_ROOT,
+      prompt,
+      contract,
+      expectedUtcDate,
+    }), /role or contribution grouping|permission or skill contribution/iu);
+  }
 
   const sixthContribution = [...canonical, promptMessage('developer', ['ambient instruction'])];
   assert.throws(() => validateCodexPromptInputContributions({
@@ -1005,13 +1055,21 @@ test('Codex paid and prompt probes share one controlled model-bound launch prefi
     '--sandbox', 'workspace-write', '-C', '/isolated/workspace',
   ]);
   assert.equal(strictPrefix.filter((entry) => entry === '--strict-config').length, 1);
+  const paidPrefix = codexTurnLaunchArgs('/isolated/workspace', env);
+  assert.ok(paidPrefix.includes(
+    `developer_instructions=${JSON.stringify(codexSandboxDeveloperInstructions())}`,
+  ));
+  const promptPrefix = codexPromptLaunchArgs('/isolated/workspace', env);
+  assert.ok(promptPrefix.includes(
+    `developer_instructions=${JSON.stringify(codexSandboxDeveloperInstructions())}`,
+  ));
   const source = readFileSync(join(
     HOST_LED_LEARNING_REPO_ROOT,
     'test/support/host-led-learning-certification.ts',
   ), 'utf8');
-  assert.match(source, /function codexArgs[\s\S]+\.\.\.codexStrictGlobalLaunchArgs\(pass\.workspace, env\)/u);
+  assert.match(source, /function codexArgs[\s\S]+\.\.\.codexTurnLaunchArgs\(pass\.workspace, env\)/u);
   assert.match(source, /function probeCodexProjectSkills[\s\S]+\.\.\.codexStrictGlobalLaunchArgs\(options\.workspace, options\.env\)/u);
-  assert.match(source, /function captureCodexPromptInputSummary[\s\S]+\.\.\.codexGlobalLaunchArgs\(options\.workspace, options\.env\)/u);
+  assert.match(source, /function captureCodexPromptInputSummary[\s\S]+\.\.\.codexPromptLaunchArgs\(options\.workspace, options\.env\)/u);
 });
 
 test('Codex app-server frames are closed against unmatched responses and warnings', () => {

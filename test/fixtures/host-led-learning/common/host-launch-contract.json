@@ -2,7 +2,7 @@
   "schema_version": 1,
   "fixture_id": "host-led-learning",
   "behavior_revision": "host-led-learning-v2",
-  "fixture_iteration": 2,
+  "fixture_iteration": 3,
   "runtime": {
     "state_path": ".fixture/learning-state.json",
     "adapter_log_path": ".fixture/adapter-calls.jsonl",
@@ -16,10 +16,6 @@
         {
           "source": "common/fake-search-results.json",
           "destination": ".fixture/input/fake-search-results.json"
-        },
-        {
-          "source": "common/fixture-lifecycle.md",
-          "destination": ".fixture/fixture-lifecycle.md"
         }
       ],
       "claude": [],
@@ -37,8 +33,7 @@
     "brain_evidence": "common/brain-evidence.json",
     "tool_results": "common/fake-search-results.json",
     "discover_output_schema": "common/discover-output-schema.json",
-    "approve_output_schema": "common/approve-output-schema.json",
-    "lifecycle": "common/fixture-lifecycle.md"
+    "approve_output_schema": "common/approve-output-schema.json"
   },
   "roster": {
     "executable": "$NODE $REPO/bin/roster.js",
@@ -270,14 +265,16 @@
       "required_configurable_contributions": [
         "canonical-roster-instructions",
         "expected-project-skills",
+        "sandbox-canary-instructions",
         "literal-human-request"
       ],
       "pinned_contribution_sha256": {
         "permissions": "dba160a791bbfa61a0fd7775efc99b38d3eed72720fb913b73e022bb819f713b",
+        "sandbox_instructions": "654ff3cf04f215bfbfe16910191cff5d8b22af6fce8403e4d3dda8a744cacfc2",
         "skills": "d40a40bc1d9f5edf4297cbb5d2440f20e4ba34a7620656bce0a279be64d5a3b2",
         "binary_collaboration": "fccb993bd0ff45747511e4c90dd1524d804d353084a0767e09684d10512c20fe",
         "binary_multi_agent": "65523c71c4fa1ed65e831bd7a589a5c2c0d4a5f7dfac562e431e1a10937b374e",
-        "workspace_instructions": "22ccc391cfde612c7355d48d29ac70ec10cf96022c71b0d4285fa6cd69c5cb70",
+        "workspace_instructions": "a706a9b14bd76c65df8e1d79d397bbb589a010bc2d5f4b9c247df735ec2c8aef",
         "environment": "f5c70eebe1b2e13534a86de4f16540a6eb3355322921df76ddd36f3984315877"
       }
     },

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import test from 'node:test';
 import ts from 'typescript';
@@ -551,8 +551,15 @@ test('host-led fixture skills are byte-identical and cannot leak the semantic an
   ), 'utf8')) as {
     adapters: { command: string; required_flags: string[] }[];
     host_readable_inputs: Record<string, string>;
+    runtime: { workspace_entries: { common: { source: string; destination: string }[] } };
   };
   assert.equal('output_schema' in launchContract.host_readable_inputs, false);
+  assert.equal('lifecycle' in launchContract.host_readable_inputs, false);
+  assert.equal(launchContract.runtime.workspace_entries.common.some((entry) => (
+    entry.source === 'common/fixture-lifecycle.md'
+    || entry.destination === '.fixture/fixture-lifecycle.md'
+  )), false);
+  assert.equal(existsSync(join(PROJECT_ROOT, fixtureRoot, 'common/fixture-lifecycle.md')), false);
   assert.equal(
     launchContract.host_readable_inputs['discover_output_schema'],
     'common/discover-output-schema.json',
@@ -712,7 +719,6 @@ test('host-led fixture skills are byte-identical and cannot leak the semantic an
   assert.deepEqual(oracleLeaks, []);
 
   const mechanicsOnly = [
-    'common/fixture-lifecycle.md',
     'common/host-launch-contract.json',
     'common/discover-output-schema.json',
     'common/approve-output-schema.json',
