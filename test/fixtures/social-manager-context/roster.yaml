@@ -1,0 +1,13 @@
+schema_version: 2
+workspace_id: social-manager-context
+brain:
+  binding: company-brain
+functions:
+  gtm:
+    path: functions/gtm
+hosts:
+  claude: enabled
+  codex: enabled
+tool_uses:
+  - catalog-only
+  - social-search

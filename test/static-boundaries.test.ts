@@ -157,6 +157,21 @@ function forbiddenBoundaryDependency(module: string): boolean {
     'undici',
     'worker_threads',
   ]).has(normalized)) return true;
+  if (normalized === 'aws-sdk'
+    || normalized.startsWith('aws-sdk/')
+    || normalized.startsWith('@aws-sdk/')
+    || normalized === 'pg'
+    || normalized.startsWith('pg/')
+    || normalized === 'postgres'
+    || normalized.startsWith('postgres/')
+    || normalized === 'postgres.js'
+    || normalized.startsWith('postgres.js/')
+    || normalized === 'openai'
+    || normalized.startsWith('openai/')
+    || normalized === '@neondatabase/serverless'
+    || normalized.startsWith('@neondatabase/serverless/')) return true;
+  const forbiddenExactSegment = new Set(['brain', 'persistence', 'postgres', 'postgresql', 'search']);
+  if (normalized.split('/').some((segment) => forbiddenExactSegment.has(segment))) return true;
   const forbiddenSegment = /(?:^|-)(?:credential|credentials|env|env-merge|provider|providers|mcp|browser|router|routing|health|health-check|result-gate|result-gates)(?:-|$)/;
   return normalized.split('/').some((segment) => forbiddenSegment.test(segment));
 }
@@ -277,11 +292,35 @@ function callOptionKeys(path: string, calleeName: string): string[][] {
   return options;
 }
 
+test('context boundary classifier rejects legacy Brain, search, persistence, and provider clients', () => {
+  const forbidden = [
+    '../brain/query.ts',
+    '../lib/brain/search.ts',
+    '../persistence/postgres/stores.ts',
+    '@aws-sdk/client-s3',
+    '@neondatabase/serverless',
+    'aws-sdk',
+    'openai',
+    'pg',
+    'postgres',
+  ];
+  assert.deepEqual(forbidden.filter((module) => !forbiddenBoundaryDependency(module)), []);
+  assert.deepEqual([
+    './workspace-diagnostics.ts',
+    './workspace-registry.ts',
+    './workspace-tool-use.ts',
+    'node:crypto',
+  ].filter(forbiddenBoundaryDependency), []);
+});
+
 test('tool-use and vendor-skill boundary modules depend only on inert validation and workspace primitives', () => {
   const vendorFiles = typescriptFiles('src/lib/vendor-skills');
   assert.ok(vendorFiles.length > 0, 'vendor-skills boundary must remain represented in this test');
   const files = [
+    join(PROJECT_ROOT, 'src/commands/context.ts'),
     join(PROJECT_ROOT, 'src/lib/authored-secret-detector.ts'),
+    join(PROJECT_ROOT, 'src/lib/context-args.ts'),
+    join(PROJECT_ROOT, 'src/lib/workspace-context.ts'),
     join(PROJECT_ROOT, 'src/lib/workspace-tool-use.ts'),
     join(PROJECT_ROOT, 'src/lib/internal/workspace-tool-use-snapshot.ts'),
     join(PROJECT_ROOT, 'src/lib/internal/workspace-update-lock.ts'),
@@ -343,6 +382,63 @@ test('complete workspace snapshots have one internal mint and one registry-owned
   assert.deepEqual(
     files.flatMap((path) => dynamicModuleReferences(path)
       .filter((module) => moduleMatches(module, snapshotModule))
+      .map((module) => `${repositoryPath(path)}:${module}`)),
+    [],
+  );
+});
+
+test('prepared context sources and their read capability have one production and one test importer', () => {
+  const sourceFiles = typescriptFiles('src');
+  const testFiles = typescriptFiles('test');
+  const files = [...sourceFiles, ...testFiles];
+  const registryModule = 'workspace-registry';
+  const registryPath = join(PROJECT_ROOT, 'src/lib/workspace-registry.ts');
+  const capability = 'withContextReadCapability';
+  const protectedNames = new Set([
+    capability,
+    'assertPreparedContextSource',
+    'PreparedContextSource',
+    'PreparedContextRegistryMetadata',
+    'ContextReadCapability',
+    'ContextVendorSkillSelection',
+    'ContextVendorSkillProjection',
+  ]);
+
+  assert.deepEqual(declaringFiles(sourceFiles, capability), [
+    'src/lib/workspace-registry.ts',
+  ]);
+  assert.deepEqual(declaringFiles(sourceFiles, 'PREPARED_CONTEXT_SOURCE'), [
+    'src/lib/workspace-registry.ts',
+  ]);
+  assert.equal(exportedNames(registryPath).includes('PREPARED_CONTEXT_SOURCE'), false);
+  assert.deepEqual(importers(sourceFiles, registryModule, capability), [{
+    file: 'src/lib/workspace-context.ts',
+    local: capability,
+  }]);
+  assert.deepEqual(importers(testFiles, registryModule, capability), [{
+    file: 'test/workspace-context.test.ts',
+    local: capability,
+  }]);
+
+  const protectedEdges = files.flatMap((path) => moduleEdges(path)).filter((edge) => (
+    moduleMatches(edge.module, registryModule)
+    && (protectedNames.has(edge.imported) || edge.imported === '*')
+  ));
+  assert.deepEqual(
+    [...new Set(protectedEdges
+      .filter((edge) => edge.file.startsWith('src/'))
+      .map((edge) => edge.file))],
+    ['src/lib/workspace-context.ts'],
+  );
+  assert.deepEqual(
+    [...new Set(protectedEdges
+      .filter((edge) => edge.file.startsWith('test/'))
+      .map((edge) => edge.file))],
+    ['test/workspace-context.test.ts'],
+  );
+  assert.deepEqual(
+    files.flatMap((path) => dynamicModuleReferences(path)
+      .filter((module) => moduleMatches(module, registryModule))
       .map((module) => `${repositoryPath(path)}:${module}`)),
     [],
   );

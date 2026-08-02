@@ -1,0 +1,15 @@
+schema_version: 2
+id: social-search
+scope:
+  function: gtm
+purpose: Search for conversations that match the company positioning.
+skill_ref: exa:search
+filters:
+  - exclude cryptocurrency topics
+rules:
+  - prefer attributable primary sources
+effects:
+  allowed:
+    - external-read
+    - brain-read
+    - brain-write

@@ -1,0 +1,8 @@
+schema_version: 2
+id: catalog-only
+scope: {}
+purpose: Describe a cataloged scraper that this plan does not select.
+skill_ref: bright-data:scrape
+effects:
+  allowed:
+    - external-read

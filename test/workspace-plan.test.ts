@@ -1,13 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import YAML from 'yaml';
+import { renderRosterBootstrap } from '../src/lib/generated-artifacts.ts';
 import {
   MAX_PLAN_COLLECTION_ITEMS,
   parseStructuredPlan,
   resolveValidatedPlan,
+  resolveValidatedPlanClosure,
   validateStructuredPlans,
   type PlanWorkspaceRecord,
 } from '../src/lib/workspace-plan.ts';
+import { collectCompleteWorkspaceSnapshot } from '../src/lib/workspace-registry.ts';
 import {
   WORKSPACE_DIAGNOSTIC_CODES,
   isWorkspaceFailure,
@@ -68,6 +74,48 @@ function failureCode(run: () => unknown): string | undefined {
   } catch (error) {
     assert.equal(isWorkspaceFailure(error), true);
     return isWorkspaceFailure(error) ? error.code : undefined;
+  }
+}
+
+function completePlanSnapshot(values: readonly Record<string, unknown>[]) {
+  const root = mkdtempSync(join(tmpdir(), 'roster-plan-closure-'));
+  try {
+    writeFileSync(join(root, 'roster.yaml'), YAML.stringify({
+      schema_version: 2,
+      workspace_id: 'plan-closure-test',
+      functions: { gtm: { path: 'functions/gtm' } },
+      hosts: {},
+      tool_uses: [],
+    }));
+    writeFileSync(join(root, 'ROSTER.md'), renderRosterBootstrap());
+    const functionRoot = join(root, 'functions', 'gtm');
+    const agentRoot = join(functionRoot, 'agents', 'social');
+    const planRoot = join(agentRoot, 'plans');
+    mkdirSync(planRoot, { recursive: true });
+    writeFileSync(join(functionRoot, 'function.yaml'), YAML.stringify({
+      schema_version: 2,
+      id: 'gtm',
+      purpose: 'Test complete plan closure.',
+      agents: ['social'],
+      guidelines: [],
+      tool_uses: [],
+    }));
+    writeFileSync(join(agentRoot, 'agent.yaml'), YAML.stringify({
+      schema_version: 2,
+      id: 'social',
+      function: 'gtm',
+      purpose: 'Test complete plan closure.',
+      plans: values.map((value) => String(value.id)),
+      subagents: [],
+      guidelines: [],
+      default_guidelines: [],
+      tool_uses: [],
+      lessons: [],
+    }));
+    for (const value of values) writeFileSync(join(planRoot, `${String(value.id)}.yaml`), YAML.stringify(value));
+    return collectCompleteWorkspaceSnapshot(root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 }
 
@@ -379,6 +427,50 @@ test('selected roots and nested closure contain registered plans only', () => {
   assert.deepEqual(missingNested.selected_plan_ids, ['gtm/social#source']);
   assert.equal(missingNested.plans.length, 1);
   assert.equal(missingNested.diagnostics[0]?.code, 'REFERENCE_NOT_FOUND');
+});
+
+test('complete-snapshot resolver returns the root first and the full closure in code-point order', () => {
+  const root = definition('root');
+  root.steps = [
+    { id: 'later', kind: 'nested-plan', instruction: 'Use AA.', plan: 'gtm/social#aa' },
+    { id: 'earlier', kind: 'nested-plan', instruction: 'Use A-Z.', plan: 'gtm/social#a-z' },
+  ];
+  const unrelated = definition('unrelated');
+  unrelated.steps = [];
+  unrelated.completion = { artifacts: [], output_guidance: '', criteria: [] };
+  const snapshot = completePlanSnapshot([
+    unrelated,
+    definition('aa'),
+    root,
+    definition('a-z'),
+  ]);
+
+  const closure = resolveValidatedPlanClosure(snapshot, 'gtm/social#root');
+  assert.equal(closure.root.qualified_id, 'gtm/social#root');
+  assert.deepEqual(
+    closure.definitions.map((plan) => plan.qualified_id),
+    ['gtm/social#root', 'gtm/social#a-z', 'gtm/social#aa'],
+  );
+  assert.equal(Object.isFrozen(closure), true);
+  assert.equal(Object.isFrozen(closure.definitions), true);
+});
+
+test('complete-snapshot resolver fails on selected closure diagnostics but ignores unrelated drafts', () => {
+  const root = definition('root');
+  root.steps = [{ id: 'nested', kind: 'nested-plan', instruction: 'Use the draft.', plan: 'gtm/social#draft' }];
+  const draft = definition('draft');
+  draft.steps = [];
+  draft.completion = { artifacts: [], output_guidance: '', criteria: [] };
+  const snapshot = completePlanSnapshot([root, draft]);
+
+  assert.equal(
+    failureCode(() => resolveValidatedPlanClosure(snapshot, 'gtm/social#root')),
+    'PLAN_DRAFT_INCOMPLETE',
+  );
+  assert.equal(
+    failureCode(() => resolveValidatedPlanClosure(snapshot, 'gtm/social#missing')),
+    'REFERENCE_NOT_FOUND',
+  );
 });
 
 test('schema failures aggregate once per plan in stable authored-path order', () => {

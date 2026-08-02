@@ -133,6 +133,7 @@ Scaffold manifests store generated hashes and schema versions. `roster update` m
 
 All authored YAML is parsed with byte, alias, node, scalar, and nesting limits. Unknown fields fail by default. Schema version is required.
 
+<!-- forge:adr-section:workspace-registry -->
 ### Workspace registry
 
 ```yaml
@@ -148,8 +149,8 @@ hosts:
   codex: enabled
 ```
 
-`brain` is optional at initialization. Its absence never causes local scaffold or validation commands to fail, but any Brain-dependent command returns `BRAIN_NOT_BOUND` with setup guidance.
-
+`brain` is optional at initialization. Its absence never causes local scaffold or validation commands to fail. For `roster context`, absence returns the complete local bundle, an empty `brain_evidence` array, exit status zero, and exactly one warning-severity `BRAIN_NOT_BOUND` diagnostic. Brain-dependent commands retain the fatal `BRAIN_NOT_BOUND` contract with setup guidance.
+<!-- /forge:adr-section:workspace-registry -->
 ### Agent definition
 
 ```yaml
@@ -325,6 +326,7 @@ remains host guidance rather than a provider result gate.
 
 Validation is read-only unless the user requests an explicit scaffold, update, or migration action.
 
+<!-- forge:adr-section:context-request-and-response -->
 ## Context request and response
 
 ### Request
@@ -334,12 +336,12 @@ Validation is read-only unless the user requests an explicit scaffold, update, o
   "target": "gtm/social-manager#opportunity-discovery",
   "query": "Find reply opportunities from the last 24 hours",
   "step_hint": "discover",
-  "budget_tokens": 8000,
+  "budget_tokens": 12000,
   "explain": true
 }
 ```
 
-`step_hint` is optional and host supplied. Roster never infers or persists a current step.
+`step_hint` is optional and host supplied. It may rank already-authorized optional context but never selects or prunes a step, widens the authored Brain selector catalog, or becomes Roster execution state. Roster never infers a plan when `#plan` is omitted.
 
 ### Response sections
 
@@ -362,23 +364,27 @@ Validation is read-only unless the user requests an explicit scaffold, update, o
 }
 ```
 
-Each fragment includes stable identity, scope, version or hash, trust class, inclusion reason, required/optional status, and byte/token accounting. Brain extracts also contain an immutable citation envelope.
+The selected plan response contains the root definition first plus the complete, deduplicated transitive closure of every statically referenced nested-plan definition from one validated workspace snapshot. Remaining definitions use deterministic code-point order while authored step and array order is preserved. Roster returns definitions only; Claude Code or Codex interprets steps, chooses branches, delegates, invokes tools, and waits for human decisions.
 
-The response cannot contain Roster run state, a Roster-selected current step, prior-output bindings, a provider route, an approval receipt, `next_actions`, or a transition.
+Mandatory context is workspace/function/agent identity and policy, agent default guidelines, every guideline explicitly referenced by a closure plan, and each effective tool-use definition paired with its canonical skill reference when named by an actual `kind: tool` step in the closure. Registry/function/agent/plan `tool_uses` arrays are ownership catalogs and select nothing. Approved lessons and all Brain evidence are optional. Human-approved lessons rank ahead of untrusted Brain extracts. A plan Brain selector marked `required` is nonfatal retrieval intent that ranks matches only inside the Brain tier; tool-use Brain reads can match but never carry required intent.
+
+Each fragment includes stable identity, scope, version or hash, trust class, inclusion reason, required/optional status, and deterministic byte/token accounting. Effective composite tool guidance uses contributor content hashes plus its semantic hash rather than claiming one raw-source hash. Brain extracts contain an immutable logical-source/version/object/extractor citation envelope and remain structurally separate from policy.
+
+The response cannot contain Roster run state, a Roster-selected current step, prior-output bindings, a provider route, an approval receipt, `next_actions`, or a transition. Missing Brain binding is nonfatal for context as defined by the workspace registry contract. Optional retrieval failure or candidate rejection cannot corrupt or overflow the otherwise servable mandatory local bundle; per-candidate diagnostics are optional examples and fixed budget counters remain authoritative.
 
 ### Selection algorithm
 
-1. Resolve workspace, target agent, and selected plan.
-2. Reserve mandatory workspace/function/agent/plan policy and complete plan content.
-3. Resolve applicable lessons and tool-use definitions by scope and precedence.
-4. Derive authorized Brain selectors from the target, query, plan, guidelines, and tool-use definitions.
-5. Retrieve structured knowledge and document candidates.
-6. Reject stale, tombstoned, unauthorized, privacy-incompatible, duplicate, and low-trust candidates.
-7. Rank optional fragments deterministically under the remaining budget.
-8. Emit citations, selection/exclusion reasons, trust separation, and diagnostics.
+1. Resolve the workspace, exact target function/agent, and optional selected root plan from one complete validated snapshot.
+2. If a root is named, resolve its complete deduplicated transitive nested-plan definition closure. Reserve the selected function/agent, root and closure definitions, default and explicitly referenced guidelines, and every closure tool-step effective tool-use/canonical-skill pair as mandatory.
+3. Resolve applicable approved lessons as optional context. Plan-scoped lesson and Brain evidence eligibility compares the fully qualified plan identity; a same-named plan owned by another agent grants no scope. Membership catalogs do not select policy or tools.
+4. Derive the authored Brain selector catalog from closure plan selectors and selected effective tool-use Brain reads. Query and step hint never widen it.
+5. When Brain is bound, retrieve or accept bounded candidates and reject cross-binding/scope, secret, stale, tombstoned, unauthorized, privacy-incompatible, duplicate, uncited, malformed, invalid-rank, unrequested, and low-trust candidates under one deterministic primary reason each. `unauthorized` is reserved for the live authorized-scope adapter and remains zero for the seeded source, where binding and scope failures use their precise reasons.
+6. Rank approved lessons before untrusted Brain extracts, then rank each tier deterministically under the remaining budget. Required selector intent affects only the Brain tier and a no-match produces one nonfatal aggregate warning/count.
+7. Admit complete optional fragments by deterministic first-fit accounting; never truncate one. Candidate exclusion diagnostics are considered last as optional examples.
+8. Emit citations, trust separation, provenance, exact budget accounting, authoritative exclusion/scalar counts, and sanitized diagnostics. Reverify every contributing local source before returning.
 
-If mandatory material exceeds the budget, return `CONTEXT_BUDGET_REQUIRED_OVERFLOW`. Optional retrieval failure is explicit but does not corrupt mandatory material. Token counts use a deterministic configured estimator and always include raw byte counts.
-
+Mandatory content is never truncated. If its minimum is within the accepted host ceiling but exceeds the caller budget, return `CONTEXT_BUDGET_REQUIRED_OVERFLOW` with the exact accepted retry budget and no partial bundle. If the mandatory minimum exceeds the 128,000-token host ceiling, return `CONTEXT_MANDATORY_UNSERVABLE` with safe section/contributor counts rather than an impossible retry. Token counts use the fixed deterministic estimator and always include raw byte counts.
+<!-- /forge:adr-section:context-request-and-response -->
 ## CLI surface
 
 Canonical commands:

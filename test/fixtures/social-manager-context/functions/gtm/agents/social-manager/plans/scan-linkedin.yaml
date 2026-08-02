@@ -1,0 +1,23 @@
+schema_version: 2
+id: scan-linkedin
+agent: gtm/social-manager
+purpose: Collect candidates from professional-network conversations.
+inputs: {}
+brain_selectors:
+  platform-signals:
+    description: Recent engagement patterns on professional networks.
+    required: false
+guidelines: []
+tool_uses: []
+artifacts: {}
+caps: {}
+steps:
+  - id: score
+    kind: nested-plan
+    instruction: Apply the shared qualification rubric.
+    plan: gtm/social-manager#score-opportunities
+completion:
+  artifacts: []
+  output_guidance: Return the strongest professional-network candidates.
+  criteria:
+    - Candidates have attributable sources.

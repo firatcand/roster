@@ -29,6 +29,7 @@ import {
   type FunctionDefinition,
   type PlanEnvelope,
   type WorkspaceRegistry,
+  type EnabledV2Host,
   MAX_AUTHORED_MARKDOWN_BYTES,
   MAX_AUTHORED_YAML_BYTES,
 } from './workspace-record.ts';
@@ -64,6 +65,7 @@ import {
 import {
   parseWorkspaceToolUseEnvelope,
   validateToolUseLattice,
+  assertCompleteWorkspaceSnapshot,
   type CompleteWorkspaceSnapshot,
   type ToolUseLatticeValidationResult,
 } from './workspace-tool-use.ts';
@@ -78,6 +80,7 @@ import {
   parseVendorSkillMap,
   serializeVendorSkillMap,
   type VendorSkillMap,
+  type VendorSkillMapEntry,
 } from './vendor-skills/adapter-map.ts';
 import { canonicalJson } from './vendor-skills/canonical-json.ts';
 import type { CanonicalSkillRef } from './vendor-skills/skill-ref.ts';
@@ -158,9 +161,105 @@ export type LoadedWorkspaceRegistry = {
   hash: string;
 };
 
-function assertV2Workspace(root: string): void {
+export const MAX_CONTEXT_REGISTERED_RECORDS = 8_192;
+export const MAX_CONTEXT_REGISTERED_CONTENT_BYTES = 64 * 1024 * 1024;
+export const MAX_CONTEXT_MEMBERSHIP_ENTRIES = 4_096;
+
+const PREPARED_CONTEXT_SOURCE: unique symbol = Symbol('prepared-context-source');
+
+export type PreparedContextRegistryMetadata = {
+  readonly schema_version: 2;
+  readonly workspace_id: string;
+  readonly brain_binding: string | null;
+  readonly enabled_hosts: readonly EnabledV2Host[];
+};
+
+export type PreparedContextSource = {
+  readonly [PREPARED_CONTEXT_SOURCE]: true;
+  readonly snapshot: CompleteWorkspaceSnapshot;
+  readonly registry_metadata: PreparedContextRegistryMetadata;
+  readonly registry_source_hash: string;
+  readonly counts: {
+    readonly records: number;
+    readonly content_bytes: number;
+  };
+};
+
+export type ContextVendorSkillSelection = {
+  readonly skillRefs: readonly CanonicalSkillRef[];
+  readonly skillRefPaths: ReadonlyMap<CanonicalSkillRef, readonly string[]>;
+};
+
+export type ContextVendorSkillProjection = {
+  readonly generator_version: string;
+  readonly map_hash: string | null;
+  readonly skills: readonly VendorSkillMapEntry[];
+};
+
+export type ContextReadCapability = {
+  readonly source: PreparedContextSource;
+  readonly selectVendorSkillMap: (
+    selection: ContextVendorSkillSelection,
+  ) => ContextVendorSkillProjection;
+  readonly verify: (localRecordPaths: readonly string[]) => void;
+};
+
+const PREPARED_CONTEXT_SOURCES = new WeakSet<object>();
+
+function cloneContextValue<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((entry) => cloneContextValue(entry)) as T;
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+      .map(([key, entry]) => [key, cloneContextValue(entry)])) as T;
+  }
+  return value;
+}
+
+function freezeContextValue<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const entry of Object.values(value as Record<string, unknown>)) {
+      freezeContextValue(entry);
+    }
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function preparedContextSourceFailure(): never {
+  throw workspaceFailure(
+    'TOOL_USE_SNAPSHOT_INCOMPLETE',
+    'Context resolution requires a registry-attested one-generation workspace source.',
+    'Collect context through the registry-owned read capability before assembling a bundle.',
+    { requirement: 'prepared-context-source' },
+  );
+}
+
+export function assertPreparedContextSource(
+  value: unknown,
+): asserts value is PreparedContextSource {
+  if (value === null || typeof value !== 'object' || !PREPARED_CONTEXT_SOURCES.has(value)) {
+    preparedContextSourceFailure();
+  }
+  const source = value as PreparedContextSource;
+  assertCompleteWorkspaceSnapshot(source.snapshot);
+  const contentBytes = source.snapshot.records.reduce(
+    (total, record) => total + Buffer.byteLength(record.content ?? '', 'utf8'),
+    0,
+  );
+  if (source[PREPARED_CONTEXT_SOURCE] !== true
+    || !Object.isFrozen(source)
+    || !Object.isFrozen(source.registry_metadata)
+    || !Object.isFrozen(source.registry_metadata.enabled_hosts)
+    || !Object.isFrozen(source.counts)
+    || source.counts.records !== source.snapshot.records.length
+    || source.counts.content_bytes !== contentBytes) {
+    preparedContextSourceFailure();
+  }
+}
+
+function assertV2Workspace(root: string): ReturnType<typeof probeWorkspace> {
   const probe = probeWorkspace(root);
-  if (probe.kind === 'v2') return;
+  if (probe.kind === 'v2') return probe;
   if (probe.kind === 'legacy') throw legacyWorkspaceError(probe.legacySignals);
   if (probe.kind === 'mixed') throw mixedWorkspaceError(probe.v2Signals, probe.legacySignals);
   if (probe.kind === 'unsafe') throw unsafeWorkspaceMarkerError(probe.unsafeSignals);
@@ -199,6 +298,19 @@ function identityMismatch(path: string, expected: string, actual: string): never
   );
 }
 
+function decodeAuthoredText(bytes: Buffer, path: string): string {
+  const text = bytes.toString('utf8');
+  if (!Buffer.from(text, 'utf8').equals(bytes)) {
+    throw workspaceFailure(
+      'YAML_INVALID',
+      `${path}: authored text is not valid UTF-8.`,
+      'Encode the authored workspace definition as valid UTF-8 before retrying.',
+      { path, reason: 'invalid-utf8' },
+    );
+  }
+  return text;
+}
+
 function readAuthored(
   root: string,
   path: string,
@@ -208,7 +320,7 @@ function readAuthored(
   const bytes = (session?.readFile ?? ((relativePath, options) => readWorkspaceFile(root, relativePath, options)))(path, {
     maxBytes: markdown ? MAX_AUTHORED_MARKDOWN_BYTES : MAX_AUTHORED_YAML_BYTES,
   });
-  return { bytes, text: bytes.toString('utf8') };
+  return { bytes, text: decodeAuthoredText(bytes, path) };
 }
 
 export function readWorkspaceRegistry(root: string, session?: WorkspaceReadSession): LoadedWorkspaceRegistry {
@@ -228,7 +340,7 @@ export function readWorkspaceRegistry(root: string, session?: WorkspaceReadSessi
     }
     throw error;
   }
-  const text = bytes.toString('utf8');
+  const text = decodeAuthoredText(bytes, 'roster.yaml');
   return { registry: parseWorkspaceRegistry(text), bytes, text, hash: hashWorkspaceBytes(bytes) };
 }
 
@@ -350,10 +462,52 @@ function assertMarkdownIdentity(
   }
 }
 
-function pushRecord(target: WorkspaceDiscoveryRecord[], identities: Set<string>, value: WorkspaceDiscoveryRecord): void {
+type ContextCollectionBounds = {
+  records: number;
+  contentBytes: number;
+};
+
+function accountContextRecord(bounds: ContextCollectionBounds, contentBytes: number): void {
+  if (bounds.records === MAX_CONTEXT_REGISTERED_RECORDS) {
+    throw workspaceFailure(
+      'READ_LIMIT_EXCEEDED',
+      'The complete registered record catalog exceeds the context collection limit.',
+      'Reduce the number of registered workspace records before retrying context resolution.',
+      {
+        bound: 'context-registered-records',
+        limit: MAX_CONTEXT_REGISTERED_RECORDS,
+        records: bounds.records + 1,
+      },
+    );
+  }
+  if (contentBytes > MAX_CONTEXT_REGISTERED_CONTENT_BYTES - bounds.contentBytes) {
+    throw workspaceFailure(
+      'READ_LIMIT_EXCEEDED',
+      'Registered record content exceeds the context collection byte limit.',
+      'Reduce authored record content before retrying context resolution.',
+      {
+        bound: 'context-registered-content-bytes',
+        limit: MAX_CONTEXT_REGISTERED_CONTENT_BYTES,
+        bytes: bounds.contentBytes + contentBytes,
+      },
+    );
+  }
+  bounds.records += 1;
+  bounds.contentBytes += contentBytes;
+}
+
+function pushRecord(
+  target: WorkspaceDiscoveryRecord[],
+  identities: Set<string>,
+  value: WorkspaceDiscoveryRecord,
+  bounds?: ContextCollectionBounds,
+): void {
   const key = `${value.kind}\u0000${value.qualified_id}`;
   if (identities.has(key)) {
     throw workspaceFailure('DUPLICATE_IDENTITY', `Identity '${value.kind}:${value.qualified_id}' is registered more than once.`, 'Keep one canonical parent membership for the record.', { kind: value.kind, qualifiedId: value.qualified_id });
+  }
+  if (bounds !== undefined) {
+    accountContextRecord(bounds, Buffer.byteLength(value.content ?? '', 'utf8'));
   }
   identities.add(key);
   target.push(value);
@@ -362,7 +516,61 @@ function pushRecord(target: WorkspaceDiscoveryRecord[], identities: Set<string>,
 type CollectedWorkspaceRecords = {
   records: WorkspaceDiscoveryRecord[];
   diagnostics: WorkspaceDiagnostic[];
+  loadedRegistry: LoadedWorkspaceRegistry;
+  counts: {
+    records: number;
+    contentBytes: number;
+  };
 };
+
+function assertContextMembershipBound(
+  path: string,
+  field: string,
+  values: readonly unknown[],
+  bounds: ContextCollectionBounds | undefined,
+): void {
+  if (bounds === undefined || values.length <= MAX_CONTEXT_MEMBERSHIP_ENTRIES) return;
+  throw workspaceFailure(
+    'READ_LIMIT_EXCEEDED',
+    `Registry membership '${field}' exceeds the context collection limit.`,
+    'Reduce the owning registry membership before retrying context resolution.',
+    {
+      path,
+      field,
+      bound: 'context-registry-membership',
+      limit: MAX_CONTEXT_MEMBERSHIP_ENTRIES,
+      entries: values.length,
+    },
+  );
+}
+
+function assertContextDefinitionMemberships(
+  path: string,
+  definition: WorkspaceRegistry | FunctionDefinition | AgentDefinition | PlanEnvelope,
+  bounds: ContextCollectionBounds | undefined,
+): void {
+  if (bounds === undefined) return;
+  if ('functions' in definition) {
+    assertContextMembershipBound(path, 'tool_uses', definition.tool_uses, bounds);
+    return;
+  }
+  if ('agents' in definition) {
+    assertContextMembershipBound(path, 'agents', definition.agents, bounds);
+    assertContextMembershipBound(path, 'guidelines', definition.guidelines, bounds);
+    assertContextMembershipBound(path, 'tool_uses', definition.tool_uses, bounds);
+    return;
+  }
+  if ('plans' in definition) {
+    assertContextMembershipBound(path, 'plans', definition.plans, bounds);
+    assertContextMembershipBound(path, 'subagents', definition.subagents, bounds);
+    assertContextMembershipBound(path, 'guidelines', definition.guidelines, bounds);
+    assertContextMembershipBound(path, 'default_guidelines', definition.default_guidelines, bounds);
+    assertContextMembershipBound(path, 'tool_uses', definition.tool_uses, bounds);
+    assertContextMembershipBound(path, 'lessons', definition.lessons, bounds);
+    return;
+  }
+  assertContextMembershipBound(path, 'tool_uses', definition.tool_uses, bounds);
+}
 
 function toolUseScopeMatches(
   actual: Record<string, string>,
@@ -389,7 +597,11 @@ function collectToolUseRecord(options: {
   scope: WorkspaceScope;
   qualifiedId: string;
   full: boolean;
+  bounds?: ContextCollectionBounds;
 }): void {
+  if (options.bounds !== undefined) {
+    accountContextRecord(options.bounds, Buffer.byteLength(options.file.text, 'utf8'));
+  }
   let definition;
   try {
     definition = parseWorkspaceToolUseEnvelope(options.file.text, options.path);
@@ -427,12 +639,23 @@ function collectToolUseRecord(options: {
   ));
 }
 
-function collectWorkspaceRecords(root: string, full: boolean): CollectedWorkspaceRecords {
-  const session = createWorkspaceReadSession(root, { deferParentChecks: true });
-  const { registry } = readWorkspaceRegistry(root, session);
+function collectWorkspaceRecords(
+  root: string,
+  full: boolean,
+  options: {
+    session?: WorkspaceReadSession;
+    contextBounds?: boolean;
+  } = {},
+): CollectedWorkspaceRecords {
+  const ownsSession = options.session === undefined;
+  const session = options.session ?? createWorkspaceReadSession(root, { deferParentChecks: true });
+  const loadedRegistry = readWorkspaceRegistry(root, session);
+  const { registry } = loadedRegistry;
   const records: WorkspaceDiscoveryRecord[] = [];
   const diagnostics: WorkspaceDiagnostic[] = [];
   const identities = new Set<string>();
+  const bounds = options.contextBounds ? { records: 0, contentBytes: 0 } : undefined;
+  assertContextDefinitionMemberships('roster.yaml', registry, bounds);
 
   for (const toolId of registry.tool_uses) {
     const scope: WorkspaceScope = {};
@@ -447,12 +670,14 @@ function collectWorkspaceRecords(root: string, full: boolean): CollectedWorkspac
       scope,
       qualifiedId: qualifiedRecordId('tool-use', { localId: toolId }),
       full,
+      bounds,
     });
   }
 
   const functionIds = Object.keys(registry.functions).sort((a, b) => a.localeCompare(b, 'en'));
   for (const functionId of functionIds) {
     const fn = loadFunction(root, registry, functionId, session);
+    assertContextDefinitionMemberships(fn.path, fn.definition, bounds);
     pushRecord(records, identities, record(
       'function',
       functionId,
@@ -466,7 +691,7 @@ function collectWorkspaceRecords(root: string, full: boolean): CollectedWorkspac
         tool_uses: fn.definition.tool_uses.length,
       },
       full,
-    ));
+    ), bounds);
 
     for (const toolId of fn.definition.tool_uses) {
       const scope: WorkspaceScope = { function: functionId };
@@ -481,6 +706,7 @@ function collectWorkspaceRecords(root: string, full: boolean): CollectedWorkspac
         scope,
         qualifiedId: qualifiedRecordId('tool-use', { functionId, localId: toolId }),
         full,
+        bounds,
       });
     }
 
@@ -498,11 +724,12 @@ function collectWorkspaceRecords(root: string, full: boolean): CollectedWorkspac
         file.bytes,
         {},
         full,
-      ));
+      ), bounds);
     }
 
     for (const agentId of fn.definition.agents) {
       const agent = loadAgent(root, registry, functionId, agentId, session, fn);
+      assertContextDefinitionMemberships(agent.path, agent.definition, bounds);
       const agentQualified = `${functionId}/${agentId}`;
       pushRecord(records, identities, record(
         'agent',
@@ -519,10 +746,11 @@ function collectWorkspaceRecords(root: string, full: boolean): CollectedWorkspac
           lessons: agent.definition.lessons.length,
         },
         full,
-      ));
+      ), bounds);
 
       for (const planId of agent.definition.plans) {
         const plan = loadPlan(root, fn, agent, planId, session);
+        assertContextDefinitionMemberships(plan.path, plan.definition, bounds);
         pushRecord(records, identities, record(
           'plan',
           qualifiedRecordId('plan', { functionId, agentId, localId: planId }),
@@ -532,7 +760,7 @@ function collectWorkspaceRecords(root: string, full: boolean): CollectedWorkspac
           plan.bytes,
           { tool_uses: plan.definition.tool_uses.length },
           full,
-        ));
+        ), bounds);
 
         for (const toolId of plan.definition.tool_uses) {
           const scope: WorkspaceScope = { function: functionId, agent: agentId, plan: planId };
@@ -552,6 +780,7 @@ function collectWorkspaceRecords(root: string, full: boolean): CollectedWorkspac
               localId: toolId,
             }),
             full,
+            bounds,
           });
         }
       }
@@ -571,7 +800,7 @@ function collectWorkspaceRecords(root: string, full: boolean): CollectedWorkspac
           file.bytes,
           {},
           full,
-        ));
+        ), bounds);
       }
 
       for (const guidelineId of agent.definition.guidelines) {
@@ -588,7 +817,7 @@ function collectWorkspaceRecords(root: string, full: boolean): CollectedWorkspac
           file.bytes,
           {},
           full,
-        ));
+        ), bounds);
       }
 
       for (const toolId of agent.definition.tool_uses) {
@@ -605,6 +834,7 @@ function collectWorkspaceRecords(root: string, full: boolean): CollectedWorkspac
           scope,
           qualifiedId: qualifiedRecordId('tool-use', { functionId, agentId, localId: toolId }),
           full,
+          bounds,
         });
       }
 
@@ -634,12 +864,21 @@ function collectWorkspaceRecords(root: string, full: boolean): CollectedWorkspac
           file.bytes,
           {},
           full,
-        ));
+        ), bounds);
       }
     }
   }
-  session.verify();
-  return { records, diagnostics };
+  if (ownsSession) session.verify();
+  return {
+    records,
+    diagnostics,
+    loadedRegistry,
+    counts: {
+      records: records.length,
+      contentBytes: bounds?.contentBytes
+        ?? records.reduce((total, entry) => total + Buffer.byteLength(entry.content ?? '', 'utf8'), 0),
+    },
+  };
 }
 
 function resolveRegisteredRecord(
@@ -1010,6 +1249,258 @@ function buildExpectedVendorSkillMap(
   return { map, content: serializeVendorSkillMap(map), definitionCount: lattice.definitions.length };
 }
 
+type ContextVendorVerificationState = {
+  selection: ContextVendorSkillSelection;
+  expectedContent: string;
+  storedContentHash: string;
+};
+
+function contextVendorFailure(
+  code: 'SKILL_REF_UNMAPPED' | 'SKILL_REF_DRIFTED',
+  reason: string,
+): never {
+  throw workspaceFailure(
+    code,
+    code === 'SKILL_REF_UNMAPPED'
+      ? 'Selected tool guidance is missing a canonical vendor-skill locator.'
+      : 'Selected vendor-skill provenance changed during context resolution.',
+    'Repair the selected tool definitions and reviewed vendor-skill artifacts, then run roster update.',
+    { path: VENDOR_SKILL_MAP_PATH, reason },
+  );
+}
+
+function readCanonicalStoredVendorSkillMap(root: string): {
+  content: string;
+  contentHash: string;
+  map: VendorSkillMap;
+} {
+  let bytes: Buffer;
+  try {
+    bytes = readWorkspaceFile(root, VENDOR_SKILL_MAP_PATH, {
+      maxBytes: VENDOR_SKILL_MAP_MAX_BYTES,
+    });
+  } catch (error) {
+    if (isWorkspaceFailure(error) && error.code === 'PARENT_NOT_FOUND') {
+      return contextVendorFailure('SKILL_REF_UNMAPPED', 'stored-map-missing');
+    }
+    throw error;
+  }
+  const content = bytes.toString('utf8');
+  if (!Buffer.from(content, 'utf8').equals(bytes)) {
+    return contextVendorFailure('SKILL_REF_DRIFTED', 'stored-map-not-canonical');
+  }
+  const map = parseVendorSkillMap(content);
+  if (map === null) return contextVendorFailure('SKILL_REF_DRIFTED', 'stored-map-not-canonical');
+  return { content, contentHash: hashWorkspaceBytes(bytes), map };
+}
+
+function deriveRestrictedVendorSkillMap(
+  root: string,
+  metadata: PreparedContextRegistryMetadata,
+  selection: ContextVendorSkillSelection,
+): { map: VendorSkillMap; content: string; selection: ContextVendorSkillSelection } {
+  const selectedRefs = [...selection.skillRefs];
+  const restrictedPaths = new Map<CanonicalSkillRef, readonly string[]>();
+  for (const skillRef of selectedRefs) {
+    restrictedPaths.set(skillRef, [...(selection.skillRefPaths.get(skillRef) ?? [])]);
+  }
+  const map = buildVendorSkillMap({
+    workspaceRoot: root,
+    skillRefs: selectedRefs,
+    skillRefPaths: restrictedPaths,
+    enabledHosts: metadata.enabled_hosts,
+    manifest: readFounderSkillsManifest(root),
+    lockfile: readLockfile(root),
+    generatorVersion: getPackageVersion(),
+  });
+  const normalizedPaths = new Map<CanonicalSkillRef, readonly string[]>(
+    map.skills.map((entry) => [entry.skill_ref, [...entry.authored_paths]]),
+  );
+  return {
+    map,
+    content: serializeVendorSkillMap(map),
+    selection: {
+      skillRefs: map.skills.map((entry) => entry.skill_ref),
+      skillRefPaths: normalizedPaths,
+    },
+  };
+}
+
+function validateSelectedVendorProjection(
+  stored: VendorSkillMap,
+  expected: VendorSkillMap,
+): void {
+  if (stored.generator_version !== expected.generator_version) {
+    contextVendorFailure('SKILL_REF_DRIFTED', 'stored-map-generator-version');
+  }
+  const storedByRef = new Map(stored.skills.map((entry) => [entry.skill_ref, entry]));
+  for (const selected of expected.skills) {
+    const current = storedByRef.get(selected.skill_ref);
+    if (current === undefined) contextVendorFailure('SKILL_REF_UNMAPPED', 'selected-ref-missing');
+    if (canonicalJson(current.hosts) !== canonicalJson(selected.hosts)) {
+      contextVendorFailure('SKILL_REF_DRIFTED', 'selected-host-locator');
+    }
+    const currentPaths = new Set(current.authored_paths);
+    if (!selected.authored_paths.every((path) => currentPaths.has(path))) {
+      contextVendorFailure('SKILL_REF_DRIFTED', 'selected-authored-path');
+    }
+  }
+}
+
+function mintPreparedContextSource(
+  collected: CollectedWorkspaceRecords,
+): PreparedContextSource {
+  const snapshot = mintCompleteWorkspaceSnapshot(collected.records);
+  const registry = collected.loadedRegistry.registry;
+  const source = {
+    [PREPARED_CONTEXT_SOURCE]: true as const,
+    snapshot,
+    registry_metadata: {
+      schema_version: registry.schema_version,
+      workspace_id: registry.workspace_id,
+      brain_binding: registry.brain?.binding ?? null,
+      enabled_hosts: [...enabledV2Hosts(registry)],
+    },
+    registry_source_hash: collected.loadedRegistry.hash,
+    counts: {
+      records: collected.counts.records,
+      content_bytes: collected.counts.contentBytes,
+    },
+  };
+  freezeContextValue(source);
+  PREPARED_CONTEXT_SOURCES.add(source);
+  assertPreparedContextSource(source);
+  return source;
+}
+
+function throwCollectedContextFailure(collected: CollectedWorkspaceRecords): void {
+  const failure = collected.diagnostics.find((diagnostic) => diagnostic.severity === 'error');
+  if (failure !== undefined) throwWorkspaceDiagnostic(failure);
+}
+
+function contextCapabilityFailure(reason: string): never {
+  throw workspaceFailure(
+    'CONTEXT_RESOLUTION_FAILED',
+    'Context read capability was not completed through its terminal verifier.',
+    'Retry context resolution through the registry-owned capability wrapper.',
+    { reason },
+  );
+}
+
+export function withContextReadCapability<T>(
+  root: string,
+  operation: (capability: ContextReadCapability) => T,
+): T {
+  const initialProbe = assertV2Workspace(root);
+  const rootIdentity = initialProbe.session?.root;
+  if (rootIdentity === undefined) contextCapabilityFailure('initial-probe-session-missing');
+  const session = createWorkspaceReadSession(root, {
+    deferParentChecks: true,
+    contextMode: true,
+    rootIdentity,
+  });
+  const collected = collectWorkspaceRecords(root, true, {
+    session,
+    contextBounds: true,
+  });
+  throwCollectedContextFailure(collected);
+  const source = mintPreparedContextSource(collected);
+  const registeredPaths = new Set(source.snapshot.records.map((record) => record.path));
+  let vendorSelectionCalls = 0;
+  let vendorState: ContextVendorVerificationState | null = null;
+  let verificationCalls = 0;
+  let verificationSucceeded = false;
+  let callbackActive = true;
+
+  const selectVendorSkillMap = (
+    selection: ContextVendorSkillSelection,
+  ): ContextVendorSkillProjection => {
+    if (!callbackActive || verificationCalls > 0) contextCapabilityFailure('vendor-selection-after-terminal');
+    vendorSelectionCalls += 1;
+    if (vendorSelectionCalls !== 1) contextCapabilityFailure('vendor-selection-call-count');
+    if (selection.skillRefs.length === 0) {
+      return freezeContextValue({
+        generator_version: getPackageVersion(),
+        map_hash: null,
+        skills: [] as VendorSkillMapEntry[],
+      });
+    }
+    const stored = readCanonicalStoredVendorSkillMap(root);
+    const expected = deriveRestrictedVendorSkillMap(root, source.registry_metadata, selection);
+    validateSelectedVendorProjection(stored.map, expected.map);
+    vendorState = {
+      selection: expected.selection,
+      expectedContent: expected.content,
+      storedContentHash: stored.contentHash,
+    };
+    return freezeContextValue({
+      generator_version: stored.map.generator_version,
+      map_hash: stored.map.map_hash,
+      skills: cloneContextValue(expected.map.skills),
+    });
+  };
+
+  const verify = (localRecordPaths: readonly string[]): void => {
+    if (!callbackActive) contextCapabilityFailure('terminal-outside-callback');
+    verificationCalls += 1;
+    if (verificationCalls !== 1) contextCapabilityFailure('terminal-call-count');
+    PREPARED_CONTEXT_SOURCES.delete(source);
+    const paths = [...new Set(localRecordPaths)];
+    if (paths.some((path) => !registeredPaths.has(path))) {
+      contextCapabilityFailure('terminal-path-not-registered');
+    }
+
+    const terminalProbe = probeWorkspace(root);
+    const terminalRoot = terminalProbe.session?.root;
+    if (terminalProbe.kind !== 'v2'
+      || terminalRoot === undefined
+      || terminalRoot.dev !== rootIdentity.dev
+      || terminalRoot.ino !== rootIdentity.ino) {
+      throw workspaceFailure(
+        'WRITE_CONFLICT',
+        'Workspace classification changed during context resolution.',
+        'Stop the concurrent workspace mutation and retry context resolution.',
+        { path: '.', expected_kind: 'v2', actual_kind: terminalProbe.kind },
+      );
+    }
+
+    if (vendorState !== null) {
+      const currentStored = readCanonicalStoredVendorSkillMap(root);
+      if (currentStored.contentHash !== vendorState.storedContentHash) {
+        contextVendorFailure('SKILL_REF_DRIFTED', 'stored-map-changed');
+      }
+      const currentExpected = deriveRestrictedVendorSkillMap(
+        root,
+        source.registry_metadata,
+        vendorState.selection,
+      );
+      if (currentExpected.content !== vendorState.expectedContent) {
+        contextVendorFailure('SKILL_REF_DRIFTED', 'selected-provenance-changed');
+      }
+      validateSelectedVendorProjection(currentStored.map, currentExpected.map);
+    }
+    session.verify(['roster.yaml', ...paths]);
+    verificationSucceeded = true;
+  };
+
+  const capability = Object.freeze({ source, selectVendorSkillMap, verify });
+  let result: T;
+  try {
+    result = operation(capability);
+  } finally {
+    callbackActive = false;
+    PREPARED_CONTEXT_SOURCES.delete(source);
+  }
+  if (result !== null
+    && (typeof result === 'object' || typeof result === 'function')
+    && typeof (result as { then?: unknown }).then === 'function') {
+    contextCapabilityFailure('async-callback-result');
+  }
+  if (verificationCalls !== 1) contextCapabilityFailure('terminal-call-count');
+  if (!verificationSucceeded) contextCapabilityFailure('terminal-verification-failed');
+  return result;
+}
+
 export function prepareVendorSkillMap(root: string): PreparedVendorSkillMap {
   const snapshot = collectCompleteWorkspaceSnapshot(root);
   const expected = buildExpectedVendorSkillMap(root, snapshot);
@@ -1037,9 +1528,21 @@ function validateVendorSkillMap(
         },
       )];
     }
-    if (current.toString('utf8') !== expected.content) {
+    const currentContent = current.toString('utf8');
+    if (!Buffer.from(currentContent, 'utf8').equals(current)) {
+      return [workspaceDiagnostic(
+        'SKILL_REF_DRIFTED',
+        'The generated vendor-skill map is missing canonical bytes or no longer matches authored guidance.',
+        {
+          path: VENDOR_SKILL_MAP_PATH,
+          remedy: 'Run roster update after repairing tool definitions and reviewed founder-skill metadata.',
+          details: { path: VENDOR_SKILL_MAP_PATH, reason: 'stored-map-not-canonical' },
+        },
+      )];
+    }
+    if (currentContent !== expected.content) {
       if (ignoredDraftPaths.size > 0) {
-        const parsed = parseVendorSkillMap(current.toString('utf8'));
+        const parsed = parseVendorSkillMap(currentContent);
         if (parsed !== null && parsed.generator_version === expected.map.generator_version) {
           const currentByRef = new Map(parsed.skills.map((entry) => [entry.skill_ref, entry]));
           const requiredEntriesMatch = expected.map.skills.every((entry) => {

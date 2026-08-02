@@ -109,6 +109,7 @@ Roster does not compile a plan into an executable manifest, select a current ste
 
 The host discovers a plan, validation resolves every static reference/cycle, and the complete plan enters context for host interpretation. Missing or ambiguous references fail before work; edited plans need no active-run migration because Roster owns no cursor.
 
+<!-- forge:adr-section:feature-3-bounded-context-assembly -->
 ## Feature 3: Bounded context assembly
 
 ### User outcome
@@ -117,9 +118,9 @@ The host asks Roster for the context needed for one user request and receives on
 
 ### Required inputs
 
-- Workspace and company Brain binding.
-- Target function and agent.
-- Optional selected plan.
+- Workspace with target function and agent.
+- Optional company Brain binding.
+- Optional explicitly selected root plan; Roster never infers one.
 - Human request or task query.
 - Optional host-supplied step hint.
 - Token budget.
@@ -127,29 +128,33 @@ The host asks Roster for the context needed for one user request and receives on
 ### Required output
 
 - Workspace and target identity.
-- The selected agent definition and complete selected plan.
-- Applicable guidelines and approved lessons.
-- Cited Brain facts, structured records, and document extracts.
-- Applicable workspace tool-use definitions and canonical vendor skill references.
-- Trust classification, provenance, inclusion reason, scope, version/hash, and budget accounting for every included fragment.
-- Deterministic exclusion explanations and diagnostics.
+- The selected function/agent definitions.
+- When a plan is selected, its root definition plus the complete deduplicated transitive nested-plan definition closure from one validated snapshot.
+- Mandatory agent default guidelines and every guideline explicitly referenced by a closure plan.
+- For each actual closure `kind: tool` step, the mandatory effective workspace tool-use definition paired with its canonical vendor skill reference; membership catalogs select nothing.
+- Optional applicable approved lessons ranked ahead of optional untrusted Brain evidence.
+- Immutable Brain citations when evidence is included.
+- Trust classification, provenance, inclusion reason, scope, version/hash, and deterministic budget accounting for every included fragment.
+- Authoritative bounded exclusion/scalar counts and sanitized diagnostics; per-candidate diagnostic examples are optional.
 
 ### Explicit boundary
 
-The bundle never contains a Roster-selected current step, transition, next action, provider route, runtime output binding, approval receipt, or Roster execution state. An optional step is only a narrowing hint supplied by the host.
+The bundle never contains a Roster-selected current step, transition, next action, provider route, runtime output binding, approval receipt, or Roster execution state. An optional step is only a host assertion used for relevance. Claude Code or Codex interprets and executes the returned definitions.
 
 ### Acceptance
 
-- Required policy and plan material is reserved before optional evidence.
-- Required content exceeding the configured budget fails explicitly rather than truncating silently.
-- Equivalent inputs and equivalent source versions yield the same semantic bundle and inclusion explanation.
-- Untrusted Brain content and tool output are visibly separated from authored policy.
+- Required function/agent/policy, complete selected-plan closure, and step-referenced effective tool/skill pairs are reserved before optional lessons or Brain evidence.
+- Required content is never truncated: a reachable budget shortfall reports an exact accepted retry, while a mandatory minimum above the host ceiling reports a distinct unservable error.
+- Missing Brain binding exits successfully with the complete local bundle, empty Brain evidence, and one warning diagnostic.
+- Optional retrieval failure, rejected candidates, or candidate diagnostic examples cannot corrupt or overflow a servable mandatory local bundle.
+- Equivalent inputs and equivalent source versions yield the same semantic bundle and inclusion explanation for Claude Code and Codex.
+- Authored policy, approved lessons, vendor instructions, Brain evidence, and tool output are visibly separated by trust.
 - The representative `my-roster` bundle reduces eager-load tokens by at least 60 percent while passing required-context recall and irrelevant-context exclusion thresholds.
 
 ### Flow and edge cases
 
-The host submits target, task, optional step hint, and budget; Roster reserves mandatory content, retrieves/ranks optional evidence, and emits one explained bundle. Required overflow fails, remote optional retrieval degrades explicitly, and hostile evidence never becomes policy.
-
+The host submits a target, task, optional selected plan and step hint, and budget. Roster resolves one validated local snapshot, returns the complete selected definition closure and mandatory policy/tool guidance, then ranks optional approved lessons and Brain evidence. Without Brain it degrades to the complete local bundle. Reachable mandatory overflow returns the exact retry; an oversized closure is reported as unservable; remote optional failure and hostile evidence never become policy or suppress local context.
+<!-- /forge:adr-section:feature-3-bounded-context-assembly -->
 ## Feature 4: Company Brain knowledge and source lifecycle
 
 ### User outcome

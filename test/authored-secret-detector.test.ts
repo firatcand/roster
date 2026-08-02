@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   detectAuthoredSecretMaterial,
+  hasCredentialShape,
   type AuthoredSecretDetectorId,
 } from '../src/lib/authored-secret-detector.ts';
 import { isWorkspaceFailure } from '../src/lib/workspace-diagnostics.ts';
@@ -55,6 +56,13 @@ test('generic examples and prohibition prose do not hard-fail', () => {
     'Bearer this-is-an-all-lowercase-example.',
   ].join('\n');
   assert.deepEqual(detectAuthoredSecretMaterial(prose), []);
+});
+
+test('generic credential-shape filtering preserves its closed mixed-class rule', () => {
+  assert.equal(hasCredentialShape('this-is-an-all-lowercase-example'), false);
+  assert.equal(hasCredentialShape('alllowercasecredentialvalue'), false);
+  assert.equal(hasCredentialShape('AbCdEfGhIjKlMnOpQrSt'), true);
+  assert.equal(hasCredentialShape('12345678901234567890='), true);
 });
 
 test('tool-use rejection exposes only sanitized detector metadata', () => {

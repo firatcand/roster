@@ -98,6 +98,27 @@ test('spawned CLI reports invalid scaffold arguments as JSON', () => {
   }
 });
 
+test('context-local dispatch preserves global help and version scans for other commands', () => {
+  const fx = fixture();
+  try {
+    const globalHelp = runCli(fx.root, ['--help']);
+    const nestedHelp = runCli(fx.root, ['discover', '--help', '--json']);
+    assert.equal(globalHelp.status, 0);
+    assert.equal(nestedHelp.status, 0);
+    assert.equal(nestedHelp.stdout, globalHelp.stdout);
+    assert.equal(nestedHelp.stderr, globalHelp.stderr);
+
+    const globalVersion = runCli(fx.root, ['--version']);
+    const nestedVersion = runCli(fx.root, ['discover', '-v', '--json']);
+    assert.equal(globalVersion.status, 0);
+    assert.equal(nestedVersion.status, 0);
+    assert.equal(nestedVersion.stdout, globalVersion.stdout);
+    assert.equal(nestedVersion.stderr, globalVersion.stderr);
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test('spawned CLI scaffolds tool-use guidance at all four explicit scopes', () => {
   const fx = fixture();
   try {

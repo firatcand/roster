@@ -294,6 +294,80 @@ test('deferred read sessions never return bytes from a swap-and-restore diversio
   }
 });
 
+test('context read sessions terminally revalidate selected leaf hashes and identities', () => {
+  const fx = fixture();
+  try {
+    mkdirSync(join(fx.root, 'safe'));
+    writeFileSync(join(fx.root, 'safe/a'), 'alpha');
+    writeFileSync(join(fx.root, 'safe/b'), 'bravo');
+
+    const changedBytes = createWorkspaceReadSession(fx.root, {
+      deferParentChecks: true,
+      contextMode: true,
+    });
+    assert.equal(changedBytes.readText('safe/a'), 'alpha');
+    assert.equal(changedBytes.readText('safe/b'), 'bravo');
+    writeFileSync(join(fx.root, 'safe/a'), 'omega');
+    assert.equal(failureCode(() => changedBytes.verify()), 'WRITE_CONFLICT');
+
+    writeFileSync(join(fx.root, 'safe/a'), 'alpha');
+    const replacedIdentity = createWorkspaceReadSession(fx.root, {
+      deferParentChecks: true,
+      contextMode: true,
+    });
+    assert.equal(replacedIdentity.readText('safe/a'), 'alpha');
+    writeFileSync(join(fx.root, 'safe/replacement'), 'alpha');
+    renameSync(join(fx.root, 'safe/replacement'), join(fx.root, 'safe/a'));
+    assert.equal(failureCode(() => replacedIdentity.verify(['safe/a'])), 'WRITE_CONFLICT');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('context leaf selection does not pin an unselected record body', () => {
+  const fx = fixture();
+  try {
+    mkdirSync(join(fx.root, 'safe'));
+    writeFileSync(join(fx.root, 'safe/selected'), 'selected');
+    writeFileSync(join(fx.root, 'safe/catalog-only'), 'catalog');
+    const session = createWorkspaceReadSession(fx.root, {
+      deferParentChecks: true,
+      contextMode: true,
+    });
+    session.readFile('safe/selected');
+    session.readFile('safe/catalog-only');
+    writeFileSync(join(fx.root, 'safe/catalog-only'), 'changed');
+    session.verify(['safe/selected']);
+
+    const ordinary = createWorkspaceReadSession(fx.root, { deferParentChecks: true });
+    ordinary.readFile('safe/selected');
+    writeFileSync(join(fx.root, 'safe/selected'), 'ordinary');
+    ordinary.verify();
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('context sessions do not inode-pin root-level vendor provenance outside the session', () => {
+  const fx = fixture();
+  try {
+    mkdirSync(join(fx.root, 'safe'));
+    writeFileSync(join(fx.root, 'safe/selected'), 'selected');
+    writeFileSync(join(fx.root, 'founder-skills.lock'), 'same vendor bytes');
+    const session = createWorkspaceReadSession(fx.root, {
+      deferParentChecks: true,
+      contextMode: true,
+    });
+    session.readFile('safe/selected');
+
+    writeFileSync(join(fx.root, 'replacement'), 'same vendor bytes');
+    renameSync(join(fx.root, 'replacement'), join(fx.root, 'founder-skills.lock'));
+    session.verify(['safe/selected']);
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test('replace requires the exact source hash and publishes parent bytes last', () => {
   const fx = fixture();
   try {

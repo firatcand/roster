@@ -1,207 +1,94 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import YAML from 'yaml';
-import { renderRosterBootstrap } from '../src/lib/generated-artifacts.ts';
 import {
-  resolveValidatedPlan,
+  DEFAULT_CONTEXT_BUDGET_TOKENS,
+} from '../src/lib/context-args.ts';
+import { resolveWorkspaceContext } from '../src/lib/workspace-context.ts';
+import {
+  collectCompleteWorkspaceSnapshot,
+} from '../src/lib/workspace-registry.ts';
+import {
+  resolveValidatedPlanClosure,
   validateStructuredPlans,
 } from '../src/lib/workspace-plan.ts';
-import { collectCompleteWorkspaceSnapshot } from '../src/lib/workspace-registry.ts';
 import { resolveToolUse } from '../src/lib/workspace-tool-use.ts';
-import { buildVendorSkillMap } from '../src/lib/vendor-skills/adapter-map.ts';
-import { parseSkillRef } from '../src/lib/vendor-skills/skill-ref.ts';
+import { buildSocialManagerContextFixture } from './fixtures/social-manager-context/_setup.ts';
 
-function writeYaml(root: string, path: string, value: unknown): void {
-  const absolute = join(root, path);
-  mkdirSync(dirname(absolute), { recursive: true });
-  writeFileSync(absolute, YAML.stringify(value));
-}
-
-test('Social Manager resolves agent and plan Exa guidance identically for Claude and Codex without provider execution', () => {
-  const root = mkdtempSync(join(tmpdir(), 'roster-social-exa-'));
+test('Social Manager Exa discovery resolves one host-neutral context bundle for Claude and Codex', () => {
+  const fx = buildSocialManagerContextFixture();
   try {
-    writeYaml(root, 'roster.yaml', {
-      schema_version: 2,
-      workspace_id: 'social-exa-golden',
-      functions: { gtm: { path: 'functions/gtm' } },
-      hosts: { claude: 'enabled', codex: 'enabled' },
-      tool_uses: [],
-    });
-    writeFileSync(join(root, 'ROSTER.md'), renderRosterBootstrap());
-    writeYaml(root, 'functions/gtm/function.yaml', {
-      schema_version: 2,
-      id: 'gtm',
-      purpose: 'Go-to-market policy.',
-      agents: ['social-manager'],
-      guidelines: [],
-      tool_uses: [],
-    });
-    writeYaml(root, 'functions/gtm/agents/social-manager/agent.yaml', {
-      schema_version: 2,
-      id: 'social-manager',
-      function: 'gtm',
-      purpose: 'Find evidence-backed social opportunities.',
-      plans: ['opportunity-discovery'],
-      subagents: [],
-      guidelines: [],
-      default_guidelines: [],
-      tool_uses: ['social-opportunity-research'],
-      lessons: [],
-    });
-    writeYaml(root, 'functions/gtm/agents/social-manager/plans/opportunity-discovery.yaml', {
-      schema_version: 2,
-      id: 'opportunity-discovery',
-      agent: 'gtm/social-manager',
-      purpose: 'Produce an evidence-backed opportunity shortlist.',
-      inputs: {},
-      brain_selectors: {},
-      guidelines: [],
-      tool_uses: ['social-opportunity-research'],
-      artifacts: {},
-      caps: {},
-      steps: [{
-        id: 'search',
-        kind: 'tool',
-        instruction: 'Use the company-defined opportunity research guidance.',
-        tool_use: 'social-opportunity-research',
-      }],
-      completion: {
-        artifacts: [],
-        output_guidance: 'Return cited opportunities with relevance reasons.',
-        criteria: ['Every opportunity has attributable evidence.'],
-      },
-    });
-    writeYaml(root, 'functions/gtm/agents/social-manager/tools/social-opportunity-research.yaml', {
-      schema_version: 2,
-      id: 'social-opportunity-research',
-      scope: { function: 'gtm', agent: 'social-manager' },
-      purpose: 'Find timely public posts matching company positioning.',
-      skill_ref: 'exa:search',
-      when: ['discovering public reply opportunities'],
-      capabilities: ['web-search', 'content-retrieval'],
-      filters: [
-        'exclude previously presented canonical URLs',
-        'exclude cryptocurrency topics',
-      ],
-      rules: [
-        'require canonical URLs and attributable provenance',
-        'never perform an external write',
-      ],
-      brain: { read: ['previously-presented-opportunities'] },
-      effects: { allowed: ['external-read', 'brain-read', 'brain-write'] },
-      approval: { requirement: 'none', guidance: [] },
-      evidence: {
-        required: ['source_url', 'retrieved_at', 'skill_revision'],
-        guidance: ['preserve query and filter summaries without secret material'],
-      },
-    });
-    writeYaml(
-      root,
-      'functions/gtm/agents/social-manager/plans/opportunity-discovery/tools/social-opportunity-research.yaml',
-      {
-        schema_version: 2,
-        id: 'social-opportunity-research',
-        scope: { function: 'gtm', agent: 'social-manager', plan: 'opportunity-discovery' },
-        purpose: 'Rank timely LinkedIn and public-web opportunities for this request.',
-        skill_ref: 'exa:search',
-        when: ['running opportunity discovery for the social manager'],
-        how: [
-          'start with a 24-hour lookback and expand only as far as 72 hours',
-          'rank candidates by ICP relevance',
-        ],
-        filters: ['reject profile and company-homepage URLs as candidate post URLs'],
-        output_expectations: {
-          required: ['canonical_url', 'author', 'published_at', 'relevance_reason'],
-          guidance: ['return evidence rather than drafting a reply'],
-        },
-        brain: { write: ['discovered-opportunity', 'retrieval-provenance'] },
-        effects: { allowed: ['external-read', 'brain-read', 'brain-write'] },
-        approval: { requirement: 'none', guidance: [] },
-      },
-    );
-
-    const snapshot = collectCompleteWorkspaceSnapshot(root);
+    const snapshot = collectCompleteWorkspaceSnapshot(fx.root);
     assert.deepEqual(validateStructuredPlans(snapshot.records, undefined, snapshot).diagnostics, []);
-    assert.equal(
-      resolveValidatedPlan(
-        snapshot.records,
-        'gtm/social-manager#opportunity-discovery',
-        snapshot,
-      ).completion.criteria[0],
-      'Every opportunity has attributable evidence.',
-    );
-    const mutatedReferences = snapshot.records.map((record) => (
-      record.kind === 'plan'
-        ? { ...record, references: { ...record.references, tool_uses: 999 } }
-        : record
-    ));
-    for (const substituted of [
-      [...snapshot.records],
-      snapshot.records.filter((record) => record.kind !== 'tool-use'),
-      snapshot.records.map((record) => ({ ...record })),
-      mutatedReferences,
-    ]) {
-      assert.equal(
-        validateStructuredPlans(substituted, undefined, snapshot).diagnostics[0]?.code,
-        'TOOL_USE_SNAPSHOT_INCOMPLETE',
-      );
-    }
-    const resolution = resolveToolUse(
+    const closure = resolveValidatedPlanClosure(
       snapshot,
-      { function: 'gtm', agent: 'social-manager', plan: 'opportunity-discovery' },
-      'social-opportunity-research',
+      'gtm/social-manager#opportunity-discovery',
     );
     assert.deepEqual(
-      resolution.contributors.map((entry) => entry.qualified_id),
+      closure.definitions.map((plan) => plan.qualified_id),
       [
-        'gtm/social-manager/tools/social-opportunity-research',
-        'gtm/social-manager#opportunity-discovery/tools/social-opportunity-research',
+        'gtm/social-manager#opportunity-discovery',
+        'gtm/social-manager#scan-linkedin',
+        'gtm/social-manager#scan-web',
+        'gtm/social-manager#score-opportunities',
       ],
     );
-    assert.equal(resolution.effective.skill_ref, 'exa:search');
-    assert.equal(resolution.effective.purpose, 'Rank timely LinkedIn and public-web opportunities for this request.');
-    assert.deepEqual(resolution.effective.filters, [
-      'exclude previously presented canonical URLs',
+
+    const tool = resolveToolUse(
+      snapshot,
+      { function: 'gtm', agent: 'social-manager', plan: 'opportunity-discovery' },
+      'social-search',
+    );
+    assert.equal(tool.effective.skill_ref, 'exa:search');
+    assert.deepEqual(tool.effective.filters, [
+      'require a canonical public URL',
       'exclude cryptocurrency topics',
-      'reject profile and company-homepage URLs as candidate post URLs',
+      'reject profile and company-homepage URLs',
+      'exclude URLs presented in prior discovery runs',
     ]);
-    assert.deepEqual(resolution.effective.output_expectations.required, [
+    assert.deepEqual(tool.effective.brain, {
+      read: ['historical-opportunities'],
+      write: ['discovered-opportunity', 'retrieval-provenance'],
+    });
+    assert.deepEqual(tool.effective.output_expectations.required, [
       'canonical_url',
       'author',
       'published_at',
       'relevance_reason',
     ]);
-    assert.deepEqual(resolution.effective.brain, {
-      read: ['previously-presented-opportunities'],
-      write: ['discovered-opportunity', 'retrieval-provenance'],
-    });
-    assert.deepEqual(resolution.effective.effects?.allowed, [
-      'external-read',
-      'brain-read',
-      'brain-write',
-    ]);
 
-    const map = buildVendorSkillMap({
-      workspaceRoot: root,
-      skillRefs: [parseSkillRef('exa:search')],
-      enabledHosts: ['claude', 'codex'],
-      manifest: null,
-      lockfile: null,
-      generatorVersion: '2.0.0',
-    });
-    const exa = map.skills[0]!;
-    assert.deepEqual(exa.hosts.claude, {
-      kind: 'host-native',
-      identity: 'exa:search',
-      assurance: 'host-resolved',
-    });
-    assert.deepEqual(exa.hosts.codex, exa.hosts.claude);
-    assert.equal(Object.isFrozen(resolution), true);
-    assert.equal(Object.isFrozen(resolution.effective), true);
+    const request = {
+      root: fx.root,
+      target: 'gtm/social-manager#opportunity-discovery',
+      query: 'Find timely conversations where our experience with reliable AI operations is relevant.',
+      stepHint: 'The host is preparing the discovery shortlist.',
+      budgetTokens: DEFAULT_CONTEXT_BUDGET_TOKENS,
+      explain: true,
+    } as const;
+    const claudeBundle = resolveWorkspaceContext(request);
+    const codexBundle = resolveWorkspaceContext(request);
+    assert.deepEqual(claudeBundle, codexBundle);
+    assert.deepEqual(
+      claudeBundle.plan.definitions.map((fragment) => fragment.content.qualified_id),
+      closure.definitions.map((plan) => plan.qualified_id),
+    );
+    assert.deepEqual(claudeBundle.skill_refs.map((entry) => entry.content.skill_ref), ['exa:search']);
+    assert.equal(claudeBundle.skill_refs[0]!.content.hosts.claude?.kind, 'host-native');
+    assert.deepEqual(
+      claudeBundle.skill_refs[0]!.content.hosts.codex,
+      claudeBundle.skill_refs[0]!.content.hosts.claude,
+    );
+    assert.deepEqual(claudeBundle.brain_evidence, []);
+    assert.equal(
+      claudeBundle.diagnostics.some((entry) => entry.code === 'CONTEXT_REQUIRED_EVIDENCE_MISSING'),
+      true,
+    );
+    assert.equal(claudeBundle.budget.mandatory_tokens <= DEFAULT_CONTEXT_BUDGET_TOKENS / 2, true);
+    assert.equal(claudeBundle.budget.total_tokens <= DEFAULT_CONTEXT_BUDGET_TOKENS, true);
+    assert.equal(JSON.stringify(claudeBundle).includes('bright-data:scrape'), false);
+    assert.equal(JSON.stringify(claudeBundle).includes('provider_route'), false);
+    assert.equal(JSON.stringify(claudeBundle).includes('current_step'), false);
+    assert.equal(JSON.stringify(claudeBundle).includes('next_action'), false);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    fx.cleanup();
   }
 });

@@ -1,0 +1,21 @@
+schema_version: 2
+id: social-search
+scope:
+  function: gtm
+  agent: social-manager
+  plan: opportunity-discovery
+purpose: Rank timely public conversations for this discovery request.
+skill_ref: exa:search
+how:
+  - widen the lookback only when the initial result set is too small
+filters:
+  - exclude URLs presented in prior discovery runs
+brain:
+  write:
+    - discovered-opportunity
+    - retrieval-provenance
+effects:
+  allowed:
+    - external-read
+    - brain-read
+    - brain-write
