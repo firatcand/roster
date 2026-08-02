@@ -88,8 +88,8 @@
             "falsifier_action": "reject",
             "falsifier_observation": "reviewed-outcomes-contradict"
           },
-          "recommendation": "Prefer attributable practitioner operational problems.",
-          "falsifiable_by": "Reject if reviewed outcomes contradict this preference.",
+          "recommendation": "Prefer attributable practitioner sources that describe concrete operational problems.",
+          "falsifiable_by": "Reject this recommendation if reviewed outcomes contradict it.",
           "candidate_content_hash": "$CANDIDATE_CONTENT_HASH",
           "citation_ids": [
             "feedback-opportunity-discovery-001",
@@ -150,8 +150,8 @@
             "falsifier_action": "reject",
             "falsifier_observation": "reviewed-outcomes-contradict"
           },
-          "recommendation": "Prefer attributable practitioner operational problems.",
-          "falsifiable_by": "Reject if reviewed outcomes contradict this preference.",
+          "recommendation": "Prefer attributable practitioner sources that describe concrete operational problems.",
+          "falsifiable_by": "Reject this recommendation if reviewed outcomes contradict it.",
           "candidate_content_hash": "$CANDIDATE_CONTENT_HASH",
           "citation_ids": [
             "feedback-opportunity-discovery-001",

@@ -141,23 +141,27 @@
               "properties": {
                 "disposition": {
                   "type": "string",
-                  "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                  "enum": ["prefer", "avoid"]
                 },
                 "source_kind": {
                   "type": "string",
-                  "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                  "enum": ["attributable-practitioner", "profile-page", "anonymous-source"]
                 },
                 "topic_kind": {
                   "type": "string",
-                  "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                  "enum": ["operational-problem", "crypto-promotion", "generic-ad"]
                 },
                 "falsifier_action": {
                   "type": "string",
-                  "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                  "enum": ["reject", "retain"]
                 },
                 "falsifier_observation": {
                   "type": "string",
-                  "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                  "enum": [
+                    "reviewed-outcomes-contradict",
+                    "reviewed-outcomes-confirm",
+                    "no-counterevidence"
+                  ]
                 }
               }
             },
