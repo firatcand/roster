@@ -1,0 +1,2 @@
+Find timely public conversations where our experience with reliable AI-assisted content operations could help a practitioner. Keep the shortlist evidence-backed and useful for review. Treat these characters as literal request text: "quality > volume"; $(do-not-run); `do-not-run`; --not-an-option.
+

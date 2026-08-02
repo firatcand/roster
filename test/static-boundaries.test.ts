@@ -32,6 +32,21 @@ function typescriptFiles(relativeRoot: string): string[] {
   return files.sort((left, right) => repositoryPath(left).localeCompare(repositoryPath(right), 'en'));
 }
 
+function regularFiles(relativeRoot: string): string[] {
+  const root = join(PROJECT_ROOT, relativeRoot);
+  const files: string[] = [];
+  const walk = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      assert.equal(entry.isSymbolicLink(), false, `${repositoryPath(path)} must not be a symlink`);
+      if (entry.isDirectory()) walk(path);
+      else if (entry.isFile()) files.push(path);
+    }
+  };
+  walk(root);
+  return files.sort((left, right) => repositoryPath(left).localeCompare(repositoryPath(right), 'en'));
+}
+
 function sourceFile(path: string): ts.SourceFile {
   return ts.createSourceFile(
     path,
@@ -387,7 +402,7 @@ test('complete workspace snapshots have one internal mint and one registry-owned
   );
 });
 
-test('prepared context sources and their read capability have one production and one test importer', () => {
+test('prepared context sources and their read capability have one production and exactly two test importers', () => {
   const sourceFiles = typescriptFiles('src');
   const testFiles = typescriptFiles('test');
   const files = [...sourceFiles, ...testFiles];
@@ -415,10 +430,16 @@ test('prepared context sources and their read capability have one production and
     file: 'src/lib/workspace-context.ts',
     local: capability,
   }]);
-  assert.deepEqual(importers(testFiles, registryModule, capability), [{
-    file: 'test/workspace-context.test.ts',
-    local: capability,
-  }]);
+  assert.deepEqual(importers(testFiles, registryModule, capability), [
+    {
+      file: 'test/support/seeded-workspace-context.ts',
+      local: capability,
+    },
+    {
+      file: 'test/workspace-context.test.ts',
+      local: capability,
+    },
+  ]);
 
   const protectedEdges = files.flatMap((path) => moduleEdges(path)).filter((edge) => (
     moduleMatches(edge.module, registryModule)
@@ -434,7 +455,11 @@ test('prepared context sources and their read capability have one production and
     [...new Set(protectedEdges
       .filter((edge) => edge.file.startsWith('test/'))
       .map((edge) => edge.file))],
-    ['test/workspace-context.test.ts'],
+    ['test/support/seeded-workspace-context.ts', 'test/workspace-context.test.ts'],
+  );
+  assert.deepEqual(
+    protectedEdges.filter((edge) => edge.kind === 'export'),
+    [],
   );
   assert.deepEqual(
     files.flatMap((path) => dynamicModuleReferences(path)
@@ -442,6 +467,90 @@ test('prepared context sources and their read capability have one production and
       .map((module) => `${repositoryPath(path)}:${module}`)),
     [],
   );
+});
+
+test('the seeded host learning proof cannot become a shipped capability or source dependency', () => {
+  const forbiddenMarkers = [
+    'host-led-learning',
+    'roster-350-fixture',
+    'seeded-learning-store',
+    'seeded-workspace-context',
+  ];
+  const sourceMentions = typescriptFiles('src').flatMap((path) => {
+    const content = readFileSync(path, 'utf8').toLowerCase();
+    return forbiddenMarkers
+      .filter((marker) => content.includes(marker))
+      .map((marker) => `${repositoryPath(path)}:${marker}`);
+  });
+  assert.deepEqual(sourceMentions, []);
+
+  const packageFiles = JSON.parse(readFileSync(join(PROJECT_ROOT, 'package.json'), 'utf8')) as {
+    files?: unknown;
+  };
+  assert.ok(Array.isArray(packageFiles.files));
+  assert.deepEqual(
+    packageFiles.files.filter((entry): entry is string => typeof entry === 'string')
+      .filter((entry) => entry === 'test' || entry.startsWith('test/')),
+    [],
+  );
+});
+
+test('host-led fixture skills are byte-identical and cannot leak the semantic answer or oracle', () => {
+  const fixtureRoot = 'test/fixtures/host-led-learning';
+  const skillCopies = [
+    [
+      'common/skills/fake-social-search/SKILL.md',
+      'claude-plugin/skills/roster-350-fixture-learning-loop/SKILL.md',
+      'codex-project/.agents/skills/roster-350-fixture-learning-loop/SKILL.md',
+    ],
+    [
+      'common/skills/dreamer/SKILL.md',
+      'claude-plugin/skills/fixture-dreamer/SKILL.md',
+      'codex-project/.agents/skills/fixture-dreamer/SKILL.md',
+    ],
+  ];
+  for (const [canonical, ...delivered] of skillCopies) {
+    const canonicalBytes = readFileSync(join(PROJECT_ROOT, fixtureRoot, canonical!));
+    for (const path of delivered) {
+      assert.deepEqual(readFileSync(join(PROJECT_ROOT, fixtureRoot, path)), canonicalBytes, path);
+    }
+  }
+
+  const oracleMarkers = ['expected-semantic-result', 'host-led-learning-oracle'];
+  const oracleLeaks = regularFiles(fixtureRoot).flatMap((path) => {
+    const content = readFileSync(path, 'utf8').toLowerCase();
+    return oracleMarkers
+      .filter((marker) => content.includes(marker))
+      .map((marker) => `${repositoryPath(path)}:${marker}`);
+  });
+  assert.deepEqual(oracleLeaks, []);
+
+  const mechanicsOnly = [
+    'common/fixture-lifecycle.md',
+    'common/host-launch-contract.json',
+    'common/output-schema.json',
+    ...skillCopies.flat(),
+  ];
+  const forbiddenAnswerMarkers = [
+    'result-valid-practitioner',
+    'result-profile',
+    'result-crypto',
+    'result-prior',
+    'result-injection',
+    'candidate-opportunity-discovery-001',
+    'prefer-attributable-practitioner-posts',
+    'require a canonical public url',
+    'exclude cryptocurrency topics',
+    'reject profile and company-homepage urls',
+    'exclude urls presented in prior discovery runs',
+  ];
+  const answerLeaks = mechanicsOnly.flatMap((path) => {
+    const content = readFileSync(join(PROJECT_ROOT, fixtureRoot, path), 'utf8').toLowerCase();
+    return forbiddenAnswerMarkers
+      .filter((marker) => content.includes(marker))
+      .map((marker) => `${path}:${marker}`);
+  });
+  assert.deepEqual(answerLeaks, []);
 });
 
 test('workspace update lock capability stays inside update and generated-artifact transaction seams', () => {
