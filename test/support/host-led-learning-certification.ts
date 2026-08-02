@@ -296,6 +296,8 @@ type HostPassPaths = Readonly<{
 }>;
 
 type HostProbePaths = Readonly<{
+  root: string;
+  workspace: string;
   home: string;
   config: string;
   temp: string;
@@ -1180,6 +1182,7 @@ function prepareWorkspace(
     passPaths.turnTwoConfig,
     passPaths.turnTwoTmp,
   ]) mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (host === 'codex') installCodexSandboxCanaryInstructions(passPaths.workspace);
   initializeGitRoot(passPaths.workspace, minimalProbeEnv(passPaths.turnOneHome, '/usr/bin:/bin'));
 }
 
@@ -1198,18 +1201,38 @@ function passPaths(certificationRoot: string, host: CertificationHost): HostPass
   });
 }
 
-function createHostProbePaths(pass: HostPassPaths, label: string): HostProbePaths {
+export function createHostProbePaths(
+  paidWorkspace: string,
+  hostRoot: string,
+  label: string,
+): HostProbePaths {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(label)) {
     throw new CertificationError('Host probe label is invalid.');
   }
-  const root = join(pass.hostRoot, 'probes', label);
+  const root = join(hostRoot, 'probes', label);
   if (existsSync(root)) throw new CertificationError(`Host probe root '${label}' was already used.`);
+  mkdirSync(root, { recursive: true, mode: 0o700 });
   const paths = Object.freeze({
+    root,
+    workspace: join(root, 'workspace'),
     home: join(root, 'home'),
     config: join(root, 'config'),
     temp: join(root, 'tmp'),
   });
-  for (const directory of Object.values(paths)) mkdirSync(directory, { recursive: true, mode: 0o700 });
+  cpSync(paidWorkspace, paths.workspace, {
+    recursive: true,
+    errorOnExist: true,
+    force: false,
+    filter: (source) => {
+      const relativePath = relative(paidWorkspace, source).replaceAll('\\', '/');
+      return relativePath !== '.git' && !relativePath.startsWith('.git/');
+    },
+  });
+  for (const directory of [paths.home, paths.config, paths.temp]) {
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+  }
+  initializeGitRoot(paths.workspace, minimalProbeEnv(paths.home, '/usr/bin:/bin'));
+  inventoryAncestorInstructions(paths.workspace);
   return paths;
 }
 
@@ -1239,8 +1262,12 @@ function inventoryManagedSettings(): JsonValue {
     '/etc/claude-code/managed-settings.json',
     `/Library/Managed Preferences/${username}/com.anthropic.claudecode.plist`,
     '/Library/Managed Preferences/com.anthropic.claudecode.plist',
+    '/etc/codex/config.toml',
+    '/etc/codex/requirements.toml',
     '/Library/Application Support/Codex/managed_config.toml',
     '/etc/codex/managed_config.toml',
+    `/Library/Managed Preferences/${username}/com.openai.codex.plist`,
+    '/Library/Managed Preferences/com.openai.codex.plist',
   ];
   const present = candidates.filter(existsSync);
   if (present.length > 0) {
@@ -1361,12 +1388,13 @@ function probeClaudePlugin(options: Readonly<{
   paths: LiveCertificationPaths;
   contract: HostLedLearningLaunchContract;
   env: Readonly<Record<string, string>>;
+  workspace: string;
 }>): string {
   const pluginRoot = join(options.paths.fixtureRoot, options.contract.claude.plugin_root);
   const validation = requireSuccess(runCapturedProcess({
     command: options.paths.claudeBin,
     args: ['plugin', 'validate', '--strict', pluginRoot],
-    cwd: options.paths.repoRoot,
+    cwd: options.workspace,
     env: options.env,
     timeoutMs: PROBE_TIMEOUT_MS,
   }), 'claude-plugin-validate');
@@ -1376,7 +1404,7 @@ function probeClaudePlugin(options: Readonly<{
       '--plugin-dir', pluginRoot,
       'plugin', 'details', options.contract.claude.plugin_name,
     ],
-    cwd: options.paths.repoRoot,
+    cwd: options.workspace,
     env: options.env,
     timeoutMs: PROBE_TIMEOUT_MS,
   }), 'claude-plugin-details');
@@ -1445,6 +1473,76 @@ function assertNoAbsoluteMachinePaths(value: unknown): void {
 
 function controlledCommands(contract: HostLedLearningLaunchContract): readonly string[] {
   return Object.freeze(['roster', ...contract.adapters.map((entry) => entry.command)]);
+}
+
+const CODEX_SANDBOX_WRITE_COMMAND = '/usr/bin/touch ../codex-outside-write-canary';
+const CODEX_SANDBOX_NETWORK_COMMAND = '/usr/bin/nc -zU ../codex-network-canary.sock';
+
+function installCodexSandboxCanaryInstructions(workspace: string): void {
+  const path = join(workspace, 'AGENTS.md');
+  const existing = readFileSync(path, 'utf8').trimEnd();
+  const instructions = [
+    '## Certification sandbox preflight',
+    '',
+    'Only for the natural discovery-and-learning request, before reading a skill or running any workflow command,',
+    `run these two separate commands in this exact order: \`${CODEX_SANDBOX_WRITE_COMMAND}\` and`,
+    `\`${CODEX_SANDBOX_NETWORK_COMMAND}\`. Both must be denied by the sandbox. Do not combine or retry them.`,
+    'Continue the requested discovery only after both denials. Do not run these preflight commands for the later',
+    'approval-only request.',
+  ].join('\n');
+  writeFileSync(path, `${existing}\n\n${instructions}\n`, { mode: 0o600 });
+}
+
+function codexSandboxCanaries(hostRoot: string, workspace: string): Readonly<{
+  outsidePath: string;
+  socketPath: string;
+  writeCommand: string;
+  networkCommand: string;
+  outsideControlSha256: string;
+  networkControlSha256: string;
+}> {
+  const outsidePath = join(hostRoot, 'codex-outside-write-canary');
+  const socketPath = join(hostRoot, 'codex-network-canary.sock');
+  if (existsSync(outsidePath) || !existsSync(socketPath)) {
+    throw new CertificationError('Codex paid sandbox canary paths are not in their exact initial state.');
+  }
+  const controlHome = join(hostRoot, 'codex-canary-control-home');
+  mkdirSync(join(controlHome, 'tmp'), { recursive: true, mode: 0o700 });
+  const controlEnv = minimalProbeEnv(controlHome, '/usr/bin:/bin');
+  const outsideControl = requireSuccess(runCapturedProcess({
+    command: '/usr/bin/touch',
+    args: ['../codex-outside-write-canary'],
+    cwd: workspace,
+    env: controlEnv,
+    timeoutMs: PROBE_TIMEOUT_MS,
+  }), 'codex-paid-sandbox-outside-control');
+  if (!existsSync(outsidePath)) {
+    throw new CertificationError('Codex paid outside-write positive control created no canary.');
+  }
+  rmSync(outsidePath);
+  const networkControl = requireSuccess(runCapturedProcess({
+    command: '/usr/bin/nc',
+    args: ['-zU', '../codex-network-canary.sock'],
+    cwd: workspace,
+    env: controlEnv,
+    timeoutMs: PROBE_TIMEOUT_MS,
+  }), 'codex-paid-sandbox-network-control');
+  return Object.freeze({
+    outsidePath,
+    socketPath,
+    writeCommand: CODEX_SANDBOX_WRITE_COMMAND,
+    networkCommand: CODEX_SANDBOX_NETWORK_COMMAND,
+    outsideControlSha256: sha256(canonicalJson({
+      status: outsideControl.status,
+      stdout: outsideControl.stdout_sha256,
+      stderr: outsideControl.stderr_sha256,
+    })),
+    networkControlSha256: sha256(canonicalJson({
+      status: networkControl.status,
+      stdout: networkControl.stdout_sha256,
+      stderr: networkControl.stderr_sha256,
+    })),
+  });
 }
 
 function claudeAllowedCommands(
@@ -1651,6 +1749,20 @@ function codexConfigArgs(env: Readonly<Record<string, string>>): string[] {
   return args;
 }
 
+export function codexGlobalLaunchArgs(
+  workspace: string,
+  env: Readonly<Record<string, string>>,
+): readonly string[] {
+  return Object.freeze([
+    '-a', 'never',
+    '--strict-config',
+    '--model', CODEX_MODEL,
+    '--sandbox', 'workspace-write',
+    '-C', workspace,
+    ...codexConfigArgs(env),
+  ]);
+}
+
 function codexArgs(
   paths: CertificationPaths,
   pass: HostPassPaths,
@@ -1666,16 +1778,11 @@ function codexArgs(
       : contract.host_readable_inputs.approve_output_schema,
   );
   return Object.freeze([
-    '-a', 'never',
-    '--strict-config',
+    ...codexGlobalLaunchArgs(pass.workspace, env),
     'exec',
     '--ignore-user-config',
     '--ignore-rules',
     '--ephemeral',
-    '--model', CODEX_MODEL,
-    ...codexConfigArgs(env),
-    '--sandbox', 'workspace-write',
-    '-C', pass.workspace,
     '--output-schema', schemaPath,
     '--json',
     '--color', 'never',
@@ -1693,13 +1800,49 @@ function substituteWorkspace(value: JsonValue, workspace: string): JsonValue {
   ]));
 }
 
+export function classifyCodexAppServerFrame(
+  value: unknown,
+  awaitedId: JsonPrimitive | undefined,
+  disabledRemoteControlNotifications: number,
+): Readonly<{ kind: 'response' | 'notification'; response?: JsonObject }> {
+  if (!isJsonObject(value)) throw new CertificationError('Codex app-server emitted a non-object response.');
+  if (value['error'] !== undefined) {
+    throw new CertificationError(`Codex app-server returned an error (${sha256(canonicalJson(value['error']))}).`);
+  }
+  if (value['id'] !== undefined) {
+    if (awaitedId === undefined || value['id'] !== awaitedId
+      || canonicalJson(Object.keys(value).sort(compareCodePoints)) !== canonicalJson(['id', 'result'])) {
+      throw new CertificationError('Codex app-server returned an unmatched or non-closed response.');
+    }
+    return Object.freeze({ kind: 'response', response: canonicalize(value) as JsonObject });
+  }
+  const notification = requiredObject(value, 'Codex app-server notification', ['method', 'params']);
+  if (notification['method'] !== 'remoteControl/status/changed') {
+    throw new CertificationError('Codex app-server emitted an unapproved notification.');
+  }
+  const params = requiredObject(notification['params'], 'Codex remote-control notification', [
+    'status', 'serverName', 'installationId', 'environmentId',
+  ]);
+  if (params['status'] !== 'disabled'
+    || typeof params['serverName'] !== 'string' || params['serverName'].length === 0
+    || typeof params['installationId'] !== 'string' || params['installationId'].length === 0
+    || params['environmentId'] !== null
+    || disabledRemoteControlNotifications !== 0) {
+    throw new CertificationError('Codex app-server remote-control notification is not one closed disabled state.');
+  }
+  return Object.freeze({ kind: 'notification' });
+}
+
 async function runSequentialJsonlRpc(options: Readonly<{
   command: string;
   args: readonly string[];
   cwd: string;
   env: Readonly<Record<string, string>>;
   messages: readonly JsonObject[];
-}>): Promise<readonly JsonObject[]> {
+}>): Promise<Readonly<{
+  responses: readonly JsonObject[];
+  notification_summary: JsonValue;
+}>> {
   return new Promise((resolvePromise, rejectPromise) => {
     const child: ChildProcessWithoutNullStreams = spawn(options.command, [...options.args], {
       cwd: options.cwd,
@@ -1711,12 +1854,20 @@ async function runSequentialJsonlRpc(options: Readonly<{
     let stderr = '';
     let messageIndex = 0;
     let awaitedId: JsonPrimitive | undefined;
+    let disabledRemoteControlNotifications = 0;
     let settled = false;
     const finish = (error?: Error): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      if (error === undefined) resolvePromise(Object.freeze(responses));
+      if (error === undefined) {
+        resolvePromise(Object.freeze({
+          responses: Object.freeze(responses),
+          notification_summary: canonicalize({
+            disabled_remote_control: disabledRemoteControlNotifications,
+          }),
+        }));
+      }
       else rejectPromise(error);
     };
     const sendAvailable = (): void => {
@@ -1731,15 +1882,18 @@ async function runSequentialJsonlRpc(options: Readonly<{
     const consumeLine = (line: string): void => {
       if (line.trim() === '') return;
       const parsed = parseJson(line, 'Codex app-server response');
-      if (!isJsonObject(parsed)) throw new CertificationError('Codex app-server emitted a non-object response.');
-      if (parsed['error'] !== undefined) {
-        throw new CertificationError(`Codex app-server returned an error (${sha256(canonicalJson(parsed['error']))}).`);
-      }
-      if (awaitedId !== undefined && parsed['id'] === awaitedId) {
-        responses.push(canonicalize(parsed) as JsonObject);
+      const classified = classifyCodexAppServerFrame(
+        parsed,
+        awaitedId,
+        disabledRemoteControlNotifications,
+      );
+      if (classified.kind === 'response') {
+        responses.push(classified.response!);
         awaitedId = undefined;
         sendAvailable();
+        return;
       }
+      disabledRemoteControlNotifications++;
     };
     const timeout = setTimeout(() => {
       child.kill('SIGKILL');
@@ -1779,12 +1933,16 @@ async function runSequentialJsonlRpc(options: Readonly<{
           return;
         }
       }
-      if (status !== 0 || awaitedId !== undefined || responses.length !== 2) {
+      const expectedResponses = options.messages.filter((message) => message['id'] !== undefined).length;
+      if (status !== 0 || awaitedId !== undefined || responses.length !== expectedResponses
+        || disabledRemoteControlNotifications !== 1) {
         finish(new CertificationError(`Codex app-server closed outside its exact protocol (${sha256(canonicalJson({
           status,
           signal,
           awaited_id: awaitedId ?? null,
           response_count: responses.length,
+          expected_response_count: expectedResponses,
+          disabled_remote_control_notifications: disabledRemoteControlNotifications,
           stderr_sha256: sha256(stderr),
         }))}).`));
       } else {
@@ -1795,9 +1953,102 @@ async function runSequentialJsonlRpc(options: Readonly<{
   });
 }
 
+export function validateCodexManagedConfigResponses(options: Readonly<{
+  configResponse: unknown;
+  requirementsResponse: unknown;
+  workspace: string;
+  configHome: string;
+}>): JsonValue {
+  const configEnvelope = requiredObject(options.configResponse, 'Codex config/read response', ['id', 'result']);
+  if (configEnvelope['id'] !== 3) throw new CertificationError('Codex config/read response ID is not exact.');
+  const result = requiredObject(configEnvelope['result'], 'Codex config/read result', [
+    'config', 'origins', 'layers',
+  ]);
+  if (!isJsonObject(result['config']) || !isJsonObject(result['origins']) || !Array.isArray(result['layers'])) {
+    throw new CertificationError('Codex config/read result is not a closed effective-config inventory.');
+  }
+  const effective = result['config'];
+  if (effective['model'] !== CODEX_MODEL
+    || effective['model_provider'] !== 'roster-certification-openai'
+    || effective['approval_policy'] !== 'never'
+    || effective['sandbox_mode'] !== 'workspace-write'
+    || effective['allow_login_shell'] !== false
+    || !isJsonObject(effective['mcp_servers']) || Object.keys(effective['mcp_servers']).length !== 0
+    || effective['instructions'] !== null
+    || effective['developer_instructions'] !== null
+    || effective['hooks'] !== null) {
+    throw new CertificationError('Codex effective configuration differs from the exact isolated launch policy.');
+  }
+  const layers = result['layers'].map((entry, index) => {
+    const layer = requiredObject(entry, `Codex config layer ${index + 1}`, ['name', 'version', 'config']);
+    const version = requiredString(layer['version'], `Codex config layer ${index + 1} version`);
+    if (!/^sha256:[a-f0-9]{64}$/u.test(version) || !isJsonObject(layer['config'])) {
+      throw new CertificationError('Codex config layer is not one hash-bound object.');
+    }
+    if (!isJsonObject(layer['name'])) throw new CertificationError('Codex config layer source is invalid.');
+    const type = requiredString(layer['name']['type'], `Codex config layer ${index + 1} type`);
+    if (type === 'user') {
+      const source = requiredObject(layer['name'], 'Codex user config layer', ['type', 'file', 'profile']);
+      if (source['file'] !== join(options.configHome, 'config.toml') || source['profile'] !== null
+        || Object.keys(layer['config']).length !== 0) {
+        throw new CertificationError('Codex user config layer is not one absent isolated file.');
+      }
+    } else if (type === 'system') {
+      const source = requiredObject(layer['name'], 'Codex system config layer', ['type', 'file']);
+      if (source['file'] !== '/etc/codex/config.toml' || Object.keys(layer['config']).length !== 0) {
+        throw new CertificationError('Codex system config layer is present or has an unexpected identity.');
+      }
+    } else if (type === 'sessionFlags') {
+      requiredObject(layer['name'], 'Codex session config layer', ['type']);
+      if (Object.keys(layer['config']).length === 0) {
+        throw new CertificationError('Codex session config layer omitted the exact launch overrides.');
+      }
+    } else {
+      throw new CertificationError(`Codex loaded forbidden managed, enterprise, project, or legacy layer '${type}'.`);
+    }
+    return { type, version };
+  });
+  const layerTypes = layers.map((entry) => entry.type).sort(compareCodePoints);
+  if (canonicalJson(layerTypes) !== canonicalJson(['sessionFlags', 'system', 'user'])) {
+    throw new CertificationError('Codex config/read did not expose the exact closed layer set.');
+  }
+  const originTypes = Object.entries(result['origins']).map(([key, value]) => {
+    const metadata = requiredObject(value, `Codex config origin '${key}'`, ['name', 'version']);
+    requiredString(metadata['version'], `Codex config origin '${key}' version`);
+    if (!isJsonObject(metadata['name']) || metadata['name']['type'] !== 'sessionFlags') {
+      throw new CertificationError('Codex effective config contains a non-session origin.');
+    }
+    requiredObject(metadata['name'], `Codex config origin '${key}' source`, ['type']);
+    return 'sessionFlags';
+  });
+  const requirementsEnvelope = requiredObject(
+    options.requirementsResponse,
+    'Codex configRequirements/read response',
+    ['id', 'result'],
+  );
+  if (requirementsEnvelope['id'] !== 4) {
+    throw new CertificationError('Codex configRequirements/read response ID is not exact.');
+  }
+  const requirements = requiredObject(
+    requirementsEnvelope['result'],
+    'Codex configRequirements/read result',
+    ['requirements'],
+  );
+  if (requirements['requirements'] !== null) {
+    throw new CertificationError('Codex loaded managed requirements from file, MDM, or enterprise state.');
+  }
+  return canonicalize({
+    layer_types: layerTypes,
+    origin_count: originTypes.length,
+    requirements: null,
+    workspace: options.workspace,
+    config_home: options.configHome,
+  });
+}
+
 async function probeCodexProjectSkills(options: Readonly<{
   paths: LiveCertificationPaths;
-  passPaths: HostPassPaths;
+  workspace: string;
   contract: HostLedLearningLaunchContract;
   env: Readonly<Record<string, string>>;
 }>): Promise<string> {
@@ -1805,20 +2056,29 @@ async function probeCodexProjectSkills(options: Readonly<{
     throw new CertificationError('Codex skills-list transport is not the certified stdio JSONL transport.');
   }
   const messages = options.contract.codex.skills_list.request_sequence.map((entry) => {
-    const substituted = substituteWorkspace(entry, options.passPaths.workspace);
+    const substituted = substituteWorkspace(entry, options.workspace);
     if (!isJsonObject(substituted)) throw new CertificationError('Codex skills-list request is not an object.');
     return substituted as JsonObject;
   });
   if (messages.map((entry) => entry['method']).join(',') !== 'initialize,initialized,skills/list') {
     throw new CertificationError('Codex skills-list request order is not exact.');
   }
-  const responses = await runSequentialJsonlRpc({
+  const rpc = await runSequentialJsonlRpc({
     command: options.paths.codexBin,
-    args: [...codexConfigArgs(options.env), 'app-server', '--stdio'],
-    cwd: options.passPaths.workspace,
+    args: [...codexGlobalLaunchArgs(options.workspace, options.env), 'app-server', '--stdio'],
+    cwd: options.workspace,
     env: options.env,
-    messages,
+    messages: [
+      ...messages,
+      canonicalize({
+        method: 'config/read',
+        id: 3,
+        params: { cwd: options.workspace, includeLayers: true },
+      }) as JsonObject,
+      canonicalize({ method: 'configRequirements/read', id: 4 }) as JsonObject,
+    ],
   });
+  const responses = rpc.responses;
   const initializeResponse = responses.find((entry) => entry['id'] === 1);
   const initializeResult = initializeResponse?.['result'];
   if (!isJsonObject(initializeResult)
@@ -1835,7 +2095,7 @@ async function probeCodexProjectSkills(options: Readonly<{
     throw new CertificationError('Codex skills-list response has invalid cardinality.');
   }
   const entry = result['data'][0];
-  if (!isJsonObject(entry) || entry['cwd'] !== options.passPaths.workspace
+  if (!isJsonObject(entry) || entry['cwd'] !== options.workspace
     || !Array.isArray(entry['errors']) || entry['errors'].length !== 0
     || !Array.isArray(entry['skills'])) {
     throw new CertificationError('Codex project skill discovery returned an error or wrong workspace.');
@@ -1843,7 +2103,7 @@ async function probeCodexProjectSkills(options: Readonly<{
   const expectedRepository = [options.contract.codex.generated_skill, ...options.contract.codex.skills]
     .map((skill) => ({
       name: skill.name,
-      path: join(options.passPaths.workspace, skill.path),
+      path: join(options.workspace, skill.path),
       scope: 'repo',
     }));
   const expectedSystem = ['imagegen', 'openai-docs', 'plugin-creator', 'skill-creator', 'skill-installer'].map((name) => ({
@@ -1869,64 +2129,68 @@ async function probeCodexProjectSkills(options: Readonly<{
   ))) {
     throw new CertificationError('Codex skill discovery differs from the exact five-system/three-repository inventory.');
   }
-  return sha256(canonicalJson(normalizeMachinePaths({ initialization: initializeResult, skills: actual }, {
-    [options.passPaths.workspace]: '$WORKSPACE',
+  const managedConfig = validateCodexManagedConfigResponses({
+    configResponse: responses.find((response) => response['id'] === 3),
+    requirementsResponse: responses.find((response) => response['id'] === 4),
+    workspace: options.workspace,
+    configHome: options.env['CODEX_HOME']!,
+  });
+  return sha256(canonicalJson(normalizeMachinePaths({
+    initialization: initializeResult,
+    skills: actual,
+    managed_config: managedConfig,
+    notifications: rpc.notification_summary,
+  }, {
+    [options.workspace]: '$WORKSPACE',
     [options.env['CODEX_HOME']!]: '$CODEX_HOME',
   })));
 }
 
 function captureCodexPromptInputSummary(options: Readonly<{
   paths: LiveCertificationPaths;
-  passPaths: HostPassPaths;
+  workspace: string;
   contract: HostLedLearningLaunchContract;
   env: Readonly<Record<string, string>>;
   prompt: string;
 }>): JsonValue {
   const [commandName, ...commandArgs] = options.contract.codex.prompt_input.command;
   if (commandName !== 'codex') throw new CertificationError('Codex prompt-input executable contract is invalid.');
+  const expectedUtcDate = new Date().toISOString().slice(0, 10);
   const result = requireSuccess(runCapturedProcess({
     command: options.paths.codexBin,
     args: [
-      '-a', 'never',
-      '-s', 'workspace-write',
-      '-C', options.passPaths.workspace,
-      ...codexConfigArgs(options.env),
+      ...codexGlobalLaunchArgs(options.workspace, options.env),
       ...commandArgs,
       options.prompt,
     ],
-    cwd: options.passPaths.workspace,
+    cwd: options.workspace,
     env: options.env,
     timeoutMs: PROBE_TIMEOUT_MS,
   }), 'codex-prompt-input');
+  if (new Date().toISOString().slice(0, 10) !== expectedUtcDate) {
+    throw new CertificationError('UTC date changed while Codex prompt-input was captured.');
+  }
   const parsed = parseJson(result.stdout, 'Codex prompt-input output');
   const normalizedPaths = normalizeMachinePaths(parsed, {
     [options.paths.repoRoot]: '$REPO',
-    [options.passPaths.workspace]: '$WORKSPACE',
+    [options.workspace]: '$WORKSPACE',
     [options.env['HOME']!]: '$TEMP_HOME',
     [options.env['CODEX_HOME']!]: '$HOST_CONFIG',
     [options.env['TMPDIR']!]: '$TMPDIR',
   });
-  const normalizeVolatileText = (value: JsonValue): JsonValue => {
-    if (typeof value === 'string') {
-      return value.replace(/<current_date>\d{4}-\d{2}-\d{2}<\/current_date>/gu,
-        '<current_date>$CURRENT_DATE</current_date>');
-    }
-    if (Array.isArray(value)) return value.map(normalizeVolatileText);
-    if (value === null || typeof value !== 'object') return value;
-    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, normalizeVolatileText(entry)]));
-  };
   const summary = validateCodexPromptInputContributions({
-    value: normalizeVolatileText(normalizedPaths),
-    workspace: options.passPaths.workspace,
+    value: normalizedPaths,
+    workspace: options.workspace,
     prompt: options.prompt,
     contract: options.contract,
+    expectedUtcDate,
   });
   return summary;
 }
 
 function probeCodexPromptInput(options: Readonly<{
   paths: LiveCertificationPaths;
-  passPaths: HostPassPaths;
+  workspace: string;
   contract: HostLedLearningLaunchContract;
   env: Readonly<Record<string, string>>;
   prompt: string;
@@ -1941,6 +2205,7 @@ export function validateCodexPromptInputContributions(options: Readonly<{
   workspace: string;
   prompt: string;
   contract: HostLedLearningLaunchContract;
+  expectedUtcDate: string;
 }>): JsonValue {
   if (!Array.isArray(options.value) || options.value.length !== 5) {
     throw new CertificationError('Codex prompt-input must contain exactly five closed messages.');
@@ -1957,9 +2222,10 @@ export function validateCodexPromptInputContributions(options: Readonly<{
       `Codex prompt message ${index + 1} metadata`,
       ['turn_id'],
     );
-    requiredString(metadata['turn_id'], `Codex prompt message ${index + 1} turn ID`);
+    const turnId = requiredString(metadata['turn_id'], `Codex prompt message ${index + 1} turn ID`);
     return {
       role: requiredString(record['role'], `Codex prompt message ${index + 1} role`),
+      turnId,
       texts: record['content'].map((block, blockIndex) => {
         const content = requiredObject(block, `Codex prompt message ${index + 1} content ${blockIndex + 1}`, [
           'type', 'text',
@@ -1978,10 +2244,16 @@ export function validateCodexPromptInputContributions(options: Readonly<{
     || messages[4]!.role !== 'user' || canonicalJson(messages[4]!.texts) !== canonicalJson([options.prompt])) {
     throw new CertificationError('Codex prompt-input role or contribution grouping is not exact.');
   }
+  if (new Set(messages.map((message) => message.turnId)).size !== 1) {
+    throw new CertificationError('Codex prompt-input messages do not share one exact turn identity.');
+  }
   const [permissions, skills] = messages[0]!.texts;
   const [binaryCollaboration] = messages[1]!.texts;
   const [binaryMultiAgent] = messages[2]!.texts;
-  const [instructions, environment] = messages[3]!.texts;
+  const [instructions, rawEnvironment] = messages[3]!.texts;
+  const environment = rawEnvironment === undefined
+    ? undefined
+    : normalizeCodexCurrentDateContribution(rawEnvironment, options.expectedUtcDate);
   if (permissions === undefined || !permissions.startsWith('<permissions instructions>')
     || !permissions.endsWith('</permissions instructions>')
     || !permissions.includes('`sandbox_mode` is `workspace-write`')
@@ -2028,6 +2300,10 @@ export function validateCodexPromptInputContributions(options: Readonly<{
     throw new CertificationError('Codex prompt-input configurable contribution contract drifted.');
   }
   return canonicalize({
+    prompt_metadata: {
+      single_turn: true,
+      message_count: messages.length,
+    },
     message_roles: messages.map((message) => message.role),
     contribution_order: [
       'permissions', 'skills', 'binary-collaboration', 'binary-multi-agent',
@@ -2044,6 +2320,23 @@ export function validateCodexPromptInputContributions(options: Readonly<{
     },
     skills: discoveredSkills,
   });
+}
+
+export function normalizeCodexCurrentDateContribution(
+  environment: string,
+  expectedUtcDate: string,
+): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(expectedUtcDate)) {
+    throw new CertificationError('Expected Codex UTC date is invalid.');
+  }
+  const matches = [...environment.matchAll(/<current_date>([^<]+)<\/current_date>/gu)];
+  if (matches.length !== 1 || matches[0]![1] !== expectedUtcDate) {
+    throw new CertificationError('Codex prompt-input current date is missing, duplicated, stale, or forged.');
+  }
+  return environment.replace(
+    `<current_date>${expectedUtcDate}</current_date>`,
+    '<current_date>$CURRENT_DATE</current_date>',
+  );
 }
 
 export function assertCodexPromptContributionPins(
@@ -2067,17 +2360,18 @@ export function assertCodexPromptContributionPins(
 async function probeCodexSandbox(options: Readonly<{
   paths: LiveCertificationPaths;
   passPaths: HostPassPaths;
+  workspace: string;
   contract: HostLedLearningLaunchContract;
   env: Readonly<Record<string, string>>;
 }>): Promise<string> {
   const outside = join(options.passPaths.hostRoot, 'sandbox-outside-canary');
-  const inside = join(options.passPaths.workspace, '.fixture/sandbox-inside-canary');
+  const inside = join(options.workspace, '.fixture/sandbox-inside-canary');
   if (existsSync(outside)) throw new CertificationError('Codex sandbox write canary already exists.');
   const baseArgs = [
     ...codexConfigArgs(options.env),
     'sandbox',
     '-P', ':workspace',
-    '-C', options.passPaths.workspace,
+    '-C', options.workspace,
     '--sandbox-state-disable-network',
   ];
   const listener = createServer((socket) => socket.end());
@@ -2099,7 +2393,7 @@ async function probeCodexSandbox(options: Readonly<{
     const outsideControl = requireSuccess(runCapturedProcess({
       command: '/usr/bin/touch',
       args: [outside],
-      cwd: options.passPaths.workspace,
+      cwd: options.workspace,
       env: options.env,
       timeoutMs: PROBE_TIMEOUT_MS,
     }), 'codex-sandbox-outside-control');
@@ -2108,14 +2402,14 @@ async function probeCodexSandbox(options: Readonly<{
     const networkControl = requireSuccess(runCapturedProcess({
       command: process.execPath,
       args: ['-e', networkScript],
-      cwd: options.passPaths.workspace,
+      cwd: options.workspace,
       env: options.env,
       timeoutMs: PROBE_TIMEOUT_MS,
     }), 'codex-sandbox-network-control');
     const insideProbe = requireSuccess(runCapturedProcess({
       command: options.paths.codexBin,
       args: [...baseArgs, '/usr/bin/touch', inside],
-      cwd: options.passPaths.workspace,
+      cwd: options.workspace,
       env: options.env,
       timeoutMs: PROBE_TIMEOUT_MS,
     }), 'codex-sandbox-inside-write');
@@ -2124,14 +2418,14 @@ async function probeCodexSandbox(options: Readonly<{
     const writeProbe = runCapturedProcess({
       command: options.paths.codexBin,
       args: [...baseArgs, '/usr/bin/touch', outside],
-      cwd: options.passPaths.workspace,
+      cwd: options.workspace,
       env: options.env,
       timeoutMs: PROBE_TIMEOUT_MS,
     });
     const networkProbe = runCapturedProcess({
       command: options.paths.codexBin,
       args: [...baseArgs, process.execPath, '-e', networkScript],
-      cwd: options.passPaths.workspace,
+      cwd: options.workspace,
       env: options.env,
       timeoutMs: PROBE_TIMEOUT_MS,
     });
@@ -2401,9 +2695,15 @@ function extractCodexTrace(events: readonly JsonValue[]): Pick<NormalizedHostTra
     }
     if (eventType === 'item.completed') {
       const started = startedCommands.get(itemId);
+      const isSandboxDenial = (decodedCommand === CODEX_SANDBOX_WRITE_COMMAND
+        || decodedCommand === CODEX_SANDBOX_NETWORK_COMMAND)
+        && item['status'] === 'failed'
+        && typeof item['exit_code'] === 'number' && item['exit_code'] !== 0
+        && typeof item['aggregated_output'] === 'string'
+        && /sandbox|denied|not permitted|operation not permitted|blocked/iu.test(item['aggregated_output']);
       if (started === undefined || completedCommands.has(itemId)
         || started.raw !== rawCommand || started.decoded !== decodedCommand
-        || item['status'] !== 'completed' || item['exit_code'] !== 0) {
+        || (!isSandboxDenial && (item['status'] !== 'completed' || item['exit_code'] !== 0))) {
         throw new CertificationError('Codex command completion is unmatched, changed, duplicated, or unsuccessful.');
       }
       completedCommands.add(itemId);
@@ -2559,6 +2859,52 @@ function assertClaudeSandboxProof(
     outside_control_sha256: probe.outsideControlSha256,
     network_control_sha256: probe.networkControlSha256,
     denials: proofs,
+  }));
+}
+
+export function assertCodexSandboxCanaryTrace(
+  trace: NormalizedHostTrace,
+  expectedCommands: readonly [string, string],
+): readonly Readonly<{ command_sha256: string; result_sha256: string }>[] {
+  const calls = trace.tool_calls.filter((entry) => isJsonObject(entry) && entry['type'] === 'command_execution');
+  if (calls.length < 3) {
+    throw new CertificationError('Codex did not run controlled workflow commands after both sandbox canaries.');
+  }
+  return Object.freeze(expectedCommands.map((expectedCommand, index) => {
+    const call = calls[index];
+    if (!isJsonObject(call)
+      || decodeCodexShellWrappedCommand(call['command'], true) !== expectedCommand
+      || call['status'] !== 'failed'
+      || typeof call['exit_code'] !== 'number' || call['exit_code'] === 0
+      || typeof call['aggregated_output'] !== 'string'
+      || !/sandbox|denied|not permitted|operation not permitted|blocked/iu.test(call['aggregated_output'])
+      || calls.filter((entry) => isJsonObject(entry)
+        && decodeCodexShellWrappedCommand(entry['command'], true) === expectedCommand).length !== 1) {
+      throw new CertificationError(`Codex sandbox canary ${index + 1} was not one exact ordered paid-exec denial.`);
+    }
+    return Object.freeze({
+      command_sha256: sha256(expectedCommand),
+      result_sha256: sha256(canonicalJson(call)),
+    });
+  }));
+}
+
+function assertCodexSandboxProof(
+  trace: NormalizedHostTrace,
+  probe: ReturnType<typeof codexSandboxCanaries>,
+): string {
+  if (existsSync(probe.outsidePath)) {
+    throw new CertificationError('Codex paid exec created its outside-write canary.');
+  }
+  const denials = assertCodexSandboxCanaryTrace(
+    trace,
+    [probe.writeCommand, probe.networkCommand],
+  );
+  return sha256(canonicalJson({
+    canary_order: ['outside-workspace-write', 'unix-socket-connect'],
+    outside_control_sha256: probe.outsideControlSha256,
+    network_control_sha256: probe.networkControlSha256,
+    denials,
   }));
 }
 
@@ -2943,6 +3289,7 @@ export function validateHostTraceCommands(options: Readonly<{
   required: readonly string[];
   forbidden: readonly string[];
   claudeCanaries?: ReturnType<typeof claudeSandboxCanaries>;
+  codexCanaries?: ReturnType<typeof codexSandboxCanaries>;
 }>): void {
   if (options.host === 'claude') {
     validateClaudeActionSurface(options.trace, options.contract, options.turn, options.claudeCanaries);
@@ -2971,6 +3318,11 @@ export function validateHostTraceCommands(options: Readonly<{
     if (options.host === 'claude' && options.turn === 'discover'
       && options.claudeCanaries !== undefined
       && (command === options.claudeCanaries.writeCommand || command === options.claudeCanaries.networkCommand)) {
+      continue;
+    }
+    if (options.host === 'codex' && options.turn === 'discover'
+      && options.codexCanaries !== undefined
+      && (command === options.codexCanaries.writeCommand || command === options.codexCanaries.networkCommand)) {
       continue;
     }
     if (options.host === 'codex'
@@ -3261,7 +3613,11 @@ function hostProbeEnvironment(options: Readonly<{
   turn: 1 | 2;
   label: string;
 }>): Readonly<{ env: Readonly<Record<string, string>>; roots: HostProbePaths }> {
-  const roots = createHostProbePaths(options.passPaths, options.label);
+  const roots = createHostProbePaths(
+    options.passPaths.workspace,
+    options.passPaths.hostRoot,
+    options.label,
+  );
   const hostBinary = options.host === 'claude' ? options.paths.claudeBin : options.paths.codexBin;
   return Object.freeze({
     roots,
@@ -3271,7 +3627,7 @@ function hostProbeEnvironment(options: Readonly<{
       home: roots.home,
       configHome: roots.config,
       temp: roots.temp,
-      workspace: options.passPaths.workspace,
+      workspace: roots.workspace,
       hostBinary,
       requestHash: `sha256:${sha256(readFileSync(join(
         options.paths.fixtureRoot,
@@ -3976,6 +4332,7 @@ async function runPass(options: Readonly<{
   let sandboxProbeHash: string;
   let turnOne: HostTurnOutcome;
   let claudeCanaries: ReturnType<typeof claudeSandboxCanaries> | undefined;
+  let codexCanaries: ReturnType<typeof codexSandboxCanaries> | undefined;
   if (options.host === 'claude') {
     const pluginProbe = hostProbeEnvironment({
       host: options.host,
@@ -3986,8 +4343,21 @@ async function runPass(options: Readonly<{
       label: 'skill-discovery',
     });
     skillDiscoveryHash = withHostBinaryProof(options.host, hostBinary, options.hostProbe, () => (
-      probeClaudePlugin({ paths: options.paths, contract: options.contract, env: pluginProbe.env })
+      probeClaudePlugin({
+        paths: options.paths,
+        contract: options.contract,
+        env: pluginProbe.env,
+        workspace: pluginProbe.roots.workspace,
+      })
     ));
+    const beforePaidTurn = buildFileManifest([{
+      label: `${options.host}-workspace`,
+      path: currentPaths.workspace,
+      exclusions: ['.git'],
+    }]);
+    if (beforePaidTurn.sha256 !== initialWorkspace.sha256) {
+      throw new CertificationError('A model-free Claude probe mutated the paid workspace before launch.');
+    }
     const listener = createServer((socket) => socket.end());
     await new Promise<void>((resolvePromise, rejectPromise) => {
       listener.once('error', rejectPromise);
@@ -4033,7 +4403,7 @@ async function runPass(options: Readonly<{
     skillDiscoveryHash = await withHostBinaryProofAsync(options.host, hostBinary, options.hostProbe, () => (
       probeCodexProjectSkills({
         paths: options.paths,
-        passPaths: currentPaths,
+        workspace: skillProbe.roots.workspace,
         contract: options.contract,
         env: skillProbe.env,
       })
@@ -4049,7 +4419,7 @@ async function runPass(options: Readonly<{
     const discoverPromptHash = withHostBinaryProof(options.host, hostBinary, options.hostProbe, () => (
       probeCodexPromptInput({
         paths: options.paths,
-        passPaths: currentPaths,
+        workspace: discoverPromptProbe.roots.workspace,
         contract: options.contract,
         env: discoverPromptProbe.env,
         prompt: request,
@@ -4066,7 +4436,7 @@ async function runPass(options: Readonly<{
     const approvePromptHash = withHostBinaryProof(options.host, hostBinary, options.hostProbe, () => (
       probeCodexPromptInput({
         paths: options.paths,
-        passPaths: currentPaths,
+        workspace: approvePromptProbe.roots.workspace,
         contract: options.contract,
         env: approvePromptProbe.env,
         prompt: readFileSync(approvalPath, 'utf8'),
@@ -4084,24 +4454,52 @@ async function runPass(options: Readonly<{
       turn: 1,
       label: 'sandbox',
     });
-    sandboxProbeHash = await withHostBinaryProofAsync(options.host, hostBinary, options.hostProbe, () => (
+    const standaloneSandboxProbeHash = await withHostBinaryProofAsync(options.host, hostBinary, options.hostProbe, () => (
       probeCodexSandbox({
         paths: options.paths,
         passPaths: currentPaths,
+        workspace: sandboxProbe.roots.workspace,
         contract: options.contract,
         env: sandboxProbe.env,
       })
     ));
-    turnOne = runHostTurn({
-      host: options.host,
-      paths: options.paths,
-      passPaths: currentPaths,
-      contract: options.contract,
-      turn: 1,
-      prompt: request,
-      apiKey: options.apiKey,
-      hostProbe: options.hostProbe,
+    const beforePaidTurn = buildFileManifest([{
+      label: `${options.host}-workspace`,
+      path: currentPaths.workspace,
+      exclusions: ['.git'],
+    }]);
+    if (beforePaidTurn.sha256 !== initialWorkspace.sha256) {
+      throw new CertificationError('A model-free Codex probe mutated the paid workspace before launch.');
+    }
+    const socketPath = join(currentPaths.hostRoot, 'codex-network-canary.sock');
+    const listener = createServer((socket) => socket.end());
+    await new Promise<void>((resolvePromise, rejectPromise) => {
+      listener.once('error', rejectPromise);
+      listener.listen(socketPath, () => resolvePromise());
     });
+    let canaries: ReturnType<typeof codexSandboxCanaries> | undefined;
+    try {
+      canaries = codexSandboxCanaries(currentPaths.hostRoot, currentPaths.workspace);
+      codexCanaries = canaries;
+      turnOne = runHostTurn({
+        host: options.host,
+        paths: options.paths,
+        passPaths: currentPaths,
+        contract: options.contract,
+        turn: 1,
+        prompt: request,
+        apiKey: options.apiKey,
+        hostProbe: options.hostProbe,
+      });
+    } finally {
+      await new Promise<void>((resolvePromise) => listener.close(() => resolvePromise()));
+      if (existsSync(socketPath)) rmSync(socketPath);
+    }
+    if (canaries === undefined) throw new CertificationError('Codex paid sandbox controls were not established.');
+    sandboxProbeHash = sha256(canonicalJson({
+      standalone: standaloneSandboxProbeHash,
+      paid_exec: assertCodexSandboxProof(turnOne.trace, canaries),
+    }));
     assertCodexPrimarySkillProof(turnOne.trace, currentPaths.workspace, options.contract);
     assertCodexDreamerProof(
       turnOne.trace,
@@ -4124,6 +4522,7 @@ async function runPass(options: Readonly<{
       options.contract.turn_expectations.discover.forbidden_log_categories,
     ),
     ...(claudeCanaries === undefined ? {} : { claudeCanaries }),
+    ...(codexCanaries === undefined ? {} : { codexCanaries }),
   });
   const turnOneAdapterLog = readAdapterLog(currentPaths.workspace, options.contract);
   const derivedQuery = validateAdapterLog({

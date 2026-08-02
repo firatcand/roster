@@ -1,24 +1,30 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import {
   assertDistinctHostPassTraceHashes,
   assertCodexPromptContributionPins,
+  assertCodexSandboxCanaryTrace,
   assertClaudeSandboxCanaryTrace,
   assertHostVisibleJsonCommandOutput,
   buildFileManifest,
   assertHostBinaryMatches,
   canonicalJson,
+  classifyCodexAppServerFrame,
+  codexGlobalLaunchArgs,
+  createHostProbePaths,
   HOST_LED_LEARNING_REPO_ROOT,
   loadHostLedLearningLaunchContract,
   normalizeHostTrace,
+  normalizeCodexCurrentDateContribution,
   parseHostLedLearningLaunchContract,
   tokenizeLiteralHostCommand,
   validateCandidateSemanticMeaning,
   validateCodexPromptInputContributions,
+  validateCodexManagedConfigResponses,
   validateDerivedQueryMeaning,
   validateHostTraceCommands,
   type CertificationHost,
@@ -148,6 +154,7 @@ function promptMessage(role: 'developer' | 'user', texts: readonly string[]): Js
 }
 
 function canonicalCodexPromptInput(prompt: string): JsonValue[] {
+  const expectedUtcDate = '2026-08-03';
   const contract = loadHostLedLearningLaunchContract();
   const permissions = [
     '<permissions instructions>',
@@ -178,7 +185,12 @@ function canonicalCodexPromptInput(prompt: string): JsonValue[] {
     readFileSync(join(HOST_LED_LEARNING_REPO_ROOT, 'AGENTS.md'), 'utf8'),
     '</INSTRUCTIONS>',
   ].join('\n');
-  const environment = '<environment_context>\n<cwd>$WORKSPACE</cwd>\n</environment_context>';
+  const environment = [
+    '<environment_context>',
+    '<cwd>$WORKSPACE</cwd>',
+    `<current_date>${expectedUtcDate}</current_date>`,
+    '</environment_context>',
+  ].join('\n');
   return [
     promptMessage('developer', [permissions, skills]),
     promptMessage('developer', ['binary-owned collaboration instructions']),
@@ -549,12 +561,14 @@ test('Codex trace audit permits one exact Dreamer read and rejects extra operand
 test('Codex prompt-input validation rejects extra and injected contributions', () => {
   const contract = loadHostLedLearningLaunchContract();
   const prompt = 'Run the seeded discovery and learning loop.';
+  const expectedUtcDate = '2026-08-03';
   const canonical = canonicalCodexPromptInput(prompt);
   assert.doesNotThrow(() => validateCodexPromptInputContributions({
     value: canonical,
     workspace: HOST_LED_LEARNING_REPO_ROOT,
     prompt,
     contract,
+    expectedUtcDate,
   }));
 
   const sixthContribution = [...canonical, promptMessage('developer', ['ambient instruction'])];
@@ -563,6 +577,7 @@ test('Codex prompt-input validation rejects extra and injected contributions', (
     workspace: HOST_LED_LEARNING_REPO_ROOT,
     prompt,
     contract,
+    expectedUtcDate,
   }), /exactly five closed messages/iu);
 
   const injected = structuredClone(canonical) as Array<Record<string, unknown>>;
@@ -577,6 +592,7 @@ test('Codex prompt-input validation rejects extra and injected contributions', (
     workspace: HOST_LED_LEARNING_REPO_ROOT,
     prompt,
     contract,
+    expectedUtcDate,
   }), /workspace instruction contribution is not exact/iu);
 
   const summary = validateCodexPromptInputContributions({
@@ -584,6 +600,7 @@ test('Codex prompt-input validation rejects extra and injected contributions', (
     workspace: HOST_LED_LEARNING_REPO_ROOT,
     prompt,
     contract,
+    expectedUtcDate,
   });
   assert.ok(summary !== null && typeof summary === 'object' && !Array.isArray(summary));
   const hashes = (summary as Record<string, JsonValue>)['contribution_sha256'];
@@ -602,11 +619,209 @@ test('Codex prompt-input validation rejects extra and injected contributions', (
     workspace: HOST_LED_LEARNING_REPO_ROOT,
     prompt,
     contract,
+    expectedUtcDate,
   });
   assert.throws(
     () => assertCodexPromptContributionPins(injectedSummary, expected as never),
     /pinned contribution 'permissions' drifted/iu,
   );
+
+  const splitTurn = structuredClone(canonical) as Array<Record<string, unknown>>;
+  const splitMetadata = splitTurn[2]!['internal_chat_message_metadata_passthrough'] as Record<string, unknown>;
+  splitMetadata['turn_id'] = 'different-turn';
+  assert.throws(() => validateCodexPromptInputContributions({
+    value: splitTurn as unknown as JsonValue,
+    workspace: HOST_LED_LEARNING_REPO_ROOT,
+    prompt,
+    contract,
+    expectedUtcDate,
+  }), /one exact turn identity/iu);
+});
+
+test('Codex current-date normalization requires one exact expected UTC date', () => {
+  const expected = '2026-08-03';
+  assert.equal(
+    normalizeCodexCurrentDateContribution(
+      `<environment_context><current_date>${expected}</current_date></environment_context>`,
+      expected,
+    ),
+    '<environment_context><current_date>$CURRENT_DATE</current_date></environment_context>',
+  );
+  for (const environment of [
+    '<environment_context></environment_context>',
+    '<environment_context><current_date>2026-08-02</current_date></environment_context>',
+    `<environment_context><current_date>${expected}</current_date><current_date>${expected}</current_date></environment_context>`,
+  ]) {
+    assert.throws(
+      () => normalizeCodexCurrentDateContribution(environment, expected),
+      /missing, duplicated, stale, or forged/iu,
+    );
+  }
+});
+
+test('Codex paid and prompt probes share one strict model-bound global launch prefix', () => {
+  const env = {
+    HOME: '/isolated/home',
+    TMPDIR: '/isolated/tmp',
+    PATH: '/isolated/bin:/usr/bin:/bin',
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    TZ: 'UTC',
+    NO_COLOR: '1',
+    CI: '1',
+    CODEX_HOME: '/isolated/config',
+    OPENAI_API_KEY: 'not-a-real-key',
+    ROSTER_350_HOST: 'codex',
+    ROSTER_350_TURN: 'discover',
+    ROSTER_350_REQUEST_SHA256: `sha256:${'a'.repeat(64)}`,
+    ROSTER_350_DREAMER_CHALLENGE_SHA256: `sha256:${'b'.repeat(64)}`,
+    ROSTER_350_ROSTER_VERSION: '0.0.0',
+  };
+  const prefix = codexGlobalLaunchArgs('/isolated/workspace', env);
+  assert.deepEqual(prefix.slice(0, 9), [
+    '-a', 'never', '--strict-config', '--model', 'gpt-5.6-sol',
+    '--sandbox', 'workspace-write', '-C', '/isolated/workspace',
+  ]);
+  assert.equal(prefix.filter((entry) => entry === '--strict-config').length, 1);
+  assert.equal(prefix.filter((entry) => entry === '--model').length, 1);
+  assert.ok(prefix.includes('model_provider="roster-certification-openai"'));
+  const source = readFileSync(join(
+    HOST_LED_LEARNING_REPO_ROOT,
+    'test/support/host-led-learning-certification.ts',
+  ), 'utf8');
+  assert.match(source, /function codexArgs[\s\S]+\.\.\.codexGlobalLaunchArgs\(pass\.workspace, env\)/u);
+  assert.match(source, /function captureCodexPromptInputSummary[\s\S]+\.\.\.codexGlobalLaunchArgs\(options\.workspace, options\.env\)/u);
+});
+
+test('Codex app-server frames are closed against unmatched responses and warnings', () => {
+  assert.deepEqual(
+    classifyCodexAppServerFrame({ id: 1, result: {} }, 1, 0),
+    { kind: 'response', response: { id: 1, result: {} } },
+  );
+  assert.deepEqual(classifyCodexAppServerFrame({
+    method: 'remoteControl/status/changed',
+    params: {
+      status: 'disabled',
+      serverName: 'isolated-host',
+      installationId: 'installation-test',
+      environmentId: null,
+    },
+  }, undefined, 0), { kind: 'notification' });
+  for (const [frame, awaitedId] of [
+    [{ id: 8, result: {} }, 7],
+    [{ id: 7, result: {}, extra: true }, 7],
+    [{ id: 7, error: { message: 'failure' } }, 7],
+    [{ method: 'config/warning', params: { message: 'managed config loaded' } }, undefined],
+  ] as const) {
+    assert.throws(
+      () => classifyCodexAppServerFrame(frame, awaitedId, 0),
+      /unmatched|error|unapproved/iu,
+    );
+  }
+});
+
+test('Codex managed-config proof rejects enterprise layers and requirements', () => {
+  const layerHash = `sha256:${'a'.repeat(64)}`;
+  const configHome = '/isolated/config';
+  const workspace = '/isolated/workspace';
+  const configResponse = {
+    id: 3,
+    result: {
+      config: {
+        model: 'gpt-5.6-sol',
+        model_provider: 'roster-certification-openai',
+        approval_policy: 'never',
+        sandbox_mode: 'workspace-write',
+        allow_login_shell: false,
+        mcp_servers: {},
+        instructions: null,
+        developer_instructions: null,
+        hooks: null,
+      },
+      origins: {
+        model: { name: { type: 'sessionFlags' }, version: layerHash },
+      },
+      layers: [
+        { name: { type: 'user', file: `${configHome}/config.toml`, profile: null }, version: layerHash, config: {} },
+        { name: { type: 'system', file: '/etc/codex/config.toml' }, version: layerHash, config: {} },
+        { name: { type: 'sessionFlags' }, version: layerHash, config: { model: 'gpt-5.6-sol' } },
+      ],
+    },
+  };
+  const requirementsResponse = { id: 4, result: { requirements: null } };
+  assert.doesNotThrow(() => validateCodexManagedConfigResponses({
+    configResponse,
+    requirementsResponse,
+    workspace,
+    configHome,
+  }));
+  const enterprise = structuredClone(configResponse);
+  enterprise.result.layers[2] = {
+    name: { type: 'enterpriseManaged', id: 'company', name: 'Company policy' },
+    version: layerHash,
+    config: { hooks: { enabled: true } },
+  } as never;
+  assert.throws(() => validateCodexManagedConfigResponses({
+    configResponse: enterprise,
+    requirementsResponse,
+    workspace,
+    configHome,
+  }), /forbidden managed, enterprise, project, or legacy/iu);
+  assert.throws(() => validateCodexManagedConfigResponses({
+    configResponse,
+    requirementsResponse: { id: 4, result: { requirements: { allowedSandboxModes: ['danger-full-access'] } } },
+    workspace,
+    configHome,
+  }), /loaded managed requirements/iu);
+});
+
+test('host capability probes clone independent clean Git workspaces', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-350-probe-roots-'));
+  const paidWorkspace = join(root, 'paid-workspace');
+  const hostRoot = join(root, 'host');
+  try {
+    mkdirSync(join(paidWorkspace, '.git'), { recursive: true });
+    writeFileSync(join(paidWorkspace, '.git/ambient'), 'must-not-copy');
+    writeFileSync(join(paidWorkspace, 'sentinel.txt'), 'pristine');
+    const first = createHostProbePaths(paidWorkspace, hostRoot, 'first');
+    const second = createHostProbePaths(paidWorkspace, hostRoot, 'second');
+    assert.notEqual(first.workspace, second.workspace);
+    assert.notEqual(first.home, second.home);
+    assert.ok(existsSync(join(first.workspace, '.git')));
+    assert.ok(existsSync(join(second.workspace, '.git')));
+    assert.equal(existsSync(join(first.workspace, '.git/ambient')), false);
+    writeFileSync(join(first.workspace, 'sentinel.txt'), 'mutated');
+    assert.equal(readFileSync(join(paidWorkspace, 'sentinel.txt'), 'utf8'), 'pristine');
+    assert.equal(readFileSync(join(second.workspace, 'sentinel.txt'), 'utf8'), 'pristine');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Codex paid sandbox canaries must be the first two exact denied exec commands', () => {
+  const commands = [
+    '/usr/bin/touch ../codex-outside-write-canary',
+    '/usr/bin/nc -zU ../codex-network-canary.sock',
+  ] as const;
+  const workflow = 'roster-350-fixture-dream-status';
+  const normalized = normalizeCodex([
+    codexCommandEvent('item.started', 'write-canary', commands[0]),
+    codexCommandEvent('item.completed', 'write-canary', commands[0], 'failed', 1, undefined, 'blocked by sandbox'),
+    codexCommandEvent('item.started', 'network-canary', commands[1]),
+    codexCommandEvent('item.completed', 'network-canary', commands[1], 'failed', 1, undefined, 'network denied by sandbox'),
+    codexCommandEvent('item.started', 'workflow', workflow),
+    codexCommandEvent('item.completed', 'workflow', workflow),
+  ]);
+  assert.equal(assertCodexSandboxCanaryTrace(normalized, commands).length, 2);
+  const reversed = normalizeCodex([
+    codexCommandEvent('item.started', 'network-canary', commands[1]),
+    codexCommandEvent('item.completed', 'network-canary', commands[1], 'failed', 1, undefined, 'network denied by sandbox'),
+    codexCommandEvent('item.started', 'write-canary', commands[0]),
+    codexCommandEvent('item.completed', 'write-canary', commands[0], 'failed', 1, undefined, 'blocked by sandbox'),
+    codexCommandEvent('item.started', 'workflow', workflow),
+    codexCommandEvent('item.completed', 'workflow', workflow),
+  ]);
+  assert.throws(() => assertCodexSandboxCanaryTrace(reversed, commands), /not one exact ordered/iu);
 });
 
 test('candidate semantics require the exact closed meaning and canonical renderer', () => {
