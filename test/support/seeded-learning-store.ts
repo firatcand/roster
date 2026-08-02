@@ -56,6 +56,7 @@ export type SeededFeedback = {
 
 export type SeededLessonCandidate = {
   id: string;
+  lesson_id: string;
   watermark: string;
   target: string;
   recommendation: string;
@@ -280,6 +281,7 @@ function validCandidate(value: unknown): value is SeededLessonCandidate {
   const citations = record['citations'];
   return exactKeys(record, [
     'id',
+    'lesson_id',
     'watermark',
     'target',
     'recommendation',
@@ -287,6 +289,7 @@ function validCandidate(value: unknown): value is SeededLessonCandidate {
     'citations',
   ])
     && safeId(record['id'])
+    && safeId(record['lesson_id'])
     && safeHash(record['watermark'])
     && boundedString(record['target'], MAX_ID_BYTES)
     && boundedString(record['recommendation'])
@@ -546,6 +549,9 @@ export function materializeSeededLesson(options: {
   }
   if (candidate.record.target !== lessonTarget(options.lesson.scope)) {
     fail('FIXTURE_CONFLICT', 'Fixture lesson scope does not match the candidate target.');
+  }
+  if (candidate.record.lesson_id !== options.lesson.id) {
+    fail('FIXTURE_CONFLICT', 'Fixture lesson identity does not match the stored candidate.');
   }
   const content = renderSeededLesson(options.lesson);
   const scaffolded = scaffoldWorkspace(options.workspaceRoot, {

@@ -275,6 +275,7 @@ test('seeded host-led learning uses product context and lesson seams around boun
 
     const lessonCandidate: SeededLessonCandidate = {
       id: 'candidate-opportunity-discovery-001',
+      lesson_id: PROMOTED_LESSON_ID,
       watermark: due.watermark!,
       target: TARGET,
       recommendation: 'Prefer attributable practitioner posts that describe a concrete operational problem.',
@@ -295,6 +296,11 @@ test('seeded host-led learning uses product context and lesson seams around boun
     assert.equal(storeFailure(() => store.createCandidate({
       ...lessonCandidate,
       recommendation: 'A conflicting recommendation.',
+    })).code, 'FIXTURE_CONFLICT');
+    assert.deepEqual(readFileSync(statePath), stateBeforeCandidateConflict);
+    assert.equal(storeFailure(() => store.createCandidate({
+      ...lessonCandidate,
+      lesson_id: 'conflicting-lesson-identity',
     })).code, 'FIXTURE_CONFLICT');
     assert.deepEqual(readFileSync(statePath), stateBeforeCandidateConflict);
 
@@ -354,6 +360,19 @@ test('seeded host-led learning uses product context and lesson seams around boun
       lesson,
     })).code, 'FIXTURE_NOT_FOUND');
     assert.deepEqual(readFileSync(statePath), stateBeforePromotion);
+    const mismatchedLessonId = 'unproposed-materialization-identity';
+    assert.equal(storeFailure(() => materializeSeededLesson({
+      store,
+      workspaceRoot: fixture.root,
+      candidateId: lessonCandidate.id,
+      expectedCandidateHash: createdCandidate.content_hash,
+      lesson: { ...lesson, id: mismatchedLessonId },
+    })).code, 'FIXTURE_CONFLICT');
+    assert.deepEqual(readFileSync(statePath), stateBeforePromotion);
+    assert.equal(existsSync(join(
+      fixture.root,
+      `functions/gtm/agents/social-manager/playbook/${mismatchedLessonId}.md`,
+    )), false);
     assert.equal(existsSync(join(
       fixture.root,
       `functions/gtm/agents/social-manager/playbook/${PROMOTED_LESSON_ID}.md`,
