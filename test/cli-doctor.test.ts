@@ -5,11 +5,24 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
+  CLAUDE_PROJECT_INSTRUCTIONS_PATH,
+  CLAUDE_PROJECT_RULE_PATH,
+  CODEX_PROJECT_INSTRUCTIONS_PATH,
+  CODEX_ROSTER_SKILL_PATH,
+  createGeneratedManifest,
+  GENERATED_MANIFEST_PATH,
+  HOST_ADAPTER_LIFECYCLE_CAPABILITIES,
   installV2ProjectActivation,
+  inspectGeneratedAdapterMetadata,
   parseGeneratedMarkdown,
+  parseGeneratedManifest,
+  renderClaudeProjectInstructions,
   renderGeneratedMarkdown,
+  renderGeneratedManifest,
   renderRosterBootstrap,
+  resolveActivationAssurance,
 } from '../src/lib/generated-artifacts.ts';
+import { deriveV2DoctorHosts } from '../src/commands/doctor.ts';
 
 const BIN = resolve('src/bin/roster.ts');
 
@@ -595,7 +608,7 @@ test('v2 doctor audits structural and generated activation without legacy projec
     const doc = runCliInCwd(['doctor'], env, ws);
     assert.equal(doc.status, 0, `stderr: ${doc.stderr}\nstdout: ${doc.stdout}`);
     assert.match(doc.stdout, /Roster v2 workspace/);
-    assert.match(doc.stdout, /claude activation: advisory-manual/);
+    assert.match(doc.stdout, /claude activation: advisory \(assurance: advisory-manual\)/);
     assert.doesNotMatch(doc.stdout, /Install scope|Shadow collisions|Scheduling/);
   } finally {
     h.cleanup();
@@ -649,12 +662,17 @@ test('v2 doctor --json includes structural, generated assurance, and not-applica
     const payload = JSON.parse(doc.stdout) as {
       workspace: { kind: string };
       structural: { ok: boolean };
-      generated: { hosts: { claude?: { activation_assurance: string } } };
+      generated: {
+        lifecycle_capabilities: Array<{ id: string; status: string }>;
+        hosts: { claude?: { activation_assurance: string; activation_capability: string } };
+      };
       not_applicable: Record<string, { status: string }>;
     };
     assert.equal(payload.workspace.kind, 'v2');
     assert.equal(payload.structural.ok, true);
     assert.equal(payload.generated.hosts.claude?.activation_assurance, 'advisory-manual');
+    assert.equal(payload.generated.hosts.claude?.activation_capability, 'advisory');
+    assert.deepEqual(payload.generated.lifecycle_capabilities, HOST_ADAPTER_LIFECYCLE_CAPABILITIES);
     assert.equal(payload.not_applicable.scheduling?.status, 'not-applicable');
   } finally {
     h.cleanup();
@@ -668,9 +686,8 @@ test('v2 doctor derives assurance from current files and the locally detected ho
     const installed = installV2ProjectActivation({
       root: ws,
       host: 'codex',
-      hostVersion: 'codex-cli 0.144.1',
     });
-    assert.equal(installed.assurance, 'auto-loaded');
+    assert.equal(installed.assurance, 'advisory-manual');
     const env = { ...envFor(h), PATH: '/usr/bin:/bin' };
 
     const absentHost = runCliInCwd(['doctor', '--json'], env, ws);
@@ -678,11 +695,18 @@ test('v2 doctor derives assurance from current files and the locally detected ho
     const absentPayload = JSON.parse(absentHost.stdout) as {
       generated: {
         manifest_status: string;
-        hosts: { codex?: { activation_assurance: string; detected_host_version: string | null } };
+        hosts: {
+          codex?: {
+            activation_assurance: string;
+            activation_capability: string;
+            detected_host_version: string | null;
+          };
+        };
       };
     };
     assert.equal(absentPayload.generated.manifest_status, 'ok');
     assert.equal(absentPayload.generated.hosts.codex?.activation_assurance, 'advisory-manual');
+    assert.equal(absentPayload.generated.hosts.codex?.activation_capability, 'advisory');
     assert.equal(absentPayload.generated.hosts.codex?.detected_host_version, null);
 
     const bin = join(h.root, 'bin');
@@ -693,9 +717,29 @@ test('v2 doctor derives assurance from current files and the locally detected ho
     const detectedHost = runCliInCwd(['doctor', '--json'], detectedEnv, ws);
     assert.equal(detectedHost.status, 0, detectedHost.stderr);
     const detectedPayload = JSON.parse(detectedHost.stdout) as {
-      generated: { hosts: { codex?: { activation_assurance: string } } };
+      generated: { hosts: { codex?: { activation_assurance: string; activation_capability: string } } };
     };
     assert.equal(detectedPayload.generated.hosts.codex?.activation_assurance, 'auto-loaded');
+    assert.equal(detectedPayload.generated.hosts.codex?.activation_capability, 'supported');
+
+    writeFileSync(join(bin, 'codex'), '#!/bin/sh\necho "codex-cli 0.144.2"\n');
+    const outOfRangeHost = runCliInCwd(['doctor', '--json'], detectedEnv, ws);
+    assert.equal(outOfRangeHost.status, 0, outOfRangeHost.stderr);
+    const outOfRangePayload = JSON.parse(outOfRangeHost.stdout) as {
+      generated: {
+        hosts: {
+          codex?: {
+            activation_assurance: string;
+            activation_capability: string;
+            detected_host_version: string | null;
+          };
+        };
+      };
+    };
+    assert.equal(outOfRangePayload.generated.hosts.codex?.activation_assurance, 'advisory-manual');
+    assert.equal(outOfRangePayload.generated.hosts.codex?.activation_capability, 'advisory');
+    assert.equal(outOfRangePayload.generated.hosts.codex?.detected_host_version, 'codex-cli 0.144.2');
+    writeFileSync(join(bin, 'codex'), '#!/bin/sh\necho "codex-cli 0.144.1"\n');
 
     const agentsPath = join(ws, 'AGENTS.md');
     const parsedAgents = parseGeneratedMarkdown(readFileSync(agentsPath, 'utf8'))!;
@@ -707,19 +751,354 @@ test('v2 doctor derives assurance from current files and the locally detected ho
     const noncanonical = runCliInCwd(['doctor', '--json'], detectedEnv, ws);
     assert.equal(noncanonical.status, 1, noncanonical.stderr);
     const noncanonicalPayload = JSON.parse(noncanonical.stdout) as {
-      generated: { manifest_status: string; hosts: { codex?: { activation_assurance: string } } };
+      generated: {
+        manifest_status: string;
+        hosts: { codex?: { activation_assurance: string; activation_capability: string } };
+      };
     };
     assert.equal(noncanonicalPayload.generated.manifest_status, 'drift');
     assert.equal(noncanonicalPayload.generated.hosts.codex?.activation_assurance, 'advisory-manual');
+    assert.equal(noncanonicalPayload.generated.hosts.codex?.activation_capability, 'drifted');
 
     rmSync(agentsPath);
+    assert.equal(statSync(join(ws, CODEX_ROSTER_SKILL_PATH)).isFile(), true);
     const missingFile = runCliInCwd(['doctor', '--json'], env, ws);
     assert.equal(missingFile.status, 1, missingFile.stderr);
     const missingPayload = JSON.parse(missingFile.stdout) as {
-      generated: { manifest_status: string; hosts: { codex?: { activation_assurance: string } } };
+      generated: {
+        manifest_status: string;
+        files: Array<{ path: string }>;
+        hosts: { codex?: { activation_assurance: string; activation_capability: string } };
+      };
     };
     assert.equal(missingPayload.generated.manifest_status, 'drift');
     assert.equal(missingPayload.generated.hosts.codex?.activation_assurance, 'missing');
+    assert.equal(missingPayload.generated.hosts.codex?.activation_capability, 'missing');
+    assert.equal(
+      missingPayload.generated.files.some((entry) => entry.path === CODEX_ROSTER_SKILL_PATH),
+      true,
+    );
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor emits one shared lifecycle and independent supported activation for both hosts', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    const hostVersions = { claude: '2.1.220 (Claude Code)', codex: 'codex-cli 0.144.1' };
+    assert.equal(installV2ProjectActivation({
+      root: ws,
+      host: 'claude',
+      hostVersions,
+    }).ok, true);
+    assert.equal(installV2ProjectActivation({
+      root: ws,
+      host: 'codex',
+      hostVersions,
+    }).ok, true);
+
+    const bin = join(h.root, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'claude'), '#!/bin/sh\necho "2.1.220 (Claude Code)"\n');
+    writeFileSync(join(bin, 'codex'), '#!/bin/sh\necho "codex-cli 0.144.1"\n');
+    chmodSync(join(bin, 'claude'), 0o755);
+    chmodSync(join(bin, 'codex'), 0o755);
+    const doc = runCliInCwd(['doctor', '--json'], {
+      ...envFor(h),
+      PATH: `${bin}:/usr/bin:/bin`,
+    }, ws);
+    assert.equal(doc.status, 0, doc.stderr);
+    const payload = JSON.parse(doc.stdout) as {
+      generated: {
+        lifecycle_capabilities: Array<{ id: string; status: string }>;
+        hosts: Record<string, { activation_capability: string; lifecycle_capabilities?: unknown }>;
+      };
+    };
+    assert.deepEqual(payload.generated.lifecycle_capabilities, HOST_ADAPTER_LIFECYCLE_CAPABILITIES);
+    assert.equal(payload.generated.hosts.claude?.activation_capability, 'supported');
+    assert.equal(payload.generated.hosts.codex?.activation_capability, 'supported');
+    assert.equal(payload.generated.hosts.claude?.lifecycle_capabilities, undefined);
+    assert.equal(payload.generated.hosts.codex?.lifecycle_capabilities, undefined);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor marks shared ROSTER.md drift on every viable enabled activation', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    const hostVersions = { claude: '2.1.220 (Claude Code)', codex: 'codex-cli 0.144.1' };
+    installV2ProjectActivation({ root: ws, host: 'claude', hostVersions });
+    installV2ProjectActivation({ root: ws, host: 'codex', hostVersions });
+
+    const rosterPath = join(ws, 'ROSTER.md');
+    const parsed = parseGeneratedMarkdown(readFileSync(rosterPath, 'utf8'))!;
+    const { content_hash: _contentHash, ...header } = parsed.header;
+    writeFileSync(rosterPath, renderGeneratedMarkdown(header, `${parsed.body}\nForged lifecycle.\n`, parsed.prefix));
+
+    const doc = runCliInCwd(['doctor', '--json'], { ...envFor(h), PATH: '/usr/bin:/bin' }, ws);
+    assert.equal(doc.status, 1, doc.stderr);
+    const payload = JSON.parse(doc.stdout) as {
+      generated: { hosts: Record<string, { activation_capability: string }> };
+    };
+    assert.equal(payload.generated.hosts.claude?.activation_capability, 'drifted');
+    assert.equal(payload.generated.hosts.codex?.activation_capability, 'drifted');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor preserves Claude and Codex fallback assurance asymmetry', () => {
+  const h = makeHomes([]);
+  try {
+    const claudeWs = makeWorkspaceDir(h.root);
+    mkdirSync(join(claudeWs, '.claude'), { recursive: true });
+    writeFileSync(join(claudeWs, CLAUDE_PROJECT_INSTRUCTIONS_PATH), '# Authored Claude policy\n');
+    assert.equal(installV2ProjectActivation({
+      root: claudeWs,
+      host: 'claude',
+      hostVersion: '2.1.220 (Claude Code)',
+    }).ok, true);
+
+    const bin = join(h.root, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'claude'), '#!/bin/sh\necho "2.1.220 (Claude Code)"\n');
+    chmodSync(join(bin, 'claude'), 0o755);
+    const supported = runCliInCwd(['doctor', '--json'], {
+      ...envFor(h),
+      PATH: `${bin}:/usr/bin:/bin`,
+    }, claudeWs);
+    assert.equal(supported.status, 0, supported.stderr);
+    const supportedPayload = JSON.parse(supported.stdout) as {
+      generated: { hosts: { claude?: { activation_capability: string } } };
+    };
+    assert.equal(supportedPayload.generated.hosts.claude?.activation_capability, 'supported');
+
+    const advisory = runCliInCwd(['doctor', '--json'], {
+      ...envFor(h),
+      PATH: '/usr/bin:/bin',
+    }, claudeWs);
+    const advisoryPayload = JSON.parse(advisory.stdout) as {
+      generated: { hosts: { claude?: { activation_capability: string } } };
+    };
+    assert.equal(advisoryPayload.generated.hosts.claude?.activation_capability, 'advisory');
+
+    const codexWs = makeWorkspaceDir(h.root);
+    writeFileSync(join(codexWs, CODEX_PROJECT_INSTRUCTIONS_PATH), '# Authored Codex policy\n');
+    assert.equal(installV2ProjectActivation({
+      root: codexWs,
+      host: 'codex',
+      hostVersion: 'codex-cli 0.144.1',
+    }).ok, true);
+    writeFileSync(join(bin, 'codex'), '#!/bin/sh\necho "codex-cli 0.144.1"\n');
+    chmodSync(join(bin, 'codex'), 0o755);
+    const codex = runCliInCwd(['doctor', '--json'], {
+      ...envFor(h),
+      PATH: `${bin}:/usr/bin:/bin`,
+    }, codexWs);
+    assert.equal(codex.status, 0, codex.stderr);
+    const codexPayload = JSON.parse(codex.stdout) as {
+      generated: { hosts: { codex?: { activation_capability: string } } };
+    };
+    assert.equal(codexPayload.generated.hosts.codex?.activation_capability, 'advisory');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor reports redundant Claude generated activations as drifted', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    assert.equal(installV2ProjectActivation({ root: ws, host: 'claude' }).ok, true);
+    const assurance = resolveActivationAssurance({
+      host: 'claude',
+      artifact: 'claude-project-rule',
+    });
+    mkdirSync(join(ws, '.claude/rules'), { recursive: true });
+    writeFileSync(
+      join(ws, CLAUDE_PROJECT_RULE_PATH),
+      renderClaudeProjectInstructions('claude-project-rule', assurance),
+    );
+
+    const doc = runCliInCwd(['doctor', '--json'], { ...envFor(h), PATH: '/usr/bin:/bin' }, ws);
+    assert.equal(doc.status, 1, doc.stderr);
+    const payload = JSON.parse(doc.stdout) as {
+      generated: { hosts: { claude?: { activation_capability: string } } };
+    };
+    assert.equal(payload.generated.hosts.claude?.activation_capability, 'drifted');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor isolates a disabled-host leftover from the enabled host capability', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    const hostVersions = { claude: '2.1.220 (Claude Code)', codex: 'codex-cli 0.144.1' };
+    assert.equal(installV2ProjectActivation({ root: ws, host: 'claude', hostVersions }).ok, true);
+    assert.equal(installV2ProjectActivation({ root: ws, host: 'codex', hostVersions }).ok, true);
+    writeFileSync(join(ws, 'roster.yaml'), [
+      'schema_version: 2',
+      'workspace_id: test',
+      'tool_uses: []',
+      'functions: {}',
+      'hosts:',
+      '  claude: enabled',
+      '',
+    ].join('\n'));
+
+    const bin = join(h.root, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'claude'), '#!/bin/sh\necho "2.1.220 (Claude Code)"\n');
+    chmodSync(join(bin, 'claude'), 0o755);
+
+    const doc = runCliInCwd(['doctor', '--json'], {
+      ...envFor(h),
+      PATH: `${bin}:/usr/bin:/bin`,
+    }, ws);
+    assert.equal(doc.status, 1, doc.stderr);
+    const payload = JSON.parse(doc.stdout) as {
+      generated: { hosts: Record<string, unknown> };
+      structural: { ok: boolean };
+    };
+    assert.equal(payload.structural.ok, false);
+    assert.equal(
+      (payload.generated.hosts.claude as { activation_capability?: string } | undefined)?.activation_capability,
+      'supported',
+    );
+    assert.equal('codex' in payload.generated.hosts, false);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor reports a viable Codex fallback with stale host metadata as drifted', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    writeFileSync(join(ws, CODEX_PROJECT_INSTRUCTIONS_PATH), '# Authored Codex policy\n');
+    assert.equal(installV2ProjectActivation({
+      root: ws,
+      host: 'codex',
+      hostVersion: 'codex-cli 0.144.1',
+    }).ok, true);
+
+    const manifestPath = join(ws, GENERATED_MANIFEST_PATH);
+    const stored = parseGeneratedManifest(readFileSync(manifestPath, 'utf8'))!;
+    const { manifest_hash: _manifestHash, ...draft } = stored;
+    const host = stored.hosts.codex!;
+    writeFileSync(manifestPath, renderGeneratedManifest(createGeneratedManifest({
+      ...draft,
+      hosts: {
+        ...draft.hosts,
+        codex: { ...host, artifacts: [] },
+      },
+    })));
+
+    const doc = runCliInCwd(['doctor', '--json'], { ...envFor(h), PATH: '/usr/bin:/bin' }, ws);
+    assert.equal(doc.status, 1, doc.stderr);
+    const payload = JSON.parse(doc.stdout) as {
+      generated: { hosts: { codex?: { activation_assurance: string; activation_capability: string } } };
+    };
+    assert.equal(payload.generated.hosts.codex?.activation_assurance, 'advisory-manual');
+    assert.equal(payload.generated.hosts.codex?.activation_capability, 'drifted');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor host derivation fails closed when current activation inspection fails', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    assert.equal(installV2ProjectActivation({
+      root: ws,
+      host: 'claude',
+      hostVersion: '2.1.220 (Claude Code)',
+    }).ok, true);
+    const hosts = deriveV2DoctorHosts({
+      enabledHosts: ['claude'],
+      generatedMetadata: inspectGeneratedAdapterMetadata(ws),
+      currentManifest: null,
+      hostVersions: { claude: '2.1.220 (Claude Code)' },
+    });
+    assert.deepEqual(hosts.claude, {
+      status: 'enabled',
+      activation_assurance: 'missing',
+      artifacts: [],
+      attestation_fixture: null,
+      detected_host_version: '2.1.220 (Claude Code)',
+      activation_capability: 'drifted',
+    });
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor keeps structured host status and redacts machine paths for unreadable activation', {
+  skip: process.platform === 'win32',
+}, () => {
+  const h = makeHomes([]);
+  let claudeDir: string | null = null;
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    assert.equal(installV2ProjectActivation({ root: ws, host: 'claude' }).ok, true);
+    claudeDir = join(ws, '.claude');
+    chmodSync(claudeDir, 0o000);
+
+    const doc = runCliInCwd(['doctor', '--json'], { ...envFor(h), PATH: '/usr/bin:/bin' }, ws);
+    assert.equal(doc.status, 1, doc.stderr);
+    const payload = JSON.parse(doc.stdout) as {
+      generated: { hosts: { claude?: { activation_capability: string } } };
+      structural: { diagnostics: Array<{ code: string; path?: string; details: Record<string, unknown> }> };
+    };
+    assert.doesNotMatch(
+      JSON.stringify(payload.structural.diagnostics),
+      new RegExp(ws.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    );
+    assert.equal(payload.generated.hosts.claude?.activation_capability, 'drifted');
+    assert.ok(payload.structural.diagnostics.some((entry) =>
+      entry.code === 'FILESYSTEM_ACCESS_FAILED'
+      && entry.path === CLAUDE_PROJECT_RULE_PATH
+      && entry.details['cause'] === 'EACCES'
+    ));
+    assert.ok(payload.structural.diagnostics
+      .filter((entry) => entry.details['cause'] === 'EACCES')
+      .every((entry) => entry.code === 'FILESYSTEM_ACCESS_FAILED'));
+  } finally {
+    if (claudeDir !== null) chmodSync(claudeDir, 0o700);
+    h.cleanup();
+  }
+});
+
+test('v2 doctor sanitizes a nested wrong-type activation parent without calling it an access failure', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    assert.equal(installV2ProjectActivation({ root: ws, host: 'claude' }).ok, true);
+    rmSync(join(ws, '.claude'), { recursive: true });
+    writeFileSync(join(ws, '.claude'), 'wrong type\n');
+
+    const doc = runCliInCwd(['doctor', '--json'], { ...envFor(h), PATH: '/usr/bin:/bin' }, ws);
+    assert.equal(doc.status, 1, doc.stderr);
+    const payload = JSON.parse(doc.stdout) as {
+      structural: { diagnostics: Array<{ code: string; path?: string; details: Record<string, unknown> }> };
+    };
+    const serialized = JSON.stringify(payload.structural.diagnostics);
+    assert.doesNotMatch(serialized, new RegExp(ws.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.ok(payload.structural.diagnostics.some((entry) =>
+      entry.code === 'NOT_REGULAR_FILE'
+      && (entry.path === CLAUDE_PROJECT_INSTRUCTIONS_PATH || entry.path === CLAUDE_PROJECT_RULE_PATH)
+    ));
+    assert.equal(
+      payload.structural.diagnostics.some((entry) => entry.code === 'FILESYSTEM_ACCESS_FAILED'),
+      false,
+    );
   } finally {
     h.cleanup();
   }

@@ -498,3 +498,26 @@ test('workspace update lock capability stays inside update and generated-artifac
     ['expectedHash', 'expectedIdentity', 'maxBytes'],
   ]);
 });
+
+test('generated adapter rendering stays isolated from runtime, Brain, scheduler, and approval modules', () => {
+  const generatedPath = join(PROJECT_ROOT, 'src/lib/generated-artifacts.ts');
+  const forbidden = [
+    /(?:^|\/)brain(?:[-./]|$)/,
+    /(?:^|\/)persistence(?:\/|$)/,
+    /schedule/,
+    /pending/,
+    /(?:^|\/)ops(?:[-./]|$)/,
+    /(?:^|\/)run(?:[-./]|$)/,
+    /provider/,
+    /router/,
+    /approval/,
+    /hitl/,
+  ];
+  for (const module of ['./brain-args.ts', './ops-args.ts', './run-args.ts']) {
+    assert.equal(forbidden.some((pattern) => pattern.test(module)), true, module);
+  }
+  const violations = moduleEdges(generatedPath)
+    .map((edge) => edge.module)
+    .filter((module) => forbidden.some((pattern) => pattern.test(module)));
+  assert.deepEqual(violations, []);
+});
