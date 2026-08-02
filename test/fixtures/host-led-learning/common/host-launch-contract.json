@@ -224,8 +224,7 @@
           }
         },
         {
-          "method": "initialized",
-          "params": {}
+          "method": "initialized"
         },
         {
           "method": "skills/list",
