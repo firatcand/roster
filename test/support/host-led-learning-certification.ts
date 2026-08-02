@@ -1772,11 +1772,22 @@ export function codexGlobalLaunchArgs(
 ): readonly string[] {
   return Object.freeze([
     '-a', 'never',
-    '--strict-config',
     '--model', CODEX_MODEL,
     '--sandbox', 'workspace-write',
     '-C', workspace,
     ...codexConfigArgs(env),
+  ]);
+}
+
+export function codexStrictGlobalLaunchArgs(
+  workspace: string,
+  env: Readonly<Record<string, string>>,
+): readonly string[] {
+  const [approvalFlag, approvalPolicy, ...controlledArgs] = codexGlobalLaunchArgs(workspace, env);
+  return Object.freeze([
+    approvalFlag!, approvalPolicy!,
+    '--strict-config',
+    ...controlledArgs,
   ]);
 }
 
@@ -1795,7 +1806,7 @@ function codexArgs(
       : contract.host_readable_inputs.approve_output_schema,
   );
   return Object.freeze([
-    ...codexGlobalLaunchArgs(pass.workspace, env),
+    ...codexStrictGlobalLaunchArgs(pass.workspace, env),
     'exec',
     '--ignore-user-config',
     '--ignore-rules',
@@ -2082,7 +2093,7 @@ async function probeCodexProjectSkills(options: Readonly<{
   }
   const rpc = await runSequentialJsonlRpc({
     command: options.paths.codexBin,
-    args: [...codexGlobalLaunchArgs(options.workspace, options.env), 'app-server', '--stdio'],
+    args: [...codexStrictGlobalLaunchArgs(options.workspace, options.env), 'app-server', '--stdio'],
     cwd: options.workspace,
     env: options.env,
     messages: [

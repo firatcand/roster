@@ -18,6 +18,7 @@ import {
   canonicalJson,
   classifyCodexAppServerFrame,
   codexGlobalLaunchArgs,
+  codexStrictGlobalLaunchArgs,
   createHostProbePaths,
   HOST_LED_LEARNING_REPO_ROOT,
   loadHostLedLearningLaunchContract,
@@ -833,7 +834,7 @@ test('Codex current-date normalization requires one exact expected UTC date', ()
   }
 });
 
-test('Codex paid and prompt probes share one strict model-bound global launch prefix', () => {
+test('Codex paid and prompt probes share one controlled model-bound launch prefix', () => {
   const env = {
     HOME: '/isolated/home',
     TMPDIR: '/isolated/tmp',
@@ -852,18 +853,25 @@ test('Codex paid and prompt probes share one strict model-bound global launch pr
     ROSTER_350_ROSTER_VERSION: '0.0.0',
   };
   const prefix = codexGlobalLaunchArgs('/isolated/workspace', env);
-  assert.deepEqual(prefix.slice(0, 9), [
+  assert.deepEqual(prefix.slice(0, 8), [
+    '-a', 'never', '--model', 'gpt-5.6-sol',
+    '--sandbox', 'workspace-write', '-C', '/isolated/workspace',
+  ]);
+  assert.equal(prefix.includes('--strict-config'), false);
+  assert.equal(prefix.filter((entry) => entry === '--model').length, 1);
+  assert.ok(prefix.includes('model_provider="roster-certification-openai"'));
+  const strictPrefix = codexStrictGlobalLaunchArgs('/isolated/workspace', env);
+  assert.deepEqual(strictPrefix.slice(0, 9), [
     '-a', 'never', '--strict-config', '--model', 'gpt-5.6-sol',
     '--sandbox', 'workspace-write', '-C', '/isolated/workspace',
   ]);
-  assert.equal(prefix.filter((entry) => entry === '--strict-config').length, 1);
-  assert.equal(prefix.filter((entry) => entry === '--model').length, 1);
-  assert.ok(prefix.includes('model_provider="roster-certification-openai"'));
+  assert.equal(strictPrefix.filter((entry) => entry === '--strict-config').length, 1);
   const source = readFileSync(join(
     HOST_LED_LEARNING_REPO_ROOT,
     'test/support/host-led-learning-certification.ts',
   ), 'utf8');
-  assert.match(source, /function codexArgs[\s\S]+\.\.\.codexGlobalLaunchArgs\(pass\.workspace, env\)/u);
+  assert.match(source, /function codexArgs[\s\S]+\.\.\.codexStrictGlobalLaunchArgs\(pass\.workspace, env\)/u);
+  assert.match(source, /function probeCodexProjectSkills[\s\S]+\.\.\.codexStrictGlobalLaunchArgs\(options\.workspace, options\.env\)/u);
   assert.match(source, /function captureCodexPromptInputSummary[\s\S]+\.\.\.codexGlobalLaunchArgs\(options\.workspace, options\.env\)/u);
 });
 
