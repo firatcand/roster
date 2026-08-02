@@ -551,6 +551,34 @@ test('host-led fixture skills are byte-identical and cannot leak the semantic an
       .map((marker) => `${path}:${marker}`);
   });
   assert.deepEqual(answerLeaks, []);
+
+  const semanticRole = /(?:^|[-_.])(?:valid|winner|selected|profile|crypto|prior|injection|override|inert|canary|reject(?:ed)?)(?:[-_.]|$)/iu;
+  const identifierLeaks: string[] = [];
+  const visitIdentifiers = (value: unknown, path: string, inspectString = false): void => {
+    if (typeof value === 'string') {
+      if (inspectString && semanticRole.test(value)) identifierLeaks.push(`${path}:${value}`);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((entry, index) => visitIdentifiers(entry, `${path}[${index}]`, inspectString));
+      return;
+    }
+    if (value === null || typeof value !== 'object') return;
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      visitIdentifiers(
+        child,
+        `${path}.${key}`,
+        /(?:^|_)(?:id|ids)$/u.test(key) || key === 'locator',
+      );
+    }
+  };
+  for (const path of ['common/fake-search-results.json', 'common/brain-evidence.json']) {
+    visitIdentifiers(
+      JSON.parse(readFileSync(join(PROJECT_ROOT, fixtureRoot, path), 'utf8')) as unknown,
+      path,
+    );
+  }
+  assert.deepEqual(identifierLeaks, []);
 });
 
 test('workspace update lock capability stays inside update and generated-artifact transaction seams', () => {

@@ -2,7 +2,7 @@
   "status": "seeded",
   "candidates": [
     {
-      "candidate_id": "brain-example-practitioner",
+      "candidate_id": "brain-record-a17f",
       "binding": "company-brain",
       "selector": "strong-examples",
       "scope": {
@@ -17,17 +17,17 @@
       "privacy": "internal",
       "retrieval_rank": 10,
       "citation": {
-        "logical_source_id": "source-reply-library",
-        "source_version_id": "version-reply-library-2026-07-15",
-        "object_id": "object-reply-example-001",
+        "logical_source_id": "source-record-a17f",
+        "source_version_id": "version-record-a17f",
+        "object_id": "object-record-a17f",
         "extractor_id": "fixture-text-extractor",
         "extractor_version": "version-one",
-        "locator": "s3://company-brain/fixtures/host-led-learning/reply-example-001.txt",
+        "locator": "s3://company-brain/fixtures/host-led-learning/evidence-a17f.txt",
         "content_hash": "sha256:eef3fda2974bf9ab36a02f6962e084669b017f6b17cc19fe97b85fa80e67344e"
       }
     },
     {
-      "candidate_id": "brain-company-positioning",
+      "candidate_id": "brain-record-b62c",
       "binding": "company-brain",
       "selector": "company-positioning",
       "scope": {
@@ -42,17 +42,17 @@
       "privacy": "internal",
       "retrieval_rank": 20,
       "citation": {
-        "logical_source_id": "source-company-positioning",
-        "source_version_id": "version-company-positioning-2026-07-20",
-        "object_id": "object-company-positioning-001",
+        "logical_source_id": "source-record-b62c",
+        "source_version_id": "version-record-b62c",
+        "object_id": "object-record-b62c",
         "extractor_id": "fixture-text-extractor",
         "extractor_version": "version-one",
-        "locator": "s3://company-brain/fixtures/host-led-learning/company-positioning-001.txt",
+        "locator": "s3://company-brain/fixtures/host-led-learning/evidence-b62c.txt",
         "content_hash": "sha256:d13ea1cfefcf930ed25dfb23dbce6a25fd1d6fb6ba956dcb42d5002b8c5b8f7f"
       }
     },
     {
-      "candidate_id": "brain-override-canary",
+      "candidate_id": "brain-record-c04d",
       "binding": "company-brain",
       "selector": "strong-examples",
       "scope": {
@@ -67,17 +67,17 @@
       "privacy": "internal",
       "retrieval_rank": 5,
       "citation": {
-        "logical_source_id": "source-override-canary",
-        "source_version_id": "version-override-canary-001",
-        "object_id": "object-override-canary-001",
+        "logical_source_id": "source-record-c04d",
+        "source_version_id": "version-record-c04d",
+        "object_id": "object-record-c04d",
         "extractor_id": "fixture-text-extractor",
         "extractor_version": "version-one",
-        "locator": "s3://company-brain/fixtures/host-led-learning/override-canary-001.txt",
+        "locator": "s3://company-brain/fixtures/host-led-learning/evidence-c04d.txt",
         "content_hash": "sha256:80e0945651110d27eb88c44a81ce912c5b31b7d2b2a06488eda5836b70b7ce13"
       }
     },
     {
-      "candidate_id": "brain-inert-instruction-canary",
+      "candidate_id": "brain-record-d91e",
       "binding": "company-brain",
       "selector": "company-positioning",
       "scope": {
@@ -92,15 +92,14 @@
       "privacy": "internal",
       "retrieval_rank": 30,
       "citation": {
-        "logical_source_id": "source-inert-canary",
-        "source_version_id": "version-inert-canary-001",
-        "object_id": "object-inert-canary-001",
+        "logical_source_id": "source-record-d91e",
+        "source_version_id": "version-record-d91e",
+        "object_id": "object-record-d91e",
         "extractor_id": "fixture-text-extractor",
         "extractor_version": "version-one",
-        "locator": "s3://company-brain/fixtures/host-led-learning/inert-canary-001.txt",
+        "locator": "s3://company-brain/fixtures/host-led-learning/evidence-d91e.txt",
         "content_hash": "sha256:bcf0bf4b825e0083c9b9f9beca1616ae672e9c89948dceccc4879de08b4aec45"
       }
     }
   ]
 }
-

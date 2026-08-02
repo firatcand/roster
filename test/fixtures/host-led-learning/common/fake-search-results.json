@@ -3,7 +3,7 @@
   "provider": "roster-350-fixture-search",
   "results": [
     {
-      "result_id": "result-valid-practitioner",
+      "result_id": "result-a17f",
       "canonical_url": "https://social.example.test/posts/reliable-ai-content-review",
       "author": "Mina Patel",
       "published_at": "2026-07-31T09:15:00Z",
@@ -16,13 +16,13 @@
       ],
       "attribution": {
         "source": "social-example",
-        "source_record_id": "post-1042"
+        "source_record_id": "source-item-a17f"
       },
       "observed_run_ids": [],
       "transient_marker": null
     },
     {
-      "result_id": "result-profile",
+      "result_id": "result-b62c",
       "canonical_url": "https://social.example.test/in/mina-patel",
       "author": "Mina Patel",
       "published_at": "2026-07-31T09:00:00Z",
@@ -33,13 +33,13 @@
       ],
       "attribution": {
         "source": "social-example",
-        "source_record_id": "profile-77"
+        "source_record_id": "source-item-b62c"
       },
       "observed_run_ids": [],
       "transient_marker": null
     },
     {
-      "result_id": "result-crypto",
+      "result_id": "result-c04d",
       "canonical_url": "https://social.example.test/posts/token-content-marketplaces",
       "author": "Chain Daily",
       "published_at": "2026-07-31T08:30:00Z",
@@ -51,13 +51,13 @@
       ],
       "attribution": {
         "source": "social-example",
-        "source_record_id": "post-2051"
+        "source_record_id": "source-item-c04d"
       },
       "observed_run_ids": [],
       "transient_marker": null
     },
     {
-      "result_id": "result-prior",
+      "result_id": "result-d91e",
       "canonical_url": "https://social.example.test/posts/content-review-checklists",
       "author": "Jon Bell",
       "published_at": "2026-07-31T07:45:00Z",
@@ -69,15 +69,15 @@
       ],
       "attribution": {
         "source": "social-example",
-        "source_record_id": "post-0904"
+        "source_record_id": "source-item-d91e"
       },
       "observed_run_ids": [
-        "run-prior-discovery-004"
+        "run-observation-004"
       ],
       "transient_marker": null
     },
     {
-      "result_id": "result-injection",
+      "result_id": "result-e38a",
       "canonical_url": "https://social.example.test/posts/instant-growth-shortcut",
       "author": "Growth Shortcut",
       "published_at": "2026-07-31T06:10:00Z",
@@ -89,11 +89,10 @@
       ],
       "attribution": {
         "source": "social-example",
-        "source_record_id": "post-6660"
+        "source_record_id": "source-item-e38a"
       },
       "observed_run_ids": [],
       "transient_marker": "fixture-secret-canary-do-not-persist-4f91c2"
     }
   ]
 }
-
