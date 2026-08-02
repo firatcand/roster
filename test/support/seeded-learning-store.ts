@@ -24,17 +24,39 @@ import {
   renderMarkdownDefinition,
 } from '../../src/lib/workspace-record.ts';
 
-const STATE_SCHEMA_VERSION = 1 as const;
+const STATE_SCHEMA_VERSION = 2 as const;
 const MAX_STATE_BYTES = 128 * 1024;
 const MAX_TEXT_BYTES = 8 * 1024;
 const MAX_ID_BYTES = 256;
 const SHA256 = /^sha256:[a-f0-9]{64}$/u;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
+const QUERY_RELIABILITY = [
+  'reliable', 'reliability', 'quality', 'review', 'reviewed', 'safe', 'safety',
+  'credible', 'trusted', 'concrete', 'useful',
+] as const;
+const QUERY_DOMAIN = [
+  'ai', 'content', 'editorial', 'operation', 'operations', 'operational', 'workflow', 'workflows',
+  'publishing', 'media',
+] as const;
+const QUERY_AUDIENCE = [
+  'practitioner', 'practitioners', 'operator', 'operators', 'team', 'teams',
+  'creator', 'creators', 'professional', 'professionals',
+] as const;
+const QUERY_NEUTRAL = [
+  'find', 'seek', 'search', 'discover', 'identify', 'locate', 'public', 'recent', 'timely',
+  'post', 'posts', 'discussion', 'discussions', 'conversation', 'conversations',
+  'example', 'examples', 'source', 'sources', 'relevant', 'about', 'for', 'and', 'of', 'in',
+  'on', 'with', 'from',
+] as const;
+const QUERY_ALLOWED = new Set<string>([
+  ...QUERY_RELIABILITY, ...QUERY_DOMAIN, ...QUERY_AUDIENCE, ...QUERY_NEUTRAL,
+]);
 
 export type SeededCompletedRun = {
   id: string;
   target: string;
   request_hash: string;
+  context_query: SeededContextQueryEvidence;
   host: string;
   roster_version: string;
   started_at: string;
@@ -44,6 +66,12 @@ export type SeededCompletedRun = {
   tool_ids: readonly string[];
   source_ids: readonly string[];
   artifact_ids: readonly string[];
+};
+
+export type SeededContextQueryEvidence = {
+  bytes: number;
+  query: string;
+  query_sha256: string;
 };
 
 export type SeededFeedback = {
@@ -186,6 +214,10 @@ function hashValue(value: unknown): string {
   return `sha256:${createHash('sha256').update(canonicalJson(value)).digest('hex')}`;
 }
 
+function hashText(value: string): string {
+  return `sha256:${createHash('sha256').update(value).digest('hex')}`;
+}
+
 function clone<T>(value: T): T {
   return JSON.parse(canonicalJson(value)) as T;
 }
@@ -246,6 +278,42 @@ function stringList(value: unknown): value is string[] {
     && new Set(value).size === value.length;
 }
 
+function validContextQueryGrammar(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const normalized = value.normalize('NFKC').toLowerCase();
+  const tokens = new Set(normalized.match(/[a-z0-9]+/gu) ?? []);
+  const hasAny = (values: readonly string[]): boolean => values.some((token) => tokens.has(token));
+  return value === value.normalize('NFKC')
+    && /^[a-z0-9\s-]+$/u.test(normalized)
+    && tokens.size >= 3
+    && [...tokens].every((token) => QUERY_ALLOWED.has(token))
+    && hasAny(QUERY_RELIABILITY)
+    && hasAny(QUERY_DOMAIN)
+    && hasAny(QUERY_AUDIENCE);
+}
+
+export function validateSeededContextQueryMeaning(query: string): string {
+  if (!validContextQueryGrammar(query)) {
+    fail('FIXTURE_INVALID', 'Fixture context query is outside the closed non-secret semantic grammar.');
+  }
+  return 'reliable-ai-content-operations-practitioner';
+}
+
+function validContextQuery(value: unknown, requestHash: unknown): value is SeededContextQueryEvidence {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const query = record['query'];
+  return exactKeys(record, ['bytes', 'query', 'query_sha256'])
+    && boundedString(query, 240)
+    && validContextQueryGrammar(query)
+    && !/^-/u.test(query)
+    && !/[\u0000-\u001f\u007f-\u009f]/u.test(query)
+    && Number.isInteger(record['bytes'])
+    && record['bytes'] === Buffer.byteLength(query, 'utf8')
+    && record['query_sha256'] === hashText(query)
+    && record['query_sha256'] !== requestHash;
+}
+
 function validCompletedRun(value: unknown): value is SeededCompletedRun {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
@@ -253,6 +321,7 @@ function validCompletedRun(value: unknown): value is SeededCompletedRun {
     'id',
     'target',
     'request_hash',
+    'context_query',
     'host',
     'roster_version',
     'started_at',
@@ -266,6 +335,7 @@ function validCompletedRun(value: unknown): value is SeededCompletedRun {
     && safeId(record['id'])
     && boundedString(record['target'], MAX_ID_BYTES)
     && safeHash(record['request_hash'])
+    && validContextQuery(record['context_query'], record['request_hash'])
     && safeId(record['host'])
     && boundedString(record['roster_version'], MAX_ID_BYTES)
     && boundedString(record['started_at'], MAX_ID_BYTES)

@@ -34,6 +34,7 @@ import {
   validateCodexManagedConfigResponses,
   validateDerivedQueryMeaning,
   validateHostTraceCommands,
+  validatePersistedContextQuery,
   type CertificationHost,
   type CertificationInputSnapshot,
   type HostLaunchProbe,
@@ -328,6 +329,29 @@ test('host launch contract rejects duplicate arrays, protocol drift, and version
   const versionDrift = contractClone();
   (versionDrift['claude'] as Record<string, unknown>)['version'] = '2.1.221 (Claude Code)';
   assert.throws(() => parseHostLedLearningLaunchContract(versionDrift), /exact certified CLI patches/iu);
+
+  const optionalRepeat = contractClone();
+  const optionalRepeatAdapters = optionalRepeat['adapters'] as Array<Record<string, unknown>>;
+  optionalRepeatAdapters[0]!['repeatable_flags'] = ['--not-required'];
+  assert.throws(() => parseHostLedLearningLaunchContract(optionalRepeat), /repeatable flag that is not required/iu);
+});
+
+test('semantic oracle lesson IDs use exact normalized code-point order', () => {
+  const oracle = JSON.parse(readFileSync(join(
+    HOST_LED_LEARNING_REPO_ROOT,
+    'test/fixtures/host-led-learning-oracle/expected-semantic-result.json',
+  ), 'utf8')) as Record<string, unknown>;
+  const turns = oracle['turns'] as Record<string, Record<string, unknown>>;
+  for (const [turn, key] of [['discover', 'baseline_lesson_ids'], ['approve', 'promoted_lesson_ids']] as const) {
+    const learning = turns[turn]!['learning'] as Record<string, unknown>;
+    const ids = learning[key] as string[];
+    assert.deepEqual(ids, ids.map((id) => id.normalize('NFKC')));
+    assert.deepEqual(ids, [...ids].sort((left, right) => left < right ? -1 : left > right ? 1 : 0));
+  }
+  assert.deepEqual(
+    (turns['approve']!['learning'] as Record<string, unknown>)['promoted_lesson_ids'],
+    ['general-prior', 'nested-prior', 'prefer-practitioner-operational-reject-contradict', 'root-prior'],
+  );
 });
 
 test('literal host command parser rejects shell composition and preserves quoted argv', () => {
@@ -652,7 +676,7 @@ test('Codex trace audit permits one exact Dreamer read and rejects extra operand
     'roster discover gtm/social-manager#opportunity-discovery --exact --json',
     "roster context gtm/social-manager#opportunity-discovery --query 'reliable AI operations' --json",
     "roster-350-fixture-search --query 'reliable AI operations'",
-    'roster-350-fixture-run-record --request-hash sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --selected-result result-a17f --brain-citation brain-record-a17f',
+    'roster-350-fixture-run-record --request-hash sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --selected-result result-a17f --brain-citation brain-record-a17f --brain-citation brain-record-b62c --brain-citation brain-record-d91e',
     'roster-350-fixture-feedback-record --run-id run-opportunity-discovery-001 --signal useful',
     'roster-350-fixture-dream-status',
     'cat .agents/skills/fixture-dreamer/SKILL.md',
@@ -666,6 +690,30 @@ test('Codex trace audit permits one exact Dreamer read and rejects extra operand
     required,
     forbidden: ['roster-350-fixture-state-show', 'roster-350-fixture-candidate-promote'],
   });
+
+  const zeroCitations = commands.map((command) => command.startsWith('roster-350-fixture-run-record ')
+    ? command.replace(/ --brain-citation brain-record-[a-z0-9]+/gu, '')
+    : command);
+  assert.throws(() => validateHostTraceCommands({
+    trace: trace('codex', zeroCitations),
+    host: 'codex',
+    turn: 'discover',
+    contract,
+    required,
+    forbidden: [],
+  }), /invalid count for '--brain-citation'/iu);
+
+  const repeatedNonRepeatable = commands.map((command) => command.startsWith('roster-350-fixture-run-record ')
+    ? `${command} --selected-result result-a17f`
+    : command);
+  assert.throws(() => validateHostTraceCommands({
+    trace: trace('codex', repeatedNonRepeatable),
+    host: 'codex',
+    turn: 'discover',
+    contract,
+    required,
+    forbidden: [],
+  }), /invalid count for '--selected-result'/iu);
 
   const extraRead = commands.map((command) => command.startsWith('cat ')
     ? `${command} /etc/passwd`
@@ -1054,6 +1102,33 @@ test('derived query meaning rejects unrelated and policy-opposing shared query s
   ]) {
     assert.throws(() => validateDerivedQueryMeaning(query), /semantically bound/iu);
   }
+});
+
+test('fresh approval accepts only the exact persisted completed-run query proof', () => {
+  const query = 'reliable AI content operations practitioner discussions';
+  const requestHash = `sha256:${'a'.repeat(64)}`;
+  const run = {
+    request_hash: requestHash,
+    context_query: {
+      bytes: Buffer.byteLength(query, 'utf8'),
+      query,
+      query_sha256: `sha256:${digest(query)}`,
+    },
+  };
+  assert.deepEqual(validatePersistedContextQuery(run as never, requestHash), run.context_query);
+  for (const contextQuery of [
+    { ...run.context_query, bytes: run.context_query.bytes + 1 },
+    { ...run.context_query, query_sha256: `sha256:${'b'.repeat(64)}` },
+  ]) {
+    assert.throws(
+      () => validatePersistedContextQuery({ ...run, context_query: contextQuery } as never, requestHash),
+      /exact bounded bytes and hash/iu,
+    );
+  }
+  assert.throws(
+    () => validatePersistedContextQuery(run as never, `sha256:${'c'.repeat(64)}`),
+    /attested request hash/iu,
+  );
 });
 
 test('exact promoted revisions remain visible to cross-host semantic equality', () => {

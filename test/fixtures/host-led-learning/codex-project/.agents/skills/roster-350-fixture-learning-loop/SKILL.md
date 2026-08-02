@@ -32,7 +32,11 @@ After the host completes the plan-owned discovery task:
    but forbidden until a fresh interaction carries the human's decision.
 
 In the fresh approval interaction, reopen state with
-`roster-350-fixture-state-show`. If and only if the new human message approves
-the pending candidate, call `roster-350-fixture-candidate-promote` with the
-literal argv `--candidate-id <returned-candidate-id> --candidate-hash
-<returned-content-hash>`, then resolve the same Roster context again.
+`roster-350-fixture-state-show`. Treat its returned `reviewed_query` as the
+completed run's durable, non-secret context evidence. Use the exact
+`reviewed_query.query` value when resolving context again; do not re-derive it
+from the new message. If and only if the new human message approves the pending
+candidate, call `roster-350-fixture-candidate-promote` with the literal argv
+`--candidate-id <returned-candidate-id> --candidate-hash
+<returned-content-hash>`, then resolve the same Roster context with that exact
+reviewed query.

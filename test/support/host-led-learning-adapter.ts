@@ -32,8 +32,10 @@ import {
   openSeededLearningStore,
   renderSeededCandidateLessonId,
   renderSeededCandidateMeaning,
+  validateSeededContextQueryMeaning,
   type SeededCandidateMeaning,
   type SeededCompletedRun,
+  type SeededContextQueryEvidence,
   type SeededFeedback,
   type SeededLessonCandidate,
 } from './seeded-learning-store.ts';
@@ -239,6 +241,9 @@ function readContract(workspace: string): Contract {
       || adapterCommands.has(adapter.command)) {
       fail('contract adapter data is invalid');
     }
+    if (adapter.repeatable_flags.some((flag) => !adapter.required_flags.includes(flag))) {
+      fail('contract repeatable adapter flags must also be required');
+    }
     adapterCommands.add(adapter.command);
   }
   workspacePath({
@@ -287,6 +292,11 @@ function queryProof(query: string, requestHash: string): Record<string, unknown>
   }
   const queryHash = sha256(query);
   if (queryHash === requestHash) fail('derived query must differ from the natural request');
+  try {
+    validateSeededContextQueryMeaning(query);
+  } catch {
+    fail('derived query is outside the closed non-secret semantic grammar');
+  }
   return {
     bytes,
     differs_from_request: true,
@@ -295,6 +305,56 @@ function queryProof(query: string, requestHash: string): Record<string, unknown>
     query,
     query_sha256: queryHash,
   };
+}
+
+function persistedContextQueryFromDiscoveryLog(
+  workspace: string,
+  contract: Contract,
+  requestHash: string,
+): Readonly<SeededContextQueryEvidence> {
+  const bytes = readWorkspaceFile(workspace, contract.runtime.adapter_log_path, 'adapter log');
+  const records = bytes.toString('utf8').split(/\r?\n/u).filter((line) => line.length > 0).map((line, index) => {
+    let value: unknown;
+    try {
+      value = JSON.parse(line) as unknown;
+    } catch {
+      fail('adapter log contains invalid JSON while binding the completed-run query');
+    }
+    if (value === null || typeof value !== 'object' || Array.isArray(value)
+      || (value as Record<string, unknown>)['sequence'] !== index + 1) {
+      fail('adapter log sequence is invalid while binding the completed-run query');
+    }
+    return value as Record<string, unknown>;
+  });
+  const queryRecords = records.filter((record) => (
+    record['log_category'] === 'roster.context' || record['log_category'] === 'tool.search'
+  ));
+  if (canonicalJson(queryRecords.map((record) => record['log_category']))
+    !== canonicalJson(['roster.context', 'tool.search'])) {
+    fail('completed run does not have one ordered context/search query pair');
+  }
+  const proofs = queryRecords.map((record) => {
+    const proof = record['query_proof'];
+    if (record['turn'] !== 'discover' || proof === null || typeof proof !== 'object' || Array.isArray(proof)) {
+      fail('completed-run query proof is missing or outside discovery');
+    }
+    const query = (proof as Record<string, unknown>)['query'];
+    if (typeof query !== 'string') fail('completed-run query proof omitted its exact query');
+    const expected = queryProof(query, requestHash);
+    if (canonicalJson(proof) !== canonicalJson(expected)) {
+      fail('completed-run query proof does not match its exact bytes and hash');
+    }
+    return expected;
+  });
+  if (canonicalJson(proofs[0]) !== canonicalJson(proofs[1])) {
+    fail('completed run context and search queries differ');
+  }
+  const proof = proofs[0]!;
+  return Object.freeze({
+    bytes: proof['bytes'] as number,
+    query: proof['query'] as string,
+    query_sha256: proof['query_sha256'] as string,
+  });
 }
 
 function appendLog(options: {
@@ -477,6 +537,7 @@ export const hostLedLearningAdapterTestApi = Object.freeze({
   requireContractedRosterArgv,
   parseArguments,
   appendLog,
+  persistedContextQueryFromDiscoveryLog,
   stateShowProjection,
 });
 
@@ -543,11 +604,13 @@ function stateShowProjection(store: ReturnType<typeof openSeededLearningStore>):
   status: ReturnType<typeof store.status>;
   state: ReturnType<typeof store.snapshot>;
   pending_candidate: NonNullable<ReturnType<typeof store.candidate>>;
+  reviewed_query: SeededContextQueryEvidence;
 }> {
   const pendingCandidate = store.candidate(CANDIDATE_ID);
   if (pendingCandidate === null) fail('pending candidate does not exist');
   const state = store.snapshot();
   if (pendingCandidate.status !== 'existing'
+    || state.completed_runs.length !== 1
     || state.candidates.length !== 1
     || canonicalJson(state.candidates[0]) !== canonicalJson(pendingCandidate.record)
     || hashSeededLearningValue(state.candidates[0]) !== pendingCandidate.content_hash) {
@@ -557,6 +620,7 @@ function stateShowProjection(store: ReturnType<typeof openSeededLearningStore>):
     status: store.status(),
     state,
     pending_candidate: pendingCandidate,
+    reviewed_query: state.completed_runs[0]!.context_query,
   });
 }
 
@@ -689,6 +753,11 @@ function runAdapter(options: {
         id: RUN_ID,
         target: options.contract.roster.target,
         request_hash: requestHash,
+        context_query: persistedContextQueryFromDiscoveryLog(
+          options.workspace,
+          options.contract,
+          requestHash,
+        ),
         host: options.host,
         roster_version: options.rosterVersion,
         started_at: FIXTURE_STARTED_AT,

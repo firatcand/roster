@@ -30,11 +30,14 @@ interpolation or evaluate source text.
 6. End the first interaction after one candidate exists with phase
    `awaiting_human`. Do not call promotion in that interaction.
 7. In the fresh approval interaction, call `roster-350-fixture-state-show` to
-   reopen the candidate. Only after interpreting the new human message may the
-   host call `roster-350-fixture-candidate-promote --candidate-id
+   reopen the candidate and the completed run's exact `reviewed_query` bytes
+   and hash. Only after interpreting the new human message may the host call
+   `roster-350-fixture-candidate-promote --candidate-id
    <returned-candidate-id> --candidate-hash <returned-content-hash>`.
 8. Resolve the same Roster context again and report phase `promoted` only when
-   the returned context contains the materialized lesson.
+   the returned context contains the materialized lesson. Use the exact
+   persisted `reviewed_query.query`; do not derive a replacement from the
+   approval message.
 
 The adapters return all generated identifiers. Human input never contains a
 candidate identifier or command procedure. Exact replay is idempotent;

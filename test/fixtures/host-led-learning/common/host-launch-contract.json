@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "fixture_id": "host-led-learning",
-  "behavior_revision": "host-led-learning-v1",
-  "fixture_iteration": 1,
+  "behavior_revision": "host-led-learning-v2",
+  "fixture_iteration": 2,
   "runtime": {
     "state_path": ".fixture/learning-state.json",
     "adapter_log_path": ".fixture/adapter-calls.jsonl",

@@ -292,6 +292,11 @@ test('seeded host-led learning uses product context and lesson seams around boun
       id: 'run-opportunity-discovery-001',
       target: TARGET,
       request_hash: hashSeededLearningValue(HUMAN_REQUEST),
+      context_query: {
+        bytes: Buffer.byteLength(RETRIEVAL_QUERY, 'utf8'),
+        query: RETRIEVAL_QUERY,
+        query_sha256: sha256Text(RETRIEVAL_QUERY),
+      },
       host: 'certified-semantic-boundary',
       roster_version: getPackageVersion(),
       started_at: '2026-08-02T09:00:00.000Z',
@@ -302,6 +307,26 @@ test('seeded host-led learning uses product context and lesson seams around boun
       source_ids: ['source-valid-practitioner-evidence'],
       artifact_ids: ['artifact-opportunity-shortlist-001'],
     };
+    const invalidQueryStorePath = join(fixture.root, '.fixture/invalid-query-learning-state.json');
+    const invalidQueryStore = openSeededLearningStore(invalidQueryStorePath);
+    assert.equal(storeFailure(() => invalidQueryStore.recordCompletedRun({
+      ...completedRun,
+      context_query: { ...completedRun.context_query, bytes: completedRun.context_query.bytes + 1 },
+    })).code, 'FIXTURE_INVALID');
+    for (const query of [
+      HUMAN_REQUEST,
+      'reliable AI operations practitioner sk-AbC123SecretValue',
+    ]) {
+      assert.equal(storeFailure(() => invalidQueryStore.recordCompletedRun({
+        ...completedRun,
+        context_query: {
+          bytes: Buffer.byteLength(query, 'utf8'),
+          query,
+          query_sha256: sha256Text(query),
+        },
+      })).code, 'FIXTURE_INVALID');
+    }
+    assert.equal(existsSync(invalidQueryStorePath), false);
     assert.equal(store.recordCompletedRun(completedRun).status, 'created');
     const runBytes = readFileSync(statePath);
     assert.equal(store.recordCompletedRun(completedRun).status, 'existing');
@@ -374,7 +399,7 @@ test('seeded host-led learning uses product context and lesson seams around boun
     }, renderSeededCandidateMeaning(meaning));
     store = openSeededLearningStore(statePath);
     const stateShow = hostLedLearningAdapterTestApi.stateShowProjection(store);
-    assert.deepEqual(Object.keys(stateShow).sort(), ['pending_candidate', 'state', 'status']);
+    assert.deepEqual(Object.keys(stateShow).sort(), ['pending_candidate', 'reviewed_query', 'state', 'status']);
     assert.deepEqual(
       Object.keys(stateShow.pending_candidate).sort(),
       ['content_hash', 'record', 'status'],
@@ -382,6 +407,8 @@ test('seeded host-led learning uses product context and lesson seams around boun
     assert.equal(stateShow.pending_candidate.status, 'existing');
     assert.equal(stateShow.pending_candidate.content_hash, createdCandidate.content_hash);
     assert.deepEqual(stateShow.pending_candidate.record, lessonCandidate);
+    assert.deepEqual(stateShow.reviewed_query, completedRun.context_query);
+    assert.deepEqual(stateShow.state.completed_runs[0]!.context_query, completedRun.context_query);
     assert.deepEqual(stateShow.state.candidates, [lessonCandidate]);
     assert.equal(Object.isFrozen(stateShow), true);
     assert.equal(store.status().status, 'not_due');

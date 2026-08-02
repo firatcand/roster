@@ -44,9 +44,11 @@ six passes in a new root on one unchanged final byte set.
 Discovery shows the human the full pending candidate: its closed neutral
 meaning fields, deterministically rendered recommendation and falsification
 wording, citations, and content hash. Approval is a fresh interaction. It reads
-the durable `pending_candidate` projection and must observe the same record and
-hash before promotion. The approval result intentionally omits the prior
-shortlist and Brain diagnostics; those belong only to discovery.
+the durable `pending_candidate` projection and completed run's bounded
+`reviewed_query`, must observe the same record and hash before promotion, and
+must reuse the exact reviewed query when resolving context. The approval result
+intentionally omits the prior shortlist and Brain diagnostics; those belong
+only to discovery.
 
 Claude receives each human request through stdin. Codex receives each request
 as one positional prompt in both its paid turn and its matching model-free

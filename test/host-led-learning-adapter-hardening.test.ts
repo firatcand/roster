@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import {
   mkdirSync,
   mkdtempSync,
@@ -36,6 +37,10 @@ function temporaryWorkspace(): string {
   const root = mkdtempSync(join(tmpdir(), 'roster-350-adapter-test-'));
   mkdirSync(join(root, '.fixture'), { recursive: true });
   return root;
+}
+
+function sha256(value: string): string {
+  return `sha256:${createHash('sha256').update(value).digest('hex')}`;
 }
 
 test('adapter workspace paths reject every symlinked component and leaf', () => {
@@ -112,6 +117,80 @@ test('Roster required_argv is live contract data and must match exactly', () => 
     target,
     [target, '--query', derived, '--json', '--explain'],
   ), /does not exactly match required_argv/u);
+});
+
+test('repeatable required adapter flags accept one or more distinct values', () => {
+  const definition = {
+    command: 'roster-350-fixture-run-record',
+    log_category: 'evidence.run-record',
+    allowed_turns: ['discover'],
+    required_flags: ['--request-hash', '--selected-result', '--brain-citation'],
+    repeatable_flags: ['--brain-citation'],
+  } as const;
+  const fixed = [
+    '--request-hash', `sha256:${'a'.repeat(64)}`,
+    '--selected-result', 'result-a17f',
+  ];
+  const parsed = hostLedLearningAdapterTestApi.parseArguments([
+    ...fixed,
+    '--brain-citation', 'brain-record-a17f',
+    '--brain-citation', 'brain-record-b62c',
+    '--brain-citation', 'brain-record-d91e',
+  ], definition);
+  assert.deepEqual(parsed.values.get('--brain-citation'), [
+    'brain-record-a17f', 'brain-record-b62c', 'brain-record-d91e',
+  ]);
+  assert.throws(
+    () => hostLedLearningAdapterTestApi.parseArguments(fixed, definition),
+    /required flag --brain-citation is missing/u,
+  );
+  assert.throws(() => hostLedLearningAdapterTestApi.parseArguments([
+    ...fixed,
+    '--selected-result', 'result-a17f',
+    '--brain-citation', 'brain-record-a17f',
+  ], definition), /non-repeatable flag --selected-result was repeated/u);
+});
+
+test('completed-run query is recovered from one exact context/search log pair', () => {
+  const root = temporaryWorkspace();
+  const query = 'reliable AI content operations practitioner discussions';
+  const requestHash = `sha256:${'a'.repeat(64)}`;
+  const proof = {
+    bytes: Buffer.byteLength(query, 'utf8'),
+    differs_from_request: true,
+    leading_option: false,
+    control_characters: false,
+    query,
+    query_sha256: sha256(query),
+  };
+  const records: Record<string, unknown>[] = [
+    { sequence: 1, turn: 'discover', log_category: 'roster.discover' },
+    { sequence: 2, turn: 'discover', log_category: 'roster.context', query_proof: proof },
+    { sequence: 3, turn: 'discover', log_category: 'tool.search', query_proof: proof },
+  ];
+  const logPath = join(root, contract.runtime.adapter_log_path);
+  try {
+    writeFileSync(logPath, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`);
+    assert.deepEqual(
+      hostLedLearningAdapterTestApi.persistedContextQueryFromDiscoveryLog(root, contract, requestHash),
+      { bytes: proof.bytes, query, query_sha256: proof.query_sha256 },
+    );
+    const changed = structuredClone(records);
+    const changedQuery = 'reliable AI content operations professional discussions';
+    changed[2]!['query_proof'] = {
+      ...proof,
+      bytes: Buffer.byteLength(changedQuery, 'utf8'),
+      query: changedQuery,
+      query_sha256: sha256(changedQuery),
+    };
+    writeFileSync(logPath, `${changed.map((record) => JSON.stringify(record)).join('\n')}\n`);
+    assert.throws(
+      () => hostLedLearningAdapterTestApi.persistedContextQueryFromDiscoveryLog(root, contract, requestHash),
+      /exact bytes and hash|queries differ/u,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('candidate adapter accepts only the closed meaning flags and values', () => {

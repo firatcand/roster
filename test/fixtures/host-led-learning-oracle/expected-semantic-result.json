@@ -160,9 +160,9 @@
           ]
         },
         "promoted_lesson_ids": [
-          "prefer-practitioner-operational-reject-contradict",
           "general-prior",
           "nested-prior",
+          "prefer-practitioner-operational-reject-contradict",
           "root-prior"
         ]
       },
