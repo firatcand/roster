@@ -35,7 +35,14 @@ import type { SeedBrainCandidate } from '../../src/lib/workspace-context.ts';
 import { installV2ProjectActivation } from '../../src/lib/generated-artifacts.ts';
 import { VENDOR_SKILL_MAP_PATH } from '../../src/lib/vendor-skills/adapter-map.ts';
 import { prepareVendorSkillMap } from '../../src/lib/workspace-registry.ts';
-import { openSeededLearningStore } from './seeded-learning-store.ts';
+import {
+  hashSeededLearningValue,
+  openSeededLearningStore,
+  renderSeededCandidateLessonId,
+  renderSeededCandidateMeaning,
+  type SeededCandidateMeaning,
+  type SeededLessonCandidate,
+} from './seeded-learning-store.ts';
 import { resolveSeededWorkspaceContext } from './seeded-workspace-context.ts';
 
 export const HOST_LED_LEARNING_SMOKE_ENV = 'ROSTER_HOST_LED_LOOP_SMOKE';
@@ -131,11 +138,6 @@ export type CertificationPassOutcome = Readonly<{
   promoted_lesson_sha256: string;
   semantic_result_sha256: string;
   semantic_result: JsonValue;
-  infrastructure_failures: readonly Readonly<{
-    attempt: number;
-    stage: string;
-    detail_sha256: string;
-  }>[];
 }>;
 
 type HostTurnOutcome = Readonly<{
@@ -159,6 +161,7 @@ export type HostLedLearningAttestation = Readonly<{
   fixture_id: string;
   behavior_revision: string;
   fixture_iteration: number;
+  certification_platform: 'darwin';
   generated_at: string;
   package_version: string;
   node_version: string;
@@ -196,7 +199,8 @@ export type HostLedLearningLaunchContract = Readonly<{
     approval_request: string;
     brain_evidence: string;
     tool_results: string;
-    output_schema: string;
+    discover_output_schema: string;
+    approve_output_schema: string;
     lifecycle: string;
   }>;
   roster: Readonly<{
@@ -236,6 +240,7 @@ export type HostLedLearningLaunchContract = Readonly<{
   codex: Readonly<{
     version: string;
     project_overlay: string;
+    generated_skill: Readonly<{ name: string; path: string }>;
     skills_list: Readonly<{
       transport: string;
       request_sequence: readonly JsonObject[];
@@ -250,6 +255,14 @@ export type HostLedLearningLaunchContract = Readonly<{
       command: readonly string[];
       literal_prompt_source: string;
       required_configurable_contributions: readonly string[];
+      pinned_contribution_sha256: Readonly<{
+        permissions: string;
+        skills: string;
+        binary_collaboration: string;
+        binary_multi_agent: string;
+        workspace_instructions: string;
+        environment: string;
+      }>;
     }>;
     dreamer_invocation_proof: readonly string[];
   }>;
@@ -282,22 +295,16 @@ type HostPassPaths = Readonly<{
   turnTwoTmp: string;
 }>;
 
+type HostProbePaths = Readonly<{
+  home: string;
+  config: string;
+  temp: string;
+}>;
+
 class CertificationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'CertificationError';
-  }
-}
-
-class InfrastructureError extends CertificationError {
-  readonly stage: string;
-  readonly detailSha256: string;
-
-  constructor(stage: string, detail: string) {
-    super(`Host certification infrastructure failed at '${stage}' (${sha256(detail)}).`);
-    this.name = 'InfrastructureError';
-    this.stage = stage;
-    this.detailSha256 = sha256(detail);
   }
 }
 
@@ -404,7 +411,8 @@ function requiredObject(
 
 function parseContractPathMap(value: unknown): HostLedLearningLaunchContract['host_readable_inputs'] {
   const record = requiredObject(value, 'host_readable_inputs', [
-    'discover_request', 'approval_request', 'brain_evidence', 'tool_results', 'output_schema', 'lifecycle',
+    'discover_request', 'approval_request', 'brain_evidence', 'tool_results',
+    'discover_output_schema', 'approve_output_schema', 'lifecycle',
   ]);
   return Object.freeze(Object.fromEntries(Object.keys(record).map((key) => [
     key,
@@ -537,8 +545,10 @@ export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearn
     'version', 'plugin_root', 'plugin_name', 'skill_tool_name', 'skills', 'dreamer_invocation_proof',
   ]);
   const codex = requiredObject(root['codex'], 'codex', [
-    'version', 'project_overlay', 'skills_list', 'skills', 'prompt_input', 'dreamer_invocation_proof',
+    'version', 'project_overlay', 'generated_skill', 'skills_list', 'skills', 'prompt_input',
+    'dreamer_invocation_proof',
   ]);
+  const generatedSkill = requiredObject(codex['generated_skill'], 'codex.generated_skill', ['name', 'path']);
   const skillsList = requiredObject(codex['skills_list'], 'codex.skills_list', ['transport', 'request_sequence']);
   if (!Array.isArray(skillsList['request_sequence']) || skillsList['request_sequence'].length !== 3) {
     throw new CertificationError('codex.skills_list.request_sequence must contain exactly three messages.');
@@ -549,7 +559,16 @@ export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearn
   });
   const promptInput = requiredObject(codex['prompt_input'], 'codex.prompt_input', [
     'command', 'literal_prompt_source', 'required_configurable_contributions',
+    'pinned_contribution_sha256',
   ]);
+  const pinnedPromptContributions = requiredObject(
+    promptInput['pinned_contribution_sha256'],
+    'codex.prompt_input.pinned_contribution_sha256',
+    [
+      'permissions', 'skills', 'binary_collaboration', 'binary_multi_agent',
+      'workspace_instructions', 'environment',
+    ],
+  );
   const contract = {
     schema_version: HOST_LED_LEARNING_CONTRACT_SCHEMA_VERSION,
     fixture_id: requiredString(root['fixture_id'], 'fixture_id'),
@@ -593,6 +612,10 @@ export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearn
     codex: Object.freeze({
       version: requiredString(codex['version'], 'codex.version'),
       project_overlay: assertRelativePath(requiredString(codex['project_overlay'], 'codex.project_overlay'), 'Codex overlay'),
+      generated_skill: Object.freeze({
+        name: requiredString(generatedSkill['name'], 'codex.generated_skill.name'),
+        path: assertRelativePath(requiredString(generatedSkill['path'], 'codex.generated_skill.path'), 'generated skill path'),
+      }),
       skills_list: Object.freeze({
         transport: requiredString(skillsList['transport'], 'codex.skills_list.transport'),
         request_sequence: Object.freeze(requestSequence),
@@ -605,6 +628,12 @@ export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearn
           promptInput['required_configurable_contributions'],
           'codex.prompt_input.required_configurable_contributions',
         ),
+        pinned_contribution_sha256: Object.freeze(Object.fromEntries(
+          Object.entries(pinnedPromptContributions).map(([key, value]) => [
+            key,
+            requireBareHash(value, `codex.prompt_input.pinned_contribution_sha256.${key}`),
+          ]),
+        )) as HostLedLearningLaunchContract['codex']['prompt_input']['pinned_contribution_sha256'],
       }),
       dreamer_invocation_proof: requiredStringArray(codex['dreamer_invocation_proof'], 'codex.dreamer_invocation_proof'),
     }),
@@ -644,6 +673,12 @@ export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearn
     || canonicalJson(contract.codex.prompt_input.required_configurable_contributions)
       !== canonicalJson(['canonical-roster-instructions', 'expected-project-skills', 'literal-human-request'])) {
     throw new CertificationError('Codex prompt-input contract differs from the exact model-free probe.');
+  }
+  if (canonicalJson(contract.codex.generated_skill) !== canonicalJson({
+    name: 'roster',
+    path: '.agents/skills/roster/SKILL.md',
+  })) {
+    throw new CertificationError('Codex generated Roster skill contract is not exact.');
   }
   return Object.freeze(contract);
 }
@@ -803,7 +838,17 @@ export function normalizeMachinePaths(
   replacements: Readonly<Record<string, string>>,
 ): JsonValue {
   const ordered = Object.entries(replacements)
-    .map(([path, placeholder]) => [resolve(path), placeholder] as const)
+    .flatMap(([path, placeholder]) => {
+      const resolved = resolve(path);
+      try {
+        const real = realpathSync(resolved);
+        return real === resolved
+          ? [[resolved, placeholder] as const]
+          : [[resolved, placeholder] as const, [real, placeholder] as const];
+      } catch {
+        return [[resolved, placeholder] as const];
+      }
+    })
     .sort(([left], [right]) => right.length - left.length || compareCodePoints(left, right));
   const normalize = (entry: unknown): JsonValue => {
     if (typeof entry === 'string') {
@@ -872,7 +917,7 @@ export function runCapturedProcess(options: Readonly<{
 
 function requireSuccess(result: ProcessCapture, stage: string): ProcessCapture {
   if (result.status !== 0 || result.timed_out) {
-    throw new InfrastructureError(stage, safeProcessDetail(result));
+    throw new CertificationError(`Host certification failed at '${stage}' (${sha256(safeProcessDetail(result))}).`);
   }
   return result;
 }
@@ -926,6 +971,7 @@ function minimalProbeEnv(home: string, pathValue: string): Readonly<Record<strin
     TMPDIR: join(home, 'tmp'),
     LANG: 'C.UTF-8',
     LC_ALL: 'C.UTF-8',
+    TZ: 'UTC',
     NO_COLOR: '1',
     CI: '1',
   });
@@ -1152,6 +1198,21 @@ function passPaths(certificationRoot: string, host: CertificationHost): HostPass
   });
 }
 
+function createHostProbePaths(pass: HostPassPaths, label: string): HostProbePaths {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(label)) {
+    throw new CertificationError('Host probe label is invalid.');
+  }
+  const root = join(pass.hostRoot, 'probes', label);
+  if (existsSync(root)) throw new CertificationError(`Host probe root '${label}' was already used.`);
+  const paths = Object.freeze({
+    home: join(root, 'home'),
+    config: join(root, 'config'),
+    temp: join(root, 'tmp'),
+  });
+  for (const directory of Object.values(paths)) mkdirSync(directory, { recursive: true, mode: 0o700 });
+  return paths;
+}
+
 function inventoryAncestorInstructions(workspace: string): JsonValue {
   const names = ['CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', 'AGENTS.override.md'];
   const found: string[] = [];
@@ -1256,7 +1317,7 @@ function explicitHostEnv(options: Readonly<{
   configHome: string;
   temp: string;
   workspace: string;
-  apiKey: string;
+  apiKey?: string;
   hostBinary: string;
   requestHash: string;
   challengeHash: string;
@@ -1268,6 +1329,7 @@ function explicitHostEnv(options: Readonly<{
     PATH: `${join(options.workspace, '.fixture/bin')}:${dirname(process.execPath)}:${dirname(options.hostBinary)}:/usr/bin:/bin`,
     LANG: 'C.UTF-8',
     LC_ALL: 'C.UTF-8',
+    TZ: 'UTC',
     NO_COLOR: '1',
     CI: '1',
     ROSTER_350_HOST: options.host,
@@ -1278,10 +1340,10 @@ function explicitHostEnv(options: Readonly<{
   };
   if (options.host === 'claude') {
     env['CLAUDE_CONFIG_DIR'] = options.configHome;
-    env['ANTHROPIC_API_KEY'] = options.apiKey;
+    if (options.apiKey !== undefined) env['ANTHROPIC_API_KEY'] = options.apiKey;
   } else {
     env['CODEX_HOME'] = options.configHome;
-    env['OPENAI_API_KEY'] = options.apiKey;
+    env['OPENAI_API_KEY'] = options.apiKey ?? 'roster-model-free-probe';
   }
   return Object.freeze(env);
 }
@@ -1499,12 +1561,18 @@ function writeClaudeSettings(
 function claudeArgs(
   paths: CertificationPaths,
   contract: HostLedLearningLaunchContract,
+  turn: 1 | 2,
   settingsPath: string,
   mcpPath: string,
   includeSandboxCanaries: boolean,
   sandboxProbePrompt?: string,
 ): readonly string[] {
-  const schemaPath = join(paths.fixtureRoot, contract.host_readable_inputs.output_schema);
+  const schemaPath = join(
+    paths.fixtureRoot,
+    turn === 1
+      ? contract.host_readable_inputs.discover_output_schema
+      : contract.host_readable_inputs.approve_output_schema,
+  );
   const pluginPath = join(paths.fixtureRoot, contract.claude.plugin_root);
   return Object.freeze([
     '-p',
@@ -1555,12 +1623,18 @@ const DEFAULT_CODEX_DISABLED_FEATURES = Object.freeze([
 
 function codexConfigArgs(env: Readonly<Record<string, string>>): string[] {
   const shellValues = [
-    'PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL',
+    'PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'TZ',
     'ROSTER_350_HOST', 'ROSTER_350_TURN', 'ROSTER_350_REQUEST_SHA256',
     'ROSTER_350_DREAMER_CHALLENGE_SHA256', 'ROSTER_350_ROSTER_VERSION',
   ] as const;
   const args = [
     '-c', `model_reasoning_effort=${JSON.stringify(CODEX_REASONING_EFFORT)}`,
+    '-c', 'model_provider="roster-certification-openai"',
+    '-c', 'model_providers.roster-certification-openai.name="OpenAI"',
+    '-c', 'model_providers.roster-certification-openai.base_url="https://api.openai.com/v1"',
+    '-c', 'model_providers.roster-certification-openai.env_key="OPENAI_API_KEY"',
+    '-c', 'model_providers.roster-certification-openai.wire_api="responses"',
+    '-c', 'model_providers.roster-certification-openai.requires_openai_auth=false',
     '-c', 'shell_environment_policy.inherit="none"',
     '-c', 'allow_login_shell=false',
     '-c', 'sandbox_workspace_write.network_access=false',
@@ -1581,9 +1655,16 @@ function codexArgs(
   paths: CertificationPaths,
   pass: HostPassPaths,
   contract: HostLedLearningLaunchContract,
+  turn: 1 | 2,
   env: Readonly<Record<string, string>>,
+  prompt: string,
 ): readonly string[] {
-  const schemaPath = join(paths.fixtureRoot, contract.host_readable_inputs.output_schema);
+  const schemaPath = join(
+    paths.fixtureRoot,
+    turn === 1
+      ? contract.host_readable_inputs.discover_output_schema
+      : contract.host_readable_inputs.approve_output_schema,
+  );
   return Object.freeze([
     '-a', 'never',
     '--strict-config',
@@ -1598,7 +1679,7 @@ function codexArgs(
     '--output-schema', schemaPath,
     '--json',
     '--color', 'never',
-    '-',
+    prompt,
   ]);
 }
 
@@ -1662,7 +1743,7 @@ async function runSequentialJsonlRpc(options: Readonly<{
     };
     const timeout = setTimeout(() => {
       child.kill('SIGKILL');
-      finish(new InfrastructureError('codex-app-server-timeout', sha256(stderr)));
+      finish(new CertificationError(`Codex app-server timed out (${sha256(stderr)}).`));
     }, PROBE_TIMEOUT_MS);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
@@ -1685,10 +1766,10 @@ async function runSequentialJsonlRpc(options: Readonly<{
       stderr += stripAnsi(chunk);
       if (Buffer.byteLength(stderr, 'utf8') > MAX_PROCESS_OUTPUT_BYTES) {
         child.kill('SIGKILL');
-        finish(new InfrastructureError('codex-app-server-stderr-limit', sha256(stderr)));
+        finish(new CertificationError(`Codex app-server exceeded its stderr bound (${sha256(stderr)}).`));
       }
     });
-    child.on('error', (error) => finish(new InfrastructureError('codex-app-server-spawn', error.message)));
+    child.on('error', (error) => finish(new CertificationError(`Codex app-server spawn failed (${sha256(error.message)}).`)));
     child.on('close', (status, signal) => {
       if (stdoutBuffer.trim() !== '') {
         try {
@@ -1699,13 +1780,13 @@ async function runSequentialJsonlRpc(options: Readonly<{
         }
       }
       if (status !== 0 || awaitedId !== undefined || responses.length !== 2) {
-        finish(new InfrastructureError('codex-app-server-close', canonicalJson({
+        finish(new CertificationError(`Codex app-server closed outside its exact protocol (${sha256(canonicalJson({
           status,
           signal,
           awaited_id: awaitedId ?? null,
           response_count: responses.length,
           stderr_sha256: sha256(stderr),
-        })));
+        }))}).`));
       } else {
         finish();
       }
@@ -1759,11 +1840,12 @@ async function probeCodexProjectSkills(options: Readonly<{
     || !Array.isArray(entry['skills'])) {
     throw new CertificationError('Codex project skill discovery returned an error or wrong workspace.');
   }
-  const expectedRepository = options.contract.codex.skills.map((skill) => ({
-    name: skill.name,
-    path: join(options.passPaths.workspace, skill.path),
-    scope: 'repo',
-  }));
+  const expectedRepository = [options.contract.codex.generated_skill, ...options.contract.codex.skills]
+    .map((skill) => ({
+      name: skill.name,
+      path: join(options.passPaths.workspace, skill.path),
+      scope: 'repo',
+    }));
   const expectedSystem = ['imagegen', 'openai-docs', 'plugin-creator', 'skill-creator', 'skill-installer'].map((name) => ({
     name,
     path: join(options.env['CODEX_HOME']!, 'skills/.system', name, 'SKILL.md'),
@@ -1785,7 +1867,7 @@ async function probeCodexProjectSkills(options: Readonly<{
     || skill.scope !== expected[index]!.scope
     || skill.enabled !== true
   ))) {
-    throw new CertificationError('Codex skill discovery differs from the exact five-system/two-repository inventory.');
+    throw new CertificationError('Codex skill discovery differs from the exact five-system/three-repository inventory.');
   }
   return sha256(canonicalJson(normalizeMachinePaths({ initialization: initializeResult, skills: actual }, {
     [options.passPaths.workspace]: '$WORKSPACE',
@@ -1793,14 +1875,13 @@ async function probeCodexProjectSkills(options: Readonly<{
   })));
 }
 
-function probeCodexPromptInput(options: Readonly<{
+function captureCodexPromptInputSummary(options: Readonly<{
   paths: LiveCertificationPaths;
   passPaths: HostPassPaths;
   contract: HostLedLearningLaunchContract;
   env: Readonly<Record<string, string>>;
   prompt: string;
-  apiKey: string;
-}>): string {
+}>): JsonValue {
   const [commandName, ...commandArgs] = options.contract.codex.prompt_input.command;
   if (commandName !== 'codex') throw new CertificationError('Codex prompt-input executable contract is invalid.');
   const result = requireSuccess(runCapturedProcess({
@@ -1817,21 +1898,42 @@ function probeCodexPromptInput(options: Readonly<{
     env: options.env,
     timeoutMs: PROBE_TIMEOUT_MS,
   }), 'codex-prompt-input');
-  assertNoRawSecrets(`${result.stdout}\n${result.stderr}`, [options.apiKey]);
   const parsed = parseJson(result.stdout, 'Codex prompt-input output');
-  const normalized = normalizeMachinePaths(parsed, {
+  const normalizedPaths = normalizeMachinePaths(parsed, {
     [options.paths.repoRoot]: '$REPO',
     [options.passPaths.workspace]: '$WORKSPACE',
     [options.env['HOME']!]: '$TEMP_HOME',
     [options.env['CODEX_HOME']!]: '$HOST_CONFIG',
     [options.env['TMPDIR']!]: '$TMPDIR',
   });
-  return sha256(canonicalJson(validateCodexPromptInputContributions({
-    value: normalized,
+  const normalizeVolatileText = (value: JsonValue): JsonValue => {
+    if (typeof value === 'string') {
+      return value.replace(/<current_date>\d{4}-\d{2}-\d{2}<\/current_date>/gu,
+        '<current_date>$CURRENT_DATE</current_date>');
+    }
+    if (Array.isArray(value)) return value.map(normalizeVolatileText);
+    if (value === null || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, normalizeVolatileText(entry)]));
+  };
+  const summary = validateCodexPromptInputContributions({
+    value: normalizeVolatileText(normalizedPaths),
     workspace: options.passPaths.workspace,
     prompt: options.prompt,
     contract: options.contract,
-  })));
+  });
+  return summary;
+}
+
+function probeCodexPromptInput(options: Readonly<{
+  paths: LiveCertificationPaths;
+  passPaths: HostPassPaths;
+  contract: HostLedLearningLaunchContract;
+  env: Readonly<Record<string, string>>;
+  prompt: string;
+}>): string {
+  const summary = captureCodexPromptInputSummary(options);
+  assertCodexPromptContributionPins(summary, options.contract.codex.prompt_input.pinned_contribution_sha256);
+  return sha256(canonicalJson(summary));
 }
 
 export function validateCodexPromptInputContributions(options: Readonly<{
@@ -1840,8 +1942,8 @@ export function validateCodexPromptInputContributions(options: Readonly<{
   prompt: string;
   contract: HostLedLearningLaunchContract;
 }>): JsonValue {
-  if (!Array.isArray(options.value) || options.value.length !== 3) {
-    throw new CertificationError('Codex prompt-input must contain exactly three closed messages.');
+  if (!Array.isArray(options.value) || options.value.length !== 5) {
+    throw new CertificationError('Codex prompt-input must contain exactly five closed messages.');
   }
   const messages = options.value.map((entry, index) => {
     const record = requiredObject(entry, `Codex prompt message ${index + 1}`, [
@@ -1870,19 +1972,25 @@ export function validateCodexPromptInputContributions(options: Readonly<{
     };
   });
   if (messages[0]!.role !== 'developer' || messages[0]!.texts.length !== 2
-    || messages[1]!.role !== 'user' || messages[1]!.texts.length !== 2
-    || messages[2]!.role !== 'user' || canonicalJson(messages[2]!.texts) !== canonicalJson([options.prompt])) {
+    || messages[1]!.role !== 'developer' || messages[1]!.texts.length !== 1
+    || messages[2]!.role !== 'developer' || messages[2]!.texts.length !== 1
+    || messages[3]!.role !== 'user' || messages[3]!.texts.length !== 2
+    || messages[4]!.role !== 'user' || canonicalJson(messages[4]!.texts) !== canonicalJson([options.prompt])) {
     throw new CertificationError('Codex prompt-input role or contribution grouping is not exact.');
   }
   const [permissions, skills] = messages[0]!.texts;
-  const [instructions, environment] = messages[1]!.texts;
+  const [binaryCollaboration] = messages[1]!.texts;
+  const [binaryMultiAgent] = messages[2]!.texts;
+  const [instructions, environment] = messages[3]!.texts;
   if (permissions === undefined || !permissions.startsWith('<permissions instructions>')
     || !permissions.endsWith('</permissions instructions>')
     || !permissions.includes('`sandbox_mode` is `workspace-write`')
     || !permissions.includes('Approval policy is currently never')
     || !permissions.includes('$WORKSPACE')
     || skills === undefined || !skills.startsWith('<skills_instructions>')
-    || !skills.endsWith('</skills_instructions>')) {
+    || !skills.endsWith('</skills_instructions>')
+    || binaryCollaboration === undefined || binaryCollaboration.length === 0
+    || binaryMultiAgent === undefined || binaryMultiAgent.length === 0) {
     throw new CertificationError('Codex prompt-input permission or skill contribution is not exact and isolated.');
   }
   const discoveredSkills = [...skills.matchAll(/^- ([^:\n]+): .+ \(file: ([^)]+)\)$/gmu)]
@@ -1890,7 +1998,7 @@ export function validateCodexPromptInputContributions(options: Readonly<{
     .sort((left, right) => compareCodePoints(left.name, right.name));
   const systemSkillNames = ['imagegen', 'openai-docs', 'plugin-creator', 'skill-creator', 'skill-installer'];
   const expectedSkills = [
-    ...options.contract.codex.skills.map((skill) => ({
+    ...[options.contract.codex.generated_skill, ...options.contract.codex.skills].map((skill) => ({
       name: skill.name,
       path: `$WORKSPACE/${skill.path}`,
     })),
@@ -1900,9 +2008,9 @@ export function validateCodexPromptInputContributions(options: Readonly<{
     })),
   ].sort((left, right) => compareCodePoints(left.name, right.name));
   if (canonicalJson(discoveredSkills) !== canonicalJson(expectedSkills)) {
-    throw new CertificationError('Codex prompt-input skill contribution is outside the exact seven-skill inventory.');
+    throw new CertificationError('Codex prompt-input skill contribution is outside the exact eight-skill inventory.');
   }
-  const agentInstructions = readFileSync(join(options.workspace, 'AGENTS.md'), 'utf8').trim();
+  const agentInstructions = readFileSync(join(options.workspace, 'AGENTS.md'), 'utf8');
   const expectedInstructions = `# AGENTS.md instructions for $WORKSPACE\n\n<INSTRUCTIONS>\n${agentInstructions}\n</INSTRUCTIONS>`;
   if (instructions !== expectedInstructions
     || environment === undefined
@@ -1922,17 +2030,38 @@ export function validateCodexPromptInputContributions(options: Readonly<{
   return canonicalize({
     message_roles: messages.map((message) => message.role),
     contribution_order: [
-      'permissions', 'skills', 'workspace-instructions', 'environment', 'literal-human-request',
+      'permissions', 'skills', 'binary-collaboration', 'binary-multi-agent',
+      'workspace-instructions', 'environment', 'literal-human-request',
     ],
     contribution_sha256: {
       permissions: sha256(permissions),
       skills: sha256(skills),
+      binary_collaboration: sha256(binaryCollaboration),
+      binary_multi_agent: sha256(binaryMultiAgent),
       workspace_instructions: sha256(instructions),
       environment: sha256(environment),
       literal_human_request: sha256(options.prompt),
     },
     skills: discoveredSkills,
   });
+}
+
+export function assertCodexPromptContributionPins(
+  summary: JsonValue,
+  expected: HostLedLearningLaunchContract['codex']['prompt_input']['pinned_contribution_sha256'],
+): void {
+  if (!isJsonObject(summary) || !isJsonObject(summary['contribution_sha256'])) {
+    throw new CertificationError('Codex prompt-input contribution summary is invalid.');
+  }
+  const actual = requiredObject(summary['contribution_sha256'], 'Codex prompt contribution hashes', [
+    'permissions', 'skills', 'binary_collaboration', 'binary_multi_agent',
+    'workspace_instructions', 'environment', 'literal_human_request',
+  ]);
+  for (const [key, hash] of Object.entries(expected)) {
+    if (actual[key] !== hash) {
+      throw new CertificationError(`Codex prompt-input pinned contribution '${key}' drifted.`);
+    }
+  }
 }
 
 async function probeCodexSandbox(options: Readonly<{
@@ -2539,6 +2668,53 @@ function assertCodexPrimarySkillProof(
   }
 }
 
+export function assertHostVisibleJsonCommandOutput(
+  trace: NormalizedHostTrace,
+  commandName: string,
+  expected: JsonValue,
+): string {
+  const expectedText = canonicalJson(expected);
+  let visibleOutput: string;
+  if (trace.host === 'claude') {
+    const calls = trace.tool_calls.filter((entry) => {
+      if (!isJsonObject(entry) || entry['name'] !== 'Bash' || !isJsonObject(entry['input'])
+        || typeof entry['input']['command'] !== 'string') return false;
+      const tokens = tokenizeLiteralHostCommand(entry['input']['command'], true);
+      return tokens[0]?.split('/').at(-1) === commandName;
+    });
+    const call = calls[0];
+    if (calls.length !== 1 || !isJsonObject(call) || typeof call['id'] !== 'string') {
+      throw new CertificationError(`Claude did not expose one exact '${commandName}' command output.`);
+    }
+    const callId = call['id'];
+    const results = trace.tool_results.filter((entry) => (
+      isJsonObject(entry) && entry['tool_use_id'] === callId
+    ));
+    if (results.length !== 1 || !isJsonObject(results[0]) || results[0]['is_error'] === true
+      || typeof results[0]['content'] !== 'string') {
+      throw new CertificationError(`Claude did not expose one successful textual '${commandName}' result.`);
+    }
+    visibleOutput = results[0]['content'];
+  } else {
+    const calls = trace.tool_calls.filter((entry) => {
+      if (!isJsonObject(entry) || entry['type'] !== 'command_execution') return false;
+      const command = decodeCodexShellWrappedCommand(entry['command'], true);
+      return tokenizeLiteralHostCommand(command, true)[0]?.split('/').at(-1) === commandName;
+    });
+    if (calls.length !== 1 || !isJsonObject(calls[0])
+      || calls[0]['status'] !== 'completed' || calls[0]['exit_code'] !== 0
+      || typeof calls[0]['aggregated_output'] !== 'string') {
+      throw new CertificationError(`Codex did not expose one successful textual '${commandName}' result.`);
+    }
+    visibleOutput = calls[0]['aggregated_output'];
+  }
+  const normalizedOutput = visibleOutput.replace(/\r\n?/gu, '\n');
+  if (normalizedOutput !== expectedText && normalizedOutput !== `${expectedText}\n`) {
+    throw new CertificationError(`Host-visible '${commandName}' output differs from the exact adapter projection.`);
+  }
+  return sha256(normalizedOutput);
+}
+
 export function tokenizeLiteralHostCommand(
   command: string,
   allowNormalizedMarkers = false,
@@ -2869,7 +3045,7 @@ function validateAdapterLog(options: Readonly<{
   challengeHash: string;
   challenge: string;
   rosterBundleHash: string;
-}>): void {
+}>): string {
   const expectation = options.contract.turn_expectations[options.turn];
   const slice = options.records.slice(options.start);
   const allowedCategories = new Set([
@@ -2900,6 +3076,7 @@ function validateAdapterLog(options: Readonly<{
       if (!isJsonObject(proof) || !boundedQueryProof(proof, options.requestHash)) {
         throw new CertificationError('Fixture adapter log has an invalid derived-query proof.');
       }
+      validateDerivedQueryMeaning(requiredString(proof['query'], 'derived query'));
     }
     const rosterInvocation = options.contract.roster.allowed_model_invocations
       .find((entry) => entry.log_category === category);
@@ -2956,12 +3133,38 @@ function validateAdapterLog(options: Readonly<{
   if (queryHashes.length > 0 && new Set(queryHashes).size !== 1) {
     throw new CertificationError('Roster context and controlled search did not use one shared derived query.');
   }
+  const queries = options.records.flatMap((record) => {
+    if (record['log_category'] !== 'roster.context' && record['log_category'] !== 'tool.search') return [];
+    const proof = record['query_proof'];
+    return isJsonObject(proof) && typeof proof['query'] === 'string' ? [proof['query']] : [];
+  });
+  if (queries.length === 0 || new Set(queries).size !== 1) {
+    throw new CertificationError('Roster context and controlled search omitted one exact shared derived query.');
+  }
   const candidate = slice.find((entry) => entry['log_category'] === 'learning.candidate-create');
   if (options.turn === 'discover'
     && (candidate?.['skill_challenge_sha256'] !== options.challengeHash
       || canonicalJson(options.records).includes(options.challenge))) {
     throw new CertificationError('Dreamer challenge proof is missing, wrong, or retained in raw adapter logs.');
   }
+  return queries[0]!;
+}
+
+export function validateDerivedQueryMeaning(query: string): string {
+  const tokens = new Set(query.normalize('NFKC').toLowerCase().match(/[a-z0-9]+/gu) ?? []);
+  const hasAny = (values: readonly string[]): boolean => values.some((value) => tokens.has(value));
+  const contradictoryTokens = [
+    'ad', 'ads', 'advertising', 'anti', 'avoid', 'ban', 'crypto', 'exclude', 'ignore',
+    'not', 'promotion', 'reject', 'skip', 'spam', 'token', 'tokens',
+  ] as const;
+  if (tokens.size < 3
+    || hasAny(contradictoryTokens)
+    || !hasAny(['reliable', 'reliability', 'quality', 'review', 'reviewed', 'safe', 'safety'])
+    || !hasAny(['ai', 'content', 'editorial', 'operation', 'operations', 'operational', 'workflow', 'workflows'])
+    || !hasAny(['practitioner', 'practitioners', 'operator', 'operators', 'team', 'teams', 'creator', 'creators'])) {
+    throw new CertificationError('Derived query is not semantically bound to reliable AI/content operations practitioners.');
+  }
+  return 'reliable-ai-content-operations-practitioner';
 }
 
 function boundedQueryProof(proof: Record<string, unknown>, requestHash: string): boolean {
@@ -3050,6 +3253,36 @@ function hostTurnEnvironment(options: Readonly<{
   });
 }
 
+function hostProbeEnvironment(options: Readonly<{
+  host: CertificationHost;
+  paths: LiveCertificationPaths;
+  passPaths: HostPassPaths;
+  contract: HostLedLearningLaunchContract;
+  turn: 1 | 2;
+  label: string;
+}>): Readonly<{ env: Readonly<Record<string, string>>; roots: HostProbePaths }> {
+  const roots = createHostProbePaths(options.passPaths, options.label);
+  const hostBinary = options.host === 'claude' ? options.paths.claudeBin : options.paths.codexBin;
+  return Object.freeze({
+    roots,
+    env: explicitHostEnv({
+      host: options.host,
+      turn: options.turn === 1 ? 'discover' : 'approve',
+      home: roots.home,
+      configHome: roots.config,
+      temp: roots.temp,
+      workspace: options.passPaths.workspace,
+      hostBinary,
+      requestHash: `sha256:${sha256(readFileSync(join(
+        options.paths.fixtureRoot,
+        options.contract.host_readable_inputs.discover_request,
+      )))}`,
+      challengeHash: `sha256:${sha256(dreamerChallenge(options.paths, options.contract))}`,
+      rosterVersion: packageVersion(options.paths),
+    }),
+  });
+}
+
 function runHostTurn(options: Readonly<{
   host: CertificationHost;
   paths: LiveCertificationPaths;
@@ -3082,13 +3315,14 @@ function runHostTurn(options: Readonly<{
         return claudeArgs(
           options.paths,
           options.contract,
+          options.turn,
           settingsPath,
           mcpPath,
           includeSandboxCanaries,
           options.claudeSandboxProbe?.systemPrompt,
         );
       })()
-    : codexArgs(options.paths, options.passPaths, options.contract, env);
+    : codexArgs(options.paths, options.passPaths, options.contract, options.turn, env, options.prompt);
   const replacements = {
     [options.paths.repoRoot]: '$REPO',
     [options.passPaths.workspace]: '$WORKSPACE',
@@ -3108,7 +3342,7 @@ function runHostTurn(options: Readonly<{
       args,
       cwd: options.passPaths.workspace,
       env,
-      input: options.prompt,
+      ...(options.host === 'claude' ? { input: options.prompt } : {}),
     }), `${options.host}-turn-${options.turn}`)
   ));
   const authoredConfigAfter = authoredHostConfigManifest(options.host, config);
@@ -3327,6 +3561,7 @@ function seededContextSummary(
   workspace: string,
   fixtureRoot: string,
   contract: HostLedLearningLaunchContract,
+  query: string,
 ): Readonly<{ lessonIds: readonly string[]; targetRecordHash: string }> {
   const evidence = readJson(join(fixtureRoot, contract.host_readable_inputs.brain_evidence), 'seeded Brain evidence');
   if (!isJsonObject(evidence) || !Array.isArray(evidence['candidates'])) {
@@ -3336,7 +3571,7 @@ function seededContextSummary(
     root: workspace,
     request: {
       target: contract.roster.target,
-      query: 'reliable AI operations practitioner discussions',
+      query,
       stepHint: 'The harness is verifying the complete certified context.',
       budgetTokens: DEFAULT_CONTEXT_BUDGET_TOKENS,
       explain: true,
@@ -3417,28 +3652,28 @@ function assertNoForbiddenRetention(
 }
 
 export function validateCandidateSemanticMeaning(
+  meaningValue: unknown,
   recommendationValue: unknown,
   falsifiableByValue: unknown,
 ): Readonly<{ recommendation_code: string; falsifier_code: string }> {
+  const meaning = requiredObject(meaningValue, 'candidate meaning', [
+    'disposition', 'source_kind', 'topic_kind', 'falsifier_action', 'falsifier_observation',
+  ]);
+  const expectedMeaning: SeededCandidateMeaning = {
+    disposition: 'prefer',
+    source_kind: 'attributable-practitioner',
+    topic_kind: 'operational-problem',
+    falsifier_action: 'reject',
+    falsifier_observation: 'reviewed-outcomes-contradict',
+  };
+  if (canonicalJson(meaning) !== canonicalJson(expectedMeaning)) {
+    throw new CertificationError('Candidate meaning differs from the closed preferred-source learning decision.');
+  }
   const recommendation = boundedProse(recommendationValue, 'candidate recommendation');
   const falsifiableBy = boundedProse(falsifiableByValue, 'candidate falsification condition');
-  if (recommendation.trim() !== recommendation
-    || !/^(?:prefer|prioritize|favor)\b/iu.test(recommendation)
-    || !/\battribut(?:able|ed|ion|ing)?\b/iu.test(recommendation)
-    || !/\bpractitioners?\b/iu.test(recommendation)
-    || !/\boperations?|operational\b/iu.test(recommendation)
-    || !/\bproblems?|challenges?|pains?\b/iu.test(recommendation)
-    || /\b(?:avoid|exclude|reject|ignore|irrelevant|profiles?|homepages?|crypto(?:currency)?|tokens?|advertis(?:e|ing|ement)|never|not)\b/iu.test(recommendation)) {
-    throw new CertificationError('Candidate recommendation is not a positive preference for attributable practitioner operational problems.');
-  }
-  if (falsifiableBy.trim() !== falsifiableBy
-    || !/^(?:reject|revise|withdraw|revisit|discard|change)\b/iu.test(falsifiableBy)
-    || !/\b(?:if|when)\b/iu.test(falsifiableBy)
-    || !/\b(?:reviewed|future|later|measured|observed)\b/iu.test(falsifiableBy)
-    || !/\b(?:outcomes?|evidence|results?|observations?|performance)\b/iu.test(falsifiableBy)
-    || !/\b(?:contradict|contradicts|contradicted|disprove|disproves|disproved|fail|fails|failed)\b/iu.test(falsifiableBy)
-    || /\b(?:never|ignore|regardless|irrelevant|cannot|unfalsifiable)\b|no matter/iu.test(falsifiableBy)) {
-    throw new CertificationError('Candidate falsification condition is not an observable future counter-test.');
+  const rendered = renderSeededCandidateMeaning(expectedMeaning);
+  if (recommendation !== rendered.recommendation || falsifiableBy !== rendered.falsifiable_by) {
+    throw new CertificationError('Candidate prose differs from the canonical closed-meaning renderer.');
   }
   return Object.freeze({
     recommendation_code: 'prefer-attributable-practitioner-operational-problems',
@@ -3449,109 +3684,144 @@ export function validateCandidateSemanticMeaning(
 function assertCandidateSemantics(
   candidate: ReturnType<ReturnType<typeof openSeededLearningStore>['snapshot']>['candidates'][number],
 ): void {
-  validateCandidateSemanticMeaning(candidate.recommendation, candidate.falsifiable_by);
+  validateCandidateSemanticMeaning(candidate.meaning, candidate.recommendation, candidate.falsifiable_by);
 }
 
-function policyReasonCode(result: Record<string, unknown>, prose: string): string {
-  if (!/\b(?:reject|exclude|skip|omit|filter|outside|ineligible|untrusted)\b|out of scope|not (?:a )?(?:post|eligible|allowed|useful)|already used/iu.test(prose)
-    || /\b(?:select|include|accept|prioritize|prefer)\b/iu.test(prose)) {
-    throw new CertificationError('Rejected result prose does not express a rejection policy decision.');
-  }
+function policyCodeForResult(result: Record<string, unknown>): string {
   const topics = Array.isArray(result['topics']) ? result['topics'].filter((entry) => typeof entry === 'string') : [];
   const observed = Array.isArray(result['observed_run_ids']) ? result['observed_run_ids'] : [];
   if (topics.includes('professional-profile')) {
-    if (!/profile|homepage/iu.test(prose)) throw new CertificationError('Profile rejection prose lacks its policy meaning.');
     return 'profile-or-homepage';
   }
   if (topics.includes('cryptocurrency')) {
-    if (!/crypto|token/iu.test(prose)) throw new CertificationError('Cryptocurrency rejection prose lacks its policy meaning.');
     return 'cryptocurrency';
   }
   if (observed.length > 0) {
-    if (!/prior|previous|already|used|observed/iu.test(prose)) {
-      throw new CertificationError('Prior-use rejection prose lacks its policy meaning.');
-    }
     return 'previously-used';
   }
   if (result['transient_marker'] !== null && result['transient_marker'] !== undefined) {
-    if (!/untrust|instruction|override|policy|prompt/iu.test(prose)) {
-      throw new CertificationError('Untrusted-instruction rejection prose lacks its policy meaning.');
-    }
     return 'untrusted-instruction';
   }
   throw new CertificationError('Rejected result has no recognized authored-policy classification.');
 }
 
+function candidateOutputProjection(value: unknown, candidate: SeededLessonCandidate): JsonValue {
+  const record = requiredObject(value, 'semantic candidate', [
+    'candidate_id', 'lesson_id', 'meaning', 'recommendation', 'falsifiable_by',
+    'candidate_content_hash', 'citation_ids',
+  ]);
+  const citationIds = [...candidate.citations.run_ids, ...candidate.citations.feedback_ids].sort(compareCodePoints);
+  const canonicalLessonId = renderSeededCandidateLessonId(candidate.meaning);
+  if (!Array.isArray(record['citation_ids'])
+    || record['citation_ids'].some((entry) => typeof entry !== 'string')
+    || canonicalJson([...record['citation_ids']].sort(compareCodePoints)) !== canonicalJson(citationIds)
+    || record['candidate_id'] !== candidate.id
+    || candidate.lesson_id !== canonicalLessonId
+    || record['lesson_id'] !== canonicalLessonId
+    || canonicalJson(record['meaning']) !== canonicalJson(candidate.meaning)
+    || record['recommendation'] !== candidate.recommendation
+    || record['falsifiable_by'] !== candidate.falsifiable_by
+    || record['candidate_content_hash'] !== hashSeededLearningValue(candidate)) {
+    throw new CertificationError('Semantic candidate differs from the exact persisted pending candidate and hash.');
+  }
+  validateCandidateSemanticMeaning(record['meaning'], record['recommendation'], record['falsifiable_by']);
+  return canonicalize({
+    candidate_id: candidate.id,
+    lesson_id: canonicalLessonId,
+    meaning: candidate.meaning,
+    recommendation: candidate.recommendation,
+    falsifiable_by: candidate.falsifiable_by,
+    candidate_content_hash: '$CANDIDATE_CONTENT_HASH',
+    citation_ids: citationIds,
+  });
+}
+
 function normalizeSemanticTurn(options: Readonly<{
+  turn: 'discover' | 'approve';
   value: JsonValue;
   paths: CertificationPaths;
   contract: HostLedLearningLaunchContract;
+  candidate: SeededLessonCandidate;
   expectedLessonIds: readonly string[];
-  promotedLessonId?: string;
-  expectedTargetHash?: string;
-  projectTargetRevision?: boolean;
+  expectedTargetHash: string;
 }>): JsonValue {
-  if (!isJsonObject(options.value) || !Array.isArray(options.value['selected_results'])
-    || !Array.isArray(options.value['rejected_results']) || !isJsonObject(options.value['learning'])
-    || !isJsonObject(options.value['target'])) {
-    throw new CertificationError('Semantic turn is missing result or learning fields.');
+  const requiredKeys = options.turn === 'discover'
+    ? [
+        'schema_version', 'phase', 'target', 'plan', 'tool_use', 'selected_results', 'rejected_results',
+        'brain_citation_ids', 'context_diagnostics', 'evidence', 'learning', 'external_write_performed',
+      ]
+    : [
+        'schema_version', 'phase', 'target', 'plan', 'tool_use', 'evidence', 'learning',
+        'external_write_performed',
+      ];
+  const turn = requiredObject(options.value, `${options.turn} semantic turn`, requiredKeys);
+  const target = requiredObject(turn['target'], `${options.turn} semantic target`, ['qualified_id', 'record_hash']);
+  if (target['record_hash'] !== options.expectedTargetHash) {
+    throw new CertificationError('Semantic target hash differs from the real seeded-context agent revision.');
   }
-  const rawLessonIds = options.value['learning']['lesson_ids'];
-  const rawBrainCitationIds = options.value['brain_citation_ids'];
-  const rawCandidateCitationIds = options.value['learning']['candidate_citation_ids'];
+  const learningKeys = options.turn === 'discover'
+    ? ['watermark', 'candidate', 'baseline_lesson_ids']
+    : ['watermark', 'candidate', 'promoted_lesson_ids'];
+  const learning = requiredObject(turn['learning'], `${options.turn} semantic learning`, learningKeys);
+  if (learning['watermark'] !== options.candidate.watermark) {
+    throw new CertificationError('Semantic learning watermark differs from the persisted candidate.');
+  }
+  const lessonKey = options.turn === 'discover' ? 'baseline_lesson_ids' : 'promoted_lesson_ids';
+  const rawLessonIds = learning[lessonKey];
   if (!Array.isArray(rawLessonIds) || rawLessonIds.some((entry) => typeof entry !== 'string')) {
     throw new CertificationError('Semantic turn lesson IDs are invalid.');
-  }
-  if (!Array.isArray(rawBrainCitationIds) || rawBrainCitationIds.some((entry) => typeof entry !== 'string')
-    || !Array.isArray(rawCandidateCitationIds) || rawCandidateCitationIds.some((entry) => typeof entry !== 'string')) {
-    throw new CertificationError('Semantic turn citation IDs are invalid.');
   }
   const sortedRawLessonIds = [...rawLessonIds].sort(compareCodePoints);
   if (canonicalJson(sortedRawLessonIds) !== canonicalJson([...options.expectedLessonIds].sort(compareCodePoints))) {
     throw new CertificationError('Semantic turn lesson set differs from the real fresh context lesson set.');
   }
-  const results = fakeResultsById(options.paths, options.contract);
-  const selected = options.value['selected_results'].map((entry) => {
-    if (!isJsonObject(entry)) throw new CertificationError('Selected semantic result is invalid.');
-    const id = requiredString(entry['result_id'], 'selected result ID');
-    if (!results.has(id)) throw new CertificationError('Selected semantic result is outside the fake corpus.');
-    const prose = boundedProse(entry['relevance_reason'], 'selected relevance reason');
-    if (!/attribut|practitioner/iu.test(prose) || !/operation|problem|editorial|review/iu.test(prose)) {
-      throw new CertificationError('Selected relevance prose lacks the authored semantic rationale.');
-    }
-    return { result_id: id, canonical_url: entry['canonical_url'], relevance_code: 'attributable-practitioner-problem' };
-  }).sort((left, right) => compareCodePoints(left.result_id, right.result_id));
-  const rejected = options.value['rejected_results'].map((entry) => {
-    if (!isJsonObject(entry) || !Array.isArray(entry['policy_reasons']) || entry['policy_reasons'].length === 0) {
-      throw new CertificationError('Rejected semantic result is invalid.');
-    }
-    const id = requiredString(entry['result_id'], 'rejected result ID');
-    const result = results.get(id);
-    if (result === undefined) throw new CertificationError('Rejected semantic result is outside the fake corpus.');
-    const prose = entry['policy_reasons'].map((reason) => boundedProse(reason, 'rejection reason')).join(' ');
-    return { result_id: id, policy_code: policyReasonCode(result, prose) };
-  }).sort((left, right) => compareCodePoints(left.result_id, right.result_id));
-  const learning = { ...options.value['learning'] };
-  learning['candidate_citation_ids'] = [...rawCandidateCitationIds].sort(compareCodePoints);
-  learning['lesson_ids'] = sortedRawLessonIds.map((id) => (
-    options.promotedLessonId !== undefined && id === options.promotedLessonId ? '$PROMOTED_LESSON' : id
-  )).sort(compareCodePoints);
-  const projected = {
-    ...options.value,
-    brain_citation_ids: [...rawBrainCitationIds].sort(compareCodePoints),
-    target: {
-      ...options.value['target'],
-      record_hash: options.projectTargetRevision === true
-        ? '$PROMOTED_AGENT_REVISION'
-        : options.value['target']['record_hash'],
-    },
-    selected_results: selected,
-    rejected_results: rejected,
-    learning,
+  const normalizedLearning = {
+    watermark: learning['watermark'],
+    candidate: candidateOutputProjection(learning['candidate'], options.candidate),
+    [lessonKey]: sortedRawLessonIds,
   };
-  if (options.expectedTargetHash !== undefined
-    && options.value['target']['record_hash'] !== options.expectedTargetHash) {
-    throw new CertificationError('Semantic target hash differs from the real seeded-context agent revision.');
+  const projected: Record<string, unknown> = {
+    ...turn,
+    target: {
+      ...target,
+      record_hash: options.turn === 'approve' ? '$PROMOTED_AGENT_REVISION' : target['record_hash'],
+    },
+    learning: normalizedLearning,
+  };
+  if (options.turn === 'discover') {
+    if (!Array.isArray(turn['selected_results']) || !Array.isArray(turn['rejected_results'])
+      || !Array.isArray(turn['brain_citation_ids'])
+      || turn['brain_citation_ids'].some((entry) => typeof entry !== 'string')) {
+      throw new CertificationError('Discovery semantic result is missing its shortlist or Brain citations.');
+    }
+    const results = fakeResultsById(options.paths, options.contract);
+    projected['selected_results'] = turn['selected_results'].map((entry) => {
+      const selected = requiredObject(entry, 'selected semantic result', [
+        'result_id', 'canonical_url', 'relevance_code',
+      ]);
+      const id = requiredString(selected['result_id'], 'selected result ID');
+      if (!results.has(id)) throw new CertificationError('Selected semantic result is outside the fake corpus.');
+      if (selected['relevance_code'] !== 'attributable-practitioner-problem') {
+        throw new CertificationError('Selected result has the wrong closed relevance decision.');
+      }
+      return {
+        result_id: id,
+        canonical_url: selected['canonical_url'],
+        relevance_code: 'attributable-practitioner-problem',
+      };
+    }).sort((left, right) => compareCodePoints(left.result_id, right.result_id));
+    projected['rejected_results'] = turn['rejected_results'].map((entry) => {
+      const rejected = requiredObject(entry, 'rejected semantic result', ['result_id', 'policy_code']);
+      const id = requiredString(rejected['result_id'], 'rejected result ID');
+      const result = results.get(id);
+      if (result === undefined) throw new CertificationError('Rejected semantic result is outside the fake corpus.');
+      const expectedPolicyCode = policyCodeForResult(result);
+      if (rejected['policy_code'] !== expectedPolicyCode) {
+        throw new CertificationError('Rejected result has the wrong closed policy decision.');
+      }
+      return { result_id: id, policy_code: expectedPolicyCode };
+    }).sort((left, right) => compareCodePoints(left.result_id, right.result_id));
+    projected['brain_citation_ids'] = [...turn['brain_citation_ids']].sort(compareCodePoints);
   }
   return canonicalize(projected);
 }
@@ -3563,12 +3833,15 @@ function assertSemanticOracle(actual: JsonValue, expected: JsonValue): void {
 }
 
 function assertDurableSemanticCoherence(
-  discover: JsonValue,
-  approve: JsonValue,
+  discoverTrace: NormalizedHostTrace,
+  approveTrace: NormalizedHostTrace,
   state: ReturnType<ReturnType<typeof openSeededLearningStore>['snapshot']>,
   host: CertificationHost,
   contract: HostLedLearningLaunchContract,
+  adapterLog: readonly Record<string, unknown>[],
 ): void {
+  const discover = discoverTrace.semantic_result;
+  const approve = approveTrace.semantic_result;
   const run = state.completed_runs[0];
   const feedback = state.feedback[0];
   const candidate = state.candidates[0];
@@ -3585,26 +3858,48 @@ function assertDurableSemanticCoherence(
   }
   assertCandidateSemantics(candidate);
   for (const [phase, value] of [['discover', discover], ['approve', approve]] as const) {
-    if (!isJsonObject(value) || !Array.isArray(value['selected_results'])
-      || !Array.isArray(value['brain_citation_ids']) || !isJsonObject(value['evidence'])
-      || !isJsonObject(value['learning'])) {
+    if (!isJsonObject(value) || !isJsonObject(value['evidence']) || !isJsonObject(value['learning'])) {
       throw new CertificationError(`${phase} semantic output is missing durable evidence fields.`);
     }
-    const selectedIds = value['selected_results'].map((entry) => (
-      isJsonObject(entry) ? entry['result_id'] : null
-    ));
-    const brainIds = [...value['brain_citation_ids']].sort(compareCodePoints);
-    const lessonIds = value['learning']['lesson_ids'];
-    if (canonicalJson(selectedIds) !== canonicalJson([run.selected_result_id])
-      || canonicalJson(brainIds) !== canonicalJson([...run.source_ids].sort(compareCodePoints))
-      || value['evidence']['run_id'] !== run.id
+    const learning = value['learning'];
+    if (value['evidence']['run_id'] !== run.id
       || value['evidence']['feedback_id'] !== feedback.id
-      || value['learning']['watermark'] !== candidate.watermark
-      || value['learning']['candidate_id'] !== candidate.id
-      || !Array.isArray(lessonIds)) {
+      || learning['watermark'] !== candidate.watermark) {
       throw new CertificationError(`${phase} semantic output is incoherent with durable adapter state.`);
     }
+    candidateOutputProjection(learning['candidate'], candidate);
   }
+  if (!isJsonObject(discover) || !Array.isArray(discover['selected_results'])
+    || !Array.isArray(discover['brain_citation_ids'])
+    || canonicalJson(discover['selected_results'].map((entry) => isJsonObject(entry) ? entry['result_id'] : null))
+      !== canonicalJson([run.selected_result_id])
+    || canonicalJson([...discover['brain_citation_ids']].sort(compareCodePoints))
+      !== canonicalJson([...run.source_ids].sort(compareCodePoints))) {
+    throw new CertificationError('Discovery semantic output is incoherent with durable run citations.');
+  }
+  const stateRead = adapterLog.find((entry) => entry['log_category'] === 'learning.state-read');
+  const expectedStateRead = {
+    status: {
+      status: 'not_due',
+      watermark: candidate.watermark,
+      run_ids: [run.id],
+      feedback_ids: [feedback.id],
+    },
+    state,
+    pending_candidate: {
+      status: 'existing',
+      record: candidate,
+      content_hash: hashSeededLearningValue(candidate),
+    },
+  };
+  if (stateRead?.['output_sha256'] !== `sha256:${sha256(canonicalJson(expectedStateRead))}`) {
+    throw new CertificationError('Approval did not read the exact persisted pending candidate projection and hash.');
+  }
+  assertHostVisibleJsonCommandOutput(
+    approveTrace,
+    'roster-350-fixture-state-show',
+    canonicalize(expectedStateRead),
+  );
 }
 
 function sameSemanticResults(outcomes: Readonly<Record<CertificationHost, readonly CertificationPassOutcome[]>>): JsonValue {
@@ -3669,8 +3964,6 @@ async function runPass(options: Readonly<{
     path: currentPaths.workspace,
     exclusions: ['.git'],
   }]);
-  const baselineContext = seededContextSummary(currentPaths.workspace, options.paths.fixtureRoot, options.contract);
-  const baselineLessonIds = baselineContext.lessonIds;
   const requestPath = join(options.paths.fixtureRoot, options.contract.host_readable_inputs.discover_request);
   const approvalPath = join(options.paths.fixtureRoot, options.contract.host_readable_inputs.approval_request);
   const request = readFileSync(requestPath, 'utf8');
@@ -3678,22 +3971,22 @@ async function runPass(options: Readonly<{
   const challenge = dreamerChallenge(options.paths, options.contract);
   const challengeHash = `sha256:${sha256(challenge)}`;
   const sourceManifest = certificationInputManifest(options.paths);
-  const probeEnv = hostTurnEnvironment({
-    host: options.host,
-    paths: options.paths,
-    passPaths: currentPaths,
-    contract: options.contract,
-    turn: 1,
-    apiKey: options.apiKey,
-  });
   let skillDiscoveryHash: string;
   let promptInputHash: string | null = null;
   let sandboxProbeHash: string;
   let turnOne: HostTurnOutcome;
   let claudeCanaries: ReturnType<typeof claudeSandboxCanaries> | undefined;
   if (options.host === 'claude') {
+    const pluginProbe = hostProbeEnvironment({
+      host: options.host,
+      paths: options.paths,
+      passPaths: currentPaths,
+      contract: options.contract,
+      turn: 1,
+      label: 'skill-discovery',
+    });
     skillDiscoveryHash = withHostBinaryProof(options.host, hostBinary, options.hostProbe, () => (
-      probeClaudePlugin({ paths: options.paths, contract: options.contract, env: probeEnv })
+      probeClaudePlugin({ paths: options.paths, contract: options.contract, env: pluginProbe.env })
     ));
     const listener = createServer((socket) => socket.end());
     await new Promise<void>((resolvePromise, rejectPromise) => {
@@ -3729,30 +4022,74 @@ async function runPass(options: Readonly<{
       dreamerChallenge(options.paths, options.contract),
     );
   } else {
+    const skillProbe = hostProbeEnvironment({
+      host: options.host,
+      paths: options.paths,
+      passPaths: currentPaths,
+      contract: options.contract,
+      turn: 1,
+      label: 'skill-discovery',
+    });
     skillDiscoveryHash = await withHostBinaryProofAsync(options.host, hostBinary, options.hostProbe, () => (
       probeCodexProjectSkills({
         paths: options.paths,
         passPaths: currentPaths,
         contract: options.contract,
-        env: probeEnv,
+        env: skillProbe.env,
       })
     ));
-    promptInputHash = withHostBinaryProof(options.host, hostBinary, options.hostProbe, () => (
+    const discoverPromptProbe = hostProbeEnvironment({
+      host: options.host,
+      paths: options.paths,
+      passPaths: currentPaths,
+      contract: options.contract,
+      turn: 1,
+      label: 'discover-prompt',
+    });
+    const discoverPromptHash = withHostBinaryProof(options.host, hostBinary, options.hostProbe, () => (
       probeCodexPromptInput({
         paths: options.paths,
         passPaths: currentPaths,
         contract: options.contract,
-        env: probeEnv,
+        env: discoverPromptProbe.env,
         prompt: request,
-        apiKey: options.apiKey,
       })
     ));
+    const approvePromptProbe = hostProbeEnvironment({
+      host: options.host,
+      paths: options.paths,
+      passPaths: currentPaths,
+      contract: options.contract,
+      turn: 2,
+      label: 'approve-prompt',
+    });
+    const approvePromptHash = withHostBinaryProof(options.host, hostBinary, options.hostProbe, () => (
+      probeCodexPromptInput({
+        paths: options.paths,
+        passPaths: currentPaths,
+        contract: options.contract,
+        env: approvePromptProbe.env,
+        prompt: readFileSync(approvalPath, 'utf8'),
+      })
+    ));
+    promptInputHash = sha256(canonicalJson({
+      discover: discoverPromptHash,
+      approve: approvePromptHash,
+    }));
+    const sandboxProbe = hostProbeEnvironment({
+      host: options.host,
+      paths: options.paths,
+      passPaths: currentPaths,
+      contract: options.contract,
+      turn: 1,
+      label: 'sandbox',
+    });
     sandboxProbeHash = await withHostBinaryProofAsync(options.host, hostBinary, options.hostProbe, () => (
       probeCodexSandbox({
         paths: options.paths,
         passPaths: currentPaths,
         contract: options.contract,
-        env: probeEnv,
+        env: sandboxProbe.env,
       })
     ));
     turnOne = runHostTurn({
@@ -3789,7 +4126,7 @@ async function runPass(options: Readonly<{
     ...(claudeCanaries === undefined ? {} : { claudeCanaries }),
   });
   const turnOneAdapterLog = readAdapterLog(currentPaths.workspace, options.contract);
-  validateAdapterLog({
+  const derivedQuery = validateAdapterLog({
     records: turnOneAdapterLog,
     start: 0,
     turn: 'discover',
@@ -3799,6 +4136,13 @@ async function runPass(options: Readonly<{
     challenge,
     rosterBundleHash: `sha256:${sha256(readFileSync(options.bundles.rosterPath))}`,
   });
+  const baselineContext = seededContextSummary(
+    currentPaths.workspace,
+    options.paths.fixtureRoot,
+    options.contract,
+    derivedQuery,
+  );
+  const baselineLessonIds = baselineContext.lessonIds;
   const turnTwo = runHostTurn({
     host: options.host,
     paths: options.paths,
@@ -3831,7 +4175,7 @@ async function runPass(options: Readonly<{
     || canonicalJson(turnTwoAdapterLog.slice(0, turnOneAdapterLog.length)) !== canonicalJson(turnOneAdapterLog)) {
     throw new CertificationError('Approval turn did not preserve and append to the exact discovery trace.');
   }
-  validateAdapterLog({
+  const approvalQuery = validateAdapterLog({
     records: turnTwoAdapterLog,
     start: turnOneAdapterLog.length,
     turn: 'approve',
@@ -3841,6 +4185,9 @@ async function runPass(options: Readonly<{
     challenge,
     rosterBundleHash: `sha256:${sha256(readFileSync(options.bundles.rosterPath))}`,
   });
+  if (approvalQuery !== derivedQuery) {
+    throw new CertificationError('Approval turn changed the exact discovery-derived context query.');
+  }
   const sourceAfter = certificationInputManifest(options.paths);
   if (sourceManifest.sha256 !== sourceAfter.sha256) {
     throw new CertificationError('Host certification mutated an immutable source root.');
@@ -3851,11 +4198,12 @@ async function runPass(options: Readonly<{
   const candidate = state.candidates[0];
   if (candidate === undefined) throw new CertificationError('Certified pass has no durable candidate.');
   assertDurableSemanticCoherence(
-    turnOne.trace.semantic_result,
-    turnTwo.trace.semantic_result,
+    turnOne.trace,
+    turnTwo.trace,
     state,
     options.host,
     options.contract,
+    turnTwoAdapterLog,
   );
   const lessonPath = join(
     currentPaths.workspace,
@@ -3871,7 +4219,12 @@ async function runPass(options: Readonly<{
   assertNoForbiddenRetention('Durable learning state', readFileSync(statePath), retainedTokenSet);
   assertNoForbiddenRetention('Promoted lesson', lessonBytes, retainedTokenSet);
   assertNoForbiddenRetention('Adapter log', canonicalize(turnTwoAdapterLog), retainedTokenSet);
-  const finalContext = seededContextSummary(currentPaths.workspace, options.paths.fixtureRoot, options.contract);
+  const finalContext = seededContextSummary(
+    currentPaths.workspace,
+    options.paths.fixtureRoot,
+    options.contract,
+    derivedQuery,
+  );
   const finalLessonIds = finalContext.lessonIds;
   const additions = finalLessonIds.filter((id) => !baselineLessonIds.includes(id));
   if (additions.length !== 1 || additions[0] !== candidate.lesson_id
@@ -3883,26 +4236,30 @@ async function runPass(options: Readonly<{
   }
   const actualTurns = {
     discover: normalizeSemanticTurn({
+      turn: 'discover',
       value: turnOne.trace.semantic_result,
       paths: options.paths,
       contract: options.contract,
+      candidate,
       expectedLessonIds: baselineLessonIds,
       expectedTargetHash: baselineContext.targetRecordHash,
     }),
     approve: normalizeSemanticTurn({
+      turn: 'approve',
       value: turnTwo.trace.semantic_result,
       paths: options.paths,
       contract: options.contract,
+      candidate,
       expectedLessonIds: finalLessonIds,
-      promotedLessonId: candidate.lesson_id,
       expectedTargetHash: finalContext.targetRecordHash,
-      projectTargetRevision: true,
     }),
   };
   const semanticResult = canonicalize({
     schema_version: 1,
     fixture_id: options.contract.fixture_id,
+    derived_query_code: validateDerivedQueryMeaning(derivedQuery),
     candidate_semantics: validateCandidateSemanticMeaning(
+      candidate.meaning,
       candidate.recommendation,
       candidate.falsifiable_by,
     ),
@@ -3933,24 +4290,7 @@ async function runPass(options: Readonly<{
     promoted_lesson_sha256: sha256(lessonBytes),
     semantic_result_sha256: sha256(canonicalJson(semanticResult)),
     semantic_result: semanticResult,
-    infrastructure_failures: Object.freeze([]),
   });
-}
-
-async function runPassWithInfrastructureRetry(
-  options: Parameters<typeof runPass>[0],
-): Promise<CertificationPassOutcome> {
-  const failures: { attempt: number; stage: string; detail_sha256: string }[] = [];
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      const outcome = await runPass(options);
-      return Object.freeze({ ...outcome, infrastructure_failures: Object.freeze(failures) });
-    } catch (error) {
-      if (!(error instanceof InfrastructureError) || attempt === 2) throw error;
-      failures.push({ attempt, stage: error.stage, detail_sha256: error.detailSha256 });
-    }
-  }
-  throw new CertificationError('Unreachable infrastructure retry state.');
 }
 
 function buildAttestation(options: Readonly<{
@@ -3969,6 +4309,7 @@ function buildAttestation(options: Readonly<{
     fixture_id: options.contract.fixture_id,
     behavior_revision: options.contract.behavior_revision,
     fixture_iteration: options.contract.fixture_iteration,
+    certification_platform: 'darwin' as const,
     generated_at: new Date().toISOString(),
     package_version: packageVersion(options.paths),
     node_version: process.version,
@@ -4001,6 +4342,7 @@ function writeAttestation(path: string, attestation: HostLedLearningAttestation,
 export function parseHostLedLearningAttestation(value: unknown): HostLedLearningAttestation {
   const root = requiredObject(value, 'host-led learning attestation', [
     'schema_version', 'status', 'fixture_id', 'behavior_revision', 'fixture_iteration', 'generated_at',
+    'certification_platform',
     'package_version', 'node_version', 'typescript_version', 'roster_bundle_sha256',
     'certification_roster_bundle_sha256', 'adapter_bundle_sha256', 'input_manifest_sha256',
     'support_semantics_sha256', 'launch_contract_sha256', 'oracle_sha256', 'probes', 'outcomes',
@@ -4019,6 +4361,9 @@ export function parseHostLedLearningAttestation(value: unknown): HostLedLearning
   requiredString(root['fixture_id'], 'fixture_id');
   requiredString(root['behavior_revision'], 'behavior_revision');
   requiredInteger(root['fixture_iteration'], 'fixture_iteration');
+  if (root['certification_platform'] !== 'darwin') {
+    throw new CertificationError('Host-led learning certification platform is not exact.');
+  }
   requiredString(root['package_version'], 'package_version');
   requiredString(root['node_version'], 'node_version');
   requiredString(root['typescript_version'], 'typescript_version');
@@ -4118,7 +4463,6 @@ function validateAttestedOutcome(
     'host_probe_sha256', 'turn_one_config_sha256', 'turn_two_config_sha256', 'sandbox_probe_sha256',
     'skill_discovery_sha256', 'prompt_input_sha256', 'turn_one_trace_sha256', 'turn_two_trace_sha256',
     'learning_state_sha256', 'promoted_lesson_sha256', 'semantic_result_sha256', 'semantic_result',
-    'infrastructure_failures',
   ]);
   if (outcome['pass'] !== pass) throw new CertificationError(`${host} attestation pass ordinal is invalid.`);
   for (const key of [
@@ -4145,15 +4489,6 @@ function validateAttestedOutcome(
   if (sha256(canonicalJson(outcome['semantic_result'])) !== outcome['semantic_result_sha256']
     || canonicalJson(outcome['semantic_result']) !== canonicalJson(attestation['normalized_result'])) {
     throw new CertificationError(`${host} attested semantic outcome is not normalized and equivalent.`);
-  }
-  if (!Array.isArray(outcome['infrastructure_failures']) || outcome['infrastructure_failures'].length > 1) {
-    throw new CertificationError(`${host} infrastructure retry attestation is invalid.`);
-  }
-  for (const failure of outcome['infrastructure_failures']) {
-    const record = requiredObject(failure, `${host} infrastructure failure`, ['attempt', 'stage', 'detail_sha256']);
-    if (record['attempt'] !== 1) throw new CertificationError(`${host} infrastructure retry ordinal is invalid.`);
-    requiredString(record['stage'], `${host} infrastructure stage`);
-    requireBareHash(record['detail_sha256'], `${host} infrastructure detail hash`);
   }
 }
 
@@ -4223,6 +4558,9 @@ export async function runHostLedLearningCertification(
   if (!isHostLedLearningCertificationEnabled(env)) {
     throw new CertificationError(`Set ${HOST_LED_LEARNING_SMOKE_ENV}=1 to run paid host certification.`);
   }
+  if (process.platform !== 'darwin') {
+    throw new CertificationError('Live host-led learning certification requires the exact macOS host boundary.');
+  }
   const paths = resolveLiveCertificationPaths(repoRoot, env);
   const contract = loadHostLedLearningLaunchContract(repoRoot);
   const expected = oracle(paths);
@@ -4248,7 +4586,7 @@ export async function runHostLedLearningCertification(
       const apiKey = host === 'claude' ? claudeKey : codexKey;
       const hostOutcomes: CertificationPassOutcome[] = [];
       for (let pass = 1; pass <= HOST_LED_LEARNING_PASS_COUNT; pass++) {
-        hostOutcomes.push(await runPassWithInfrastructureRetry({
+        hostOutcomes.push(await runPass({
           host,
           pass,
           paths,
@@ -4302,7 +4640,9 @@ export function modelFreeProbeSummary(options: Readonly<{
   return canonicalize({
     host: options.host,
     probe: options.probe,
-    expected_skills: (options.host === 'claude' ? options.contract.claude.skills : options.contract.codex.skills)
+    expected_skills: (options.host === 'claude'
+      ? options.contract.claude.skills
+      : [options.contract.codex.generated_skill, ...options.contract.codex.skills])
       .map((entry) => entry.name),
     env: envAttestation(options.env, options.host),
   });
@@ -4320,6 +4660,8 @@ export function verifyHostLedLearningModelFreeInputs(
     initial_workspace_sha256: rebuilt.initialWorkspaceSha256,
   });
 }
+
+
 
 export function currentUserHomeForAudit(): string {
   return homedir();

@@ -51,11 +51,12 @@ shortlist and Brain diagnostics; those belong only to discovery.
 Claude receives each human request through stdin. Codex receives each request
 as one positional prompt in both its paid turn and its matching model-free
 `debug prompt-input` probe. For Codex 0.144.1, the probe accepts exactly five
-messages: permissions/skills, two binary-owned developer contributions,
-workspace instructions/environment, and the literal request. Discovery and
-approval are probed separately. Every plugin, skill, prompt, and sandbox probe
-uses its own clean home/config/temp roots and never shares host state with a
-paid turn.
+messages: permissions and the exact eight-skill inventory (five system, the
+generated Roster skill, and two fixture skills), two binary-owned developer
+contributions, workspace instructions/environment, and the literal request.
+Discovery and approval are probed separately. Every plugin, skill, prompt, and
+sandbox probe uses its own clean home/config/temp roots and never shares host
+state with a paid turn.
 
 The exact model versions, binary hashes, Node version, non-secret launch
 configuration, run date, input manifest, and normalized outcomes belong only in

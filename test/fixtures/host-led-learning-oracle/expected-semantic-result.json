@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "fixture_id": "host-led-learning",
+  "derived_query_code": "reliable-ai-content-operations-practitioner",
   "candidate_semantics": {
     "recommendation_code": "prefer-attributable-practitioner-operational-problems",
     "falsifier_code": "reject-if-reviewed-outcomes-contradict"
@@ -80,7 +81,7 @@
         "watermark": "sha256:4f9398682c2bfd9afff34219b909c637d7a0024e8c80e190d2ba5e2bace6041b",
         "candidate": {
           "candidate_id": "candidate-opportunity-discovery-001",
-          "lesson_id": "$PROMOTED_LESSON",
+          "lesson_id": "prefer-practitioner-operational-reject-contradict",
           "meaning": {
             "disposition": "prefer",
             "source_kind": "attributable-practitioner",
@@ -142,7 +143,7 @@
         "watermark": "sha256:4f9398682c2bfd9afff34219b909c637d7a0024e8c80e190d2ba5e2bace6041b",
         "candidate": {
           "candidate_id": "candidate-opportunity-discovery-001",
-          "lesson_id": "$PROMOTED_LESSON",
+          "lesson_id": "prefer-practitioner-operational-reject-contradict",
           "meaning": {
             "disposition": "prefer",
             "source_kind": "attributable-practitioner",
@@ -159,7 +160,7 @@
           ]
         },
         "promoted_lesson_ids": [
-          "$PROMOTED_LESSON",
+          "prefer-practitioner-operational-reject-contradict",
           "general-prior",
           "nested-prior",
           "root-prior"

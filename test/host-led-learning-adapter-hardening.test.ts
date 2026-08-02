@@ -122,7 +122,6 @@ test('candidate adapter accepts only the closed meaning flags and values', () =>
     required_flags: [
       '--run-id',
       '--feedback-id',
-      '--lesson-id',
       '--disposition',
       '--source-kind',
       '--topic-kind',
@@ -135,7 +134,6 @@ test('candidate adapter accepts only the closed meaning flags and values', () =>
   const argv = [
     '--run-id', 'run-opportunity-discovery-001',
     '--feedback-id', 'feedback-opportunity-discovery-001',
-    '--lesson-id', 'proposed-lesson',
     '--disposition', 'prefer',
     '--source-kind', 'attributable-practitioner',
     '--topic-kind', 'operational-problem',
@@ -173,6 +171,25 @@ test('candidate adapter accepts only the closed meaning flags and values', () =>
   } as unknown as SeededCandidateMeaning), (error: unknown) => (
     error instanceof SeededLearningStoreError && error.code === 'FIXTURE_INVALID'
   ));
+});
+
+test('promotion adapter requires the human-reviewed candidate identity and hash', () => {
+  const definition = {
+    command: 'roster-350-fixture-candidate-promote',
+    log_category: 'learning.candidate-promote',
+    allowed_turns: ['approve'],
+    required_flags: ['--candidate-id', '--candidate-hash'],
+    repeatable_flags: [],
+  } as const;
+  const candidateHash = `sha256:${'a'.repeat(64)}`;
+  const parsed = hostLedLearningAdapterTestApi.parseArguments([
+    '--candidate-id', 'candidate-opportunity-discovery-001',
+    '--candidate-hash', candidateHash,
+  ], definition);
+  assert.deepEqual(parsed.ordered.map((entry) => entry.flag), definition.required_flags);
+  assert.throws(() => hostLedLearningAdapterTestApi.parseArguments([
+    '--candidate-id', 'candidate-opportunity-discovery-001',
+  ], definition), /required flag --candidate-hash is missing/iu);
 });
 
 test('adapter log enforces one writer and validates contiguous sequences', () => {

@@ -34,5 +34,5 @@ After the host completes the plan-owned discovery task:
 In the fresh approval interaction, reopen state with
 `roster-350-fixture-state-show`. If and only if the new human message approves
 the pending candidate, call `roster-350-fixture-candidate-promote` with the
-returned candidate identifier, then resolve the same Roster context again.
-
+literal argv `--candidate-id <returned-candidate-id> --candidate-hash
+<returned-content-hash>`, then resolve the same Roster context again.

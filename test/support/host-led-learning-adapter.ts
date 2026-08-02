@@ -30,6 +30,7 @@ import {
   hashSeededLearningValue,
   materializeSeededLesson,
   openSeededLearningStore,
+  renderSeededCandidateLessonId,
   renderSeededCandidateMeaning,
   type SeededCandidateMeaning,
   type SeededCompletedRun,
@@ -738,7 +739,7 @@ function runAdapter(options: {
       const rendered = renderSeededCandidateMeaning(meaning);
       const candidate: SeededLessonCandidate = {
         id: CANDIDATE_ID,
-        lesson_id: one(parsed, '--lesson-id'),
+        lesson_id: renderSeededCandidateLessonId(meaning),
         watermark: status.watermark,
         target: options.contract.roster.target,
         meaning,
@@ -754,8 +755,11 @@ function runAdapter(options: {
       break;
     case 'roster-350-fixture-candidate-promote': {
       const candidateId = one(parsed, '--candidate-id');
+      const candidateHash = one(parsed, '--candidate-hash');
+      if (!SHA256.test(candidateHash)) fail('candidate hash is not a canonical sha256 digest');
       const candidate = store.candidate(candidateId);
       if (candidate === null) fail('candidate does not exist');
+      if (candidate.content_hash !== candidateHash) fail('candidate changed after human review');
       const lessonRelativePath = `functions/gtm/agents/social-manager/playbook/${candidate.record.lesson_id}.md`;
       workspacePath({
         root: options.workspace,
@@ -767,7 +771,7 @@ function runAdapter(options: {
         store,
         workspaceRoot: options.workspace,
         candidateId,
-        expectedCandidateHash: candidate.content_hash,
+        expectedCandidateHash: candidateHash,
         lesson: {
           id: candidate.record.lesson_id,
           purpose: 'Preserve an approved discovery qualification lesson.',

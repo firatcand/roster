@@ -347,6 +347,34 @@ export function renderSeededCandidateMeaning(
   });
 }
 
+export function renderSeededCandidateLessonId(meaning: SeededCandidateMeaning): string {
+  if (!validCandidateMeaning(meaning)) {
+    fail('FIXTURE_INVALID', 'Fixture candidate meaning does not match its closed semantic schema.');
+  }
+  const sourceCodes: Record<SeededCandidateMeaning['source_kind'], string> = {
+    'attributable-practitioner': 'practitioner',
+    'profile-page': 'profile',
+    'anonymous-source': 'anonymous',
+  };
+  const topicCodes: Record<SeededCandidateMeaning['topic_kind'], string> = {
+    'operational-problem': 'operational',
+    'crypto-promotion': 'crypto',
+    'generic-ad': 'ad',
+  };
+  const observationCodes: Record<SeededCandidateMeaning['falsifier_observation'], string> = {
+    'reviewed-outcomes-contradict': 'contradict',
+    'reviewed-outcomes-confirm': 'confirm',
+    'no-counterevidence': 'absent',
+  };
+  return [
+    meaning.disposition,
+    sourceCodes[meaning.source_kind],
+    topicCodes[meaning.topic_kind],
+    meaning.falsifier_action,
+    observationCodes[meaning.falsifier_observation],
+  ].join('-');
+}
+
 function validCandidate(value: unknown): value is SeededLessonCandidate {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
@@ -365,7 +393,7 @@ function validCandidate(value: unknown): value is SeededLessonCandidate {
     'citations',
   ])
     && safeId(record['id'])
-    && safeId(record['lesson_id'])
+    && record['lesson_id'] === renderSeededCandidateLessonId(meaning)
     && safeHash(record['watermark'])
     && boundedString(record['target'], MAX_ID_BYTES)
     && record['recommendation'] === rendered.recommendation

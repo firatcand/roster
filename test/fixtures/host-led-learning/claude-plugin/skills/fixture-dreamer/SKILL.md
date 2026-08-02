@@ -13,22 +13,21 @@ Reopen the completed-run and feedback observations returned by the controlled
 fixture adapters. Choose one value from each neutral option set by applying the
 authored plan and tool-use policy to that evidence:
 
-- disposition: `prefer` or `avoid`
-- source kind: `attributable-practitioner`, `profile-page`, or `anonymous-source`
-- topic kind: `operational-problem`, `crypto-promotion`, or `generic-ad`
-- falsifier action: `reject` or `retain`
-- falsifier observation: `reviewed-outcomes-contradict`,
-  `reviewed-outcomes-confirm`, or `no-counterevidence`
+- disposition: `avoid` or `prefer`
+- source kind: `anonymous-source`, `profile-page`, or `attributable-practitioner`
+- topic kind: `generic-ad`, `crypto-promotion`, or `operational-problem`
+- falsifier action: `retain` or `reject`
+- falsifier observation: `no-counterevidence`,
+  `reviewed-outcomes-confirm`, or `reviewed-outcomes-contradict`
 
-The options describe possible meanings, not the correct answer. Choose a concise
-kebab-case proposed lesson ID from the evidence. The controlled adapter validates
-the literal choices and renders canonical recommendation and falsifier prose; it
-must not choose the values for the host. The candidate cites both returned
-evidence IDs, never this skill invocation, and does not activate itself as policy.
-Then call:
+The options describe possible meanings, not the correct answer. The controlled
+adapter validates the literal choices, derives the lesson ID from all five
+choices, and renders canonical recommendation and falsifier prose; it must not
+choose the values for the host. The candidate cites both returned evidence IDs,
+never this skill invocation, and does not activate itself as policy. Then call:
 
 `roster-350-fixture-candidate-create --run-id <run-id> --feedback-id
-<feedback-id> --lesson-id <proposed-lesson-id> --disposition <disposition>
+<feedback-id> --disposition <disposition>
 --source-kind <source-kind> --topic-kind <topic-kind> --falsifier-action
 <falsifier-action> --falsifier-observation <falsifier-observation>
 --skill-challenge

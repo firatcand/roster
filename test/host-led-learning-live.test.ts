@@ -22,7 +22,7 @@ function rehash(value: HostLedLearningAttestation): HostLedLearningAttestation {
   };
 }
 
-test('host-led learning attestation is closed, fresh, verifier-runtime independent, and host equivalent', () => {
+test('host-led learning attestation is closed, fresh, exact-host bound, and host equivalent', () => {
   const attestation = verifyHostLedLearningAttestationFreshness();
   assert.equal(parseHostLedLearningAttestation(attestation).attestation_sha256, attestation.attestation_sha256);
   for (const host of ['claude', 'codex'] as const) {
@@ -35,12 +35,6 @@ test('host-led learning attestation is closed, fresh, verifier-runtime independe
   }
   assert.deepEqual(attestation.outcomes.claude.map((entry) => entry.semantic_result),
     attestation.outcomes.codex.map((entry) => entry.semantic_result));
-
-  const alternateVerifierRuntime = rehash({ ...attestation, node_version: 'v22.18.0' });
-  assert.equal(
-    verifyHostLedLearningAttestationFreshness({ expected: alternateVerifierRuntime }).node_version,
-    'v22.18.0',
-  );
 
   const missingOutcome = rehash({
     ...attestation,

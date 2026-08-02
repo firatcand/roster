@@ -141,26 +141,26 @@
               "properties": {
                 "disposition": {
                   "type": "string",
-                  "enum": ["prefer", "avoid"]
+                  "enum": ["avoid", "prefer"]
                 },
                 "source_kind": {
                   "type": "string",
-                  "enum": ["attributable-practitioner", "profile-page", "anonymous-source"]
+                  "enum": ["anonymous-source", "profile-page", "attributable-practitioner"]
                 },
                 "topic_kind": {
                   "type": "string",
-                  "enum": ["operational-problem", "crypto-promotion", "generic-ad"]
+                  "enum": ["generic-ad", "crypto-promotion", "operational-problem"]
                 },
                 "falsifier_action": {
                   "type": "string",
-                  "enum": ["reject", "retain"]
+                  "enum": ["retain", "reject"]
                 },
                 "falsifier_observation": {
                   "type": "string",
                   "enum": [
-                    "reviewed-outcomes-contradict",
+                    "no-counterevidence",
                     "reviewed-outcomes-confirm",
-                    "no-counterevidence"
+                    "reviewed-outcomes-contradict"
                   ]
                 }
               }

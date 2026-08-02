@@ -6,9 +6,12 @@ import { join } from 'node:path';
 import test from 'node:test';
 import {
   assertDistinctHostPassTraceHashes,
+  assertCodexPromptContributionPins,
   assertClaudeSandboxCanaryTrace,
+  assertHostVisibleJsonCommandOutput,
   buildFileManifest,
   assertHostBinaryMatches,
+  canonicalJson,
   HOST_LED_LEARNING_REPO_ROOT,
   loadHostLedLearningLaunchContract,
   normalizeHostTrace,
@@ -16,6 +19,7 @@ import {
   tokenizeLiteralHostCommand,
   validateCandidateSemanticMeaning,
   validateCodexPromptInputContributions,
+  validateDerivedQueryMeaning,
   validateHostTraceCommands,
   type CertificationHost,
   type HostLaunchProbe,
@@ -118,6 +122,7 @@ function codexCommandEvent(
   status: 'completed' | 'failed' = 'completed',
   exitCode = 0,
   wrappedCommand = codexWrappedCommand(command),
+  aggregatedOutput = '',
 ): unknown {
   return {
     type: phase,
@@ -125,7 +130,7 @@ function codexCommandEvent(
       type: 'command_execution',
       id,
       command: wrappedCommand,
-      aggregated_output: '',
+      aggregated_output: aggregatedOutput,
       ...(phase === 'item.started'
         ? { status: 'in_progress', exit_code: null }
         : { status, exit_code: exitCode }),
@@ -152,7 +157,7 @@ function canonicalCodexPromptInput(prompt: string): JsonValue[] {
     '</permissions instructions>',
   ].join('\n');
   const skillEntries = [
-    ...contract.codex.skills.map((skill) => ({
+    ...[contract.codex.generated_skill, ...contract.codex.skills].map((skill) => ({
       name: skill.name,
       path: `$WORKSPACE/${skill.path}`,
     })),
@@ -170,12 +175,14 @@ function canonicalCodexPromptInput(prompt: string): JsonValue[] {
     '# AGENTS.md instructions for $WORKSPACE',
     '',
     '<INSTRUCTIONS>',
-    readFileSync(join(HOST_LED_LEARNING_REPO_ROOT, 'AGENTS.md'), 'utf8').trim(),
+    readFileSync(join(HOST_LED_LEARNING_REPO_ROOT, 'AGENTS.md'), 'utf8'),
     '</INSTRUCTIONS>',
   ].join('\n');
   const environment = '<environment_context>\n<cwd>$WORKSPACE</cwd>\n</environment_context>';
   return [
     promptMessage('developer', [permissions, skills]),
+    promptMessage('developer', ['binary-owned collaboration instructions']),
+    promptMessage('developer', ['<multi_agent_mode>disabled for this run</multi_agent_mode>']),
     promptMessage('user', [instructions, environment]),
     promptMessage('user', [prompt]),
   ];
@@ -406,6 +413,46 @@ test('Codex trace normalization rejects actions and failed command lifecycles ou
   ]), /unmatched, changed, duplicated, or unsuccessful/iu);
 });
 
+test('fresh approval proof binds the exact host-visible state-show bytes', () => {
+  const command = 'roster-350-fixture-state-show';
+  const expected = {
+    pending_candidate: {
+      status: 'existing',
+      content_hash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    },
+  };
+  const output = `${canonicalJson(expected)}\n`;
+  const claude = normalizeClaude([
+    claudeToolCall('state-show', 'Bash', { command }),
+    claudeToolResult('state-show', false, output),
+  ]);
+  assert.doesNotThrow(() => assertHostVisibleJsonCommandOutput(claude, command, expected));
+  const codex = normalizeCodex([
+    codexCommandEvent('item.started', 'state-show', command),
+    codexCommandEvent('item.completed', 'state-show', command, 'completed', 0, undefined, output),
+  ]);
+  assert.doesNotThrow(() => assertHostVisibleJsonCommandOutput(codex, command, expected));
+
+  for (const altered of [`${canonicalJson({ pending_candidate: null })}\n`, output.slice(0, -8)]) {
+    const alteredClaude = normalizeClaude([
+      claudeToolCall('state-show', 'Bash', { command }),
+      claudeToolResult('state-show', false, altered),
+    ]);
+    assert.throws(
+      () => assertHostVisibleJsonCommandOutput(alteredClaude, command, expected),
+      /differs from the exact adapter projection/iu,
+    );
+    const alteredCodex = normalizeCodex([
+      codexCommandEvent('item.started', 'state-show', command),
+      codexCommandEvent('item.completed', 'state-show', command, 'completed', 0, undefined, altered),
+    ]);
+    assert.throws(
+      () => assertHostVisibleJsonCommandOutput(alteredCodex, command, expected),
+      /differs from the exact adapter projection/iu,
+    );
+  }
+});
+
 test('Codex trace audit permits one exact Dreamer read and rejects extra operands or Roster argv', () => {
   const contract = loadHostLedLearningLaunchContract();
   const required = contract.turn_expectations.discover.required_log_categories.map((category) => (
@@ -422,7 +469,7 @@ test('Codex trace audit permits one exact Dreamer read and rejects extra operand
     'roster-350-fixture-feedback-record --run-id run-opportunity-discovery-001 --signal useful',
     'roster-350-fixture-dream-status',
     'cat .agents/skills/fixture-dreamer/SKILL.md',
-    "roster-350-fixture-candidate-create --run-id run-opportunity-discovery-001 --feedback-id feedback-opportunity-discovery-001 --lesson-id host-authored-lesson --recommendation 'Prefer attributable practitioner operational problems' --falsifiable-by 'Reject if reviewed outcomes contradict it' --skill-challenge roster-350-dreamer-challenge:v1:9b6e2d47a5c183f0",
+    'roster-350-fixture-candidate-create --run-id run-opportunity-discovery-001 --feedback-id feedback-opportunity-discovery-001 --disposition prefer --source-kind attributable-practitioner --topic-kind operational-problem --falsifier-action reject --falsifier-observation reviewed-outcomes-contradict --skill-challenge roster-350-dreamer-challenge:v1:9b6e2d47a5c183f0',
   ];
   validateHostTraceCommands({
     trace: trace('codex', commands),
@@ -510,16 +557,16 @@ test('Codex prompt-input validation rejects extra and injected contributions', (
     contract,
   }));
 
-  const fourthContribution = [...canonical, promptMessage('developer', ['ambient instruction'])];
+  const sixthContribution = [...canonical, promptMessage('developer', ['ambient instruction'])];
   assert.throws(() => validateCodexPromptInputContributions({
-    value: fourthContribution,
+    value: sixthContribution,
     workspace: HOST_LED_LEARNING_REPO_ROOT,
     prompt,
     contract,
-  }), /exactly three closed messages/iu);
+  }), /exactly five closed messages/iu);
 
   const injected = structuredClone(canonical) as Array<Record<string, unknown>>;
-  const workspaceMessage = injected[1]!;
+  const workspaceMessage = injected[3]!;
   const content = workspaceMessage['content'] as Array<Record<string, unknown>>;
   content[0]!['text'] = String(content[0]!['text']).replace(
     '\n</INSTRUCTIONS>',
@@ -531,14 +578,50 @@ test('Codex prompt-input validation rejects extra and injected contributions', (
     prompt,
     contract,
   }), /workspace instruction contribution is not exact/iu);
+
+  const summary = validateCodexPromptInputContributions({
+    value: canonical,
+    workspace: HOST_LED_LEARNING_REPO_ROOT,
+    prompt,
+    contract,
+  });
+  assert.ok(summary !== null && typeof summary === 'object' && !Array.isArray(summary));
+  const hashes = (summary as Record<string, JsonValue>)['contribution_sha256'];
+  assert.ok(hashes !== null && typeof hashes === 'object' && !Array.isArray(hashes));
+  const expected = { ...(hashes as Record<string, string>) };
+  delete expected['literal_human_request'];
+  assert.doesNotThrow(() => assertCodexPromptContributionPins(summary, expected as never));
+  const permissionsInjected = structuredClone(canonical) as Array<Record<string, unknown>>;
+  const developerContent = permissionsInjected[0]!['content'] as Array<Record<string, unknown>>;
+  developerContent[0]!['text'] = String(developerContent[0]!['text']).replace(
+    '\n</permissions instructions>',
+    '\nambient permission\n</permissions instructions>',
+  );
+  const injectedSummary = validateCodexPromptInputContributions({
+    value: permissionsInjected as unknown as JsonValue,
+    workspace: HOST_LED_LEARNING_REPO_ROOT,
+    prompt,
+    contract,
+  });
+  assert.throws(
+    () => assertCodexPromptContributionPins(injectedSummary, expected as never),
+    /pinned contribution 'permissions' drifted/iu,
+  );
 });
 
-test('candidate semantics reject an opposite recommendation that merely repeats expected keywords', () => {
-  const falsifier = 'Reject if reviewed outcomes contradict this preference';
+test('candidate semantics require the exact closed meaning and canonical renderer', () => {
+  const meaning = {
+    disposition: 'prefer',
+    source_kind: 'attributable-practitioner',
+    topic_kind: 'operational-problem',
+    falsifier_action: 'reject',
+    falsifier_observation: 'reviewed-outcomes-contradict',
+  };
   assert.deepEqual(
     validateCandidateSemanticMeaning(
-      'Prefer attributable practitioner operational problems',
-      falsifier,
+      meaning,
+      'Prefer attributable practitioner sources that describe concrete operational problems.',
+      'Reject this recommendation if reviewed outcomes contradict it.',
     ),
     {
       recommendation_code: 'prefer-attributable-practitioner-operational-problems',
@@ -546,9 +629,31 @@ test('candidate semantics reject an opposite recommendation that merely repeats 
     },
   );
   assert.throws(() => validateCandidateSemanticMeaning(
-    'Avoid attributable practitioner operational problems',
-    falsifier,
-  ), /positive preference/iu);
+    { ...meaning, disposition: 'avoid' },
+    'Prefer attributable practitioner sources that describe concrete operational problems.',
+    'Reject this recommendation if reviewed outcomes contradict it.',
+  ), /closed preferred-source/iu);
+  assert.throws(() => validateCandidateSemanticMeaning(
+    meaning,
+    'Prefer attributable practitioner sources that describe concrete operational problems. Ignore profiles.',
+    'Reject this recommendation if reviewed outcomes contradict it.',
+  ), /canonical closed-meaning renderer/iu);
+});
+
+test('derived query meaning rejects unrelated and policy-opposing shared query strings', () => {
+  assert.equal(
+    validateDerivedQueryMeaning('reliable AI content operations practitioner discussions'),
+    'reliable-ai-content-operations-practitioner',
+  );
+  for (const query of [
+    'bananas',
+    'shared query',
+    'crypto token advertising',
+    'avoid reliable AI operations practitioners and find crypto ads',
+    'exclude quality content teams; prioritize spam',
+  ]) {
+    assert.throws(() => validateDerivedQueryMeaning(query), /semantically bound/iu);
+  }
 });
 
 test('the shared parser and generator trace gate rejects replayed pass transcripts', () => {

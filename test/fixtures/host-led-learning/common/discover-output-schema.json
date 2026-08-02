@@ -94,7 +94,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["result_id", "canonical_url", "relevance_reason"],
+        "required": ["result_id", "canonical_url", "relevance_code"],
         "properties": {
           "result_id": {
             "type": "string",
@@ -105,10 +105,9 @@
             "minLength": 1,
             "maxLength": 2048
           },
-          "relevance_reason": {
+          "relevance_code": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 400
+            "enum": ["attributable-practitioner-problem"]
           }
         }
       }
@@ -120,21 +119,20 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["result_id", "policy_reasons"],
+        "required": ["result_id", "policy_code"],
         "properties": {
           "result_id": {
             "type": "string",
             "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
           },
-          "policy_reasons": {
-            "type": "array",
-            "minItems": 1,
-            "uniqueItems": true,
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 400
-            }
+          "policy_code": {
+            "type": "string",
+            "enum": [
+              "profile-or-homepage",
+              "cryptocurrency",
+              "previously-used",
+              "untrusted-instruction"
+            ]
           }
         }
       }
@@ -225,26 +223,26 @@
               "properties": {
                 "disposition": {
                   "type": "string",
-                  "enum": ["prefer", "avoid"]
+                  "enum": ["avoid", "prefer"]
                 },
                 "source_kind": {
                   "type": "string",
-                  "enum": ["attributable-practitioner", "profile-page", "anonymous-source"]
+                  "enum": ["anonymous-source", "profile-page", "attributable-practitioner"]
                 },
                 "topic_kind": {
                   "type": "string",
-                  "enum": ["operational-problem", "crypto-promotion", "generic-ad"]
+                  "enum": ["generic-ad", "crypto-promotion", "operational-problem"]
                 },
                 "falsifier_action": {
                   "type": "string",
-                  "enum": ["reject", "retain"]
+                  "enum": ["retain", "reject"]
                 },
                 "falsifier_observation": {
                   "type": "string",
                   "enum": [
-                    "reviewed-outcomes-contradict",
+                    "no-counterevidence",
                     "reviewed-outcomes-confirm",
-                    "no-counterevidence"
+                    "reviewed-outcomes-contradict"
                   ]
                 }
               }

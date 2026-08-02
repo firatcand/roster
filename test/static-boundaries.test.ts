@@ -536,6 +536,12 @@ test('host-led fixture skills are byte-identical and cannot leak the semantic an
     'reviewed-outcomes-confirm',
     'no-counterevidence',
   ]) assert.match(dreamerSkill, new RegExp(`\\b${option}\\b`, 'u'));
+  for (const orderedChoices of [
+    'disposition: `avoid` or `prefer`',
+    'source kind: `anonymous-source`, `profile-page`, or `attributable-practitioner`',
+    'topic kind: `generic-ad`, `crypto-promotion`, or `operational-problem`',
+    'falsifier action: `retain` or `reject`',
+  ]) assert.equal(dreamerSkill.includes(orderedChoices), true);
 
   const launchContract = JSON.parse(readFileSync(join(
     PROJECT_ROOT,
@@ -554,13 +560,52 @@ test('host-led fixture skills are byte-identical and cannot leak the semantic an
     launchContract.host_readable_inputs['approve_output_schema'],
     'common/approve-output-schema.json',
   );
+  const discoverOutputSchema = JSON.parse(readFileSync(join(
+    PROJECT_ROOT,
+    fixtureRoot,
+    'common/discover-output-schema.json',
+  ), 'utf8')) as {
+    properties: Record<string, { items: { required: string[]; properties: Record<string, { enum?: string[] }> } }>;
+  };
+  const selectedDecision = discoverOutputSchema.properties['selected_results']!.items;
+  const rejectedDecision = discoverOutputSchema.properties['rejected_results']!.items;
+  assert.deepEqual(selectedDecision.required, ['result_id', 'canonical_url', 'relevance_code']);
+  assert.deepEqual(selectedDecision.properties['relevance_code']?.enum, [
+    'attributable-practitioner-problem',
+  ]);
+  assert.deepEqual(rejectedDecision.required, ['result_id', 'policy_code']);
+  assert.deepEqual(rejectedDecision.properties['policy_code']?.enum, [
+    'profile-or-homepage',
+    'cryptocurrency',
+    'previously-used',
+    'untrusted-instruction',
+  ]);
+  const meaningChoices = (discoverOutputSchema as unknown as {
+    properties: {
+      learning: {
+        properties: {
+          candidate: {
+            properties: {
+              meaning: { properties: Record<string, { enum: string[] }> };
+            };
+          };
+        };
+      };
+    };
+  }).properties.learning.properties.candidate.properties.meaning.properties;
+  for (const [field, accepted] of Object.entries({
+    disposition: 'prefer',
+    source_kind: 'attributable-practitioner',
+    topic_kind: 'operational-problem',
+    falsifier_action: 'reject',
+    falsifier_observation: 'reviewed-outcomes-contradict',
+  })) assert.notEqual(meaningChoices[field]?.enum[0], accepted);
   const candidateAdapter = launchContract.adapters.find((entry) => (
     entry.command === 'roster-350-fixture-candidate-create'
   ));
   assert.deepEqual(candidateAdapter?.required_flags, [
     '--run-id',
     '--feedback-id',
-    '--lesson-id',
     '--disposition',
     '--source-kind',
     '--topic-kind',
@@ -568,6 +613,10 @@ test('host-led fixture skills are byte-identical and cannot leak the semantic an
     '--falsifier-observation',
     '--skill-challenge',
   ]);
+  const promotionAdapter = launchContract.adapters.find((entry) => (
+    entry.command === 'roster-350-fixture-candidate-promote'
+  ));
+  assert.deepEqual(promotionAdapter?.required_flags, ['--candidate-id', '--candidate-hash']);
 
   const oracleMarkers = ['expected-semantic-result', 'host-led-learning-oracle'];
   const adapterPath = 'test/support/host-led-learning-adapter.ts';

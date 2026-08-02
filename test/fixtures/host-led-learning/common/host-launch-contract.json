@@ -122,7 +122,6 @@
       "required_flags": [
         "--run-id",
         "--feedback-id",
-        "--lesson-id",
         "--disposition",
         "--source-kind",
         "--topic-kind",
@@ -148,7 +147,8 @@
         "approve"
       ],
       "required_flags": [
-        "--candidate-id"
+        "--candidate-id",
+        "--candidate-hash"
       ],
       "repeatable_flags": []
     }
@@ -213,6 +213,10 @@
   "codex": {
     "version": "0.144.1",
     "project_overlay": "codex-project",
+    "generated_skill": {
+      "name": "roster",
+      "path": ".agents/skills/roster/SKILL.md"
+    },
     "skills_list": {
       "transport": "stdio-jsonl",
       "request_sequence": [
@@ -267,7 +271,15 @@
         "canonical-roster-instructions",
         "expected-project-skills",
         "literal-human-request"
-      ]
+      ],
+      "pinned_contribution_sha256": {
+        "permissions": "dba160a791bbfa61a0fd7775efc99b38d3eed72720fb913b73e022bb819f713b",
+        "skills": "d40a40bc1d9f5edf4297cbb5d2440f20e4ba34a7620656bce0a279be64d5a3b2",
+        "binary_collaboration": "fccb993bd0ff45747511e4c90dd1524d804d353084a0767e09684d10512c20fe",
+        "binary_multi_agent": "65523c71c4fa1ed65e831bd7a589a5c2c0d4a5f7dfac562e431e1a10937b374e",
+        "workspace_instructions": "a706a9b14bd76c65df8e1d79d397bbb589a010bc2d5f4b9c247df735ec2c8aef",
+        "environment": "f5c70eebe1b2e13534a86de4f16540a6eb3355322921df76ddd36f3984315877"
+      }
     },
     "dreamer_invocation_proof": [
       "model-free-skills-list-entry",
