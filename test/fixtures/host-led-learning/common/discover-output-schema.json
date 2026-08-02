@@ -107,7 +107,13 @@
           },
           "relevance_code": {
             "type": "string",
-            "enum": ["attributable-practitioner-problem"]
+            "enum": [
+              "previously-used",
+              "attributable-practitioner-problem",
+              "untrusted-instruction",
+              "cryptocurrency",
+              "profile-or-homepage"
+            ]
           }
         }
       }
@@ -128,10 +134,11 @@
           "policy_code": {
             "type": "string",
             "enum": [
-              "profile-or-homepage",
-              "cryptocurrency",
               "previously-used",
-              "untrusted-instruction"
+              "attributable-practitioner-problem",
+              "untrusted-instruction",
+              "cryptocurrency",
+              "profile-or-homepage"
             ]
           }
         }
@@ -223,11 +230,11 @@
               "properties": {
                 "disposition": {
                   "type": "string",
-                  "enum": ["avoid", "prefer"]
+                  "enum": ["prefer", "avoid"]
                 },
                 "source_kind": {
                   "type": "string",
-                  "enum": ["anonymous-source", "profile-page", "attributable-practitioner"]
+                  "enum": ["anonymous-source", "attributable-practitioner", "profile-page"]
                 },
                 "topic_kind": {
                   "type": "string",
@@ -240,9 +247,9 @@
                 "falsifier_observation": {
                   "type": "string",
                   "enum": [
+                    "reviewed-outcomes-contradict",
                     "no-counterevidence",
-                    "reviewed-outcomes-confirm",
-                    "reviewed-outcomes-contradict"
+                    "reviewed-outcomes-confirm"
                   ]
                 }
               }

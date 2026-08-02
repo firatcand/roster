@@ -537,10 +537,11 @@ test('host-led fixture skills are byte-identical and cannot leak the semantic an
     'no-counterevidence',
   ]) assert.match(dreamerSkill, new RegExp(`\\b${option}\\b`, 'u'));
   for (const orderedChoices of [
-    'disposition: `avoid` or `prefer`',
-    'source kind: `anonymous-source`, `profile-page`, or `attributable-practitioner`',
+    'disposition: `prefer` or `avoid`',
+    'source kind: `anonymous-source`, `attributable-practitioner`, or `profile-page`',
     'topic kind: `generic-ad`, `crypto-promotion`, or `operational-problem`',
     'falsifier action: `retain` or `reject`',
+    'falsifier observation: `reviewed-outcomes-contradict`,\n  `no-counterevidence`, or `reviewed-outcomes-confirm`',
   ]) assert.equal(dreamerSkill.includes(orderedChoices), true);
 
   const launchContract = JSON.parse(readFileSync(join(
@@ -569,17 +570,25 @@ test('host-led fixture skills are byte-identical and cannot leak the semantic an
   };
   const selectedDecision = discoverOutputSchema.properties['selected_results']!.items;
   const rejectedDecision = discoverOutputSchema.properties['rejected_results']!.items;
-  assert.deepEqual(selectedDecision.required, ['result_id', 'canonical_url', 'relevance_code']);
-  assert.deepEqual(selectedDecision.properties['relevance_code']?.enum, [
+  const neutralResultCodes = [
+    'previously-used',
     'attributable-practitioner-problem',
-  ]);
+    'untrusted-instruction',
+    'cryptocurrency',
+    'profile-or-homepage',
+  ];
+  assert.deepEqual(selectedDecision.required, ['result_id', 'canonical_url', 'relevance_code']);
+  assert.deepEqual(selectedDecision.properties['relevance_code']?.enum, neutralResultCodes);
   assert.deepEqual(rejectedDecision.required, ['result_id', 'policy_code']);
-  assert.deepEqual(rejectedDecision.properties['policy_code']?.enum, [
+  assert.deepEqual(rejectedDecision.properties['policy_code']?.enum, neutralResultCodes);
+  const expectedResultCodeIndexes = [
+    'attributable-practitioner-problem',
     'profile-or-homepage',
     'cryptocurrency',
     'previously-used',
     'untrusted-instruction',
-  ]);
+  ].map((code) => neutralResultCodes.indexOf(code));
+  assert.deepEqual([...new Set(expectedResultCodeIndexes)].sort(), [0, 1, 2, 3, 4]);
   const meaningChoices = (discoverOutputSchema as unknown as {
     properties: {
       learning: {
@@ -593,13 +602,85 @@ test('host-led fixture skills are byte-identical and cannot leak the semantic an
       };
     };
   }).properties.learning.properties.candidate.properties.meaning.properties;
-  for (const [field, accepted] of Object.entries({
+  const approveOutputSchema = JSON.parse(readFileSync(join(
+    PROJECT_ROOT,
+    fixtureRoot,
+    'common/approve-output-schema.json',
+  ), 'utf8')) as typeof discoverOutputSchema;
+  const approveMeaningChoices = (approveOutputSchema as unknown as {
+    properties: {
+      learning: {
+        properties: {
+          candidate: {
+            properties: {
+              meaning: { properties: Record<string, { enum: string[] }> };
+            };
+          };
+        };
+      };
+    };
+  }).properties.learning.properties.candidate.properties.meaning.properties;
+  const expectedMeaningChoices: Record<string, string[]> = {
+    disposition: ['prefer', 'avoid'],
+    source_kind: ['anonymous-source', 'attributable-practitioner', 'profile-page'],
+    topic_kind: ['generic-ad', 'crypto-promotion', 'operational-problem'],
+    falsifier_action: ['retain', 'reject'],
+    falsifier_observation: [
+      'reviewed-outcomes-contradict',
+      'no-counterevidence',
+      'reviewed-outcomes-confirm',
+    ],
+  };
+  assert.deepEqual(
+    Object.fromEntries(Object.keys(expectedMeaningChoices).map((field) => [
+      field,
+      meaningChoices[field]?.enum,
+    ])),
+    expectedMeaningChoices,
+  );
+  assert.deepEqual(
+    Object.fromEntries(Object.keys(expectedMeaningChoices).map((field) => [
+      field,
+      approveMeaningChoices[field]?.enum,
+    ])),
+    expectedMeaningChoices,
+  );
+  const acceptedMeaning: Record<string, string> = {
     disposition: 'prefer',
     source_kind: 'attributable-practitioner',
     topic_kind: 'operational-problem',
     falsifier_action: 'reject',
     falsifier_observation: 'reviewed-outcomes-contradict',
-  })) assert.notEqual(meaningChoices[field]?.enum[0], accepted);
+  };
+  const orderedMeaningFields = Object.keys(expectedMeaningChoices);
+  const acceptedIndexes = orderedMeaningFields.map((field) => (
+    expectedMeaningChoices[field]!.indexOf(acceptedMeaning[field]!)
+  ));
+  assert.deepEqual([...new Set(acceptedIndexes)].sort(), [0, 1, 2]);
+  const ordinalHeuristics = {
+    first: orderedMeaningFields.map(() => 0),
+    lower_middle: orderedMeaningFields.map((field) => (
+      Math.floor((expectedMeaningChoices[field]!.length - 1) / 2)
+    )),
+    upper_middle: orderedMeaningFields.map((field) => (
+      Math.floor(expectedMeaningChoices[field]!.length / 2)
+    )),
+    last: orderedMeaningFields.map((field) => expectedMeaningChoices[field]!.length - 1),
+  };
+  for (const [heuristic, indexes] of Object.entries(ordinalHeuristics)) {
+    assert.equal(
+      acceptedIndexes.every((index, fieldIndex) => index === indexes[fieldIndex]),
+      false,
+      `${heuristic} must not yield every accepted candidate value`,
+    );
+  }
+  for (let index = 0; index <= Math.max(...acceptedIndexes); index++) {
+    assert.equal(
+      acceptedIndexes.every((acceptedIndex) => acceptedIndex === index),
+      false,
+      `same index ${index} must not yield every accepted candidate value`,
+    );
+  }
   const candidateAdapter = launchContract.adapters.find((entry) => (
     entry.command === 'roster-350-fixture-candidate-create'
   ));

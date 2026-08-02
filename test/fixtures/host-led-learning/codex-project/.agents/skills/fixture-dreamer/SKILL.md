@@ -13,12 +13,12 @@ Reopen the completed-run and feedback observations returned by the controlled
 fixture adapters. Choose one value from each neutral option set by applying the
 authored plan and tool-use policy to that evidence:
 
-- disposition: `avoid` or `prefer`
-- source kind: `anonymous-source`, `profile-page`, or `attributable-practitioner`
+- disposition: `prefer` or `avoid`
+- source kind: `anonymous-source`, `attributable-practitioner`, or `profile-page`
 - topic kind: `generic-ad`, `crypto-promotion`, or `operational-problem`
 - falsifier action: `retain` or `reject`
-- falsifier observation: `no-counterevidence`,
-  `reviewed-outcomes-confirm`, or `reviewed-outcomes-contradict`
+- falsifier observation: `reviewed-outcomes-contradict`,
+  `no-counterevidence`, or `reviewed-outcomes-confirm`
 
 The options describe possible meanings, not the correct answer. The controlled
 adapter validates the literal choices, derives the lesson ID from all five
