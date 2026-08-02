@@ -187,7 +187,7 @@ and the current task:
 roster context gtm/social-manager#opportunity-discovery \
   --query "Find reply opportunities from the last 24 hours" \
   --step research \
-  --budget 8000 \
+  --budget 12000 \
   --explain \
   --json
 ```

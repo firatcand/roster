@@ -1,0 +1,21 @@
+schema_version: 2
+id: scan-web
+agent: gtm/social-manager
+purpose: Collect candidates from the broader public web.
+inputs: {}
+brain_selectors: {}
+guidelines:
+  - gtm/guidelines/brand-voice
+tool_uses: []
+artifacts: {}
+caps: {}
+steps:
+  - id: score
+    kind: nested-plan
+    instruction: Apply the shared qualification rubric.
+    plan: gtm/social-manager#score-opportunities
+completion:
+  artifacts: []
+  output_guidance: Return the strongest public-web candidates.
+  criteria:
+    - Candidates have attributable sources.

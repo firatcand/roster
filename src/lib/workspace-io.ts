@@ -1122,6 +1122,8 @@ export function createWorkspaceReadSession(
     verify: (relativePaths) => {
       for (const relativeDirectory of namespaceParents) {
         const identity = directories.get(relativeDirectory)!;
+        // Root metadata changes for unrelated entries, so context mode binds the
+        // root inode and separately pins only the selected leaf authorities.
         if (sessionOptions.contextMode && relativeDirectory === '.') assertDirectoryBinding(identity);
         else assertDirectoryIdentity(identity);
       }

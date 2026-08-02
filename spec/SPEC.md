@@ -336,7 +336,7 @@ Validation is read-only unless the user requests an explicit scaffold, update, o
   "target": "gtm/social-manager#opportunity-discovery",
   "query": "Find reply opportunities from the last 24 hours",
   "step_hint": "discover",
-  "budget_tokens": 8000,
+  "budget_tokens": 12000,
   "explain": true
 }
 ```
@@ -376,9 +376,9 @@ The response cannot contain Roster run state, a Roster-selected current step, pr
 
 1. Resolve the workspace, exact target function/agent, and optional selected root plan from one complete validated snapshot.
 2. If a root is named, resolve its complete deduplicated transitive nested-plan definition closure. Reserve the selected function/agent, root and closure definitions, default and explicitly referenced guidelines, and every closure tool-step effective tool-use/canonical-skill pair as mandatory.
-3. Resolve applicable approved lessons as optional context. Membership catalogs do not select policy or tools.
+3. Resolve applicable approved lessons as optional context. Plan-scoped lesson and Brain evidence eligibility compares the fully qualified plan identity; a same-named plan owned by another agent grants no scope. Membership catalogs do not select policy or tools.
 4. Derive the authored Brain selector catalog from closure plan selectors and selected effective tool-use Brain reads. Query and step hint never widen it.
-5. When Brain is bound, retrieve or accept bounded candidates and reject cross-binding/scope, secret, stale, tombstoned, unauthorized, privacy-incompatible, duplicate, uncited, malformed, invalid-rank, unrequested, and low-trust candidates under one deterministic primary reason each.
+5. When Brain is bound, retrieve or accept bounded candidates and reject cross-binding/scope, secret, stale, tombstoned, unauthorized, privacy-incompatible, duplicate, uncited, malformed, invalid-rank, unrequested, and low-trust candidates under one deterministic primary reason each. `unauthorized` is reserved for the live authorized-scope adapter and remains zero for the seeded source, where binding and scope failures use their precise reasons.
 6. Rank approved lessons before untrusted Brain extracts, then rank each tier deterministically under the remaining budget. Required selector intent affects only the Brain tier and a no-match produces one nonfatal aggregate warning/count.
 7. Admit complete optional fragments by deterministic first-fit accounting; never truncate one. Candidate exclusion diagnostics are considered last as optional examples.
 8. Emit citations, trust separation, provenance, exact budget accounting, authoritative exclusion/scalar counts, and sanitized diagnostics. Reverify every contributing local source before returning.

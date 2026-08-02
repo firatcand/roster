@@ -298,6 +298,19 @@ function identityMismatch(path: string, expected: string, actual: string): never
   );
 }
 
+function decodeAuthoredText(bytes: Buffer, path: string): string {
+  const text = bytes.toString('utf8');
+  if (!Buffer.from(text, 'utf8').equals(bytes)) {
+    throw workspaceFailure(
+      'YAML_INVALID',
+      `${path}: authored text is not valid UTF-8.`,
+      'Encode the authored workspace definition as valid UTF-8 before retrying.',
+      { path, reason: 'invalid-utf8' },
+    );
+  }
+  return text;
+}
+
 function readAuthored(
   root: string,
   path: string,
@@ -307,7 +320,7 @@ function readAuthored(
   const bytes = (session?.readFile ?? ((relativePath, options) => readWorkspaceFile(root, relativePath, options)))(path, {
     maxBytes: markdown ? MAX_AUTHORED_MARKDOWN_BYTES : MAX_AUTHORED_YAML_BYTES,
   });
-  return { bytes, text: bytes.toString('utf8') };
+  return { bytes, text: decodeAuthoredText(bytes, path) };
 }
 
 export function readWorkspaceRegistry(root: string, session?: WorkspaceReadSession): LoadedWorkspaceRegistry {
@@ -327,7 +340,7 @@ export function readWorkspaceRegistry(root: string, session?: WorkspaceReadSessi
     }
     throw error;
   }
-  const text = bytes.toString('utf8');
+  const text = decodeAuthoredText(bytes, 'roster.yaml');
   return { registry: parseWorkspaceRegistry(text), bytes, text, hash: hashWorkspaceBytes(bytes) };
 }
 
@@ -454,6 +467,35 @@ type ContextCollectionBounds = {
   contentBytes: number;
 };
 
+function accountContextRecord(bounds: ContextCollectionBounds, contentBytes: number): void {
+  if (bounds.records === MAX_CONTEXT_REGISTERED_RECORDS) {
+    throw workspaceFailure(
+      'READ_LIMIT_EXCEEDED',
+      'The complete registered record catalog exceeds the context collection limit.',
+      'Reduce the number of registered workspace records before retrying context resolution.',
+      {
+        bound: 'context-registered-records',
+        limit: MAX_CONTEXT_REGISTERED_RECORDS,
+        records: bounds.records + 1,
+      },
+    );
+  }
+  if (contentBytes > MAX_CONTEXT_REGISTERED_CONTENT_BYTES - bounds.contentBytes) {
+    throw workspaceFailure(
+      'READ_LIMIT_EXCEEDED',
+      'Registered record content exceeds the context collection byte limit.',
+      'Reduce authored record content before retrying context resolution.',
+      {
+        bound: 'context-registered-content-bytes',
+        limit: MAX_CONTEXT_REGISTERED_CONTENT_BYTES,
+        bytes: bounds.contentBytes + contentBytes,
+      },
+    );
+  }
+  bounds.records += 1;
+  bounds.contentBytes += contentBytes;
+}
+
 function pushRecord(
   target: WorkspaceDiscoveryRecord[],
   identities: Set<string>,
@@ -465,33 +507,7 @@ function pushRecord(
     throw workspaceFailure('DUPLICATE_IDENTITY', `Identity '${value.kind}:${value.qualified_id}' is registered more than once.`, 'Keep one canonical parent membership for the record.', { kind: value.kind, qualifiedId: value.qualified_id });
   }
   if (bounds !== undefined) {
-    const contentBytes = Buffer.byteLength(value.content ?? '', 'utf8');
-    if (bounds.records === MAX_CONTEXT_REGISTERED_RECORDS) {
-      throw workspaceFailure(
-        'READ_LIMIT_EXCEEDED',
-        'The complete registered record catalog exceeds the context collection limit.',
-        'Reduce the number of registered workspace records before retrying context resolution.',
-        {
-          bound: 'context-registered-records',
-          limit: MAX_CONTEXT_REGISTERED_RECORDS,
-          records: bounds.records + 1,
-        },
-      );
-    }
-    if (contentBytes > MAX_CONTEXT_REGISTERED_CONTENT_BYTES - bounds.contentBytes) {
-      throw workspaceFailure(
-        'READ_LIMIT_EXCEEDED',
-        'Registered record content exceeds the context collection byte limit.',
-        'Reduce authored record content before retrying context resolution.',
-        {
-          bound: 'context-registered-content-bytes',
-          limit: MAX_CONTEXT_REGISTERED_CONTENT_BYTES,
-          bytes: bounds.contentBytes + contentBytes,
-        },
-      );
-    }
-    bounds.records += 1;
-    bounds.contentBytes += contentBytes;
+    accountContextRecord(bounds, Buffer.byteLength(value.content ?? '', 'utf8'));
   }
   identities.add(key);
   target.push(value);
@@ -583,6 +599,9 @@ function collectToolUseRecord(options: {
   full: boolean;
   bounds?: ContextCollectionBounds;
 }): void {
+  if (options.bounds !== undefined) {
+    accountContextRecord(options.bounds, Buffer.byteLength(options.file.text, 'utf8'));
+  }
   let definition;
   try {
     definition = parseWorkspaceToolUseEnvelope(options.file.text, options.path);
@@ -617,7 +636,7 @@ function collectToolUseRecord(options: {
     options.file.bytes,
     {},
     options.full,
-  ), options.bounds);
+  ));
 }
 
 function collectWorkspaceRecords(
@@ -1233,7 +1252,7 @@ function buildExpectedVendorSkillMap(
 type ContextVendorVerificationState = {
   selection: ContextVendorSkillSelection;
   expectedContent: string;
-  storedContent: string;
+  storedContentHash: string;
 };
 
 function contextVendorFailure(
@@ -1252,6 +1271,7 @@ function contextVendorFailure(
 
 function readCanonicalStoredVendorSkillMap(root: string): {
   content: string;
+  contentHash: string;
   map: VendorSkillMap;
 } {
   let bytes: Buffer;
@@ -1266,9 +1286,12 @@ function readCanonicalStoredVendorSkillMap(root: string): {
     throw error;
   }
   const content = bytes.toString('utf8');
+  if (!Buffer.from(content, 'utf8').equals(bytes)) {
+    return contextVendorFailure('SKILL_REF_DRIFTED', 'stored-map-not-canonical');
+  }
   const map = parseVendorSkillMap(content);
   if (map === null) return contextVendorFailure('SKILL_REF_DRIFTED', 'stored-map-not-canonical');
-  return { content, map };
+  return { content, contentHash: hashWorkspaceBytes(bytes), map };
 }
 
 function deriveRestrictedVendorSkillMap(
@@ -1386,6 +1409,7 @@ export function withContextReadCapability<T>(
   let vendorSelectionCalls = 0;
   let vendorState: ContextVendorVerificationState | null = null;
   let verificationCalls = 0;
+  let verificationSucceeded = false;
   let callbackActive = true;
 
   const selectVendorSkillMap = (
@@ -1407,7 +1431,7 @@ export function withContextReadCapability<T>(
     vendorState = {
       selection: expected.selection,
       expectedContent: expected.content,
-      storedContent: stored.content,
+      storedContentHash: stored.contentHash,
     };
     return freezeContextValue({
       generator_version: stored.map.generator_version,
@@ -1420,6 +1444,7 @@ export function withContextReadCapability<T>(
     if (!callbackActive) contextCapabilityFailure('terminal-outside-callback');
     verificationCalls += 1;
     if (verificationCalls !== 1) contextCapabilityFailure('terminal-call-count');
+    PREPARED_CONTEXT_SOURCES.delete(source);
     const paths = [...new Set(localRecordPaths)];
     if (paths.some((path) => !registeredPaths.has(path))) {
       contextCapabilityFailure('terminal-path-not-registered');
@@ -1441,7 +1466,7 @@ export function withContextReadCapability<T>(
 
     if (vendorState !== null) {
       const currentStored = readCanonicalStoredVendorSkillMap(root);
-      if (currentStored.content !== vendorState.storedContent) {
+      if (currentStored.contentHash !== vendorState.storedContentHash) {
         contextVendorFailure('SKILL_REF_DRIFTED', 'stored-map-changed');
       }
       const currentExpected = deriveRestrictedVendorSkillMap(
@@ -1455,6 +1480,7 @@ export function withContextReadCapability<T>(
       validateSelectedVendorProjection(currentStored.map, currentExpected.map);
     }
     session.verify(['roster.yaml', ...paths]);
+    verificationSucceeded = true;
   };
 
   const capability = Object.freeze({ source, selectVendorSkillMap, verify });
@@ -1463,6 +1489,7 @@ export function withContextReadCapability<T>(
     result = operation(capability);
   } finally {
     callbackActive = false;
+    PREPARED_CONTEXT_SOURCES.delete(source);
   }
   if (result !== null
     && (typeof result === 'object' || typeof result === 'function')
@@ -1470,6 +1497,7 @@ export function withContextReadCapability<T>(
     contextCapabilityFailure('async-callback-result');
   }
   if (verificationCalls !== 1) contextCapabilityFailure('terminal-call-count');
+  if (!verificationSucceeded) contextCapabilityFailure('terminal-verification-failed');
   return result;
 }
 
@@ -1500,9 +1528,21 @@ function validateVendorSkillMap(
         },
       )];
     }
-    if (current.toString('utf8') !== expected.content) {
+    const currentContent = current.toString('utf8');
+    if (!Buffer.from(currentContent, 'utf8').equals(current)) {
+      return [workspaceDiagnostic(
+        'SKILL_REF_DRIFTED',
+        'The generated vendor-skill map is missing canonical bytes or no longer matches authored guidance.',
+        {
+          path: VENDOR_SKILL_MAP_PATH,
+          remedy: 'Run roster update after repairing tool definitions and reviewed founder-skill metadata.',
+          details: { path: VENDOR_SKILL_MAP_PATH, reason: 'stored-map-not-canonical' },
+        },
+      )];
+    }
+    if (currentContent !== expected.content) {
       if (ignoredDraftPaths.size > 0) {
-        const parsed = parseVendorSkillMap(current.toString('utf8'));
+        const parsed = parseVendorSkillMap(currentContent);
         if (parsed !== null && parsed.generator_version === expected.map.generator_version) {
           const currentByRef = new Map(parsed.skills.map((entry) => [entry.skill_ref, entry]));
           const requiredEntriesMatch = expected.map.skills.every((entry) => {

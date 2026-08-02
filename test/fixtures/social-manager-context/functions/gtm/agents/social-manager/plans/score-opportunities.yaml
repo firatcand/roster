@@ -1,0 +1,19 @@
+schema_version: 2
+id: score-opportunities
+agent: gtm/social-manager
+purpose: Score candidates against relevance, evidence quality, and reply potential.
+inputs: {}
+brain_selectors: {}
+guidelines: []
+tool_uses: []
+artifacts: {}
+caps: {}
+steps:
+  - id: transition
+    kind: reasoning
+    instruction: Score each candidate without changing or publishing it.
+completion:
+  artifacts: []
+  output_guidance: Return scores and short evidence-backed reasons.
+  criteria:
+    - Every score has a relevance reason.

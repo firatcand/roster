@@ -19,7 +19,7 @@ export {
   MIN_CONTEXT_BUDGET_TOKENS,
 };
 
-export const DEFAULT_CONTEXT_BUDGET_TOKENS = 8_000;
+export const DEFAULT_CONTEXT_BUDGET_TOKENS = 12_000;
 
 export type ParsedContextArgs =
   | {

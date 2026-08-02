@@ -204,7 +204,7 @@ function printHelp(version: string): void {
     `  --full                       ${chalk.dim('Include bounded authored content in discovery output')}`,
     `  --query <task>               ${chalk.dim('Set the required host task for context resolution')}`,
     `  --step <hint>                ${chalk.dim('Add an optional host-supplied context ranking hint')}`,
-    `  --budget <tokens>            ${chalk.dim('Set the context token budget (default: 8000; maximum: 128000)')}`,
+    `  --budget <tokens>            ${chalk.dim('Set the context token budget (default: 12000; maximum: 128000)')}`,
     `  --explain                    ${chalk.dim('Include bounded context provenance explanations')}`,
     `  --yes, -y                    ${chalk.dim('Skip prompts; use safe defaults (install)')}`,
     `  --tool <name>                ${chalk.dim('Required scheduler tool: claude | codex (schedule install)')}`,

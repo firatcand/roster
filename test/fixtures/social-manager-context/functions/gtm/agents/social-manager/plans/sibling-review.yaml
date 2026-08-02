@@ -1,0 +1,19 @@
+schema_version: 2
+id: sibling-review
+agent: gtm/social-manager
+purpose: Review a previously selected shortlist in a separate workflow.
+inputs: {}
+brain_selectors: {}
+guidelines: []
+tool_uses: []
+artifacts: {}
+caps: {}
+steps:
+  - id: review
+    kind: reasoning
+    instruction: Review the supplied shortlist.
+completion:
+  artifacts: []
+  output_guidance: Return review notes.
+  criteria:
+    - Review notes are complete.

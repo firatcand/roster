@@ -20,6 +20,7 @@ export type TripwireSource =
   | 'answered_questions'
   | 'prior_attempts'
   | 'conventions'
+  | 'brain_evidence'
   | 'search_result'
   | 'browser_page';
 
@@ -29,6 +30,7 @@ export const TRIPWIRE_SOURCES: readonly TripwireSource[] = [
   'answered_questions',
   'prior_attempts',
   'conventions',
+  'brain_evidence',
   'search_result',
   'browser_page',
 ];

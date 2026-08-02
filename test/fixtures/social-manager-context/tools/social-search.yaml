@@ -1,0 +1,29 @@
+schema_version: 2
+id: social-search
+scope: {}
+purpose: Search public sources for relevant conversations.
+skill_ref: exa:search
+when:
+  - finding current public posts
+capabilities:
+  - web-search
+filters:
+  - require a canonical public URL
+rules:
+  - never perform an external write
+brain:
+  read:
+    - historical-opportunities
+effects:
+  allowed:
+    - external-read
+    - brain-read
+    - brain-write
+approval:
+  requirement: none
+  guidance: []
+evidence:
+  required:
+    - source_url
+  guidance:
+    - preserve retrieval provenance

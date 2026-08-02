@@ -157,6 +157,21 @@ function forbiddenBoundaryDependency(module: string): boolean {
     'undici',
     'worker_threads',
   ]).has(normalized)) return true;
+  if (normalized === 'aws-sdk'
+    || normalized.startsWith('aws-sdk/')
+    || normalized.startsWith('@aws-sdk/')
+    || normalized === 'pg'
+    || normalized.startsWith('pg/')
+    || normalized === 'postgres'
+    || normalized.startsWith('postgres/')
+    || normalized === 'postgres.js'
+    || normalized.startsWith('postgres.js/')
+    || normalized === 'openai'
+    || normalized.startsWith('openai/')
+    || normalized === '@neondatabase/serverless'
+    || normalized.startsWith('@neondatabase/serverless/')) return true;
+  const forbiddenExactSegment = new Set(['brain', 'persistence', 'postgres', 'postgresql', 'search']);
+  if (normalized.split('/').some((segment) => forbiddenExactSegment.has(segment))) return true;
   const forbiddenSegment = /(?:^|-)(?:credential|credentials|env|env-merge|provider|providers|mcp|browser|router|routing|health|health-check|result-gate|result-gates)(?:-|$)/;
   return normalized.split('/').some((segment) => forbiddenSegment.test(segment));
 }
@@ -277,11 +292,35 @@ function callOptionKeys(path: string, calleeName: string): string[][] {
   return options;
 }
 
+test('context boundary classifier rejects legacy Brain, search, persistence, and provider clients', () => {
+  const forbidden = [
+    '../brain/query.ts',
+    '../lib/brain/search.ts',
+    '../persistence/postgres/stores.ts',
+    '@aws-sdk/client-s3',
+    '@neondatabase/serverless',
+    'aws-sdk',
+    'openai',
+    'pg',
+    'postgres',
+  ];
+  assert.deepEqual(forbidden.filter((module) => !forbiddenBoundaryDependency(module)), []);
+  assert.deepEqual([
+    './workspace-diagnostics.ts',
+    './workspace-registry.ts',
+    './workspace-tool-use.ts',
+    'node:crypto',
+  ].filter(forbiddenBoundaryDependency), []);
+});
+
 test('tool-use and vendor-skill boundary modules depend only on inert validation and workspace primitives', () => {
   const vendorFiles = typescriptFiles('src/lib/vendor-skills');
   assert.ok(vendorFiles.length > 0, 'vendor-skills boundary must remain represented in this test');
   const files = [
+    join(PROJECT_ROOT, 'src/commands/context.ts'),
     join(PROJECT_ROOT, 'src/lib/authored-secret-detector.ts'),
+    join(PROJECT_ROOT, 'src/lib/context-args.ts'),
+    join(PROJECT_ROOT, 'src/lib/workspace-context.ts'),
     join(PROJECT_ROOT, 'src/lib/workspace-tool-use.ts'),
     join(PROJECT_ROOT, 'src/lib/internal/workspace-tool-use-snapshot.ts'),
     join(PROJECT_ROOT, 'src/lib/internal/workspace-update-lock.ts'),

@@ -1,0 +1,9 @@
+schema_version: 2
+id: gtm
+purpose: Grow demand with evidence-backed public conversations.
+agents:
+  - social-manager
+guidelines:
+  - brand-voice
+tool_uses:
+  - social-search

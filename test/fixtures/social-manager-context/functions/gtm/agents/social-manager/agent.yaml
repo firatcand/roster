@@ -1,0 +1,22 @@
+schema_version: 2
+id: social-manager
+function: gtm
+purpose: Find and qualify public conversations where the company can add value.
+plans:
+  - opportunity-discovery
+  - scan-linkedin
+  - scan-web
+  - score-opportunities
+  - sibling-review
+subagents: []
+guidelines:
+  - discovery-policy
+default_guidelines:
+  - brand-voice
+tool_uses:
+  - social-search
+lessons:
+  - general-prior
+  - root-prior
+  - nested-prior
+  - sibling-prior

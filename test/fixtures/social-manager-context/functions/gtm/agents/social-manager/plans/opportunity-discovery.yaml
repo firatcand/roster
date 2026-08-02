@@ -1,0 +1,53 @@
+schema_version: 2
+id: opportunity-discovery
+agent: gtm/social-manager
+purpose: Produce an evidence-backed shortlist of public reply opportunities.
+inputs:
+  request:
+    description: The human request for discovery.
+    required: true
+brain_selectors:
+  strong-examples:
+    description: Previously successful replies and their source posts.
+    required: true
+  company-positioning:
+    description: Current company positioning and target audience.
+    required: false
+guidelines:
+  - gtm/social-manager/guidelines/discovery-policy
+tool_uses:
+  - social-search
+artifacts:
+  shortlist:
+    description: Cited qualified opportunities.
+caps:
+  candidates:
+    maximum: 20
+    guidance: Keep only strongly relevant posts.
+steps:
+  - id: prepare
+    kind: reasoning
+    instruction: Derive request-specific filters from the human request and company policy.
+  - id: scan-linkedin
+    kind: nested-plan
+    instruction: Collect professional-network candidates.
+    plan: gtm/social-manager#scan-linkedin
+  - id: scan-web
+    kind: nested-plan
+    instruction: Collect broader public-web candidates.
+    plan: gtm/social-manager#scan-web
+  - id: search
+    kind: tool
+    instruction: Use the company-defined search guidance and return evidence only.
+    tool_use: social-search
+  - id: return
+    kind: artifact
+    instruction: Return the qualified shortlist to the host.
+    artifact: shortlist
+completion:
+  artifacts:
+    - shortlist
+  output_guidance: Return cited opportunities with relevance reasons for host review.
+  criteria:
+    - Every opportunity includes an attributable canonical source.
+    - No external write was performed.
