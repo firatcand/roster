@@ -78,12 +78,25 @@
       },
       "learning": {
         "watermark": "sha256:4f9398682c2bfd9afff34219b909c637d7a0024e8c80e190d2ba5e2bace6041b",
-        "candidate_id": "candidate-opportunity-discovery-001",
-        "candidate_citation_ids": [
-          "feedback-opportunity-discovery-001",
-          "run-opportunity-discovery-001"
-        ],
-        "lesson_ids": [
+        "candidate": {
+          "candidate_id": "candidate-opportunity-discovery-001",
+          "lesson_id": "$PROMOTED_LESSON",
+          "meaning": {
+            "disposition": "prefer",
+            "source_kind": "attributable-practitioner",
+            "topic_kind": "operational-problem",
+            "falsifier_action": "reject",
+            "falsifier_observation": "reviewed-outcomes-contradict"
+          },
+          "recommendation": "Prefer attributable practitioner operational problems.",
+          "falsifiable_by": "Reject if reviewed outcomes contradict this preference.",
+          "candidate_content_hash": "$CANDIDATE_CONTENT_HASH",
+          "citation_ids": [
+            "feedback-opportunity-discovery-001",
+            "run-opportunity-discovery-001"
+          ]
+        },
+        "baseline_lesson_ids": [
           "general-prior",
           "nested-prior",
           "root-prior"
@@ -121,54 +134,31 @@
         "qualified_id": "gtm/social-manager#opportunity-discovery/tools/social-search",
         "semantic_hash": "sha256:5747c209b45552021aabc4d88dc8e624deb283af125a3ae2a66174329e673a9b"
       },
-      "selected_results": [
-        {
-          "result_id": "result-a17f",
-          "canonical_url": "https://social.example.test/posts/reliable-ai-content-review",
-          "relevance_code": "attributable-practitioner-problem"
-        }
-      ],
-      "rejected_results": [
-        {
-          "result_id": "result-b62c",
-          "policy_code": "profile-or-homepage"
-        },
-        {
-          "result_id": "result-c04d",
-          "policy_code": "cryptocurrency"
-        },
-        {
-          "result_id": "result-d91e",
-          "policy_code": "previously-used"
-        },
-        {
-          "result_id": "result-e38a",
-          "policy_code": "untrusted-instruction"
-        }
-      ],
-      "brain_citation_ids": [
-        "brain-record-a17f",
-        "brain-record-b62c",
-        "brain-record-d91e"
-      ],
-      "context_diagnostics": [
-        {
-          "reason": "low-trust",
-          "count": 1
-        }
-      ],
       "evidence": {
         "run_id": "run-opportunity-discovery-001",
         "feedback_id": "feedback-opportunity-discovery-001"
       },
       "learning": {
         "watermark": "sha256:4f9398682c2bfd9afff34219b909c637d7a0024e8c80e190d2ba5e2bace6041b",
-        "candidate_id": "candidate-opportunity-discovery-001",
-        "candidate_citation_ids": [
-          "feedback-opportunity-discovery-001",
-          "run-opportunity-discovery-001"
-        ],
-        "lesson_ids": [
+        "candidate": {
+          "candidate_id": "candidate-opportunity-discovery-001",
+          "lesson_id": "$PROMOTED_LESSON",
+          "meaning": {
+            "disposition": "prefer",
+            "source_kind": "attributable-practitioner",
+            "topic_kind": "operational-problem",
+            "falsifier_action": "reject",
+            "falsifier_observation": "reviewed-outcomes-contradict"
+          },
+          "recommendation": "Prefer attributable practitioner operational problems.",
+          "falsifiable_by": "Reject if reviewed outcomes contradict this preference.",
+          "candidate_content_hash": "$CANDIDATE_CONTENT_HASH",
+          "citation_ids": [
+            "feedback-opportunity-discovery-001",
+            "run-opportunity-discovery-001"
+          ]
+        },
+        "promoted_lesson_ids": [
           "$PROMOTED_LESSON",
           "general-prior",
           "nested-prior",

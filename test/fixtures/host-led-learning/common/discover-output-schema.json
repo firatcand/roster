@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Roster 350 host semantic result",
+  "title": "Roster 350 discovery semantic result",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -19,22 +19,17 @@
   ],
   "properties": {
     "schema_version": {
-      "const": 1
+      "type": "integer",
+      "enum": [1]
     },
     "phase": {
       "type": "string",
-      "enum": [
-        "awaiting_human",
-        "promoted"
-      ]
+      "enum": ["awaiting_human"]
     },
     "target": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "qualified_id",
-        "record_hash"
-      ],
+      "required": ["qualified_id", "record_hash"],
       "properties": {
         "qualified_id": {
           "type": "string",
@@ -49,11 +44,7 @@
     "plan": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "qualified_id",
-        "definition_hashes",
-        "interpreted_step_ids"
-      ],
+      "required": ["qualified_id", "definition_hashes", "interpreted_step_ids"],
       "properties": {
         "qualified_id": {
           "type": "string",
@@ -83,10 +74,7 @@
     "tool_use": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "qualified_id",
-        "semantic_hash"
-      ],
+      "required": ["qualified_id", "semantic_hash"],
       "properties": {
         "qualified_id": {
           "type": "string",
@@ -106,11 +94,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "result_id",
-          "canonical_url",
-          "relevance_reason"
-        ],
+        "required": ["result_id", "canonical_url", "relevance_reason"],
         "properties": {
           "result_id": {
             "type": "string",
@@ -118,7 +102,8 @@
           },
           "canonical_url": {
             "type": "string",
-            "format": "uri"
+            "minLength": 1,
+            "maxLength": 2048
           },
           "relevance_reason": {
             "type": "string",
@@ -135,10 +120,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "result_id",
-          "policy_reasons"
-        ],
+        "required": ["result_id", "policy_reasons"],
         "properties": {
           "result_id": {
             "type": "string",
@@ -159,6 +141,7 @@
     },
     "brain_citation_ids": {
       "type": "array",
+      "minItems": 1,
       "uniqueItems": true,
       "items": {
         "type": "string",
@@ -171,10 +154,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "reason",
-          "count"
-        ],
+        "required": ["reason", "count"],
         "properties": {
           "reason": {
             "type": "string",
@@ -190,10 +170,7 @@
     "evidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "run_id",
-        "feedback_id"
-      ],
+      "required": ["run_id", "feedback_id"],
       "properties": {
         "run_id": {
           "type": "string",
@@ -208,31 +185,92 @@
     "learning": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "watermark",
-        "candidate_id",
-        "candidate_citation_ids",
-        "lesson_ids"
-      ],
+      "required": ["watermark", "candidate", "baseline_lesson_ids"],
       "properties": {
         "watermark": {
           "type": "string",
           "pattern": "^sha256:[a-f0-9]{64}$"
         },
-        "candidate_id": {
-          "type": "string",
-          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
-        },
-        "candidate_citation_ids": {
-          "type": "array",
-          "minItems": 2,
-          "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        "candidate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "candidate_id",
+            "lesson_id",
+            "meaning",
+            "recommendation",
+            "falsifiable_by",
+            "candidate_content_hash",
+            "citation_ids"
+          ],
+          "properties": {
+            "candidate_id": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+            },
+            "lesson_id": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+            },
+            "meaning": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "disposition",
+                "source_kind",
+                "topic_kind",
+                "falsifier_action",
+                "falsifier_observation"
+              ],
+              "properties": {
+                "disposition": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                },
+                "source_kind": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                },
+                "topic_kind": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                },
+                "falsifier_action": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                },
+                "falsifier_observation": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                }
+              }
+            },
+            "recommendation": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 400
+            },
+            "falsifiable_by": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 400
+            },
+            "candidate_content_hash": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "citation_ids": {
+              "type": "array",
+              "minItems": 2,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+              }
+            }
           }
         },
-        "lesson_ids": {
+        "baseline_lesson_ids": {
           "type": "array",
           "uniqueItems": true,
           "items": {
