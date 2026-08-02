@@ -259,7 +259,7 @@
         "debug",
         "prompt-input"
       ],
-      "literal_prompt_source": "current-turn-stdin",
+      "literal_prompt_source": "attested-request-positional-argument",
       "required_configurable_contributions": [
         "canonical-roster-instructions",
         "expected-project-skills",
