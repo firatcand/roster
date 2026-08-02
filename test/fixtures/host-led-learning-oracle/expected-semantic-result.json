@@ -91,7 +91,7 @@
           },
           "recommendation": "Prefer attributable practitioner sources that describe concrete operational problems.",
           "falsifiable_by": "Reject this recommendation if reviewed outcomes contradict it.",
-          "candidate_content_hash": "$CANDIDATE_CONTENT_HASH",
+          "candidate_content_hash": "sha256:c8ca1ec94de21e55839d269bb42fef06bda91e063948fd78ae748c4ae449464d",
           "citation_ids": [
             "feedback-opportunity-discovery-001",
             "run-opportunity-discovery-001"
@@ -110,7 +110,7 @@
       "phase": "promoted",
       "target": {
         "qualified_id": "gtm/social-manager",
-        "record_hash": "$PROMOTED_AGENT_REVISION"
+        "record_hash": "sha256:cff6c8053197b910e357601d45750417cf3729e93c48e8d19b1115e9195dd736"
       },
       "plan": {
         "qualified_id": "gtm/social-manager#opportunity-discovery",
@@ -153,7 +153,7 @@
           },
           "recommendation": "Prefer attributable practitioner sources that describe concrete operational problems.",
           "falsifiable_by": "Reject this recommendation if reviewed outcomes contradict it.",
-          "candidate_content_hash": "$CANDIDATE_CONTENT_HASH",
+          "candidate_content_hash": "sha256:c8ca1ec94de21e55839d269bb42fef06bda91e063948fd78ae748c4ae449464d",
           "citation_ids": [
             "feedback-opportunity-discovery-001",
             "run-opportunity-discovery-001"

@@ -10,6 +10,7 @@ import {
   assertCodexSandboxCanaryTrace,
   assertClaudeSandboxCanaryTrace,
   assertHostVisibleJsonCommandOutput,
+  assertHostVisibleAdapterOutputs,
   buildFileManifest,
   assertHostBinaryMatches,
   canonicalJson,
@@ -21,6 +22,7 @@ import {
   normalizeHostTrace,
   normalizeCodexCurrentDateContribution,
   parseHostLedLearningLaunchContract,
+  sameSemanticResults,
   tokenizeLiteralHostCommand,
   validateCandidateSemanticMeaning,
   validateCodexPromptInputContributions,
@@ -77,14 +79,13 @@ function normalizeClaude(events: readonly unknown[]): NormalizedHostTrace {
   ]);
 }
 
-function normalizeCodex(events: readonly unknown[]): NormalizedHostTrace {
+function normalizeCodexRaw(events: readonly unknown[]): NormalizedHostTrace {
   return normalizeHostTrace({
     host: 'codex',
     stdout: jsonl([
       { type: 'thread.started', thread_id: 'thread-test' },
       { type: 'turn.started' },
       ...events,
-      { type: 'item.completed', item: { type: 'agent_message', text: '{}' } },
       {
         type: 'turn.completed',
         usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
@@ -93,6 +94,13 @@ function normalizeCodex(events: readonly unknown[]): NormalizedHostTrace {
     pathReplacements: {},
     forbiddenTokens: [],
   });
+}
+
+function normalizeCodex(events: readonly unknown[]): NormalizedHostTrace {
+  return normalizeCodexRaw([
+    ...events,
+    { type: 'item.completed', item: { type: 'agent_message', text: '{}' } },
+  ]);
 }
 
 function claudeToolCall(id: string, name: string, input: Record<string, unknown>): unknown {
@@ -305,6 +313,17 @@ test('Claude trace normalization requires exactly one final successful structure
   assert.throws(() => normalizeClaudeRaw([
     { type: 'result', subtype: 'success', is_error: false },
   ]), /not one successful structured result/iu);
+
+  for (const errorEvent of [
+    { type: 'error', error: { message: 'transient failure' } },
+    { type: 'system', subtype: 'error', message: 'retrying request' },
+    { type: 'rate_limit_event', retry_after_ms: 1 },
+  ]) {
+    assert.throws(() => normalizeClaudeRaw([
+      errorEvent,
+      success,
+    ]), /error|failure|retry|rate-limit|system event/iu);
+  }
 });
 
 test('Claude sandbox canaries match results by ID and both finish before workflow actions', () => {
@@ -425,6 +444,19 @@ test('Codex trace normalization rejects actions and failed command lifecycles ou
   ]), /unmatched, changed, duplicated, or unsuccessful/iu);
 });
 
+test('Codex requires one terminal completed agent message immediately before turn completion', () => {
+  const first = { type: 'item.completed', item: { type: 'agent_message', text: '{"answer":"first"}' } };
+  const second = { type: 'item.completed', item: { type: 'agent_message', text: '{"answer":"second"}' } };
+  assert.throws(() => normalizeCodexRaw([first, second]), /one successful terminal agent message/iu);
+  assert.throws(() => normalizeCodexRaw([
+    first,
+    { type: 'item.completed', item: { type: 'reasoning', text: 'late reasoning' } },
+  ]), /one successful terminal agent message/iu);
+  assert.throws(() => normalizeCodexRaw([
+    { type: 'item.started', item: { type: 'agent_message', text: '{"answer":"early"}' } },
+  ]), /one successful terminal agent message/iu);
+});
+
 test('fresh approval proof binds the exact host-visible state-show bytes', () => {
   const command = 'roster-350-fixture-state-show';
   const expected = {
@@ -461,6 +493,45 @@ test('fresh approval proof binds the exact host-visible state-show bytes', () =>
     assert.throws(
       () => assertHostVisibleJsonCommandOutput(alteredCodex, command, expected),
       /differs from the exact adapter projection/iu,
+    );
+  }
+});
+
+test('every lifecycle record binds the exact host-visible canonical JSON output', () => {
+  const command = 'roster-350-fixture-dream-status';
+  const expected = { status: 'due', watermark: `sha256:${'a'.repeat(64)}` };
+  const record = {
+    command,
+    output_sha256: `sha256:${digest(canonicalJson(expected))}`,
+  };
+  const output = `${canonicalJson(expected)}\n`;
+  const claude = normalizeClaude([
+    claudeToolCall('status', 'Bash', { command }),
+    claudeToolResult('status', false, output),
+  ]);
+  const codex = normalizeCodex([
+    codexCommandEvent('item.started', 'status', command),
+    codexCommandEvent('item.completed', 'status', command, 'completed', 0, undefined, output),
+  ]);
+  assert.deepEqual(assertHostVisibleAdapterOutputs(claude, [record]), [record.output_sha256]);
+  assert.deepEqual(assertHostVisibleAdapterOutputs(codex, [record]), [record.output_sha256]);
+
+  for (const altered of [`${canonicalJson({ ...expected, status: 'not_due' })}\n`, output.slice(0, -4)]) {
+    const alteredClaude = normalizeClaude([
+      claudeToolCall('status', 'Bash', { command }),
+      claudeToolResult('status', false, altered),
+    ]);
+    const alteredCodex = normalizeCodex([
+      codexCommandEvent('item.started', 'status', command),
+      codexCommandEvent('item.completed', 'status', command, 'completed', 0, undefined, altered),
+    ]);
+    assert.throws(
+      () => assertHostVisibleAdapterOutputs(alteredClaude, [record]),
+      /Host-visible|ordered adapter log digests/iu,
+    );
+    assert.throws(
+      () => assertHostVisibleAdapterOutputs(alteredCodex, [record]),
+      /Host-visible|ordered adapter log digests/iu,
     );
   }
 });
@@ -866,9 +937,42 @@ test('derived query meaning rejects unrelated and policy-opposing shared query s
     'crypto token advertising',
     'avoid reliable AI operations practitioners and find crypto ads',
     'exclude quality content teams; prioritize spam',
+    'find low quality AI content teams',
+    'remove quality AI content teams',
+    'seek poor quality AI operations practitioners',
   ]) {
     assert.throws(() => validateDerivedQueryMeaning(query), /semantically bound/iu);
   }
+});
+
+test('exact promoted revisions remain visible to cross-host semantic equality', () => {
+  const semantic = {
+    turns: {
+      approve: {
+        target: { record_hash: `sha256:${'a'.repeat(64)}` },
+      },
+    },
+  };
+  const outcomes = {
+    claude: Array.from({ length: 3 }, () => ({ semantic_result: semantic })),
+    codex: Array.from({ length: 3 }, () => ({ semantic_result: semantic })),
+  };
+  assert.deepEqual(sameSemanticResults(outcomes as never), semantic);
+  const changed = structuredClone(outcomes);
+  changed.codex[2]!.semantic_result = {
+    turns: {
+      approve: {
+        target: { record_hash: `sha256:${'b'.repeat(64)}` },
+      },
+    },
+  };
+  assert.throws(() => sameSemanticResults(changed as never), /semantic outcomes are not equivalent/iu);
+  const oracle = readFileSync(join(
+    HOST_LED_LEARNING_REPO_ROOT,
+    'test/fixtures/host-led-learning-oracle/expected-semantic-result.json',
+  ), 'utf8');
+  assert.equal(oracle.includes('$CANDIDATE_CONTENT_HASH'), false);
+  assert.equal(oracle.includes('$PROMOTED_AGENT_REVISION'), false);
 });
 
 test('the shared parser and generator trace gate rejects replayed pass transcripts', () => {

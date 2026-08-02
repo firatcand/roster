@@ -2481,13 +2481,21 @@ function findSemanticResult(host: CertificationHost, events: readonly JsonValue[
     }
     return canonicalize(result['structured_output']);
   } else {
-    for (let index = events.length - 1; index >= 0; index--) {
-      const event = events[index];
-      if (!isJsonObject(event) || event['type'] !== 'item.completed' || !isJsonObject(event['item'])) continue;
-      const item = event['item'];
-      if (item['type'] !== 'agent_message' || typeof item['text'] !== 'string') continue;
-      return parseJson(item['text'], 'Codex structured result');
+    const messages = events.flatMap((event, index) => {
+      if (!isJsonObject(event) || !isJsonObject(event['item']) || event['item']['type'] !== 'agent_message') {
+        return [];
+      }
+      return [{ event, item: event['item'], index }];
+    });
+    const finalEvent = events.at(-1);
+    if (messages.length !== 1
+      || messages[0]!.event['type'] !== 'item.completed'
+      || messages[0]!.index !== events.length - 2
+      || !isJsonObject(finalEvent) || finalEvent['type'] !== 'turn.completed'
+      || typeof messages[0]!.item['text'] !== 'string') {
+      throw new CertificationError('Codex did not emit one successful terminal agent message immediately before turn completion.');
     }
+    return parseJson(messages[0]!.item['text'], 'Codex structured result');
   }
   throw new CertificationError(`${host} did not emit a structured semantic result.`);
 }
@@ -2501,13 +2509,49 @@ function extractClaudeTrace(events: readonly JsonValue[]): Pick<NormalizedHostTr
   const callPositions = new Map<string, Readonly<{ eventOrdinal: number; blockOrdinal: number }>>();
   const resultIds = new Set<string>();
   for (const [eventOrdinal, event] of events.entries()) {
-    if (!isJsonObject(event)) continue;
-    if (event['type'] === 'system' && event['subtype'] === 'init') initialization.push(canonicalize(event));
-    if (!isJsonObject(event['message']) || !Array.isArray(event['message']['content'])) continue;
+    if (!isJsonObject(event) || typeof event['type'] !== 'string') {
+      throw new CertificationError('Claude emitted a non-object or untyped stream event.');
+    }
+    const type = event['type'];
+    if (type === 'system') {
+      if (event['subtype'] !== 'init') {
+        throw new CertificationError('Claude system event escaped the exact initialization subtype.');
+      }
+      initialization.push(canonicalize(event));
+      continue;
+    }
+    if (type === 'result') {
+      if (event['subtype'] !== 'success' || event['is_error'] !== false
+        || event['structured_output'] === undefined) {
+        throw new CertificationError('Claude terminal result was not one successful structured result.');
+      }
+      continue;
+    }
+    if (event['error'] !== undefined || event['is_error'] === true
+      || /error|fail|retry|rate.?limit/iu.test(type)) {
+      throw new CertificationError('Claude emitted an error, failure, retry, or rate-limit stream event.');
+    }
+    if (type !== 'assistant' && type !== 'user') {
+      throw new CertificationError('Claude emitted an event outside the closed stream grammar.');
+    }
+    if (event['subtype'] !== undefined || !isJsonObject(event['message'])
+      || !Array.isArray(event['message']['content'])) {
+      throw new CertificationError('Claude message event escaped the exact assistant/user grammar.');
+    }
     for (const [blockOrdinal, block] of event['message']['content'].entries()) {
-      if (!isJsonObject(block) || (block['type'] !== 'tool_use' && block['type'] !== 'tool_result')) continue;
+      if (!isJsonObject(block) || typeof block['type'] !== 'string') {
+        throw new CertificationError('Claude message contains a malformed content block.');
+      }
+      const allowedBlocks = type === 'assistant'
+        ? ['text', 'thinking', 'redacted_thinking', 'tool_use']
+        : ['tool_result'];
+      if (block['type'] !== 'tool_use' && block['type'] !== 'tool_result'
+        && !allowedBlocks.includes(block['type'])) {
+        throw new CertificationError('Claude message contains a block outside its closed stream grammar.');
+      }
+      if (block['type'] !== 'tool_use' && block['type'] !== 'tool_result') continue;
       if (block['type'] === 'tool_use') {
-        if (event['type'] !== 'assistant') {
+        if (type !== 'assistant') {
           throw new CertificationError('Claude tool calls must originate from an assistant message.');
         }
         if (block['name'] !== 'Bash' && block['name'] !== 'Skill') {
@@ -2526,7 +2570,7 @@ function extractClaudeTrace(events: readonly JsonValue[]): Pick<NormalizedHostTr
         }
         continue;
       }
-      if (event['type'] !== 'user') {
+      if (type !== 'user') {
         throw new CertificationError('Claude tool results must originate from a user message.');
       }
       const id = typeof block['tool_use_id'] === 'string' ? block['tool_use_id'] : null;
@@ -3061,6 +3105,56 @@ export function assertHostVisibleJsonCommandOutput(
   return sha256(normalizedOutput);
 }
 
+export function assertHostVisibleAdapterOutputs(
+  trace: NormalizedHostTrace,
+  records: readonly Record<string, unknown>[],
+): readonly string[] {
+  const expectedCommands = records.map((record, index) => ({
+    command: requiredString(record['command'], `Adapter output record ${index + 1} command`),
+    outputHash: requiredString(record['output_sha256'], `Adapter output record ${index + 1} hash`),
+  }));
+  for (const entry of expectedCommands) {
+    if (!/^sha256:[a-f0-9]{64}$/u.test(entry.outputHash)) {
+      throw new CertificationError('Adapter output record has an invalid canonical output digest.');
+    }
+  }
+  const allowedNames = new Set(expectedCommands.map((entry) => entry.command));
+  const actual = trace.tool_calls.flatMap((entry) => {
+    let commandName: string | undefined;
+    let output: string | undefined;
+    if (trace.host === 'claude') {
+      if (!isJsonObject(entry) || entry['name'] !== 'Bash' || typeof entry['id'] !== 'string'
+        || !isJsonObject(entry['input']) || typeof entry['input']['command'] !== 'string') return [];
+      commandName = tokenizeLiteralHostCommand(entry['input']['command'], true)[0]?.split('/').at(-1);
+      if (commandName === undefined || !allowedNames.has(commandName)) return [];
+      const results = trace.tool_results.filter((candidate) => (
+        isJsonObject(candidate) && candidate['tool_use_id'] === entry['id']
+      ));
+      if (results.length !== 1 || !isJsonObject(results[0]) || results[0]['is_error'] === true
+        || typeof results[0]['content'] !== 'string') {
+        throw new CertificationError(`Claude did not expose one successful JSON '${commandName}' result.`);
+      }
+      output = results[0]['content'];
+    } else {
+      if (!isJsonObject(entry) || entry['type'] !== 'command_execution') return [];
+      const command = decodeCodexShellWrappedCommand(entry['command'], true);
+      commandName = tokenizeLiteralHostCommand(command, true)[0]?.split('/').at(-1);
+      if (commandName === undefined || !allowedNames.has(commandName)) return [];
+      if (entry['status'] !== 'completed' || entry['exit_code'] !== 0
+        || typeof entry['aggregated_output'] !== 'string') {
+        throw new CertificationError(`Codex did not expose one successful JSON '${commandName}' result.`);
+      }
+      output = entry['aggregated_output'];
+    }
+    const parsed = parseJson(output, `Host-visible '${commandName}' output`);
+    return [{ command: commandName, outputHash: `sha256:${sha256(canonicalJson(parsed))}` }];
+  });
+  if (canonicalJson(actual) !== canonicalJson(expectedCommands)) {
+    throw new CertificationError('Host-visible lifecycle outputs do not exactly match the ordered adapter log digests.');
+  }
+  return Object.freeze(actual.map((entry) => entry.outputHash));
+}
+
 export function tokenizeLiteralHostCommand(
   command: string,
   allowNormalizedMarkers = false,
@@ -3503,17 +3597,34 @@ function validateAdapterLog(options: Readonly<{
 }
 
 export function validateDerivedQueryMeaning(query: string): string {
-  const tokens = new Set(query.normalize('NFKC').toLowerCase().match(/[a-z0-9]+/gu) ?? []);
+  const normalized = query.normalize('NFKC').toLowerCase();
+  const tokens = new Set(normalized.match(/[a-z0-9]+/gu) ?? []);
   const hasAny = (values: readonly string[]): boolean => values.some((value) => tokens.has(value));
-  const contradictoryTokens = [
-    'ad', 'ads', 'advertising', 'anti', 'avoid', 'ban', 'crypto', 'exclude', 'ignore',
-    'not', 'promotion', 'reject', 'skip', 'spam', 'token', 'tokens',
+  const reliability = [
+    'reliable', 'reliability', 'quality', 'review', 'reviewed', 'safe', 'safety',
+    'credible', 'trusted', 'concrete', 'useful',
   ] as const;
-  if (tokens.size < 3
-    || hasAny(contradictoryTokens)
-    || !hasAny(['reliable', 'reliability', 'quality', 'review', 'reviewed', 'safe', 'safety'])
-    || !hasAny(['ai', 'content', 'editorial', 'operation', 'operations', 'operational', 'workflow', 'workflows'])
-    || !hasAny(['practitioner', 'practitioners', 'operator', 'operators', 'team', 'teams', 'creator', 'creators'])) {
+  const domain = [
+    'ai', 'content', 'editorial', 'operation', 'operations', 'operational', 'workflow', 'workflows',
+    'publishing', 'media',
+  ] as const;
+  const audience = [
+    'practitioner', 'practitioners', 'operator', 'operators', 'team', 'teams',
+    'creator', 'creators', 'professional', 'professionals',
+  ] as const;
+  const neutral = [
+    'find', 'seek', 'search', 'discover', 'identify', 'locate', 'public', 'recent', 'timely',
+    'post', 'posts', 'discussion', 'discussions', 'conversation', 'conversations',
+    'example', 'examples', 'source', 'sources', 'relevant', 'about', 'for', 'and', 'of', 'in',
+    'on', 'with', 'from',
+  ] as const;
+  const allowed = new Set<string>([...reliability, ...domain, ...audience, ...neutral]);
+  if (!/^[a-z0-9\s-]+$/u.test(normalized)
+    || tokens.size < 3
+    || [...tokens].some((token) => !allowed.has(token))
+    || !hasAny(reliability)
+    || !hasAny(domain)
+    || !hasAny(audience)) {
     throw new CertificationError('Derived query is not semantically bound to reliable AI/content operations practitioners.');
   }
   return 'reliable-ai-content-operations-practitioner';
@@ -4087,7 +4198,7 @@ function candidateOutputProjection(value: unknown, candidate: SeededLessonCandid
     meaning: candidate.meaning,
     recommendation: candidate.recommendation,
     falsifiable_by: candidate.falsifiable_by,
-    candidate_content_hash: '$CANDIDATE_CONTENT_HASH',
+    candidate_content_hash: hashSeededLearningValue(candidate),
     citation_ids: citationIds,
   });
 }
@@ -4140,7 +4251,7 @@ function normalizeSemanticTurn(options: Readonly<{
     ...turn,
     target: {
       ...target,
-      record_hash: options.turn === 'approve' ? '$PROMOTED_AGENT_REVISION' : target['record_hash'],
+      record_hash: target['record_hash'],
     },
     learning: normalizedLearning,
   };
@@ -4258,7 +4369,9 @@ function assertDurableSemanticCoherence(
   );
 }
 
-function sameSemanticResults(outcomes: Readonly<Record<CertificationHost, readonly CertificationPassOutcome[]>>): JsonValue {
+export function sameSemanticResults(
+  outcomes: Readonly<Record<CertificationHost, readonly CertificationPassOutcome[]>>,
+): JsonValue {
   const all = [...outcomes.claude, ...outcomes.codex];
   if (all.length !== HOST_LED_LEARNING_PASS_COUNT * 2) {
     throw new CertificationError('Certification did not produce exactly three outcomes per host.');
@@ -4535,6 +4648,7 @@ async function runPass(options: Readonly<{
     challenge,
     rosterBundleHash: `sha256:${sha256(readFileSync(options.bundles.rosterPath))}`,
   });
+  assertHostVisibleAdapterOutputs(turnOne.trace, turnOneAdapterLog);
   const baselineContext = seededContextSummary(
     currentPaths.workspace,
     options.paths.fixtureRoot,
@@ -4584,6 +4698,10 @@ async function runPass(options: Readonly<{
     challenge,
     rosterBundleHash: `sha256:${sha256(readFileSync(options.bundles.rosterPath))}`,
   });
+  assertHostVisibleAdapterOutputs(
+    turnTwo.trace,
+    turnTwoAdapterLog.slice(turnOneAdapterLog.length),
+  );
   if (approvalQuery !== derivedQuery) {
     throw new CertificationError('Approval turn changed the exact discovery-derived context query.');
   }
