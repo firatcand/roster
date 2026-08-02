@@ -151,6 +151,7 @@ test('seeded candidate meaning is closed and renders deterministic canonical pro
     'no-counterevidence',
   ] as const;
   const rendered = new Set<string>();
+  const lessonIds = new Set<string>();
   for (const disposition of dispositions) {
     for (const source_kind of sourceKinds) {
       for (const topic_kind of topicKinds) {
@@ -168,12 +169,17 @@ test('seeded candidate meaning is closed and renders deterministic canonical pro
             assert.deepEqual(second, first);
             assert.equal(Object.isFrozen(first), true);
             rendered.add(JSON.stringify(first));
+            const lessonId = renderSeededCandidateLessonId(meaning);
+            assert.match(lessonId, /^[a-z0-9]+(?:-[a-z0-9]+)*$/u);
+            assert.equal(Buffer.byteLength(lessonId, 'utf8') <= 80, true);
+            lessonIds.add(lessonId);
           }
         }
       }
     }
   }
   assert.equal(rendered.size, 108);
+  assert.equal(lessonIds.size, 108);
 
   const expected: SeededCandidateMeaning = {
     disposition: 'prefer',
