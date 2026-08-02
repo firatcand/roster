@@ -418,7 +418,7 @@ function appendLog(options: {
 }
 
 function emit(value: unknown): never {
-  process.stdout.write(`${canonicalJson(value)}\n`);
+  writeFileSync(1, `${canonicalJson(value)}\n`, { encoding: 'utf8' });
   process.exit(0);
 }
 
@@ -789,7 +789,7 @@ function main(): never {
     label: 'adapter directory',
     leaf: 'directory',
   });
-  const invokedPath = resolve(process.argv[1] ?? '');
+  const invokedPath = realpathSync(resolve(process.argv[1] ?? ''));
   if (!inside(adapterDirectory, invokedPath)) fail('invoked adapter escaped the adapter directory');
   workspacePath({
     root: workspace,
@@ -826,8 +826,9 @@ function main(): never {
   });
 }
 
-if (process.argv[1] !== undefined
-  && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1])) {
+if (process.env['ROSTER_350_TURN'] !== undefined
+  || (process.argv[1] !== undefined
+    && resolve(fileURLToPath(import.meta.url)) === resolve(process.argv[1]))) {
   try {
     main();
   } catch (error) {

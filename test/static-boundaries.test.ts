@@ -517,12 +517,15 @@ test('host-led fixture skills are byte-identical and cannot leak the semantic an
   }
 
   const oracleMarkers = ['expected-semantic-result', 'host-led-learning-oracle'];
+  const adapterPath = 'test/support/host-led-learning-adapter.ts';
   const oracleLeaks = regularFiles(fixtureRoot).flatMap((path) => {
     const content = readFileSync(path, 'utf8').toLowerCase();
     return oracleMarkers
       .filter((marker) => content.includes(marker))
       .map((marker) => `${repositoryPath(path)}:${marker}`);
-  });
+  }).concat(oracleMarkers
+    .filter((marker) => readFileSync(join(PROJECT_ROOT, adapterPath), 'utf8').toLowerCase().includes(marker))
+    .map((marker) => `${adapterPath}:${marker}`));
   assert.deepEqual(oracleLeaks, []);
 
   const mechanicsOnly = [
@@ -537,6 +540,15 @@ test('host-led fixture skills are byte-identical and cannot leak the semantic an
     'result-crypto',
     'result-prior',
     'result-injection',
+    'result-a17f',
+    'result-b62c',
+    'result-c04d',
+    'result-d91e',
+    'result-e38a',
+    'brain-record-a17f',
+    'brain-record-b62c',
+    'brain-record-c04d',
+    'brain-record-d91e',
     'candidate-opportunity-discovery-001',
     'prefer-attributable-practitioner-posts',
     'require a canonical public url',
@@ -544,11 +556,18 @@ test('host-led fixture skills are byte-identical and cannot leak the semantic an
     'reject profile and company-homepage urls',
     'exclude urls presented in prior discovery runs',
   ];
-  const answerLeaks = mechanicsOnly.flatMap((path) => {
-    const content = readFileSync(join(PROJECT_ROOT, fixtureRoot, path), 'utf8').toLowerCase();
+  const answerLeaks = [...mechanicsOnly.map((path) => ({
+    label: path,
+    absolute: join(PROJECT_ROOT, fixtureRoot, path),
+  })), {
+    label: adapterPath,
+    absolute: join(PROJECT_ROOT, adapterPath),
+  }].flatMap(({ label, absolute }) => {
+    const content = readFileSync(absolute, 'utf8').toLowerCase();
     return forbiddenAnswerMarkers
-      .filter((marker) => content.includes(marker))
-      .map((marker) => `${path}:${marker}`);
+      .filter((marker) => content.includes(marker)
+        && !(label === adapterPath && marker === 'candidate-opportunity-discovery-001'))
+      .map((marker) => `${label}:${marker}`);
   });
   assert.deepEqual(answerLeaks, []);
 
