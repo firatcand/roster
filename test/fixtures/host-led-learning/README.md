@@ -12,8 +12,9 @@ non-normative examples. `test/` is outside the package allowlist.
 
 ## Layout
 
-- `common/` contains the host-readable requests, untrusted data, closed output
-  schema, launch contract, lifecycle supplement, and canonical skill bytes.
+- `common/` contains the host-readable requests, untrusted data, separate
+  closed discovery/approval output schemas, launch contract, lifecycle
+  supplement, and canonical skill bytes.
 - `claude-plugin/` is the only local plugin passed to Claude with
   `--plugin-dir`.
 - `codex-project/` is copied into the fresh Codex project root so Codex can
@@ -35,9 +36,26 @@ or ordinary test scripts.
 Final behavior bytes require one certification consisting of three consecutive
 Claude Code 2.1.220 passes and three consecutive Codex CLI 0.144.1 passes. Each
 pass uses an independent git-initialized workspace and two fresh host
-processes. Infrastructure failure may be retried once from a new copy; a parsed
-semantic mismatch is a hard failure and restarts the full six-pass
-certification on one new byte set.
+processes. The executable proof runs on macOS and binds those exact host
+versions. No process, model, infrastructure, or semantic failure is retried
+automatically: any failure aborts the attempt, and certification restarts all
+six passes in a new root on one unchanged final byte set.
+
+Discovery shows the human the full pending candidate: its closed neutral
+meaning fields, deterministically rendered recommendation and falsification
+wording, citations, and content hash. Approval is a fresh interaction. It reads
+the durable `pending_candidate` projection and must observe the same record and
+hash before promotion. The approval result intentionally omits the prior
+shortlist and Brain diagnostics; those belong only to discovery.
+
+Claude receives each human request through stdin. Codex receives each request
+as one positional prompt in both its paid turn and its matching model-free
+`debug prompt-input` probe. For Codex 0.144.1, the probe accepts exactly five
+messages: permissions/skills, two binary-owned developer contributions,
+workspace instructions/environment, and the literal request. Discovery and
+approval are probed separately. Every plugin, skill, prompt, and sandbox probe
+uses its own clean home/config/temp roots and never shares host state with a
+paid turn.
 
 The exact model versions, binary hashes, Node version, non-secret launch
 configuration, run date, input manifest, and normalized outcomes belong only in
