@@ -49,6 +49,22 @@ const FIXTURE_COMPLETED_AT = '2026-08-02T09:01:00.000Z';
 const MAX_ARGUMENT_BYTES = 8 * 1024;
 const SHA256 = /^sha256:[a-f0-9]{64}$/u;
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/u;
+export const HOST_LED_LEARNING_MODEL_VISIBLE_JSON_CHAR_LIMIT = 28_000;
+
+const CONTEXT_HOST_PROJECTION_KEYS = [
+  'schema_version',
+  'target',
+  'request',
+  'agent',
+  'plan',
+  'guidelines',
+  'lessons',
+  'brain_evidence',
+  'tool_uses',
+  'skill_refs',
+  'diagnostics',
+] as const;
+const CONTEXT_HOST_OMITTED_KEYS = ['workspace', 'provenance', 'budget'] as const;
 
 type Turn = 'discover' | 'approve';
 
@@ -103,6 +119,36 @@ function canonicalValue(value: unknown): unknown {
 
 function canonicalJson(value: unknown): string {
   return JSON.stringify(canonicalValue(value));
+}
+
+function sameStrings(left: readonly string[], right: readonly string[]): boolean {
+  return canonicalJson([...left].sort()) === canonicalJson([...right].sort());
+}
+
+export function assertModelVisibleJsonCharacterLimit(value: unknown, label: string): number {
+  const characters = canonicalJson(value).length;
+  if (characters > HOST_LED_LEARNING_MODEL_VISIBLE_JSON_CHAR_LIMIT) {
+    fail(`${label} exceeds the ${HOST_LED_LEARNING_MODEL_VISIBLE_JSON_CHAR_LIMIT}-character model-visible JSON limit`);
+  }
+  return characters;
+}
+
+export function compactContextForHost(value: unknown): Readonly<Record<string, unknown>> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    fail('Roster context output is not an object');
+  }
+  const record = value as Record<string, unknown>;
+  const expectedRawKeys = [...CONTEXT_HOST_PROJECTION_KEYS, ...CONTEXT_HOST_OMITTED_KEYS];
+  if (!sameStrings(Object.keys(record), expectedRawKeys)) {
+    fail('Roster context output escaped the closed raw context contract');
+  }
+  const projected = Object.fromEntries(CONTEXT_HOST_PROJECTION_KEYS.map((key) => [key, record[key]]));
+  const result = Object.freeze({
+    ...projected,
+    raw_context_sha256: sha256(canonicalJson(record)),
+  });
+  assertModelVisibleJsonCharacterLimit(result, 'Roster context host projection');
+  return result;
 }
 
 function boundedString(value: unknown): value is string {
@@ -371,13 +417,26 @@ function appendLog(options: {
     argvHash: string;
     contractArgvHash: string;
     bundleHash: string;
+    rawContextHash?: string;
   }>;
 }): void {
+  const contextRawHash = options.rosterProof?.rawContextHash;
   if (options.rosterProof !== undefined
     && (!SHA256.test(options.rosterProof.argvHash)
       || options.rosterProof.argvHash !== options.rosterProof.contractArgvHash
-      || !SHA256.test(options.rosterProof.bundleHash))) {
+      || !SHA256.test(options.rosterProof.bundleHash)
+      || (options.rosterProof.rawContextHash !== undefined
+        && !SHA256.test(options.rosterProof.rawContextHash)))) {
     fail('Roster invocation proof is invalid');
+  }
+  if (options.category === 'roster.context') {
+    if (contextRawHash === undefined || options.output === null || typeof options.output !== 'object'
+      || Array.isArray(options.output)
+      || (options.output as Record<string, unknown>)['raw_context_sha256'] !== contextRawHash) {
+      fail('Roster context log is not bound to its full raw context hash');
+    }
+  } else if (contextRawHash !== undefined) {
+    fail('non-context log cannot carry a raw Roster context hash');
   }
   const relativePath = options.contract.runtime.adapter_log_path;
   const lockRelativePath = `${relativePath}.lock`;
@@ -439,6 +498,9 @@ function appendLog(options: {
         roster_argv_sha256: options.rosterProof.argvHash,
         roster_contract_argv_sha256: options.rosterProof.contractArgvHash,
         roster_bundle_sha256: options.rosterProof.bundleHash,
+        ...(options.rosterProof.rawContextHash === undefined
+          ? {}
+          : { raw_context_sha256: options.rosterProof.rawContextHash }),
       }),
     };
     let logDescriptor: number;
@@ -539,6 +601,8 @@ export const hostLedLearningAdapterTestApi = Object.freeze({
   appendLog,
   persistedContextQueryFromDiscoveryLog,
   stateShowProjection,
+  compactContextForHost,
+  assertModelVisibleJsonCharacterLimit,
 });
 
 function invokePreparedRoster(options: {
@@ -642,6 +706,7 @@ function runRoster(options: {
   let output: unknown;
   let query: Record<string, unknown> | undefined;
   let rosterBundleHash: string;
+  let rawContextHash: string | undefined;
   if (verb === 'discover') {
     if (contracted.derivedQuery !== undefined) fail('Roster discover contract cannot derive a query');
     const result = invokePreparedRoster({
@@ -677,10 +742,12 @@ function runRoster(options: {
       !== canonicalJson(localContextProjection(seededOutput))) {
       fail('prepared Roster context diverged from the seeded local-policy projection');
     }
-    output = seededOutput;
+    output = compactContextForHost(seededOutput);
+    rawContextHash = (output as Record<string, unknown>)['raw_context_sha256'] as string;
   } else {
     fail('Roster invocation has no fixture implementation');
   }
+  assertModelVisibleJsonCharacterLimit(output, `Roster ${verb} output`);
   appendLog({
     workspace: options.workspace,
     contract: options.contract,
@@ -694,6 +761,7 @@ function runRoster(options: {
       argvHash: sha256(canonicalJson(options.argv)),
       contractArgvHash: sha256(canonicalJson([invocation.verb, ...contracted.expected])),
       bundleHash: rosterBundleHash,
+      ...(rawContextHash === undefined ? {} : { rawContextHash }),
     },
   });
   emit(output);
@@ -873,6 +941,7 @@ function runAdapter(options: {
     label: 'learning state',
     leaf: 'regular-file-or-missing',
   });
+  assertModelVisibleJsonCharacterLimit(output, `${options.command} output`);
   appendLog({
     workspace: options.workspace,
     contract: options.contract,

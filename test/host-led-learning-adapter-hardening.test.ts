@@ -43,6 +43,58 @@ function sha256(value: string): string {
   return `sha256:${createHash('sha256').update(value).digest('hex')}`;
 }
 
+function rawContextFixture(): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    workspace: { id: 'workspace' },
+    target: { id: 'target' },
+    request: { query: 'reliable ai practitioners' },
+    agent: { id: 'agent' },
+    plan: { id: 'plan' },
+    guidelines: [{ id: 'guideline' }],
+    lessons: [{ id: 'lesson' }],
+    brain_evidence: [{ id: 'evidence' }],
+    tool_uses: [{ id: 'tool-use' }],
+    skill_refs: [{ id: 'skill' }],
+    provenance: [{ id: 'provenance' }],
+    budget: { used: 1 },
+    diagnostics: [{ code: 'diagnostic' }],
+  };
+}
+
+test('compact context retains every actionable field and omits only closed bookkeeping fields', () => {
+  const raw = rawContextFixture();
+  const compact = hostLedLearningAdapterTestApi.compactContextForHost(raw);
+  assert.deepEqual(Object.keys(compact).sort(), [
+    'agent', 'brain_evidence', 'diagnostics', 'guidelines', 'lessons', 'plan', 'raw_context_sha256',
+    'request', 'schema_version', 'skill_refs', 'target', 'tool_uses',
+  ]);
+  for (const key of [
+    'schema_version', 'target', 'request', 'agent', 'plan', 'guidelines', 'lessons',
+    'brain_evidence', 'tool_uses', 'skill_refs', 'diagnostics',
+  ]) {
+    assert.deepEqual(compact[key], raw[key]);
+  }
+  assert.equal(compact['workspace'], undefined);
+  assert.equal(compact['provenance'], undefined);
+  assert.equal(compact['budget'], undefined);
+  assert.equal(compact['raw_context_sha256'], sha256(JSON.stringify(Object.fromEntries(
+    Object.keys(raw).sort().map((key) => [key, raw[key]]),
+  ))));
+  assert.throws(
+    () => hostLedLearningAdapterTestApi.compactContextForHost({ ...raw, surplus: true }),
+    /closed raw context contract/iu,
+  );
+});
+
+test('model-visible adapter JSON fails closed above 28,000 JavaScript characters', () => {
+  assert.equal(hostLedLearningAdapterTestApi.assertModelVisibleJsonCharacterLimit({ ok: true }, 'small'), 11);
+  assert.throws(
+    () => hostLedLearningAdapterTestApi.assertModelVisibleJsonCharacterLimit({ value: 'x'.repeat(28_000) }, 'large'),
+    /28000-character model-visible JSON limit/iu,
+  );
+});
+
 test('adapter workspace paths reject every symlinked component and leaf', () => {
   const root = temporaryWorkspace();
   const outside = mkdtempSync(join(tmpdir(), 'roster-350-adapter-outside-'));
@@ -274,20 +326,24 @@ test('promotion adapter requires the human-reviewed candidate identity and hash'
 test('adapter log enforces one writer and validates contiguous sequences', () => {
   const root = temporaryWorkspace();
   try {
-    const append = (category: string) => hostLedLearningAdapterTestApi.appendLog({
-      workspace: root,
-      contract,
-      turn: 'discover',
-      command: 'roster',
-      category,
-      flags: ['--json'],
-      output: { ok: true },
-      rosterProof: {
-        argvHash: `sha256:${'1'.repeat(64)}`,
-        contractArgvHash: `sha256:${'1'.repeat(64)}`,
-        bundleHash: `sha256:${'3'.repeat(64)}`,
-      },
-    });
+    const append = (category: string) => {
+      const rawContextHash = `sha256:${'4'.repeat(64)}`;
+      return hostLedLearningAdapterTestApi.appendLog({
+        workspace: root,
+        contract,
+        turn: 'discover',
+        command: 'roster',
+        category,
+        flags: ['--json'],
+        output: category === 'roster.context' ? { ok: true, raw_context_sha256: rawContextHash } : { ok: true },
+        rosterProof: {
+          argvHash: `sha256:${'1'.repeat(64)}`,
+          contractArgvHash: `sha256:${'1'.repeat(64)}`,
+          bundleHash: `sha256:${'3'.repeat(64)}`,
+          ...(category === 'roster.context' ? { rawContextHash } : {}),
+        },
+      });
+    };
     append('roster.discover');
     append('roster.context');
     const logPath = join(root, contract.runtime.adapter_log_path);
@@ -297,6 +353,7 @@ test('adapter log enforces one writer and validates contiguous sequences', () =>
     assert.equal(records[0].roster_argv_sha256, records[0].roster_contract_argv_sha256);
     assert.equal(records[0].roster_argv_exact, true);
     assert.equal(records[0].roster_invocation_status, 'prepared-bundle-success');
+    assert.equal(records[1].raw_context_sha256, `sha256:${'4'.repeat(64)}`);
 
     const lockPath = `${logPath}.lock`;
     writeFileSync(lockPath, '', { flag: 'wx' });

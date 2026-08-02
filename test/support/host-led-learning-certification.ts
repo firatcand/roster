@@ -47,6 +47,10 @@ import {
   type SeededLessonCandidate,
 } from './seeded-learning-store.ts';
 import { resolveSeededWorkspaceContext } from './seeded-workspace-context.ts';
+import {
+  HOST_LED_LEARNING_MODEL_VISIBLE_JSON_CHAR_LIMIT,
+  compactContextForHost,
+} from './host-led-learning-adapter.ts';
 
 export const HOST_LED_LEARNING_SMOKE_ENV = 'ROSTER_HOST_LED_LOOP_SMOKE';
 export const HOST_LED_LEARNING_ATTESTATION_SCHEMA_VERSION = 1 as const;
@@ -73,6 +77,14 @@ const MAX_MANIFEST_BYTES = 64 * 1024 * 1024;
 const MAX_PROCESS_OUTPUT_BYTES = 16 * 1024 * 1024;
 const HOST_TIMEOUT_MS = 10 * 60_000;
 const PROBE_TIMEOUT_MS = 30_000;
+const CLAUDE_TOOL_RESULT_PERSISTENCE_MARKERS = [
+  '<persisted-output>',
+  '</persisted-output>',
+  'Output too large (',
+  'Output truncated (',
+  'Full output saved to:',
+] as const;
+const CLAUDE_BASH_FIRST_LIMITER_MAX_OUTPUT_LENGTH = '150000';
 
 const modulePath = fileURLToPath(import.meta.url);
 export const HOST_LED_LEARNING_REPO_ROOT = resolve(dirname(modulePath), '../..');
@@ -327,6 +339,54 @@ class CertificationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'CertificationError';
+  }
+}
+
+export function assertModelVisibleJsonLimit(value: unknown, label: string): number {
+  const characters = canonicalJson(value).length;
+  if (characters > HOST_LED_LEARNING_MODEL_VISIBLE_JSON_CHAR_LIMIT) {
+    throw new CertificationError(
+      `${label} exceeds the ${HOST_LED_LEARNING_MODEL_VISIBLE_JSON_CHAR_LIMIT}-character model-visible JSON limit.`,
+    );
+  }
+  return characters;
+}
+
+export function assertNoClaudeToolResultPersistenceWrapper(value: unknown): void {
+  const strings: string[] = [];
+  const visit = (entry: unknown): void => {
+    if (typeof entry === 'string') {
+      strings.push(entry);
+      return;
+    }
+    if (Array.isArray(entry)) {
+      for (const child of entry) visit(child);
+      return;
+    }
+    if (entry !== null && typeof entry === 'object') {
+      for (const child of Object.values(entry as Record<string, unknown>)) visit(child);
+    }
+  };
+  visit(value);
+  if (CLAUDE_TOOL_RESULT_PERSISTENCE_MARKERS.some((marker) => strings.some((entry) => entry.includes(marker)))) {
+    throw new CertificationError('Claude tool result was replaced by a persisted or truncated output wrapper.');
+  }
+}
+
+export function assertContextRawHashBinding(
+  rawContext: unknown,
+  visibleContext: unknown,
+  claimedRawHash: unknown,
+): void {
+  let expected: Readonly<Record<string, unknown>>;
+  try {
+    expected = compactContextForHost(rawContext);
+  } catch {
+    throw new CertificationError('Raw Roster context escaped the closed compact-projection contract.');
+  }
+  if (claimedRawHash !== expected['raw_context_sha256']
+    || canonicalJson(visibleContext) !== canonicalJson(expected)) {
+    throw new CertificationError('Roster context host projection is not bound to the exact full raw context hash.');
   }
 }
 
@@ -1362,7 +1422,7 @@ function authoredHostConfigManifest(host: CertificationHost, root: string): Json
   }));
 }
 
-function explicitHostEnv(options: Readonly<{
+export function explicitHostEnv(options: Readonly<{
   host: CertificationHost;
   turn: 'discover' | 'approve';
   home: string;
@@ -1392,6 +1452,7 @@ function explicitHostEnv(options: Readonly<{
   };
   if (options.host === 'claude') {
     env['CLAUDE_CONFIG_DIR'] = options.configHome;
+    env['BASH_MAX_OUTPUT_LENGTH'] = CLAUDE_BASH_FIRST_LIMITER_MAX_OUTPUT_LENGTH;
     if (options.apiKey !== undefined) env['ANTHROPIC_API_KEY'] = options.apiKey;
   } else {
     env['CODEX_HOME'] = options.configHome;
@@ -2609,6 +2670,7 @@ function extractClaudeTrace(events: readonly JsonValue[]): Pick<NormalizedHostTr
       if (type !== 'user') {
         throw new CertificationError('Claude tool results must originate from a user message.');
       }
+      assertNoClaudeToolResultPersistenceWrapper(block);
       const id = typeof block['tool_use_id'] === 'string' ? block['tool_use_id'] : null;
       const callPosition = id === null ? undefined : callPositions.get(id);
       if (id === null || callPosition === undefined || resultIds.has(id)
@@ -3121,6 +3183,7 @@ export function assertHostVisibleJsonCommandOutput(
       throw new CertificationError(`Claude did not expose one successful textual '${commandName}' result.`);
     }
     visibleOutput = results[0]['content'];
+    assertNoClaudeToolResultPersistenceWrapper(visibleOutput);
   } else {
     const calls = trace.tool_calls.filter((entry) => {
       if (!isJsonObject(entry) || entry['type'] !== 'command_execution') return false;
@@ -3171,6 +3234,7 @@ export function assertHostVisibleAdapterOutputs(
         throw new CertificationError(`Claude did not expose one successful JSON '${commandName}' result.`);
       }
       output = results[0]['content'];
+      assertNoClaudeToolResultPersistenceWrapper(output);
     } else {
       if (!isJsonObject(entry) || entry['type'] !== 'command_execution') return [];
       const command = decodeCodexShellWrappedCommand(entry['command'], true);
@@ -3524,6 +3588,8 @@ function validateAdapterLog(options: Readonly<{
   records: readonly Record<string, unknown>[];
   start: number;
   turn: 'discover' | 'approve';
+  workspace: string;
+  fixtureRoot: string;
   contract: HostLedLearningLaunchContract;
   requestHash: string;
   challengeHash: string;
@@ -3561,6 +3627,22 @@ function validateAdapterLog(options: Readonly<{
         throw new CertificationError('Fixture adapter log has an invalid derived-query proof.');
       }
       validateDerivedQueryMeaning(requiredString(proof['query'], 'derived query'));
+      if (category === 'roster.context') {
+        const rawContext = seededContext(
+          options.workspace,
+          options.fixtureRoot,
+          options.contract,
+          requiredString(proof['query'], 'derived query'),
+          false,
+        );
+        const visibleContext = compactContextForHost(rawContext);
+        assertContextRawHashBinding(rawContext, visibleContext, record['raw_context_sha256']);
+        if (record['output_sha256'] !== `sha256:${sha256(canonicalJson(visibleContext))}`) {
+          throw new CertificationError('Roster context adapter log is not bound to its exact compact host projection.');
+        }
+      } else if (record['raw_context_sha256'] !== undefined) {
+        throw new CertificationError('Non-context adapter log forged a raw Roster context hash.');
+      }
     }
     const rosterInvocation = options.contract.roster.allowed_model_invocations
       .find((entry) => entry.log_category === category);
@@ -3585,11 +3667,15 @@ function validateAdapterLog(options: Readonly<{
         || record['roster_invocation_status'] !== 'prepared-bundle-success') {
         throw new CertificationError('Roster adapter log is not bound to exact argv, contract argv, and runtime bytes.');
       }
+      if (category !== 'roster.context' && record['raw_context_sha256'] !== undefined) {
+        throw new CertificationError('Non-context Roster log forged a raw context hash.');
+      }
     } else if (record['roster_argv_sha256'] !== undefined
       || record['roster_contract_argv_sha256'] !== undefined
       || record['roster_bundle_sha256'] !== undefined
       || record['roster_argv_exact'] !== undefined
-      || record['roster_invocation_status'] !== undefined) {
+      || record['roster_invocation_status'] !== undefined
+      || record['raw_context_sha256'] !== undefined) {
       throw new CertificationError('Non-Roster adapter log contains a forged Roster invocation proof.');
     }
   }
@@ -4026,6 +4112,85 @@ function probePreparedRosterAdapterRuntime(
   }
 }
 
+function preflightControlledModelVisibleOutputs(
+  paths: CertificationPaths,
+  currentPaths: HostPassPaths,
+  contract: HostLedLearningLaunchContract,
+): Readonly<{ maximum_characters: number; output_count: number }> {
+  const roots = createHostProbePaths(currentPaths.workspace, currentPaths.hostRoot, 'model-visible-json');
+  const requestHash = `sha256:${sha256(readFileSync(join(
+    paths.fixtureRoot,
+    contract.host_readable_inputs.discover_request,
+  )))}`;
+  const challenge = dreamerChallenge(paths, contract);
+  const commonEnv = {
+    HOME: roots.home,
+    TMPDIR: roots.temp,
+    PATH: `${join(roots.workspace, contract.runtime.adapter_directory)}:${dirname(process.execPath)}:/usr/bin:/bin`,
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    NO_COLOR: '1',
+    CI: '1',
+    ROSTER_350_HOST: 'model-free-prepaid',
+    ROSTER_350_REQUEST_SHA256: requestHash,
+    ROSTER_350_DREAMER_CHALLENGE_SHA256: `sha256:${sha256(challenge)}`,
+    ROSTER_350_ROSTER_VERSION: packageVersion(paths),
+  };
+  const characterCounts: number[] = [];
+  const invoke = (command: string, args: readonly string[], turn: 'discover' | 'approve'): JsonValue => {
+    const result = requireSuccess(runCapturedProcess({
+      command: join(roots.workspace, contract.runtime.adapter_directory, command),
+      args,
+      cwd: roots.workspace,
+      env: { ...commonEnv, ROSTER_350_TURN: turn },
+      timeoutMs: PROBE_TIMEOUT_MS,
+    }), `model-visible-${command}`);
+    const value = parseJson(result.stdout, `model-visible ${command} output`);
+    characterCounts.push(assertModelVisibleJsonLimit(value, `Model-free '${command}' output`));
+    return value;
+  };
+  const queryPrefix = 'reliable ai practitioners';
+  const query = queryPrefix.padEnd(240, ' ');
+  validateDerivedQueryMeaning(query);
+  invoke('roster', ['discover', contract.roster.target, '--exact', '--json'], 'discover');
+  invoke('roster', ['context', contract.roster.target, '--query', query, '--json'], 'discover');
+  invoke('roster-350-fixture-search', ['--query', query], 'discover');
+  invoke('roster-350-fixture-run-record', [
+    '--request-hash', requestHash,
+    '--selected-result', 'result-a17f',
+    '--brain-citation', 'brain-record-a17f',
+    '--brain-citation', 'brain-record-b62c',
+    '--brain-citation', 'brain-record-d91e',
+  ], 'discover');
+  invoke('roster-350-fixture-feedback-record', [
+    '--run-id', 'run-opportunity-discovery-001',
+    '--signal', 'useful',
+  ], 'discover');
+  invoke('roster-350-fixture-dream-status', [], 'discover');
+  const candidate = invoke('roster-350-fixture-candidate-create', [
+    '--run-id', 'run-opportunity-discovery-001',
+    '--feedback-id', 'feedback-opportunity-discovery-001',
+    '--disposition', 'prefer',
+    '--source-kind', 'attributable-practitioner',
+    '--topic-kind', 'operational-problem',
+    '--falsifier-action', 'reject',
+    '--falsifier-observation', 'reviewed-outcomes-contradict',
+    '--skill-challenge', challenge,
+  ], 'discover');
+  if (!isJsonObject(candidate)) throw new CertificationError('Model-free candidate output is not an object.');
+  const candidateHash = requiredString(candidate['content_hash'], 'model-free candidate content hash');
+  invoke('roster-350-fixture-state-show', [], 'approve');
+  invoke('roster-350-fixture-candidate-promote', [
+    '--candidate-id', 'candidate-opportunity-discovery-001',
+    '--candidate-hash', candidateHash,
+  ], 'approve');
+  invoke('roster', ['context', contract.roster.target, '--query', query, '--json'], 'approve');
+  return Object.freeze({
+    maximum_characters: Math.max(...characterCounts),
+    output_count: characterCounts.length,
+  });
+}
+
 function rebuildModelFreeCertificationInputs(
   paths: CertificationPaths,
   contract: HostLedLearningLaunchContract,
@@ -4033,10 +4198,18 @@ function rebuildModelFreeCertificationInputs(
   adapterBundleSha256: string;
   certificationRosterBundleSha256: string;
   initialWorkspaceSha256: Readonly<Record<CertificationHost, string>>;
+  modelVisibleJson: Readonly<Record<CertificationHost, Readonly<{
+    maximum_characters: number;
+    output_count: number;
+  }>>>;
 }> {
   const root = createCertificationRoot();
   try {
     const bundles = buildCertificationBundles(paths, root);
+    const modelVisibleJson: Partial<Record<CertificationHost, Readonly<{
+      maximum_characters: number;
+      output_count: number;
+    }>>> = {};
     const initialWorkspaceSha256 = Object.fromEntries((['claude', 'codex'] as const).map((host) => {
       const currentPaths = passPaths(root, host);
       prepareWorkspace(host, paths, currentPaths, contract, bundles);
@@ -4045,6 +4218,7 @@ function rebuildModelFreeCertificationInputs(
         path: currentPaths.workspace,
         exclusions: ['.git'],
       }]);
+      modelVisibleJson[host] = preflightControlledModelVisibleOutputs(paths, currentPaths, contract);
       probePreparedRosterAdapterRuntime(paths, currentPaths, contract);
       return [host, manifest.sha256];
     })) as Record<CertificationHost, string>;
@@ -4052,6 +4226,10 @@ function rebuildModelFreeCertificationInputs(
       adapterBundleSha256: sha256(readFileSync(bundles.adapterPath)),
       certificationRosterBundleSha256: sha256(readFileSync(bundles.rosterPath)),
       initialWorkspaceSha256: Object.freeze(initialWorkspaceSha256),
+      modelVisibleJson: Object.freeze(modelVisibleJson) as Readonly<Record<CertificationHost, Readonly<{
+        maximum_characters: number;
+        output_count: number;
+      }>>>,
     });
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -4062,27 +4240,37 @@ function oracle(paths: CertificationPaths): JsonValue {
   return readJson(paths.oraclePath, 'semantic oracle');
 }
 
+function seededContext(
+  workspace: string,
+  fixtureRoot: string,
+  contract: HostLedLearningLaunchContract,
+  query: string,
+  explain: boolean,
+): ReturnType<typeof resolveSeededWorkspaceContext> {
+  const evidence = readJson(join(fixtureRoot, contract.host_readable_inputs.brain_evidence), 'seeded Brain evidence');
+  if (!isJsonObject(evidence) || !Array.isArray(evidence['candidates'])) {
+    throw new CertificationError('Seeded Brain evidence is invalid.');
+  }
+  return resolveSeededWorkspaceContext({
+    root: workspace,
+    request: {
+      target: contract.roster.target,
+      query,
+      stepHint: explain ? 'The harness is verifying the complete certified context.' : null,
+      budgetTokens: DEFAULT_CONTEXT_BUDGET_TOKENS,
+      explain,
+    },
+    candidates: structuredClone(evidence['candidates']) as SeedBrainCandidate[],
+  });
+}
+
 function seededContextSummary(
   workspace: string,
   fixtureRoot: string,
   contract: HostLedLearningLaunchContract,
   query: string,
 ): Readonly<{ lessonIds: readonly string[]; targetRecordHash: string }> {
-  const evidence = readJson(join(fixtureRoot, contract.host_readable_inputs.brain_evidence), 'seeded Brain evidence');
-  if (!isJsonObject(evidence) || !Array.isArray(evidence['candidates'])) {
-    throw new CertificationError('Seeded Brain evidence is invalid.');
-  }
-  const context = resolveSeededWorkspaceContext({
-    root: workspace,
-    request: {
-      target: contract.roster.target,
-      query,
-      stepHint: 'The harness is verifying the complete certified context.',
-      budgetTokens: DEFAULT_CONTEXT_BUDGET_TOKENS,
-      explain: true,
-    },
-    candidates: structuredClone(evidence['candidates']) as SeedBrainCandidate[],
-  });
+  const context = seededContext(workspace, fixtureRoot, contract, query, true);
   const targetRecordHash = context.agent.agent.fragment_hash;
   return Object.freeze({
     lessonIds: Object.freeze(context.lessons.map((entry) => entry.content.id).sort(compareCodePoints)),
@@ -4563,6 +4751,11 @@ async function runPass(options: Readonly<{
     path: currentPaths.workspace,
     exclusions: ['.git'],
   }]);
+  const modelVisibleOutputPreflight = preflightControlledModelVisibleOutputs(
+    options.paths,
+    currentPaths,
+    options.contract,
+  );
   const requestPath = join(options.paths.fixtureRoot, options.contract.host_readable_inputs.discover_request);
   const approvalPath = join(options.paths.fixtureRoot, options.contract.host_readable_inputs.approval_request);
   const request = readFileSync(requestPath, 'utf8');
@@ -4751,6 +4944,10 @@ async function runPass(options: Readonly<{
       dreamerChallenge(options.paths, options.contract),
     );
   }
+  sandboxProbeHash = sha256(canonicalJson({
+    sandbox: sandboxProbeHash,
+    model_visible_json: modelVisibleOutputPreflight,
+  }));
   validateHostTraceCommands({
     trace: turnOne.trace,
     host: options.host,
@@ -4772,6 +4969,8 @@ async function runPass(options: Readonly<{
     records: turnOneAdapterLog,
     start: 0,
     turn: 'discover',
+    workspace: currentPaths.workspace,
+    fixtureRoot: options.paths.fixtureRoot,
     contract: options.contract,
     requestHash,
     challengeHash,
@@ -4833,6 +5032,8 @@ async function runPass(options: Readonly<{
     records: turnTwoAdapterLog,
     start: turnOneAdapterLog.length,
     turn: 'approve',
+    workspace: currentPaths.workspace,
+    fixtureRoot: options.paths.fixtureRoot,
     contract: options.contract,
     requestHash,
     challengeHash,
@@ -5336,6 +5537,7 @@ export function verifyHostLedLearningModelFreeInputs(
     adapter_bundle_sha256: rebuilt.adapterBundleSha256,
     certification_roster_bundle_sha256: rebuilt.certificationRosterBundleSha256,
     initial_workspace_sha256: rebuilt.initialWorkspaceSha256,
+    model_visible_json: rebuilt.modelVisibleJson,
   });
 }
 

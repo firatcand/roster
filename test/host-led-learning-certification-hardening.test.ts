@@ -8,11 +8,14 @@ import {
   assertDistinctHostPassTraceHashes,
   assertDeterministicCertificationArtifacts,
   assertCertificationInputSnapshotUnchanged,
+  assertContextRawHashBinding,
   assertCodexPromptContributionPins,
   assertCodexSandboxCanaryTrace,
   assertClaudeSandboxCanaryTrace,
   assertHostVisibleJsonCommandOutput,
   assertHostVisibleAdapterOutputs,
+  assertModelVisibleJsonLimit,
+  assertNoClaudeToolResultPersistenceWrapper,
   buildFileManifest,
   assertHostBinaryMatches,
   canonicalJson,
@@ -20,6 +23,7 @@ import {
   codexGlobalLaunchArgs,
   codexStrictGlobalLaunchArgs,
   createHostProbePaths,
+  explicitHostEnv,
   HOST_LED_LEARNING_REPO_ROOT,
   loadHostLedLearningLaunchContract,
   normalizeHostTrace,
@@ -41,6 +45,7 @@ import {
   type JsonValue,
   type NormalizedHostTrace,
 } from './support/host-led-learning-certification.ts';
+import { compactContextForHost } from './support/host-led-learning-adapter.ts';
 
 function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -662,6 +667,92 @@ test('every lifecycle record binds the exact host-visible canonical JSON output'
       /Host-visible|ordered adapter log digests/iu,
     );
   }
+});
+
+test('Claude rejects current and legacy persisted-output wrappers before JSON validation', () => {
+  const wrappers = [
+    '<persisted-output>saved</persisted-output>',
+    '</persisted-output>',
+    'Output too large (32001 chars)',
+    'Output truncated (original char count: 32001)',
+    'Full output saved to: /tmp/tool-result.txt',
+  ];
+  for (const content of wrappers) {
+    assert.throws(
+      () => normalizeClaude([
+        claudeToolCall('context', 'Bash', { command: 'roster context target --query reliable --json' }),
+        claudeToolResult('context', false, content),
+      ]),
+      /persisted or truncated output wrapper/iu,
+    );
+    assert.throws(
+      () => assertNoClaudeToolResultPersistenceWrapper({ nested: [content] }),
+      /persisted or truncated output wrapper/iu,
+    );
+  }
+});
+
+test('compact context log binding rejects raw, projection, and claimed-hash tampering', () => {
+  const raw = {
+    schema_version: 1,
+    workspace: { id: 'workspace' },
+    target: { id: 'target' },
+    request: { query: 'reliable ai practitioners' },
+    agent: { id: 'agent' },
+    plan: { id: 'plan' },
+    guidelines: [{ id: 'guideline' }],
+    lessons: [{ id: 'lesson' }],
+    brain_evidence: [{ id: 'evidence' }],
+    tool_uses: [{ id: 'tool-use' }],
+    skill_refs: [{ id: 'skill' }],
+    provenance: [{ id: 'provenance' }],
+    budget: { used: 1 },
+    diagnostics: [{ code: 'diagnostic' }],
+  };
+  const compact = compactContextForHost(raw);
+  assert.doesNotThrow(() => assertContextRawHashBinding(raw, compact, compact['raw_context_sha256']));
+  assert.throws(
+    () => assertContextRawHashBinding(
+      { ...raw, provenance: [{ id: 'changed' }] },
+      compact,
+      compact['raw_context_sha256'],
+    ),
+    /not bound to the exact full raw context hash/iu,
+  );
+  assert.throws(
+    () => assertContextRawHashBinding(raw, { ...compact, lessons: [] }, compact['raw_context_sha256']),
+    /not bound to the exact full raw context hash/iu,
+  );
+  assert.throws(
+    () => assertContextRawHashBinding(raw, compact, `sha256:${'0'.repeat(64)}`),
+    /not bound to the exact full raw context hash/iu,
+  );
+});
+
+test('certification hard-stops oversized model-visible JSON before paid execution', () => {
+  assert.equal(assertModelVisibleJsonLimit({ ok: true }, 'small output'), 11);
+  assert.throws(
+    () => assertModelVisibleJsonLimit({ diagnostics: 'x'.repeat(28_000) }, 'oversized output'),
+    (error: unknown) => error instanceof Error
+      && error.name === 'CertificationError'
+      && /28000-character model-visible JSON limit/iu.test(error.message),
+  );
+});
+
+test('Claude alone pins the first Bash limiter defense in the explicit host environment', () => {
+  const options = {
+    turn: 'discover' as const,
+    home: '/isolated/home',
+    configHome: '/isolated/config',
+    temp: '/isolated/tmp',
+    workspace: '/isolated/workspace',
+    hostBinary: '/isolated/bin/host',
+    requestHash: `sha256:${'a'.repeat(64)}`,
+    challengeHash: `sha256:${'b'.repeat(64)}`,
+    rosterVersion: '0.0.0',
+  };
+  assert.equal(explicitHostEnv({ ...options, host: 'claude' })['BASH_MAX_OUTPUT_LENGTH'], '150000');
+  assert.equal(explicitHostEnv({ ...options, host: 'codex' })['BASH_MAX_OUTPUT_LENGTH'], undefined);
 });
 
 test('Codex trace audit permits one exact Dreamer read and rejects extra operands or Roster argv', () => {
