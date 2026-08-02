@@ -7,6 +7,7 @@ import test from 'node:test';
 import {
   assertDistinctHostPassTraceHashes,
   assertDeterministicCertificationArtifacts,
+  assertDeterministicHostArtifacts,
   assertCertificationInputSnapshotUnchanged,
   assertContextRawHashBinding,
   assertCodexPromptContributionPins,
@@ -1414,6 +1415,23 @@ test('attestation parser rejects nondeterministic durable artifacts after a vali
       /deterministic|promoted lesson hash/iu,
     );
   }
+});
+
+test('live certification rejects per-host artifact drift before another paid host can run', () => {
+  const valid = syntheticAttestation();
+  const outcomes = valid['outcomes'] as Record<string, Array<Record<string, unknown>>>;
+  const firstClaudePass = outcomes['claude']![0]!;
+  assert.doesNotThrow(() => assertDeterministicHostArtifacts('claude', [firstClaudePass]));
+  const driftedSecondPass = structuredClone(outcomes['claude']![1]!);
+  driftedSecondPass['learning_state_sha256'] = digest('early-drift');
+  assert.throws(
+    () => assertDeterministicHostArtifacts('claude', [firstClaudePass, driftedSecondPass]),
+    /claude passes do not share one deterministic learning_state_sha256/iu,
+  );
+  assert.throws(
+    () => assertDeterministicHostArtifacts('claude', []),
+    /one to three pass outcomes/iu,
+  );
 });
 
 test('host binary proof rejects executable replacement after the launch probe', () => {

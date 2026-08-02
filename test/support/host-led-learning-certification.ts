@@ -4742,27 +4742,40 @@ export function assertDeterministicCertificationArtifacts(
     if (!Array.isArray(entries) || entries.length !== HOST_LED_LEARNING_PASS_COUNT) {
       throw new CertificationError(`${host} artifact audit requires exactly three pass outcomes.`);
     }
-    for (const key of ['final_workspace_sha256', 'learning_state_sha256'] as const) {
-      const hashes = entries.map((entry, index) => {
-        if (!isJsonObject(entry)) {
-          throw new CertificationError(`${host} artifact outcome ${index + 1} is invalid.`);
-        }
-        return requireBareHash(entry[key], `${host} artifact outcome ${index + 1} ${key}`);
-      });
-      if (new Set(hashes).size !== 1) {
-        throw new CertificationError(`${host} passes do not share one deterministic ${key}.`);
-      }
-    }
-    for (const [index, entry] of entries.entries()) {
-      if (!isJsonObject(entry)) throw new CertificationError(`${host} artifact outcome ${index + 1} is invalid.`);
-      lessonHashes.push(requireBareHash(
-        entry['promoted_lesson_sha256'],
-        `${host} artifact outcome ${index + 1} promoted_lesson_sha256`,
-      ));
-    }
+    assertDeterministicHostArtifacts(host, entries);
+    const first = entries[0];
+    if (!isJsonObject(first)) throw new CertificationError(`${host} artifact outcome 1 is invalid.`);
+    lessonHashes.push(requireBareHash(
+      first['promoted_lesson_sha256'],
+      `${host} artifact outcome 1 promoted_lesson_sha256`,
+    ));
   }
   if (new Set(lessonHashes).size !== 1) {
-    throw new CertificationError('All six passes do not share one deterministic promoted lesson hash.');
+    throw new CertificationError('Claude and Codex do not share one deterministic promoted lesson hash.');
+  }
+}
+
+export function assertDeterministicHostArtifacts(
+  host: CertificationHost,
+  entries: readonly unknown[],
+): void {
+  if (!Array.isArray(entries) || entries.length < 1 || entries.length > HOST_LED_LEARNING_PASS_COUNT) {
+    throw new CertificationError(`${host} incremental artifact audit requires one to three pass outcomes.`);
+  }
+  for (const key of [
+    'final_workspace_sha256',
+    'learning_state_sha256',
+    'promoted_lesson_sha256',
+  ] as const) {
+    const hashes = entries.map((entry, index) => {
+      if (!isJsonObject(entry)) {
+        throw new CertificationError(`${host} artifact outcome ${index + 1} is invalid.`);
+      }
+      return requireBareHash(entry[key], `${host} artifact outcome ${index + 1} ${key}`);
+    });
+    if (new Set(hashes).size !== 1) {
+      throw new CertificationError(`${host} passes do not share one deterministic ${key}.`);
+    }
   }
 }
 
@@ -5581,6 +5594,7 @@ export async function runHostLedLearningCertification(
           throw new CertificationError(`${host} pass ${pass} did not use the snapshotted certification inputs.`);
         }
         hostOutcomes.push(outcome);
+        assertDeterministicHostArtifacts(host, hostOutcomes);
       }
       const initialHashes = new Set(hostOutcomes.map((entry) => entry.initial_workspace_sha256));
       if (initialHashes.size !== 1) {

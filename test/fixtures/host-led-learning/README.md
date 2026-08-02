@@ -38,8 +38,9 @@ Claude Code 2.1.220 passes and three consecutive Codex CLI 0.144.1 passes. Each
 pass uses an independent git-initialized workspace and two fresh host
 processes. The executable proof runs on macOS and binds those exact host
 versions. No process, model, infrastructure, or semantic failure is retried
-automatically: any failure aborts the attempt, and certification restarts all
-six passes in a new root on one unchanged final byte set.
+automatically. Durable artifact equality is checked after every pass so drift
+aborts before another paid host runs. Any failure still restarts all six passes
+in a new root on one unchanged final byte set.
 
 Discovery shows the human the full pending candidate: its closed neutral
 meaning fields, deterministically rendered recommendation and falsification
