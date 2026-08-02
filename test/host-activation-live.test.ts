@@ -30,8 +30,16 @@ function isolatedFixture(name: string): { cwd: string; cleanup: () => void } {
 test('LIVE: exact-patch Claude project activation fixtures auto-load', { skip: !enabled }, () => {
   assert.equal(run('claude', ['--version'], fixtureRoot, 30_000).trim(), '2.1.220 (Claude Code)');
   for (const fixture of [
-    { name: 'claude-project', expected: 'ROSTER_CLAUDE_PROJECT_LOADED' },
-    { name: 'claude-rule', expected: 'ROSTER_CLAUDE_RULE_LOADED' },
+    {
+      name: 'claude-project',
+      expected: 'ROSTER_CLAUDE_PROJECT_LOADED',
+      sharedExpected: 'ROSTER_CLAUDE_PROJECT_SHARED_LIFECYCLE_LOADED',
+    },
+    {
+      name: 'claude-rule',
+      expected: 'ROSTER_CLAUDE_RULE_LOADED',
+      sharedExpected: 'ROSTER_CLAUDE_RULE_SHARED_LIFECYCLE_LOADED',
+    },
   ]) {
     const isolated = isolatedFixture(fixture.name);
     try {
@@ -44,6 +52,15 @@ test('LIVE: exact-patch Claude project activation fixtures auto-load', { skip: !
         'ROSTER_ACTIVATION_FIXTURE',
       ], isolated.cwd);
       assert.equal(output.trim(), fixture.expected);
+      const sharedOutput = run('claude', [
+        '-p',
+        '--model',
+        'haiku',
+        '--output-format',
+        'text',
+        'ROSTER_LIFECYCLE_POINTER_FIXTURE',
+      ], isolated.cwd);
+      assert.equal(sharedOutput.trim(), fixture.sharedExpected);
     } finally {
       isolated.cleanup();
     }
@@ -67,6 +84,21 @@ test('LIVE: exact-patch Codex root AGENTS.md auto-loads', { skip: !enabled }, ()
       'ROSTER_ACTIVATION_FIXTURE',
     ], isolated.cwd);
     assert.equal(readFileSync(outputPath, 'utf8').trim(), 'ROSTER_CODEX_PROJECT_LOADED');
+    run('codex', [
+      'exec',
+      '--skip-git-repo-check',
+      '--sandbox',
+      'read-only',
+      '--color',
+      'never',
+      '-o',
+      outputPath,
+      'ROSTER_LIFECYCLE_POINTER_FIXTURE',
+    ], isolated.cwd);
+    assert.equal(
+      readFileSync(outputPath, 'utf8').trim(),
+      'ROSTER_CODEX_PROJECT_SHARED_LIFECYCLE_LOADED',
+    );
   } finally {
     isolated.cleanup();
   }

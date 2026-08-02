@@ -55,14 +55,18 @@ import {
 import { probeWorkspace } from '../lib/workspace-probe.ts';
 import { validateWorkspace } from '../lib/workspace-registry.ts';
 import {
-  GENERATED_MANIFEST_PATH,
+  HOST_ADAPTER_LIFECYCLE_CAPABILITIES,
+  inspectGeneratedAdapterMetadata,
   inspectGeneratedActivationState,
-  parseGeneratedManifest,
+  resolveCurrentHostActivationCapability,
   resolveCurrentHostActivationAssurance,
+  type GeneratedAdapterMetadataInspection,
   type GeneratedArtifactManifest,
   type GeneratedManifestHost,
+  type HostAdapterCapabilityStatus,
 } from '../lib/generated-artifacts.ts';
-import { tryReadWorkspaceFile } from '../lib/workspace-io.ts';
+import { readWorkspaceText } from '../lib/workspace-io.ts';
+import { parseWorkspaceRegistry } from '../lib/workspace-record.ts';
 import { detectProjectHostVersions } from '../lib/install.ts';
 
 export type DoctorOptions = {
@@ -849,21 +853,117 @@ const V2_NOT_APPLICABLE = Object.freeze([
   'expert-routes',
 ] as const);
 
-function readV2GeneratedManifest(cwd: string): GeneratedArtifactManifest | null {
-  try {
-    const bytes = tryReadWorkspaceFile(cwd, GENERATED_MANIFEST_PATH);
-    return bytes === null ? null : parseGeneratedManifest(bytes.toString('utf8'));
-  } catch {
-    return null;
-  }
-}
-
 function readCurrentV2GeneratedState(cwd: string): GeneratedArtifactManifest | null {
   try {
     return inspectGeneratedActivationState(cwd).manifest;
   } catch {
     return null;
   }
+}
+
+function readV2GeneratedMetadata(cwd: string): GeneratedAdapterMetadataInspection {
+  try {
+    return inspectGeneratedAdapterMetadata(cwd);
+  } catch {
+    return {
+      paths: [],
+      shared_bootstrap_canonical: false,
+      redundant_activations: [],
+      manifest: { state: 'invalid', value: null },
+    };
+  }
+}
+
+type V2AdapterHost = 'claude' | 'codex';
+
+type V2DoctorHost = GeneratedManifestHost & {
+  detected_host_version: string | null;
+  activation_capability: HostAdapterCapabilityStatus;
+};
+
+export function deriveV2DoctorHosts(options: {
+  enabledHosts: readonly V2AdapterHost[];
+  generatedMetadata: GeneratedAdapterMetadataInspection;
+  currentManifest: GeneratedArtifactManifest | null;
+  hostVersions: Partial<Record<V2AdapterHost, string>>;
+}): Partial<Record<V2AdapterHost, V2DoctorHost>> {
+  const { enabledHosts, generatedMetadata, currentManifest, hostVersions } = options;
+  const storedManifest = generatedMetadata.manifest.value;
+  const currentHosts: Partial<Record<V2AdapterHost, V2DoctorHost>> = {};
+  for (const host of enabledHosts) {
+    const detectedHostVersion = hostVersions[host] ?? null;
+    if (currentManifest === null) {
+      currentHosts[host] = {
+        status: 'enabled',
+        activation_assurance: 'missing',
+        artifacts: [],
+        attestation_fixture: null,
+        detected_host_version: detectedHostVersion,
+        activation_capability: 'drifted',
+      };
+      continue;
+    }
+
+    const headerSummary = currentManifest.hosts[host];
+    const hostPaths = generatedMetadata.paths.filter((entry) => entry.host === host);
+    const pathDrift = hostPaths.some((entry) =>
+      entry.state === 'noncanonical-generated' || entry.state === 'unsafe'
+    );
+    let activationCapability: HostAdapterCapabilityStatus;
+    if (pathDrift || generatedMetadata.redundant_activations.includes(host)) {
+      activationCapability = 'drifted';
+    } else if (headerSummary === undefined || headerSummary.activation_assurance === 'missing') {
+      activationCapability = 'missing';
+    } else if (
+      !generatedMetadata.shared_bootstrap_canonical
+      || generatedMetadata.manifest.state !== 'canonical'
+      || storedManifest === null
+      || manifestHostSlice(storedManifest, host) !== manifestHostSlice(currentManifest, host)
+    ) {
+      activationCapability = 'drifted';
+    } else {
+      activationCapability = resolveCurrentHostActivationCapability(
+        currentManifest,
+        host,
+        hostVersions[host],
+      );
+    }
+
+    const assurance = headerSummary === undefined
+      ? 'missing'
+      : resolveCurrentHostActivationAssurance(currentManifest, host, hostVersions[host]);
+    currentHosts[host] = {
+      ...(headerSummary ?? {
+        status: 'enabled' as const,
+        activation_assurance: 'missing' as const,
+        artifacts: [],
+        attestation_fixture: null,
+      }),
+      activation_assurance: assurance,
+      detected_host_version: detectedHostVersion,
+      activation_capability: activationCapability,
+    };
+  }
+  return currentHosts;
+}
+
+function readEnabledV2AdapterHosts(cwd: string): V2AdapterHost[] | null {
+  try {
+    const registry = parseWorkspaceRegistry(readWorkspaceText(cwd, 'roster.yaml'), 'roster.yaml');
+    return Object.keys(registry.hosts)
+      .filter((host): host is V2AdapterHost => host === 'claude' || host === 'codex')
+      .sort((left, right) => left.localeCompare(right, 'en'));
+  } catch {
+    return null;
+  }
+}
+
+function manifestHostSlice(manifest: GeneratedArtifactManifest, host: V2AdapterHost): string {
+  return JSON.stringify({
+    neutral: manifest.files.filter((entry) => entry.host === 'neutral'),
+    host: manifest.hosts[host] ?? null,
+    files: manifest.files.filter((entry) => entry.host === host),
+  });
 }
 
 async function executeV2Doctor(opts: DoctorOptions): Promise<number> {
@@ -896,33 +996,20 @@ async function executeV2Doctor(opts: DoctorOptions): Promise<number> {
   const secrets = opts.fix && !opts.dryRun && fixOutcome.fixed.length > 0
     ? runSecretsAudit({ cwd: opts.cwd, rosterRoot: ROSTER_ROOT, schedules: [] })
     : initialSecrets;
-  const storedManifest = readV2GeneratedManifest(opts.cwd);
+  const enabledHosts = readEnabledV2AdapterHosts(opts.cwd);
+  const generatedMetadata = readV2GeneratedMetadata(opts.cwd);
   const currentManifest = readCurrentV2GeneratedState(opts.cwd);
   const hostVersions = detectProjectHostVersions();
   const generatedCheck = structural.checks.find((check) => check.name === 'generated-artifacts');
-  const manifestStatus = storedManifest === null
+  const manifestStatus = generatedMetadata.manifest.state === 'absent'
+    || generatedMetadata.manifest.state === 'invalid'
     ? 'missing-or-invalid'
-    : generatedCheck?.status === 'pass'
+    : generatedMetadata.manifest.state === 'canonical' && generatedCheck?.status === 'pass'
       ? 'ok'
       : 'drift';
-  const currentHosts: Partial<Record<'claude' | 'codex', GeneratedManifestHost & {
-    detected_host_version: string | null;
-  }>> = {};
-  if (currentManifest !== null) {
-    for (const host of ['claude', 'codex'] as const) {
-      const summary = currentManifest.hosts[host];
-      if (summary === undefined) continue;
-      currentHosts[host] = {
-        ...summary,
-        activation_assurance: resolveCurrentHostActivationAssurance(
-          currentManifest,
-          host,
-          hostVersions[host],
-        ),
-        detected_host_version: hostVersions[host] ?? null,
-      };
-    }
-  }
+  const currentHosts = enabledHosts === null
+    ? {}
+    : deriveV2DoctorHosts({ enabledHosts, generatedMetadata, currentManifest, hostVersions });
   const allOk = structural.ok && safety.ok && secrets.ok;
   const notApplicable = Object.fromEntries(
     V2_NOT_APPLICABLE.map((name) => [name, { status: 'not-applicable', reason: 'roster-v2-host-owned-runtime' }]),
@@ -936,6 +1023,7 @@ async function executeV2Doctor(opts: DoctorOptions): Promise<number> {
       structural,
       generated: {
         manifest_status: manifestStatus,
+        lifecycle_capabilities: HOST_ADAPTER_LIFECYCLE_CAPABILITIES,
         hosts: currentHosts,
         files: currentManifest?.files ?? [],
       },
@@ -956,14 +1044,17 @@ async function executeV2Doctor(opts: DoctorOptions): Promise<number> {
       if (diagnostic.remedy !== undefined) console.log(`    ${chalk.dim(diagnostic.remedy)}`);
     }
     for (const host of ['claude', 'codex'] as const) {
-      const activation = currentHosts[host] as ({ activation_assurance: string } & Record<string, unknown>) | undefined;
+      const activation = currentHosts[host];
       if (activation === undefined) continue;
-      const mark = activation.activation_assurance === 'auto-loaded'
+      const mark = activation.activation_capability === 'supported'
         ? chalk.green('✓')
-        : activation.activation_assurance === 'missing'
+        : activation.activation_capability === 'missing' || activation.activation_capability === 'drifted'
           ? chalk.red('✗')
           : chalk.yellow('!');
-      console.log(`  ${mark} ${host} activation: ${activation.activation_assurance}`);
+      console.log(
+        `  ${mark} ${host} activation: ${activation.activation_capability}`
+        + chalk.dim(` (assurance: ${activation.activation_assurance})`),
+      );
     }
     for (const line of renderSafetySection(safety)) console.log(line);
     for (const line of renderSecretsSection(secrets)) console.log(line);

@@ -4,6 +4,7 @@ import {
   hasCredentialShape,
   type AuthoredSecretDetectorId,
 } from './authored-secret-detector.ts';
+import type { ContextTrustClass } from './context-trust.ts';
 import {
   assertPreparedContextSource,
   withContextReadCapability,
@@ -86,16 +87,7 @@ export const CONTEXT_EXCLUSION_REASONS = [
 
 export type ContextExclusionReason = (typeof CONTEXT_EXCLUSION_REASONS)[number];
 
-export type ContextTrustClass =
-  | 'authored-policy'
-  | 'approved-lesson'
-  | 'vendor-instruction'
-  | 'brain-structured'
-  | 'brain-extract-untrusted'
-  | 'tool-output-untrusted'
-  | 'host-asserted'
-  | 'legacy-unverified'
-  | 'diagnostic';
+export type { ContextTrustClass } from './context-trust.ts';
 
 export type ContextInclusionReason =
   | 'target-function'

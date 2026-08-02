@@ -202,7 +202,7 @@ function printHelp(version: string): void {
     `  --kind <record-kind>         ${chalk.dim('Filter discovery to one workspace record kind')}`,
     `  --exact                      ${chalk.dim('Require one exact qualified discovery match')}`,
     `  --full                       ${chalk.dim('Include bounded authored content in discovery output')}`,
-    `  --query <task>               ${chalk.dim('Set the required host task for context resolution')}`,
+    `  --query <retrieval-query>    ${chalk.dim('Set the required non-secret host retrieval query')}`,
     `  --step <hint>                ${chalk.dim('Add an optional host-supplied context ranking hint')}`,
     `  --budget <tokens>            ${chalk.dim('Set the context token budget (default: 12000; maximum: 128000)')}`,
     `  --explain                    ${chalk.dim('Include bounded context provenance explanations')}`,

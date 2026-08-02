@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,21 +12,33 @@ import {
   CODEX_ROSTER_SKILL_PATH,
   createGeneratedManifest,
   GENERATED_MANIFEST_PATH,
+  HOST_ADAPTER_LIFECYCLE_CAPABILITIES,
   installV2ProjectActivation,
+  inspectGeneratedAdapterMetadata,
   inspectGeneratedActivationState,
   parseGeneratedMarkdown,
   parseGeneratedManifest,
+  renderClaudeProjectInstructions,
+  renderCodexProjectInstructions,
   renderCodexRosterSkill,
   renderGeneratedMarkdown,
   renderGeneratedManifest,
   renderRosterBootstrap,
   resolveActivationAssurance,
+  resolveCurrentHostActivationCapability,
   resolveCurrentHostActivationAssurance,
   updateV2ProjectActivations,
   validateGeneratedArtifacts,
   type HostActivationAttestation,
 } from '../src/lib/generated-artifacts.ts';
-import { isWorkspaceFailure } from '../src/lib/workspace-diagnostics.ts';
+import { detectAuthoredSecretMaterial } from '../src/lib/authored-secret-detector.ts';
+import { CONTEXT_TRUST_CLASSES } from '../src/lib/context-trust.ts';
+import { diagnosticForPathFailure } from '../src/lib/internal/generated-path-diagnostic.ts';
+import {
+  isWorkspaceFailure,
+  WORKSPACE_DIAGNOSTIC_CODES,
+  workspaceFailure,
+} from '../src/lib/workspace-diagnostics.ts';
 import { parseWorkspaceRegistry } from '../src/lib/workspace-record.ts';
 import { realWorkspaceDurabilityFs } from '../src/lib/workspace-io.ts';
 
@@ -38,6 +51,16 @@ const passed: HostActivationAttestation = {
   minimum_host_version: '1.2.0',
   maximum_host_version_exclusive: '1.3.0',
   outcome: 'passed',
+  proof_scope: 'activation-path',
+};
+
+const broadPassed: HostActivationAttestation = {
+  ...passed,
+  fixture_id: 'codex-root-agents-and-roster-v1',
+  proof_scope: 'activation-and-shared-lifecycle',
+  activation_fixture_hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  shared_lifecycle_fixture: 'test/fixtures/host-activation/codex-project/ROSTER.md',
+  shared_lifecycle_fixture_hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
 };
 
 const claudePassed: HostActivationAttestation = {
@@ -49,7 +72,12 @@ const claudePassed: HostActivationAttestation = {
   minimum_host_version: '2.1.0',
   maximum_host_version_exclusive: '2.2.0',
   outcome: 'passed',
+  proof_scope: 'activation-path',
 };
+
+function sha256File(path: string): string {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
 
 test('ROSTER.md renderer is deterministic and detects ownership-header or body drift', () => {
   const rendered = renderRosterBootstrap();
@@ -62,6 +90,190 @@ test('ROSTER.md renderer is deterministic and detects ownership-header or body d
   assert.equal(parseGeneratedMarkdown(headerEdited)?.valid, false);
   const bodyEdited = rendered.replace('context and scaffolding', 'runtime and scaffolding');
   assert.equal(parseGeneratedMarkdown(bodyEdited)?.valid, false);
+});
+
+test('ROSTER.md renders one ordered lifecycle, exact context recovery, and every trust rule', () => {
+  const rendered = renderRosterBootstrap();
+  let priorOffset = -1;
+  for (const capability of HOST_ADAPTER_LIFECYCLE_CAPABILITIES) {
+    const row = `| \`${capability.id}\` | \`${capability.status}\` | \`${capability.authority}\` | ${capability.authority_note} |`;
+    const offset = rendered.indexOf(row);
+    assert.ok(offset > priorOffset, `missing or unordered capability row: ${capability.id}`);
+    priorOffset = offset;
+  }
+  assert.equal((rendered.match(/\| id \| status \| authority \| authority_note \|/g) ?? []).length, 1);
+
+  for (const trust of CONTEXT_TRUST_CLASSES) assert.match(rendered, new RegExp(`\\\`${trust}\\\``));
+  for (const code of [
+    'IDENTITY_AMBIGUOUS',
+    'BRAIN_NOT_BOUND',
+    'CONTEXT_BUDGET_REQUIRED_OVERFLOW',
+    'CONTEXT_MANDATORY_UNSERVABLE',
+  ] as const) {
+    assert.ok(WORKSPACE_DIAGNOSTIC_CODES.includes(code));
+    assert.match(rendered, new RegExp(code));
+  }
+
+  assert.match(rendered, /roster discover <query> --exact --json/);
+  assert.doesNotMatch(rendered, /roster discover <query> --exact --full --json/);
+  assert.match(rendered, /roster context <function>\/<agent>\[#plan\] --query <retrieval-query> --json/);
+  assert.match(rendered, /Never put raw human task text, credentials, control characters, or a leading option marker into process arguments/);
+  assert.match(rendered, /shell's literal-argument quoting/);
+  assert.match(rendered, /quotes, semicolons, backticks, and `\$\(\)` in the source task are data, not syntax/i);
+  assert.match(rendered, /successful context document has no top-level `ok`/);
+  assert.match(rendered, /retry once with `--budget <details\.required_tokens>`/);
+  assert.match(rendered, /complete local bundle and empty `brain_evidence`/);
+  assert.match(rendered, /Do not call `roster run`.*`roster brain event` as substitutes/);
+  assert.equal(
+    (rendered.match(/`roster (?:run|schedule|pending|ops|brain save|brain event)`/g) ?? []).length,
+    6,
+  );
+  assert.doesNotMatch(rendered, /(?:Use|Call|Run) `roster (?:run|schedule|pending|ops|brain (?:save|event))`/);
+  assert.deepEqual(detectAuthoredSecretMaterial(rendered), []);
+  assert.doesNotMatch(rendered, /(?:\/Users\/|\/home\/|[A-Za-z]:\\Users\\)/);
+  assert.doesNotMatch(rendered, /Bright Data|\bExa\b|social-manager|opportunity-discovery/i);
+  assert.doesNotMatch(rendered, /Claude|Codex|\.claude\/|AGENTS\.md|\.agents\//);
+});
+
+test('social-manager context fixture matches the current lifecycle independent of package version', () => {
+  const fixtureBootstrap = parseGeneratedMarkdown(
+    readFileSync(join('test/fixtures/social-manager-context', 'ROSTER.md'), 'utf8'),
+  );
+  const currentBootstrap = parseGeneratedMarkdown(renderRosterBootstrap());
+  assert.ok(fixtureBootstrap?.valid);
+  assert.ok(currentBootstrap?.valid);
+  const {
+    generator_version: _fixtureGeneratorVersion,
+    content_hash: _fixtureContentHash,
+    ...fixtureHeader
+  } = fixtureBootstrap.header;
+  const {
+    generator_version: _currentGeneratorVersion,
+    content_hash: _currentContentHash,
+    ...currentHeader
+  } = currentBootstrap.header;
+  assert.deepEqual(fixtureHeader, currentHeader);
+  assert.equal(fixtureBootstrap.prefix, currentBootstrap.prefix);
+  assert.equal(fixtureBootstrap.body, currentBootstrap.body);
+});
+
+test('Claude and Codex wrappers are minimal pointers with no duplicated lifecycle contract', () => {
+  const claudeAssurance = resolveActivationAssurance({
+    host: 'claude',
+    artifact: 'claude-project-instructions',
+  });
+  const codexAssurance = resolveActivationAssurance({
+    host: 'codex',
+    artifact: 'codex-project-instructions',
+  });
+  const skillAssurance = resolveActivationAssurance({
+    host: 'codex',
+    artifact: 'codex-roster-skill',
+  });
+  const wrappers = [
+    renderClaudeProjectInstructions('claude-project-instructions', claudeAssurance),
+    renderClaudeProjectInstructions('claude-project-rule', claudeAssurance),
+    renderCodexProjectInstructions(codexAssurance),
+    renderCodexRosterSkill(skillAssurance),
+  ];
+  for (const wrapper of wrappers) {
+    assert.ok(parseGeneratedMarkdown(wrapper)?.valid);
+    assert.match(wrapper, /Read and follow `ROSTER\.md`/);
+    assert.match(wrapper, /roster doctor --json/);
+    assert.match(wrapper, /the human owns approval decisions/);
+    assert.doesNotMatch(wrapper, /roster discover|roster context|IDENTITY_AMBIGUOUS|BRAIN_NOT_BOUND/);
+    assert.doesNotMatch(wrapper, /`roster (?:run|schedule|pending|ops|brain save|brain event)\b/);
+    assert.doesNotMatch(wrapper, /plan executor|scheduler|provider router|approval authority/);
+    assert.doesNotMatch(wrapper, /owns[^.]*human decisions/);
+    for (const trust of CONTEXT_TRUST_CLASSES) assert.doesNotMatch(wrapper, new RegExp(`\\\`${trust}\\\``));
+    assert.deepEqual(detectAuthoredSecretMaterial(wrapper), []);
+    assert.doesNotMatch(wrapper, /(?:\/Users\/|\/home\/|[A-Za-z]:\\Users\\)/);
+  }
+});
+
+test('generated adapter metadata exposes canonical path and manifest states without content bytes', () => {
+  const fx = fixture();
+  try {
+    const initial = inspectGeneratedAdapterMetadata(fx.root);
+    assert.equal(initial.shared_bootstrap_canonical, true);
+    assert.equal(initial.manifest.state, 'absent');
+    assert.equal('content' in initial.paths[0]!, false);
+
+    assert.equal(installV2ProjectActivation({
+      root: fx.root,
+      host: 'codex',
+      hostVersion: 'codex-cli 0.144.1',
+    }).ok, true);
+    const canonical = inspectGeneratedAdapterMetadata(fx.root);
+    assert.equal(canonical.manifest.state, 'canonical');
+    assert.equal(
+      canonical.paths.find((entry) => entry.path === CODEX_PROJECT_INSTRUCTIONS_PATH)?.state,
+      'canonical-generated',
+    );
+
+    const agentsPath = at(fx.root, CODEX_PROJECT_INSTRUCTIONS_PATH);
+    const originalAgents = readFileSync(agentsPath, 'utf8');
+    const parsedAgents = parseGeneratedMarkdown(originalAgents)!;
+    const { content_hash: _contentHash, ...agentsHeader } = parsedAgents.header;
+    writeFileSync(
+      agentsPath,
+      renderGeneratedMarkdown(agentsHeader, `${parsedAgents.body}\nForged instruction.\n`, parsedAgents.prefix),
+    );
+    const forgedMetadata = inspectGeneratedAdapterMetadata(fx.root).paths.find((entry) =>
+      entry.path === CODEX_PROJECT_INSTRUCTIONS_PATH
+    );
+    assert.equal(forgedMetadata?.state, 'noncanonical-generated');
+    assert.equal(forgedMetadata?.activation_assurance, null);
+    assert.equal(forgedMetadata?.supported_host_versions, null);
+    assert.equal(forgedMetadata?.attestation_fixture, null);
+    writeFileSync(agentsPath, originalAgents);
+
+    const manifestPath = at(fx.root, GENERATED_MANIFEST_PATH);
+    const canonicalManifest = readFileSync(manifestPath, 'utf8');
+    const manifestObject = JSON.parse(canonicalManifest) as Record<string, unknown>;
+    writeFileSync(manifestPath, `${JSON.stringify({
+      manifest_hash: manifestObject['manifest_hash'],
+      hosts: manifestObject['hosts'],
+      files: manifestObject['files'],
+      protocol_version: manifestObject['protocol_version'],
+      generator_version: manifestObject['generator_version'],
+      generator: manifestObject['generator'],
+      schema_version: manifestObject['schema_version'],
+    }, null, 4)}\n`);
+    assert.equal(inspectGeneratedAdapterMetadata(fx.root).manifest.state, 'noncanonical');
+
+    writeFileSync(manifestPath, canonicalManifest);
+    const parsedManifest = parseGeneratedManifest(canonicalManifest)!;
+    const { manifest_hash: _manifestHash, ...manifestDraft } = parsedManifest;
+    writeFileSync(manifestPath, renderGeneratedManifest(createGeneratedManifest({
+      ...manifestDraft,
+      generator_version: '0.0.0-stale',
+    })));
+    assert.equal(inspectGeneratedAdapterMetadata(fx.root).manifest.state, 'stale-version');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('doctor-only capability fields never enter generated headers or manifest schema 1', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    const manifestText = readFileSync(at(fx.root, GENERATED_MANIFEST_PATH), 'utf8');
+    assert.doesNotMatch(manifestText, /activation_capability|lifecycle_capabilities/);
+    const manifest = parseGeneratedManifest(manifestText);
+    assert.equal(manifest?.schema_version, 1);
+    assert.equal(manifest?.protocol_version, 2);
+    for (const entry of manifest?.files ?? []) {
+      const parsed = parseGeneratedMarkdown(readFileSync(at(fx.root, entry.path), 'utf8'));
+      assert.equal(parsed?.header.schema_version, '1');
+      assert.equal(parsed?.header.protocol_version, '2');
+      assert.equal('activation_capability' in (parsed?.header ?? {}), false);
+      assert.equal('lifecycle_capabilities' in (parsed?.header ?? {}), false);
+    }
+  } finally {
+    fx.cleanup();
+  }
 });
 
 test('activation assurance never claims auto-load without a matching passing attestation', () => {
@@ -96,6 +308,60 @@ test('activation assurance never claims auto-load without a matching passing att
   });
   assert.equal(matched.assurance, 'auto-loaded');
   assert.equal(matched.attestationFixture, passed.fixture_id);
+});
+
+test('supported capability binds to one broad proof and fails closed on narrow or ambiguous overlap', () => {
+  const fx = fixture();
+  try {
+    const narrowInstall = installV2ProjectActivation({
+      root: fx.root,
+      host: 'codex',
+      hostVersion: 'codex-cli 1.2.3',
+      attestations: [passed],
+    });
+    assert.equal(narrowInstall.manifest?.files.find((entry) =>
+      entry.artifact === 'codex-project-instructions'
+    )?.attestation_fixture, passed.fixture_id);
+    assert.equal(
+      resolveCurrentHostActivationCapability(
+        narrowInstall.manifest!,
+        'codex',
+        'codex-cli 1.2.3',
+        [passed, broadPassed],
+      ),
+      'advisory',
+    );
+
+    const lateFx = fixture();
+    try {
+      const advisoryInstall = installV2ProjectActivation({ root: lateFx.root, host: 'codex' });
+      assert.equal(advisoryInstall.manifest?.files.find((entry) =>
+        entry.artifact === 'codex-project-instructions'
+      )?.attestation_fixture, null);
+      assert.equal(
+        resolveCurrentHostActivationCapability(
+          advisoryInstall.manifest!,
+          'codex',
+          'codex-cli 1.2.3',
+          [broadPassed],
+        ),
+        'supported',
+      );
+      assert.equal(
+        resolveCurrentHostActivationCapability(
+          advisoryInstall.manifest!,
+          'codex',
+          'codex-cli 1.2.3',
+          [broadPassed, { ...broadPassed, fixture_id: 'overlapping-broad-proof' }],
+        ),
+        'advisory',
+      );
+    } finally {
+      lateFx.cleanup();
+    }
+  } finally {
+    fx.cleanup();
+  }
 });
 
 test('current host assurance is derived from actual activation files and the local host version', () => {
@@ -139,6 +405,7 @@ test('checked-in host attestations are exact-patch and backed by explicit fixtur
       version: '2.1.220',
       nextPatch: '2.1.221',
       marker: 'ROSTER_CLAUDE_PROJECT_LOADED',
+      sharedMarker: 'ROSTER_CLAUDE_PROJECT_SHARED_LIFECYCLE_LOADED',
     },
     {
       host: 'claude' as const,
@@ -146,6 +413,7 @@ test('checked-in host attestations are exact-patch and backed by explicit fixtur
       version: '2.1.220',
       nextPatch: '2.1.221',
       marker: 'ROSTER_CLAUDE_RULE_LOADED',
+      sharedMarker: 'ROSTER_CLAUDE_RULE_SHARED_LIFECYCLE_LOADED',
     },
     {
       host: 'codex' as const,
@@ -153,6 +421,7 @@ test('checked-in host attestations are exact-patch and backed by explicit fixtur
       version: '0.144.1',
       nextPatch: '0.144.2',
       marker: 'ROSTER_CODEX_PROJECT_LOADED',
+      sharedMarker: 'ROSTER_CODEX_PROJECT_SHARED_LIFECYCLE_LOADED',
     },
   ];
   assert.equal(CHECKED_IN_HOST_ATTESTATIONS.length, expected.length);
@@ -166,6 +435,16 @@ test('checked-in host attestations are exact-patch and backed by explicit fixtur
     assert.ok(assurance.attestationFixture);
     const fixturePath = assurance.attestationFixture!.replace(/@[^@]+$/, '');
     assert.match(readFileSync(fixturePath, 'utf8'), new RegExp(fixture.marker));
+    const attestation = CHECKED_IN_HOST_ATTESTATIONS.find((candidate) =>
+      candidate.fixture_id === assurance.attestationFixture
+    );
+    assert.ok(attestation);
+    if (attestation.proof_scope !== 'activation-and-shared-lifecycle') {
+      assert.fail(`checked-in passing attestation has narrow proof scope: ${attestation.fixture_id}`);
+    }
+    assert.equal(sha256File(fixturePath), attestation.activation_fixture_hash);
+    assert.equal(sha256File(attestation.shared_lifecycle_fixture), attestation.shared_lifecycle_fixture_hash);
+    assert.match(readFileSync(attestation.shared_lifecycle_fixture, 'utf8'), new RegExp(fixture.sharedMarker));
     assert.equal(resolveActivationAssurance({
       host: fixture.host,
       artifact: fixture.artifact,
@@ -208,6 +487,14 @@ test('matching attestations are recorded in generated headers and the portable m
     });
     assert.equal(result.ok, true);
     assert.equal(result.assurance, 'auto-loaded');
+    assert.equal(
+      resolveCurrentHostActivationAssurance(result.manifest!, 'codex', 'codex-cli 1.2.3', [passed]),
+      'auto-loaded',
+    );
+    assert.equal(
+      resolveCurrentHostActivationCapability(result.manifest!, 'codex', 'codex-cli 1.2.3', [passed]),
+      'advisory',
+    );
 
     const generated = parseGeneratedMarkdown(
       readFileSync(at(fx.root, CODEX_PROJECT_INSTRUCTIONS_PATH), 'utf8'),
@@ -310,6 +597,33 @@ function disableAllHosts(root: string): void {
   ].join('\n'));
 }
 
+test('v2 update replaces a valid prior generated lifecycle body', () => {
+  const fx = fixture();
+  try {
+    const current = parseGeneratedMarkdown(renderRosterBootstrap())!;
+    const { content_hash: _contentHash, ...header } = current.header;
+    const prior = renderGeneratedMarkdown(header, [
+      '# Roster workspace',
+      '',
+      'Roster is the context and scaffolding layer for this repository. The host agent interprets plans and executes the work.',
+      '',
+      '- Read `roster.yaml` for the workspace registry.',
+      '- Use `roster discover --json` to resolve purpose-built agents and records.',
+      '- Resolve canonical tool `skill_ref` values through `.roster/vendor-skill-map.json`.',
+      '- Use `roster scaffold` to add one explicitly requested authored record at a time.',
+      '',
+    ].join('\n'));
+    assert.ok(parseGeneratedMarkdown(prior)?.valid);
+    writeFileSync(at(fx.root, 'ROSTER.md'), prior);
+
+    const updated = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(updated.ok, true);
+    assert.equal(readFileSync(at(fx.root, 'ROSTER.md'), 'utf8'), renderRosterBootstrap());
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test('v2 Claude install is standalone, deterministic, and enables the host last', () => {
   const fx = fixture();
   try {
@@ -352,6 +666,7 @@ test('project install restores manifest membership when the registry compare-and
       minimum_host_version: '1.2.0',
       maximum_host_version_exclusive: '1.3.0',
       outcome: 'passed',
+      proof_scope: 'activation-path',
     };
 
     assert.throws(
@@ -994,6 +1309,64 @@ test('v2 update accepts a bounded longer mixed-version predecessor and restores 
   } finally {
     fx.cleanup();
   }
+});
+
+test('generated validation keeps bounded-read recovery specific and strips machine paths', () => {
+  const fx = fixture();
+  try {
+    writeFileSync(at(fx.root, 'ROSTER.md'), Buffer.alloc((512 * 1024) + 1, 0x61));
+
+    const diagnostic = validateGeneratedArtifacts(fx.root).find((entry) =>
+      entry.code === 'READ_LIMIT_EXCEEDED' && entry.path === 'ROSTER.md'
+    );
+    assert.ok(diagnostic);
+    assert.match(diagnostic.message, /bounded read limit/);
+    assert.match(diagnostic.remedy ?? '', /Reduce the file to the reported limit/);
+    assert.equal(diagnostic.details['path'], 'ROSTER.md');
+    assert.equal(diagnostic.details['maxBytes'], 512 * 1024);
+    assert.equal(diagnostic.details['size'], (512 * 1024) + 1);
+    assert.equal(JSON.stringify(diagnostic).includes(fx.root), false);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('EPERM atomic-publication failures retain filesystem-capability recovery', () => {
+  const diagnostic = diagnosticForPathFailure(workspaceFailure(
+    'ATOMIC_PUBLICATION_UNSUPPORTED',
+    "Filesystem cannot atomically create '/private/secret/generated-manifest.json'.",
+    'Move the workspace to a compatible filesystem.',
+    { path: '/private/secret/generated-manifest.json', cause: 'EPERM' },
+  ), GENERATED_MANIFEST_PATH);
+
+  assert.equal(diagnostic.code, 'ATOMIC_PUBLICATION_UNSUPPORTED');
+  assert.match(diagnostic.message, /cannot atomically publish/);
+  assert.match(diagnostic.remedy ?? '', /Move the workspace/);
+  assert.deepEqual(diagnostic.details, { path: GENERATED_MANIFEST_PATH, cause: 'EPERM' });
+  assert.equal(JSON.stringify(diagnostic).includes('/private/secret'), false);
+});
+
+test('durability EACCES failures retain access recovery despite their atomic wrapper code', () => {
+  const diagnostic = diagnosticForPathFailure(workspaceFailure(
+    'ATOMIC_PUBLICATION_UNSUPPORTED',
+    "Filesystem cannot open '/private/secret' for durability sync.",
+    'Move the workspace to a compatible filesystem.',
+    {
+      path: '/private/secret',
+      operation: 'open directory for durability sync',
+      cause: 'EACCES',
+    },
+  ), GENERATED_MANIFEST_PATH);
+
+  assert.equal(diagnostic.code, 'FILESYSTEM_ACCESS_FAILED');
+  assert.match(diagnostic.message, /could not be inspected or updated safely/);
+  assert.match(diagnostic.remedy ?? '', /Restore safe read and write access/);
+  assert.deepEqual(diagnostic.details, {
+    path: GENERATED_MANIFEST_PATH,
+    cause: 'EACCES',
+    operation: 'open directory for durability sync',
+  });
+  assert.equal(JSON.stringify(diagnostic).includes('/private/secret'), false);
 });
 
 test('v2 update removes canonical activation files when an authored registry disables a host', () => {
