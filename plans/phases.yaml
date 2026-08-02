@@ -88,17 +88,19 @@ phases:
       - id: "P1-T05"
         tracker_issue_id: "346"
         title: "Resolve bounded seeded task context"
-        description: "Build the deterministic context request/response contract over seeded workspace policy, complete selected plan, approved lessons, fake Brain evidence, and scoped tool-use guidance. The host supplies the target, task, optional step hint, and budget."
+        description: "Build the deterministic context request/response contract over one validated workspace snapshot: selected function/agent policy, an optional root plus its complete transitive nested-plan definition closure, mandatory step-referenced effective tool/skill pairs, optional approved lessons, and optional fake Brain evidence. The host supplies the target, task, optional step hint, and budget and remains the sole workflow runtime."
         type: "backend"
         priority: "P0"
         depends_on: ["P1-T03", "P1-T04"]
         estimate: "M"
         owner_type: "backend-dev"
         acceptance:
-          - "Equivalent inputs produce semantically identical bundles for Claude Code and Codex with stable identities, hashes, trust classes, inclusion reasons, and budget accounting."
-          - "Required agent/plan/policy content is reserved before optional evidence; required overflow fails explicitly and optional exclusions are explained."
-          - "Authored policy, approved lessons, vendor instructions, Brain evidence, and tool output are structurally trust-separated."
-          - "The bundle contains no Roster-selected current step, prior-output binding, provider route, approval receipt, next action, or transition."
+          - Equivalent inputs produce semantically identical bundles for Claude Code and Codex with stable identities, hashes, trust classes, inclusion reasons, and deterministic budget accounting.
+          - A selected root plan returns first with the complete deduplicated transitive nested-plan definition closure from one validated snapshot; Roster selects no current step and executes nothing.
+          - Required function/agent/policy content and every closure tool-step effective tool-use/canonical-skill pair are reserved before optional approved lessons or Brain evidence; membership catalogs select nothing.
+          - Missing Brain binding returns the complete local bundle, empty evidence, exit zero, and one warning diagnostic; optional retrieval failures and candidate diagnostic examples cannot corrupt mandatory context.
+          - Reachable required overflow reports an exact accepted retry and an above-ceiling mandatory minimum reports a distinct unservable error; neither emits a partial bundle.
+          - Authored policy, approved lessons, vendor instructions, Brain evidence, and tool output remain structurally trust-separated, with no Roster-selected current step, prior-output binding, provider route, approval receipt, next action, or transition.
 
       - id: "P1-T06"
         tracker_issue_id: "349"
