@@ -1415,6 +1415,16 @@ test('attestation parser rejects nondeterministic durable artifacts after a vali
       /deterministic|promoted lesson hash/iu,
     );
   }
+
+  const crossHostDrift = structuredClone(valid);
+  const crossHostOutcomes = crossHostDrift['outcomes'] as Record<string, Array<Record<string, unknown>>>;
+  for (const outcome of crossHostOutcomes['codex']!) {
+    outcome['promoted_lesson_sha256'] = digest('codex-only-promoted-lesson');
+  }
+  assert.throws(
+    () => parseHostLedLearningAttestation(rehashAttestation(crossHostDrift)),
+    /Claude and Codex do not share one deterministic promoted lesson hash/iu,
+  );
 });
 
 test('live certification rejects per-host artifact drift before another paid host can run', () => {
