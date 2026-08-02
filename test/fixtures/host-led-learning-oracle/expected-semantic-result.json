@@ -1,6 +1,10 @@
 {
   "schema_version": 1,
   "fixture_id": "host-led-learning",
+  "candidate_semantics": {
+    "recommendation_code": "prefer-attributable-practitioner-operational-problems",
+    "falsifier_code": "reject-if-reviewed-outcomes-contradict"
+  },
   "turns": {
     "discover": {
       "schema_version": 1,

@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import {
   buildFileManifest,
+  assertHostBinaryMatches,
   HOST_LED_LEARNING_REPO_ROOT,
   loadHostLedLearningLaunchContract,
   normalizeHostTrace,
@@ -14,9 +16,14 @@ import {
   validateCodexPromptInputContributions,
   validateHostTraceCommands,
   type CertificationHost,
+  type HostLaunchProbe,
   type JsonValue,
   type NormalizedHostTrace,
 } from './support/host-led-learning-certification.ts';
+
+function digest(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
 
 function trace(host: CertificationHost, commands: readonly string[]): NormalizedHostTrace {
   return {
@@ -397,6 +404,30 @@ test('candidate semantics reject an opposite recommendation that merely repeats 
     'Avoid attributable practitioner operational problems',
     falsifier,
   ), /positive preference/iu);
+});
+
+test('host binary proof rejects executable replacement after the launch probe', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-350-host-bin-'));
+  const binary = join(root, 'host');
+  try {
+    writeFileSync(binary, '#!/bin/sh\nexit 0\n');
+    chmodSync(binary, 0o700);
+    const probe: HostLaunchProbe = {
+      executable_sha256: digest('#!/bin/sh\nexit 0\n'),
+      version: 'test',
+      version_output_sha256: '0'.repeat(64),
+      help_output_sha256: '1'.repeat(64),
+      model: 'test',
+      effort: 'test',
+      capability_sha256: '2'.repeat(64),
+    };
+    assert.doesNotThrow(() => assertHostBinaryMatches('codex', binary, probe));
+    writeFileSync(binary, '#!/bin/sh\nexit 1\n');
+    chmodSync(binary, 0o700);
+    assert.throws(() => assertHostBinaryMatches('codex', binary, probe), /no longer match/iu);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('behavior manifests reject symbolic links instead of hashing targets outside the root', () => {

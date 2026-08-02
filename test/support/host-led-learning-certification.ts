@@ -944,6 +944,7 @@ export function probeHostBinary(
 ): HostLaunchProbe {
   mkdirSync(join(temporaryHome, 'tmp'), { recursive: true, mode: 0o700 });
   const env = minimalProbeEnv(temporaryHome, `${dirname(binary)}:/usr/bin:/bin`);
+  const executableSha256 = sha256(readFileSync(binary));
   const versionResult = requireSuccess(
     runCapturedProcess({ command: binary, args: ['--version'], cwd: temporaryHome, env, timeoutMs: PROBE_TIMEOUT_MS }),
     `${host}-version`,
@@ -992,8 +993,11 @@ export function probeHostBinary(
         : { exec: { required_flags: execFlags, output_sha256: execHelpResult.stdout_sha256 } }),
     },
   });
+  if (sha256(readFileSync(binary)) !== executableSha256) {
+    throw new CertificationError(`${host} executable bytes changed during its launch probe.`);
+  }
   return Object.freeze({
-    executable_sha256: sha256(readFileSync(binary)),
+    executable_sha256: executableSha256,
     version,
     version_output_sha256: versionResult.stdout_sha256,
     help_output_sha256: helpOutputSha256,
@@ -1001,6 +1005,45 @@ export function probeHostBinary(
     effort: host === 'claude' ? CLAUDE_EFFORT : CODEX_REASONING_EFFORT,
     capability_sha256: sha256(capability),
   });
+}
+
+export function assertHostBinaryMatches(
+  host: CertificationHost,
+  binary: string,
+  probe: HostLaunchProbe,
+): void {
+  accessSync(binary, constants.X_OK);
+  if (sha256(readFileSync(binary)) !== probe.executable_sha256) {
+    throw new CertificationError(`${host} executable bytes no longer match the certified launch probe.`);
+  }
+}
+
+function withHostBinaryProof<T>(
+  host: CertificationHost,
+  binary: string,
+  probe: HostLaunchProbe,
+  operation: () => T,
+): T {
+  assertHostBinaryMatches(host, binary, probe);
+  try {
+    return operation();
+  } finally {
+    assertHostBinaryMatches(host, binary, probe);
+  }
+}
+
+async function withHostBinaryProofAsync<T>(
+  host: CertificationHost,
+  binary: string,
+  probe: HostLaunchProbe,
+  operation: () => Promise<T>,
+): Promise<T> {
+  assertHostBinaryMatches(host, binary, probe);
+  try {
+    return await operation();
+  } finally {
+    assertHostBinaryMatches(host, binary, probe);
+  }
 }
 
 function copyRuntimeEntries(
@@ -1132,6 +1175,7 @@ function inventoryManagedSettings(): JsonValue {
     '/Library/Application Support/ClaudeCode/managed-settings.json',
     '/Library/Application Support/ClaudeCode/managed-settings.d',
     '/Library/Application Support/ClaudeCode/managed-mcp.json',
+    '/etc/claude-code/managed-settings.json',
     `/Library/Managed Preferences/${username}/com.anthropic.claudecode.plist`,
     '/Library/Managed Preferences/com.anthropic.claudecode.plist',
     '/Library/Application Support/Codex/managed_config.toml',
@@ -1415,12 +1459,11 @@ function writeClaudeSettings(
   const settings = {
     permissions: {
       allow: [
-        'Read(./**)',
         'Skill',
         ...claudeAllowedCommands(contract, includeSandboxCanaries).map((command) => `Bash(${command}:*)`),
       ],
       deny: [
-        'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Task', 'Agent',
+        'Read', 'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Task', 'Agent',
         'Read(../**)', 'Read(//**)',
       ],
       defaultMode: 'dontAsk',
@@ -1481,13 +1524,12 @@ function claudeArgs(
     '--strict-mcp-config',
     '--plugin-dir', pluginPath,
     '--permission-mode', 'dontAsk',
-    '--tools', 'Read,Bash,Skill',
+    '--tools', 'Bash,Skill',
     '--allowedTools', [
-      'Read(./**)',
       'Skill',
       ...claudeAllowedCommands(contract, includeSandboxCanaries).map((command) => `Bash(${command}:*)`),
     ].join(','),
-    '--disallowedTools', 'Edit,Write,NotebookEdit,WebFetch,WebSearch,Task,Agent',
+    '--disallowedTools', 'Read,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task,Agent',
     '--max-budget-usd', '10',
   ]);
 }
@@ -1777,31 +1819,120 @@ function probeCodexPromptInput(options: Readonly<{
   }), 'codex-prompt-input');
   assertNoRawSecrets(`${result.stdout}\n${result.stderr}`, [options.apiKey]);
   const parsed = parseJson(result.stdout, 'Codex prompt-input output');
-  const serialized = canonicalJson(parsed);
-  if (!serialized.includes(options.prompt)) {
-    throw new CertificationError('Codex prompt-input omitted the literal current-turn positional request.');
-  }
-  for (const skill of options.contract.codex.skills) {
-    if (!serialized.includes(skill.name) || !serialized.includes(skill.path)) {
-      throw new CertificationError(`Codex prompt-input omitted project skill '${skill.name}'.`);
-    }
-  }
-  if (!/Roster|roster/u.test(serialized)) {
-    throw new CertificationError('Codex prompt-input omitted canonical Roster instructions.');
-  }
-  for (const ambientMarker of [
-    '<codex_delegation>', '<multi_agent_mode>', 'primary agent in a team of agents',
-    'collaboration tools cannot be called', '<source_thread_id>',
-  ]) {
-    if (serialized.includes(ambientMarker)) {
-      throw new CertificationError('Codex prompt-input contains an ambient orchestration contribution.');
-    }
-  }
-  return sha256(canonicalJson(normalizeMachinePaths(parsed, {
+  const normalized = normalizeMachinePaths(parsed, {
     [options.paths.repoRoot]: '$REPO',
     [options.passPaths.workspace]: '$WORKSPACE',
     [options.env['HOME']!]: '$TEMP_HOME',
+    [options.env['CODEX_HOME']!]: '$HOST_CONFIG',
+    [options.env['TMPDIR']!]: '$TMPDIR',
+  });
+  return sha256(canonicalJson(validateCodexPromptInputContributions({
+    value: normalized,
+    workspace: options.passPaths.workspace,
+    prompt: options.prompt,
+    contract: options.contract,
   })));
+}
+
+export function validateCodexPromptInputContributions(options: Readonly<{
+  value: JsonValue;
+  workspace: string;
+  prompt: string;
+  contract: HostLedLearningLaunchContract;
+}>): JsonValue {
+  if (!Array.isArray(options.value) || options.value.length !== 3) {
+    throw new CertificationError('Codex prompt-input must contain exactly three closed messages.');
+  }
+  const messages = options.value.map((entry, index) => {
+    const record = requiredObject(entry, `Codex prompt message ${index + 1}`, [
+      'type', 'role', 'content', 'internal_chat_message_metadata_passthrough',
+    ]);
+    if (record['type'] !== 'message' || !Array.isArray(record['content'])) {
+      throw new CertificationError('Codex prompt-input contains a non-message contribution.');
+    }
+    const metadata = requiredObject(
+      record['internal_chat_message_metadata_passthrough'],
+      `Codex prompt message ${index + 1} metadata`,
+      ['turn_id'],
+    );
+    requiredString(metadata['turn_id'], `Codex prompt message ${index + 1} turn ID`);
+    return {
+      role: requiredString(record['role'], `Codex prompt message ${index + 1} role`),
+      texts: record['content'].map((block, blockIndex) => {
+        const content = requiredObject(block, `Codex prompt message ${index + 1} content ${blockIndex + 1}`, [
+          'type', 'text',
+        ]);
+        if (content['type'] !== 'input_text') {
+          throw new CertificationError('Codex prompt-input contains a non-text contribution.');
+        }
+        return requiredString(content['text'], `Codex prompt message ${index + 1} text`);
+      }),
+    };
+  });
+  if (messages[0]!.role !== 'developer' || messages[0]!.texts.length !== 2
+    || messages[1]!.role !== 'user' || messages[1]!.texts.length !== 2
+    || messages[2]!.role !== 'user' || canonicalJson(messages[2]!.texts) !== canonicalJson([options.prompt])) {
+    throw new CertificationError('Codex prompt-input role or contribution grouping is not exact.');
+  }
+  const [permissions, skills] = messages[0]!.texts;
+  const [instructions, environment] = messages[1]!.texts;
+  if (permissions === undefined || !permissions.startsWith('<permissions instructions>')
+    || !permissions.endsWith('</permissions instructions>')
+    || !permissions.includes('`sandbox_mode` is `workspace-write`')
+    || !permissions.includes('Approval policy is currently never')
+    || !permissions.includes('$WORKSPACE')
+    || skills === undefined || !skills.startsWith('<skills_instructions>')
+    || !skills.endsWith('</skills_instructions>')) {
+    throw new CertificationError('Codex prompt-input permission or skill contribution is not exact and isolated.');
+  }
+  const discoveredSkills = [...skills.matchAll(/^- ([^:\n]+): .+ \(file: ([^)]+)\)$/gmu)]
+    .map((match) => ({ name: match[1]!, path: match[2]! }))
+    .sort((left, right) => compareCodePoints(left.name, right.name));
+  const systemSkillNames = ['imagegen', 'openai-docs', 'plugin-creator', 'skill-creator', 'skill-installer'];
+  const expectedSkills = [
+    ...options.contract.codex.skills.map((skill) => ({
+      name: skill.name,
+      path: `$WORKSPACE/${skill.path}`,
+    })),
+    ...systemSkillNames.map((name) => ({
+      name,
+      path: `$HOST_CONFIG/skills/.system/${name}/SKILL.md`,
+    })),
+  ].sort((left, right) => compareCodePoints(left.name, right.name));
+  if (canonicalJson(discoveredSkills) !== canonicalJson(expectedSkills)) {
+    throw new CertificationError('Codex prompt-input skill contribution is outside the exact seven-skill inventory.');
+  }
+  const agentInstructions = readFileSync(join(options.workspace, 'AGENTS.md'), 'utf8').trim();
+  const expectedInstructions = `# AGENTS.md instructions for $WORKSPACE\n\n<INSTRUCTIONS>\n${agentInstructions}\n</INSTRUCTIONS>`;
+  if (instructions !== expectedInstructions
+    || environment === undefined
+    || !environment.startsWith('<environment_context>')
+    || !environment.endsWith('</environment_context>')
+    || !environment.includes('<cwd>$WORKSPACE</cwd>')) {
+    throw new CertificationError('Codex prompt-input workspace instruction contribution is not exact and isolated.');
+  }
+  if (canonicalJson(options.contract.codex.prompt_input.required_configurable_contributions)
+    !== canonicalJson([
+      'canonical-roster-instructions',
+      'expected-project-skills',
+      'literal-human-request',
+    ])) {
+    throw new CertificationError('Codex prompt-input configurable contribution contract drifted.');
+  }
+  return canonicalize({
+    message_roles: messages.map((message) => message.role),
+    contribution_order: [
+      'permissions', 'skills', 'workspace-instructions', 'environment', 'literal-human-request',
+    ],
+    contribution_sha256: {
+      permissions: sha256(permissions),
+      skills: sha256(skills),
+      workspace_instructions: sha256(instructions),
+      environment: sha256(environment),
+      literal_human_request: sha256(options.prompt),
+    },
+    skills: discoveredSkills,
+  });
 }
 
 async function probeCodexSandbox(options: Readonly<{
@@ -1954,6 +2085,9 @@ function extractClaudeTrace(events: readonly JsonValue[]): Pick<NormalizedHostTr
     if (event['type'] !== 'assistant' || !isJsonObject(event['message']) || !Array.isArray(event['message']['content'])) continue;
     for (const [blockOrdinal, block] of event['message']['content'].entries()) {
       if (!isJsonObject(block) || block['type'] !== 'tool_use') continue;
+      if (block['name'] !== 'Bash' && block['name'] !== 'Skill') {
+        throw new CertificationError('Claude used an action outside the closed Bash/Skill surface.');
+      }
       const value = canonicalize(block);
       toolCalls.push(value);
       orderedEvents.push(canonicalize({ kind: 'tool_call', event_ordinal: eventOrdinal, block_ordinal: blockOrdinal, value }));
@@ -1963,6 +2097,23 @@ function extractClaudeTrace(events: readonly JsonValue[]): Pick<NormalizedHostTr
     }
   }
   if (initialization.length !== 1) throw new CertificationError('Claude emitted an invalid initialization event count.');
+  const callIds = toolCalls.map((entry) => (
+    isJsonObject(entry) && typeof entry['id'] === 'string' ? entry['id'] : null
+  ));
+  const resultIds = toolResults.map((entry) => (
+    isJsonObject(entry) && typeof entry['tool_use_id'] === 'string' ? entry['tool_use_id'] : null
+  ));
+  if (callIds.some((id) => id === null) || resultIds.some((id) => id === null)) {
+    throw new CertificationError('Claude tool calls and results are not a closed one-to-one set.');
+  }
+  const concreteCallIds = callIds as string[];
+  const concreteResultIds = resultIds as string[];
+  if (new Set(concreteCallIds).size !== concreteCallIds.length
+    || new Set(concreteResultIds).size !== concreteResultIds.length
+    || canonicalJson([...concreteCallIds].sort(compareCodePoints))
+      !== canonicalJson([...concreteResultIds].sort(compareCodePoints))) {
+    throw new CertificationError('Claude tool calls and results are not a closed one-to-one set.');
+  }
   return {
     initialization: initialization[0]!,
     events: Object.freeze(orderedEvents),
@@ -1977,12 +2128,40 @@ function extractCodexTrace(events: readonly JsonValue[]): Pick<NormalizedHostTra
   const orderedEvents: JsonValue[] = [];
   const commands: string[] = [];
   const initialization: JsonValue[] = [];
+  const startedCommands = new Set<string>();
+  const completedCommands = new Set<string>();
   for (const [eventOrdinal, event] of events.entries()) {
     if (!isJsonObject(event)) continue;
+    if (event['type'] === 'error' || event['type'] === 'turn.failed') {
+      throw new CertificationError('Codex emitted a failed top-level trace event.');
+    }
     if (event['type'] === 'thread.started') initialization.push(canonicalize(event));
     if (!isJsonObject(event['item'])) continue;
     const item = event['item'];
-    if (item['type'] === 'command_execution') {
+    const itemType = item['type'];
+    if (itemType === 'file_change' || itemType === 'mcp_tool_call' || itemType === 'web_search') {
+      throw new CertificationError(`Codex used forbidden '${String(itemType)}' action output.`);
+    }
+    if (itemType !== 'command_execution' && itemType !== 'reasoning' && itemType !== 'agent_message') {
+      throw new CertificationError('Codex emitted an item outside the closed trace contract.');
+    }
+    if (itemType !== 'command_execution') continue;
+    if (event['type'] !== 'item.started' && event['type'] !== 'item.completed') {
+      throw new CertificationError('Codex command item used an unexpected event phase.');
+    }
+    const itemId = typeof item['id'] === 'string' ? item['id'] : null;
+    if (itemId === null) throw new CertificationError('Codex command item has no stable identity.');
+    if (event['type'] === 'item.started') {
+      if (startedCommands.has(itemId)) throw new CertificationError('Codex emitted a duplicate command start.');
+      startedCommands.add(itemId);
+      continue;
+    }
+    if (event['type'] === 'item.completed') {
+      if (!startedCommands.has(itemId) || completedCommands.has(itemId)
+        || item['status'] !== 'completed' || item['exit_code'] !== 0) {
+        throw new CertificationError('Codex command completion is unmatched, duplicated, or unsuccessful.');
+      }
+      completedCommands.add(itemId);
       const value = canonicalize(item);
       toolCalls.push(value);
       orderedEvents.push(canonicalize({ kind: 'tool_call', event_ordinal: eventOrdinal, block_ordinal: 0, value }));
@@ -1995,6 +2174,10 @@ function extractCodexTrace(events: readonly JsonValue[]): Pick<NormalizedHostTra
     }
   }
   if (initialization.length !== 1) throw new CertificationError('Codex emitted an invalid initialization event count.');
+  if (startedCommands.size !== completedCommands.size
+    || [...startedCommands].some((id) => !completedCommands.has(id))) {
+    throw new CertificationError('Codex left an incomplete command item in the trace.');
+  }
   return {
     initialization: initialization[0]!,
     events: Object.freeze(orderedEvents),
@@ -2153,25 +2336,7 @@ function assertCodexDreamerProof(
 ): void {
   const dreamer = contract.codex.skills.find((entry) => entry.name === 'fixture-dreamer');
   if (dreamer === undefined) throw new CertificationError('Codex Dreamer contract entry is missing.');
-  const relativeSkillPath = dreamer.path;
-  const expectedBytes = readFileSync(join(workspace, relativeSkillPath), 'utf8').replace(/\r\n?/gu, '\n');
-  const readIndex = trace.tool_calls.findIndex((entry) => {
-    if (!isJsonObject(entry) || entry['type'] !== 'command_execution') return false;
-    const command = entry['command'];
-    const output = entry['aggregated_output'];
-    const commandText = typeof command === 'string'
-      ? command
-      : Array.isArray(command) && command.every((part) => typeof part === 'string')
-        ? command.join(' ')
-        : '';
-    if (commandText.length === 0) return false;
-    const tokens = tokenizeLiteralHostCommand(commandText, true);
-    return isExactCodexSkillRead(tokens, relativeSkillPath)
-      && entry['status'] === 'completed'
-      && entry['exit_code'] === 0
-      && typeof output === 'string'
-      && output.replace(/\r\n?/gu, '\n') === expectedBytes;
-  });
+  const readIndex = codexSkillReadIndex(trace, workspace, dreamer.path);
   if (readIndex < 0) throw new CertificationError('Codex JSONL did not prove a full read of the exact Dreamer skill bytes.');
   const candidateIndex = trace.tool_calls.findIndex((entry, index) => {
     if (index <= readIndex || !isJsonObject(entry) || entry['type'] !== 'command_execution') return false;
@@ -2190,6 +2355,56 @@ function assertCodexDreamerProof(
   });
   if (candidateIndex < 0) {
     throw new CertificationError('Codex candidate creation did not follow the full Dreamer skill read with its challenge.');
+  }
+}
+
+function codexSkillReadIndex(
+  trace: NormalizedHostTrace,
+  workspace: string,
+  relativeSkillPath: string,
+): number {
+  const expectedBytes = readFileSync(join(workspace, relativeSkillPath), 'utf8').replace(/\r\n?/gu, '\n');
+  return trace.tool_calls.findIndex((entry) => {
+    if (!isJsonObject(entry) || entry['type'] !== 'command_execution') return false;
+    const command = entry['command'];
+    const output = entry['aggregated_output'];
+    const commandText = typeof command === 'string'
+      ? command
+      : Array.isArray(command) && command.every((part) => typeof part === 'string')
+        ? command.join(' ')
+        : '';
+    if (commandText.length === 0) return false;
+    const tokens = tokenizeLiteralHostCommand(commandText, true);
+    return isExactCodexSkillRead(tokens, relativeSkillPath)
+      && entry['status'] === 'completed'
+      && entry['exit_code'] === 0
+      && typeof output === 'string'
+      && output.replace(/\r\n?/gu, '\n') === expectedBytes;
+  });
+}
+
+function assertCodexPrimarySkillProof(
+  trace: NormalizedHostTrace,
+  workspace: string,
+  contract: HostLedLearningLaunchContract,
+): void {
+  const primary = contract.codex.skills.find((entry) => entry.name === 'roster-350-fixture-learning-loop');
+  if (primary === undefined) throw new CertificationError('Codex primary workflow skill contract entry is missing.');
+  const readIndex = codexSkillReadIndex(trace, workspace, primary.path);
+  const controlledIndex = trace.tool_calls.findIndex((entry) => {
+    if (!isJsonObject(entry) || entry['type'] !== 'command_execution') return false;
+    const command = entry['command'];
+    const commandText = typeof command === 'string'
+      ? command
+      : Array.isArray(command) && command.every((part) => typeof part === 'string')
+        ? command.join(' ')
+        : '';
+    if (commandText === '') return false;
+    const name = tokenizeLiteralHostCommand(commandText, true)[0]?.split('/').at(-1);
+    return name !== undefined && controlledCommands(contract).includes(name);
+  });
+  if (readIndex < 0 || controlledIndex < 0 || readIndex >= controlledIndex) {
+    throw new CertificationError('Codex did not read the exact primary workflow skill before controlled commands.');
   }
 }
 
@@ -2333,6 +2548,86 @@ function isExactCodexSkillRead(
     && allowedPaths.has(tokens[3]!);
 }
 
+function validateClaudeActionSurface(
+  trace: NormalizedHostTrace,
+  contract: HostLedLearningLaunchContract,
+  turn: 'discover' | 'approve',
+  claudeCanaries?: ReturnType<typeof claudeSandboxCanaries>,
+): void {
+  const skillCalls: string[] = [];
+  for (const entry of trace.tool_calls) {
+    if (!isJsonObject(entry) || typeof entry['name'] !== 'string' || !isJsonObject(entry['input'])) {
+      throw new CertificationError('Claude emitted a malformed tool call.');
+    }
+    const input = entry['input'];
+    if (entry['name'] === 'Bash') {
+      const keys = Object.keys(input);
+      if (!keys.every((key) => ['command', 'description', 'timeout', 'run_in_background'].includes(key))
+        || typeof input['command'] !== 'string' || input['run_in_background'] === true
+        || (input['description'] !== undefined && typeof input['description'] !== 'string')
+        || (input['timeout'] !== undefined
+          && (typeof input['timeout'] !== 'number' || !Number.isSafeInteger(input['timeout'])
+            || input['timeout'] < 1 || input['timeout'] > HOST_TIMEOUT_MS))) {
+        throw new CertificationError('Claude Bash action escaped its closed foreground command contract.');
+      }
+      continue;
+    }
+    if (entry['name'] !== contract.claude.skill_tool_name
+      || !Object.keys(input).every((key) => key === 'skill' || key === 'args')
+      || typeof input['skill'] !== 'string'
+      || (input['args'] !== undefined && input['args'] !== '')) {
+      throw new CertificationError('Claude Skill action escaped its closed identity contract.');
+    }
+    skillCalls.push(input['skill']);
+  }
+  const primary = contract.claude.skills.find((entry) => entry.name === 'roster-350-fixture-learning-loop');
+  const dreamer = contract.claude.skills.find((entry) => entry.name === 'fixture-dreamer');
+  if (primary === undefined || dreamer === undefined) {
+    throw new CertificationError('Claude skill contract is incomplete.');
+  }
+  const expected = turn === 'discover'
+    ? [primary.identity, dreamer.identity]
+    : [primary.identity];
+  if (canonicalJson(skillCalls) !== canonicalJson(expected)) {
+    throw new CertificationError(`Claude ${turn} turn did not invoke the exact ordered native skill set.`);
+  }
+  const resultsById = new Map(trace.tool_results.map((entry) => {
+    if (!isJsonObject(entry) || typeof entry['tool_use_id'] !== 'string') {
+      throw new CertificationError('Claude emitted a malformed tool result.');
+    }
+    return [entry['tool_use_id'], entry] as const;
+  }));
+  const permittedErrorCommands = new Set(claudeCanaries === undefined
+    ? []
+    : [claudeCanaries.writeCommand, claudeCanaries.networkCommand]);
+  for (const entry of trace.tool_calls) {
+    if (!isJsonObject(entry) || typeof entry['id'] !== 'string' || !isJsonObject(entry['input'])) continue;
+    const result = resultsById.get(entry['id']);
+    if (result === undefined) throw new CertificationError('Claude action has no matching result.');
+    const command = entry['name'] === 'Bash' ? entry['input']['command'] : null;
+    const permittedError = typeof command === 'string' && permittedErrorCommands.has(command);
+    if ((result['is_error'] === true) !== permittedError) {
+      throw new CertificationError('Claude action result did not match the exact success/denial contract.');
+    }
+  }
+  const primaryIndex = trace.events.findIndex((entry) => {
+    const call = orderedTraceValue(entry, 'tool_call');
+    return call?.['name'] === contract.claude.skill_tool_name
+      && isJsonObject(call['input']) && call['input']['skill'] === primary.identity;
+  });
+  const firstControlledBash = trace.events.findIndex((entry) => {
+    const call = orderedTraceValue(entry, 'tool_call');
+    if (call?.['name'] !== 'Bash' || !isJsonObject(call['input']) || typeof call['input']['command'] !== 'string') {
+      return false;
+    }
+    const command = call['input']['command'];
+    return controlledCommands(contract).some((name) => command.split(/\s/u, 1)[0]?.split('/').at(-1) === name);
+  });
+  if (primaryIndex < 0 || firstControlledBash < 0 || primaryIndex >= firstControlledBash) {
+    throw new CertificationError('Claude did not invoke the primary workflow skill before controlled commands.');
+  }
+}
+
 export function validateHostTraceCommands(options: Readonly<{
   trace: NormalizedHostTrace;
   host: CertificationHost;
@@ -2342,20 +2637,28 @@ export function validateHostTraceCommands(options: Readonly<{
   forbidden: readonly string[];
   claudeCanaries?: ReturnType<typeof claudeSandboxCanaries>;
 }>): void {
+  if (options.host === 'claude') {
+    validateClaudeActionSurface(options.trace, options.contract, options.turn, options.claudeCanaries);
+  }
   const names: string[] = [];
-  const dreamer = options.contract.codex.skills.find((entry) => entry.name === 'fixture-dreamer');
+  const codexSequence: string[] = [];
+  const codexSkillPaths = new Set(options.contract.codex.skills
+    .filter((entry) => options.turn === 'discover' || entry.name !== 'fixture-dreamer')
+    .map((entry) => entry.path));
   for (const command of options.trace.commands) {
     const tokens = tokenizeLiteralHostCommand(command, true);
     const name = tokens[0]!.split('/').at(-1)!;
     if (name === 'roster') {
       validateRosterTraceArgv(tokens, options.contract);
       names.push(name);
+      codexSequence.push(`command:${name}`);
       continue;
     }
     const adapter = options.contract.adapters.find((entry) => entry.command === name);
     if (adapter !== undefined) {
       validateAdapterTraceArgv(tokens, adapter, options.turn);
       names.push(name);
+      codexSequence.push(`command:${name}`);
       continue;
     }
     if (options.host === 'claude' && options.turn === 'discover'
@@ -2363,17 +2666,52 @@ export function validateHostTraceCommands(options: Readonly<{
       && (command === options.claudeCanaries.writeCommand || command === options.claudeCanaries.networkCommand)) {
       continue;
     }
-    if (options.host === 'codex' && options.turn === 'discover' && dreamer !== undefined
-      && isExactCodexSkillRead(tokens, dreamer.path)) {
+    if (options.host === 'codex'
+      && [...codexSkillPaths].some((path) => isExactCodexSkillRead(tokens, path))) {
+      const skill = options.contract.codex.skills.find((entry) => isExactCodexSkillRead(tokens, entry.path));
+      if (skill === undefined) throw new CertificationError('Codex skill read escaped its exact inventory.');
+      codexSequence.push(`skill:${skill.name}`);
       continue;
     }
     throw new CertificationError(`Unexpected or structurally invalid host command '${name}' was observed.`);
   }
-  for (const name of new Set(options.required)) {
-    const expectedCount = options.required.filter((entry) => entry === name).length;
-    const actualCount = names.filter((entry) => entry === name).length;
-    if (actualCount !== expectedCount) {
-      throw new CertificationError(`Required host command '${name}' count is ${actualCount}, expected ${expectedCount}.`);
+  if (canonicalJson(names) !== canonicalJson(options.required)) {
+    throw new CertificationError(`Required host commands were not completed in the exact lifecycle order.`);
+  }
+  if (options.host === 'codex') {
+    const primary = 'skill:roster-350-fixture-learning-loop';
+    const expectedSequence = [primary, ...options.required.map((name) => `command:${name}`)];
+    if (options.turn === 'discover') {
+      expectedSequence.splice(expectedSequence.length - 1, 0, 'skill:fixture-dreamer');
+    }
+    if (canonicalJson(codexSequence) !== canonicalJson(expectedSequence)) {
+      throw new CertificationError(`Codex ${options.turn} actions were outside the exact skill/lifecycle sequence.`);
+    }
+  } else {
+    const permittedCanaries = new Set(options.claudeCanaries === undefined
+      ? []
+      : [options.claudeCanaries.writeCommand, options.claudeCanaries.networkCommand]);
+    const claudeSequence = options.trace.tool_calls.flatMap((entry) => {
+      if (!isJsonObject(entry) || !isJsonObject(entry['input'])) return [];
+      if (entry['name'] === options.contract.claude.skill_tool_name) {
+        const identity = entry['input']['skill'];
+        const skill = options.contract.claude.skills.find((candidate) => candidate.identity === identity);
+        return skill === undefined ? ['skill:unknown'] : [`skill:${skill.name}`];
+      }
+      const command = entry['input']['command'];
+      if (entry['name'] !== 'Bash' || typeof command !== 'string' || permittedCanaries.has(command)) return [];
+      const name = tokenizeLiteralHostCommand(command, true)[0]!.split('/').at(-1)!;
+      return [`command:${name}`];
+    });
+    const expectedSequence = [
+      'skill:roster-350-fixture-learning-loop',
+      ...options.required.map((name) => `command:${name}`),
+    ];
+    if (options.turn === 'discover') {
+      expectedSequence.splice(expectedSequence.length - 1, 0, 'skill:fixture-dreamer');
+    }
+    if (canonicalJson(claudeSequence) !== canonicalJson(expectedSequence)) {
+      throw new CertificationError(`Claude ${options.turn} actions were outside the exact skill/lifecycle sequence.`);
     }
   }
   for (const name of options.forbidden) {
@@ -2473,6 +2811,20 @@ function validateAdapterLog(options: Readonly<{
       throw new CertificationError(`Turn '${options.turn}' logged forbidden category '${category}'.`);
     }
   }
+  if (canonicalJson(slice.map((entry) => entry['log_category']))
+    !== canonicalJson(expectation.required_log_categories)) {
+    throw new CertificationError(`Turn '${options.turn}' adapter calls are outside the exact lifecycle order.`);
+  }
+  const queryHashes = options.records.flatMap((record) => {
+    if (record['log_category'] !== 'roster.context' && record['log_category'] !== 'tool.search') return [];
+    const proof = record['query_proof'];
+    return isJsonObject(proof) && typeof proof['query_sha256'] === 'string'
+      ? [proof['query_sha256']]
+      : [];
+  });
+  if (queryHashes.length > 0 && new Set(queryHashes).size !== 1) {
+    throw new CertificationError('Roster context and controlled search did not use one shared derived query.');
+  }
   const candidate = slice.find((entry) => entry['log_category'] === 'learning.candidate-create');
   if (options.turn === 'discover'
     && (candidate?.['skill_challenge_sha256'] !== options.challengeHash
@@ -2502,15 +2854,38 @@ function assertPluginAndToolInitialization(
   trace: NormalizedHostTrace,
   contract: HostLedLearningLaunchContract,
 ): void {
+  if (!isJsonObject(trace.initialization)) {
+    throw new CertificationError(`${host} initialization is not a closed object.`);
+  }
+  if (host === 'codex') {
+    if (canonicalJson(Object.keys(trace.initialization).sort(compareCodePoints))
+      !== canonicalJson(['thread_id', 'type'])
+      || trace.initialization['type'] !== 'thread.started'
+      || typeof trace.initialization['thread_id'] !== 'string'
+      || trace.initialization['thread_id'].length === 0) {
+      throw new CertificationError('Codex thread initialization differs from the exact JSONL contract.');
+    }
+    return;
+  }
   const serialized = canonicalJson(trace.initialization);
-  const expectedSkills = host === 'claude' ? contract.claude.skills : contract.codex.skills;
-  for (const skill of expectedSkills) {
+  for (const skill of contract.claude.skills) {
     if (!serialized.includes(skill.name)) {
       throw new CertificationError(`${host} initialization omitted expected skill '${skill.name}'.`);
     }
   }
-  if (/WebFetch|WebSearch|browser|computer-use|mcp__/iu.test(serialized)) {
-    throw new CertificationError(`${host} initialization exposed a forbidden tool or MCP surface.`);
+  const tools = trace.initialization['tools'];
+  const mcpServers = trace.initialization['mcp_servers'];
+  if (trace.initialization['type'] !== 'system' || trace.initialization['subtype'] !== 'init'
+    || trace.initialization['cwd'] !== '$WORKSPACE'
+    || !Array.isArray(tools) || tools.some((entry) => typeof entry !== 'string')
+    || canonicalJson([...tools].sort(compareCodePoints)) !== canonicalJson(['Bash', 'Skill'])
+    || !Array.isArray(mcpServers) || mcpServers.length !== 0
+    || trace.initialization['permissionMode'] !== 'dontAsk'
+    || typeof trace.initialization['model'] !== 'string'
+    || !trace.initialization['model'].includes(CLAUDE_MODEL)
+    || !serialized.includes(contract.claude.plugin_name)
+    || /WebFetch|WebSearch|browser|computer-use|mcp__/iu.test(serialized)) {
+    throw new CertificationError('Claude initialization differs from the exact model/tool/plugin/MCP contract.');
   }
 }
 
@@ -2552,6 +2927,7 @@ function runHostTurn(options: Readonly<{
   turn: 1 | 2;
   prompt: string;
   apiKey: string;
+  hostProbe: HostLaunchProbe;
   claudeSandboxProbe?: ReturnType<typeof claudeSandboxCanaries>;
 }>): HostTurnOutcome {
   const home = options.turn === 1 ? options.passPaths.turnOneHome : options.passPaths.turnTwoHome;
@@ -2595,13 +2971,15 @@ function runHostTurn(options: Readonly<{
     args,
     env: envAttestation(env, options.host),
   }, replacements);
-  const result = requireSuccess(runCapturedProcess({
-    command: hostBinary,
-    args,
-    cwd: options.passPaths.workspace,
-    env,
-    input: options.prompt,
-  }), `${options.host}-turn-${options.turn}`);
+  const result = withHostBinaryProof(options.host, hostBinary, options.hostProbe, () => (
+    requireSuccess(runCapturedProcess({
+      command: hostBinary,
+      args,
+      cwd: options.passPaths.workspace,
+      env,
+      input: options.prompt,
+    }), `${options.host}-turn-${options.turn}`)
+  ));
   const authoredConfigAfter = authoredHostConfigManifest(options.host, config);
   if (canonicalJson(authoredConfigBefore) !== canonicalJson(authoredConfigAfter)) {
     throw new CertificationError(`${options.host} mutated a harness-authored config input during turn ${options.turn}.`);
@@ -2907,22 +3285,47 @@ function assertNoForbiddenRetention(
   }
 }
 
+export function validateCandidateSemanticMeaning(
+  recommendationValue: unknown,
+  falsifiableByValue: unknown,
+): Readonly<{ recommendation_code: string; falsifier_code: string }> {
+  const recommendation = boundedProse(recommendationValue, 'candidate recommendation');
+  const falsifiableBy = boundedProse(falsifiableByValue, 'candidate falsification condition');
+  if (recommendation.trim() !== recommendation
+    || !/^(?:prefer|prioritize|favor)\b/iu.test(recommendation)
+    || !/\battribut(?:able|ed|ion|ing)?\b/iu.test(recommendation)
+    || !/\bpractitioners?\b/iu.test(recommendation)
+    || !/\boperations?|operational\b/iu.test(recommendation)
+    || !/\bproblems?|challenges?|pains?\b/iu.test(recommendation)
+    || /\b(?:avoid|exclude|reject|ignore|irrelevant|profiles?|homepages?|crypto(?:currency)?|tokens?|advertis(?:e|ing|ement)|never|not)\b/iu.test(recommendation)) {
+    throw new CertificationError('Candidate recommendation is not a positive preference for attributable practitioner operational problems.');
+  }
+  if (falsifiableBy.trim() !== falsifiableBy
+    || !/^(?:reject|revise|withdraw|revisit|discard|change)\b/iu.test(falsifiableBy)
+    || !/\b(?:if|when)\b/iu.test(falsifiableBy)
+    || !/\b(?:reviewed|future|later|measured|observed)\b/iu.test(falsifiableBy)
+    || !/\b(?:outcomes?|evidence|results?|observations?|performance)\b/iu.test(falsifiableBy)
+    || !/\b(?:contradict|contradicts|contradicted|disprove|disproves|disproved|fail|fails|failed)\b/iu.test(falsifiableBy)
+    || /\b(?:never|ignore|regardless|irrelevant|cannot|unfalsifiable)\b|no matter/iu.test(falsifiableBy)) {
+    throw new CertificationError('Candidate falsification condition is not an observable future counter-test.');
+  }
+  return Object.freeze({
+    recommendation_code: 'prefer-attributable-practitioner-operational-problems',
+    falsifier_code: 'reject-if-reviewed-outcomes-contradict',
+  });
+}
+
 function assertCandidateSemantics(
   candidate: ReturnType<ReturnType<typeof openSeededLearningStore>['snapshot']>['candidates'][number],
 ): void {
-  const recommendation = boundedProse(candidate.recommendation, 'candidate recommendation');
-  const falsifiableBy = boundedProse(candidate.falsifiable_by, 'candidate falsification condition');
-  if (!/attribut|practitioner/iu.test(recommendation)
-    || !/operation|problem|editorial|review/iu.test(recommendation)) {
-    throw new CertificationError('Candidate recommendation lacks the selected result and authored-policy meaning.');
-  }
-  if (!/reject|revisit|withdraw|change|contradict/iu.test(falsifiableBy)
-    || !/outcome|evidence|perform|result|observation/iu.test(falsifiableBy)) {
-    throw new CertificationError('Candidate falsification condition is not a bounded observable counter-test.');
-  }
+  validateCandidateSemanticMeaning(candidate.recommendation, candidate.falsifiable_by);
 }
 
 function policyReasonCode(result: Record<string, unknown>, prose: string): string {
+  if (!/\b(?:reject|exclude|skip|omit|filter|outside|ineligible|untrusted)\b|out of scope|not (?:a )?(?:post|eligible|allowed|useful)|already used/iu.test(prose)
+    || /\b(?:select|include|accept|prioritize|prefer)\b/iu.test(prose)) {
+    throw new CertificationError('Rejected result prose does not express a rejection policy decision.');
+  }
   const topics = Array.isArray(result['topics']) ? result['topics'].filter((entry) => typeof entry === 'string') : [];
   const observed = Array.isArray(result['observed_run_ids']) ? result['observed_run_ids'] : [];
   if (topics.includes('professional-profile')) {
@@ -3125,6 +3528,8 @@ async function runPass(options: Readonly<{
   bundles: CertificationBundles;
   hostProbe: HostLaunchProbe;
 }>): Promise<CertificationPassOutcome> {
+  const hostBinary = options.host === 'claude' ? options.paths.claudeBin : options.paths.codexBin;
+  assertHostBinaryMatches(options.host, hostBinary, options.hostProbe);
   const currentPaths = passPaths(options.certificationRoot, options.host);
   prepareWorkspace(options.host, options.paths, currentPaths, options.contract, options.bundles);
   inventoryAncestorInstructions(currentPaths.workspace);
@@ -3156,7 +3561,9 @@ async function runPass(options: Readonly<{
   let turnOne: HostTurnOutcome;
   let claudeCanaries: ReturnType<typeof claudeSandboxCanaries> | undefined;
   if (options.host === 'claude') {
-    skillDiscoveryHash = probeClaudePlugin({ paths: options.paths, contract: options.contract, env: probeEnv });
+    skillDiscoveryHash = withHostBinaryProof(options.host, hostBinary, options.hostProbe, () => (
+      probeClaudePlugin({ paths: options.paths, contract: options.contract, env: probeEnv })
+    ));
     const listener = createServer((socket) => socket.end());
     await new Promise<void>((resolvePromise, rejectPromise) => {
       listener.once('error', rejectPromise);
@@ -3178,6 +3585,7 @@ async function runPass(options: Readonly<{
         turn: 1,
         prompt: request,
         apiKey: options.apiKey,
+        hostProbe: options.hostProbe,
         claudeSandboxProbe: canaries,
       });
     } finally {
@@ -3190,26 +3598,32 @@ async function runPass(options: Readonly<{
       dreamerChallenge(options.paths, options.contract),
     );
   } else {
-    skillDiscoveryHash = await probeCodexProjectSkills({
-      paths: options.paths,
-      passPaths: currentPaths,
-      contract: options.contract,
-      env: probeEnv,
-    });
-    promptInputHash = probeCodexPromptInput({
-      paths: options.paths,
-      passPaths: currentPaths,
-      contract: options.contract,
-      env: probeEnv,
-      prompt: request,
-      apiKey: options.apiKey,
-    });
-    sandboxProbeHash = await probeCodexSandbox({
-      paths: options.paths,
-      passPaths: currentPaths,
-      contract: options.contract,
-      env: probeEnv,
-    });
+    skillDiscoveryHash = await withHostBinaryProofAsync(options.host, hostBinary, options.hostProbe, () => (
+      probeCodexProjectSkills({
+        paths: options.paths,
+        passPaths: currentPaths,
+        contract: options.contract,
+        env: probeEnv,
+      })
+    ));
+    promptInputHash = withHostBinaryProof(options.host, hostBinary, options.hostProbe, () => (
+      probeCodexPromptInput({
+        paths: options.paths,
+        passPaths: currentPaths,
+        contract: options.contract,
+        env: probeEnv,
+        prompt: request,
+        apiKey: options.apiKey,
+      })
+    ));
+    sandboxProbeHash = await withHostBinaryProofAsync(options.host, hostBinary, options.hostProbe, () => (
+      probeCodexSandbox({
+        paths: options.paths,
+        passPaths: currentPaths,
+        contract: options.contract,
+        env: probeEnv,
+      })
+    ));
     turnOne = runHostTurn({
       host: options.host,
       paths: options.paths,
@@ -3218,7 +3632,9 @@ async function runPass(options: Readonly<{
       turn: 1,
       prompt: request,
       apiKey: options.apiKey,
+      hostProbe: options.hostProbe,
     });
+    assertCodexPrimarySkillProof(turnOne.trace, currentPaths.workspace, options.contract);
     assertCodexDreamerProof(
       turnOne.trace,
       currentPaths.workspace,
@@ -3260,7 +3676,11 @@ async function runPass(options: Readonly<{
     turn: 2,
     prompt: readFileSync(approvalPath, 'utf8'),
     apiKey: options.apiKey,
+    hostProbe: options.hostProbe,
   });
+  if (options.host === 'codex') {
+    assertCodexPrimarySkillProof(turnTwo.trace, currentPaths.workspace, options.contract);
+  }
   validateHostTraceCommands({
     trace: turnTwo.trace,
     host: options.host,
@@ -3276,8 +3696,9 @@ async function runPass(options: Readonly<{
     ),
   });
   const turnTwoAdapterLog = readAdapterLog(currentPaths.workspace, options.contract);
-  if (canonicalJson(turnOneAdapterLog) === canonicalJson(turnTwoAdapterLog)) {
-    throw new CertificationError('Approval turn did not append a distinct adapter trace.');
+  if (canonicalJson(turnOneAdapterLog) === canonicalJson(turnTwoAdapterLog)
+    || canonicalJson(turnTwoAdapterLog.slice(0, turnOneAdapterLog.length)) !== canonicalJson(turnOneAdapterLog)) {
+    throw new CertificationError('Approval turn did not preserve and append to the exact discovery trace.');
   }
   validateAdapterLog({
     records: turnTwoAdapterLog,
@@ -3350,6 +3771,10 @@ async function runPass(options: Readonly<{
   const semanticResult = canonicalize({
     schema_version: 1,
     fixture_id: options.contract.fixture_id,
+    candidate_semantics: validateCandidateSemanticMeaning(
+      candidate.recommendation,
+      candidate.falsifiable_by,
+    ),
     turns: actualTurns,
   });
   assertNoForbiddenRetention('Normalized semantic result', semanticResult, retainedTokenSet);
@@ -3359,6 +3784,7 @@ async function runPass(options: Readonly<{
     path: currentPaths.workspace,
     exclusions: ['.git'],
   }]);
+  assertHostBinaryMatches(options.host, hostBinary, options.hostProbe);
   return Object.freeze({
     pass: options.pass,
     initial_workspace_sha256: initialWorkspace.sha256,
@@ -3494,6 +3920,20 @@ export function parseHostLedLearningAttestation(value: unknown): HostLedLearning
     )));
     if (initialHashes.size !== 1 || initialHashes.has(null)) {
       throw new CertificationError(`Attestation ${host} passes do not share one initial workspace hash.`);
+    }
+    const skillDiscoveryHashes = new Set(hostOutcomes.map((entry) => (
+      isJsonObject(entry) ? entry['skill_discovery_sha256'] : null
+    )));
+    if (skillDiscoveryHashes.size !== 1 || skillDiscoveryHashes.has(null)) {
+      throw new CertificationError(`Attestation ${host} passes do not share one skill-discovery proof.`);
+    }
+    if (host === 'codex') {
+      const promptInputHashes = new Set(hostOutcomes.map((entry) => (
+        isJsonObject(entry) ? entry['prompt_input_sha256'] : null
+      )));
+      if (promptInputHashes.size !== 1 || promptInputHashes.has(null)) {
+        throw new CertificationError('Attestation Codex passes do not share one closed prompt-input proof.');
+      }
     }
   }
   if (sha256(canonicalJson(root['normalized_result'])) !== root['normalized_result_sha256']) {
@@ -3671,6 +4111,16 @@ export async function runHostLedLearningCertification(
       const initialHashes = new Set(hostOutcomes.map((entry) => entry.initial_workspace_sha256));
       if (initialHashes.size !== 1) {
         throw new CertificationError(`${host} passes did not start from identical workspace bytes.`);
+      }
+      const skillDiscoveryHashes = new Set(hostOutcomes.map((entry) => entry.skill_discovery_sha256));
+      if (skillDiscoveryHashes.size !== 1 || skillDiscoveryHashes.has(null)) {
+        throw new CertificationError(`${host} passes did not share one skill-discovery proof.`);
+      }
+      if (host === 'codex') {
+        const promptInputHashes = new Set(hostOutcomes.map((entry) => entry.prompt_input_sha256));
+        if (promptInputHashes.size !== 1 || promptInputHashes.has(null)) {
+          throw new CertificationError('Codex passes did not share one closed prompt-input proof.');
+        }
       }
       outcomes[host] = Object.freeze(hostOutcomes);
     }
