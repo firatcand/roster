@@ -36,7 +36,8 @@
     "approval_request": "common/requests/approve-learning.txt",
     "brain_evidence": "common/brain-evidence.json",
     "tool_results": "common/fake-search-results.json",
-    "output_schema": "common/output-schema.json",
+    "discover_output_schema": "common/discover-output-schema.json",
+    "approve_output_schema": "common/approve-output-schema.json",
     "lifecycle": "common/fixture-lifecycle.md"
   },
   "roster": {
@@ -122,8 +123,11 @@
         "--run-id",
         "--feedback-id",
         "--lesson-id",
-        "--recommendation",
-        "--falsifiable-by",
+        "--disposition",
+        "--source-kind",
+        "--topic-kind",
+        "--falsifier-action",
+        "--falsifier-observation",
         "--skill-challenge"
       ],
       "repeatable_flags": []

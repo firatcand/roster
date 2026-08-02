@@ -10,19 +10,28 @@ the issue #350 certification fixture. It is not the shipped Dreamer skill and
 does not define a production candidate contract.
 
 Reopen the completed-run and feedback observations returned by the controlled
-fixture adapters. Draft one concise, falsifiable recommendation scoped to the
-selected Roster plan. The recommendation must cite both returned evidence IDs,
-must not use this skill invocation as evidence, and must not activate itself as
-policy.
+fixture adapters. Choose one value from each neutral option set by applying the
+authored plan and tool-use policy to that evidence:
 
-Choose a concise kebab-case proposed lesson ID from the evidence. Write one
-bounded recommendation and one bounded observation that would falsify it. Pass
-those host-authored values as literal arguments; the adapter must not invent
-candidate semantics. Then call:
+- disposition: `prefer` or `avoid`
+- source kind: `attributable-practitioner`, `profile-page`, or `anonymous-source`
+- topic kind: `operational-problem`, `crypto-promotion`, or `generic-ad`
+- falsifier action: `reject` or `retain`
+- falsifier observation: `reviewed-outcomes-contradict`,
+  `reviewed-outcomes-confirm`, or `no-counterevidence`
+
+The options describe possible meanings, not the correct answer. Choose a concise
+kebab-case proposed lesson ID from the evidence. The controlled adapter validates
+the literal choices and renders canonical recommendation and falsifier prose; it
+must not choose the values for the host. The candidate cites both returned
+evidence IDs, never this skill invocation, and does not activate itself as policy.
+Then call:
 
 `roster-350-fixture-candidate-create --run-id <run-id> --feedback-id
-<feedback-id> --lesson-id <proposed-lesson-id> --recommendation
-<recommendation> --falsifiable-by <falsification-condition> --skill-challenge
+<feedback-id> --lesson-id <proposed-lesson-id> --disposition <disposition>
+--source-kind <source-kind> --topic-kind <topic-kind> --falsifier-action
+<falsifier-action> --falsifier-observation <falsifier-observation>
+--skill-challenge
 roster-350-dreamer-challenge:v1:9b6e2d47a5c183f0`
 
 Use the challenge exactly as written. It is proof that the host read this

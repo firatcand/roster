@@ -515,6 +515,59 @@ test('host-led fixture skills are byte-identical and cannot leak the semantic an
       assert.deepEqual(readFileSync(join(PROJECT_ROOT, fixtureRoot, path)), canonicalBytes, path);
     }
   }
+  const dreamerSkill = readFileSync(join(
+    PROJECT_ROOT,
+    fixtureRoot,
+    'common/skills/dreamer/SKILL.md',
+  ), 'utf8');
+  assert.doesNotMatch(dreamerSkill, /--recommendation|--falsifiable-by/u);
+  for (const option of [
+    'prefer',
+    'avoid',
+    'attributable-practitioner',
+    'profile-page',
+    'anonymous-source',
+    'operational-problem',
+    'crypto-promotion',
+    'generic-ad',
+    'reject',
+    'retain',
+    'reviewed-outcomes-contradict',
+    'reviewed-outcomes-confirm',
+    'no-counterevidence',
+  ]) assert.match(dreamerSkill, new RegExp(`\\b${option}\\b`, 'u'));
+
+  const launchContract = JSON.parse(readFileSync(join(
+    PROJECT_ROOT,
+    fixtureRoot,
+    'common/host-launch-contract.json',
+  ), 'utf8')) as {
+    adapters: { command: string; required_flags: string[] }[];
+    host_readable_inputs: Record<string, string>;
+  };
+  assert.equal('output_schema' in launchContract.host_readable_inputs, false);
+  assert.equal(
+    launchContract.host_readable_inputs['discover_output_schema'],
+    'common/discover-output-schema.json',
+  );
+  assert.equal(
+    launchContract.host_readable_inputs['approve_output_schema'],
+    'common/approve-output-schema.json',
+  );
+  const candidateAdapter = launchContract.adapters.find((entry) => (
+    entry.command === 'roster-350-fixture-candidate-create'
+  ));
+  assert.deepEqual(candidateAdapter?.required_flags, [
+    '--run-id',
+    '--feedback-id',
+    '--lesson-id',
+    '--disposition',
+    '--source-kind',
+    '--topic-kind',
+    '--falsifier-action',
+    '--falsifier-observation',
+    '--skill-challenge',
+  ]);
 
   const oracleMarkers = ['expected-semantic-result', 'host-led-learning-oracle'];
   const adapterPath = 'test/support/host-led-learning-adapter.ts';
@@ -531,7 +584,8 @@ test('host-led fixture skills are byte-identical and cannot leak the semantic an
   const mechanicsOnly = [
     'common/fixture-lifecycle.md',
     'common/host-launch-contract.json',
-    'common/output-schema.json',
+    'common/discover-output-schema.json',
+    'common/approve-output-schema.json',
     ...skillCopies.flat(),
   ];
   const forbiddenAnswerMarkers = [

@@ -54,11 +54,28 @@ export type SeededFeedback = {
   summary_hash: string;
 };
 
+export type SeededCandidateMeaning = {
+  disposition: 'prefer' | 'avoid';
+  source_kind: 'attributable-practitioner' | 'profile-page' | 'anonymous-source';
+  topic_kind: 'operational-problem' | 'crypto-promotion' | 'generic-ad';
+  falsifier_action: 'reject' | 'retain';
+  falsifier_observation:
+    | 'reviewed-outcomes-contradict'
+    | 'reviewed-outcomes-confirm'
+    | 'no-counterevidence';
+};
+
+export type SeededRenderedCandidateMeaning = {
+  recommendation: string;
+  falsifiable_by: string;
+};
+
 export type SeededLessonCandidate = {
   id: string;
   lesson_id: string;
   watermark: string;
   target: string;
+  meaning: SeededCandidateMeaning;
   recommendation: string;
   falsifiable_by: string;
   citations: {
@@ -275,15 +292,74 @@ function validFeedback(value: unknown): value is SeededFeedback {
     && hashValue(record['summary']) === record['summary_hash'];
 }
 
+function validCandidateMeaning(value: unknown): value is SeededCandidateMeaning {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const meaning = value as Record<string, unknown>;
+  return exactKeys(meaning, [
+    'disposition',
+    'source_kind',
+    'topic_kind',
+    'falsifier_action',
+    'falsifier_observation',
+  ])
+    && ['prefer', 'avoid'].includes(meaning['disposition'] as string)
+    && ['attributable-practitioner', 'profile-page', 'anonymous-source']
+      .includes(meaning['source_kind'] as string)
+    && ['operational-problem', 'crypto-promotion', 'generic-ad']
+      .includes(meaning['topic_kind'] as string)
+    && ['reject', 'retain'].includes(meaning['falsifier_action'] as string)
+    && ['reviewed-outcomes-contradict', 'reviewed-outcomes-confirm', 'no-counterevidence']
+      .includes(meaning['falsifier_observation'] as string);
+}
+
+export function renderSeededCandidateMeaning(
+  meaning: SeededCandidateMeaning,
+): Readonly<SeededRenderedCandidateMeaning> {
+  if (!validCandidateMeaning(meaning)) {
+    fail('FIXTURE_INVALID', 'Fixture candidate meaning does not match its closed semantic schema.');
+  }
+  const dispositions: Record<SeededCandidateMeaning['disposition'], string> = {
+    prefer: 'Prefer',
+    avoid: 'Avoid',
+  };
+  const sourceKinds: Record<SeededCandidateMeaning['source_kind'], string> = {
+    'attributable-practitioner': 'attributable practitioner sources',
+    'profile-page': 'profile pages',
+    'anonymous-source': 'anonymous sources',
+  };
+  const topicKinds: Record<SeededCandidateMeaning['topic_kind'], string> = {
+    'operational-problem': 'that describe concrete operational problems',
+    'crypto-promotion': 'focused on cryptocurrency promotion',
+    'generic-ad': 'that are generic advertisements',
+  };
+  const falsifierActions: Record<SeededCandidateMeaning['falsifier_action'], string> = {
+    reject: 'Reject',
+    retain: 'Retain',
+  };
+  const falsifierObservations: Record<SeededCandidateMeaning['falsifier_observation'], string> = {
+    'reviewed-outcomes-contradict': 'reviewed outcomes contradict it',
+    'reviewed-outcomes-confirm': 'reviewed outcomes confirm it',
+    'no-counterevidence': 'no reviewed counterevidence appears',
+  };
+  return deepFreeze({
+    recommendation: `${dispositions[meaning.disposition]} ${sourceKinds[meaning.source_kind]} ${topicKinds[meaning.topic_kind]}.`,
+    falsifiable_by: `${falsifierActions[meaning.falsifier_action]} this recommendation if ${falsifierObservations[meaning.falsifier_observation]}.`,
+  });
+}
+
 function validCandidate(value: unknown): value is SeededLessonCandidate {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   const citations = record['citations'];
+  const meaning = record['meaning'];
+  if (!validCandidateMeaning(meaning)) return false;
+  const rendered = renderSeededCandidateMeaning(meaning);
   return exactKeys(record, [
     'id',
     'lesson_id',
     'watermark',
     'target',
+    'meaning',
     'recommendation',
     'falsifiable_by',
     'citations',
@@ -292,8 +368,8 @@ function validCandidate(value: unknown): value is SeededLessonCandidate {
     && safeId(record['lesson_id'])
     && safeHash(record['watermark'])
     && boundedString(record['target'], MAX_ID_BYTES)
-    && boundedString(record['recommendation'])
-    && boundedString(record['falsifiable_by'])
+    && record['recommendation'] === rendered.recommendation
+    && record['falsifiable_by'] === rendered.falsifiable_by
     && citations !== null
     && typeof citations === 'object'
     && !Array.isArray(citations)

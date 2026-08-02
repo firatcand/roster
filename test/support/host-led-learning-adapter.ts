@@ -30,6 +30,8 @@ import {
   hashSeededLearningValue,
   materializeSeededLesson,
   openSeededLearningStore,
+  renderSeededCandidateMeaning,
+  type SeededCandidateMeaning,
   type SeededCompletedRun,
   type SeededFeedback,
   type SeededLessonCandidate,
@@ -472,6 +474,7 @@ export const hostLedLearningAdapterTestApi = Object.freeze({
   workspacePath,
   expandedRosterArgv,
   requireContractedRosterArgv,
+  parseArguments,
   appendLog,
 });
 
@@ -703,13 +706,22 @@ function runAdapter(options: {
       if (challengeHash !== options.challengeHash) fail('Dreamer challenge does not match the attested skill');
       const status = store.status();
       if (status.status !== 'due' || status.watermark === null) fail('candidate creation is not due');
+      const meaning = {
+        disposition: one(parsed, '--disposition'),
+        source_kind: one(parsed, '--source-kind'),
+        topic_kind: one(parsed, '--topic-kind'),
+        falsifier_action: one(parsed, '--falsifier-action'),
+        falsifier_observation: one(parsed, '--falsifier-observation'),
+      } as SeededCandidateMeaning;
+      const rendered = renderSeededCandidateMeaning(meaning);
       const candidate: SeededLessonCandidate = {
         id: CANDIDATE_ID,
         lesson_id: one(parsed, '--lesson-id'),
         watermark: status.watermark,
         target: options.contract.roster.target,
-        recommendation: one(parsed, '--recommendation'),
-        falsifiable_by: one(parsed, '--falsifiable-by'),
+        meaning,
+        recommendation: rendered.recommendation,
+        falsifiable_by: rendered.falsifiable_by,
         citations: { run_ids: [RUN_ID], feedback_ids: [FEEDBACK_ID] },
       };
       output = store.createCandidate(candidate);

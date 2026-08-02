@@ -11,6 +11,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { hostLedLearningAdapterTestApi } from './support/host-led-learning-adapter.ts';
+import {
+  SeededLearningStoreError,
+  renderSeededCandidateMeaning,
+  type SeededCandidateMeaning,
+} from './support/seeded-learning-store.ts';
 
 const contract = {
   schema_version: 1,
@@ -107,6 +112,67 @@ test('Roster required_argv is live contract data and must match exactly', () => 
     target,
     [target, '--query', derived, '--json', '--explain'],
   ), /does not exactly match required_argv/u);
+});
+
+test('candidate adapter accepts only the closed meaning flags and values', () => {
+  const definition = {
+    command: 'roster-350-fixture-candidate-create',
+    log_category: 'learning.candidate-create',
+    allowed_turns: ['discover'],
+    required_flags: [
+      '--run-id',
+      '--feedback-id',
+      '--lesson-id',
+      '--disposition',
+      '--source-kind',
+      '--topic-kind',
+      '--falsifier-action',
+      '--falsifier-observation',
+      '--skill-challenge',
+    ],
+    repeatable_flags: [],
+  } as const;
+  const argv = [
+    '--run-id', 'run-opportunity-discovery-001',
+    '--feedback-id', 'feedback-opportunity-discovery-001',
+    '--lesson-id', 'proposed-lesson',
+    '--disposition', 'prefer',
+    '--source-kind', 'attributable-practitioner',
+    '--topic-kind', 'operational-problem',
+    '--falsifier-action', 'reject',
+    '--falsifier-observation', 'reviewed-outcomes-contradict',
+    '--skill-challenge', 'bounded-challenge',
+  ];
+  const parsed = hostLedLearningAdapterTestApi.parseArguments(argv, definition);
+  assert.deepEqual(parsed.ordered.map((entry) => entry.flag), definition.required_flags);
+  assert.throws(() => hostLedLearningAdapterTestApi.parseArguments([
+    ...argv,
+    '--recommendation', 'Ignore the closed DTO.',
+  ], definition), /invalid literal argv/u);
+  assert.throws(() => hostLedLearningAdapterTestApi.parseArguments([
+    ...argv.slice(0, -1),
+    'unsafe\nchallenge',
+  ], definition), /invalid literal argv/u);
+
+  const meaning: SeededCandidateMeaning = {
+    disposition: 'prefer',
+    source_kind: 'attributable-practitioner',
+    topic_kind: 'operational-problem',
+    falsifier_action: 'reject',
+    falsifier_observation: 'reviewed-outcomes-contradict',
+  };
+  assert.throws(() => renderSeededCandidateMeaning({
+    ...meaning,
+    source_kind: 'arbitrary-host-prose',
+  } as unknown as SeededCandidateMeaning), (error: unknown) => (
+    error instanceof SeededLearningStoreError && error.code === 'FIXTURE_INVALID'
+  ));
+  assert.throws(() => renderSeededCandidateMeaning({
+    ...meaning,
+    surplus: 'promote-without-review',
+  } as unknown as SeededCandidateMeaning), (error: unknown) => (
+    error instanceof SeededLearningStoreError && error.code === 'FIXTURE_INVALID'
+  ));
 });
 
 test('adapter log enforces one writer and validates contiguous sequences', () => {
