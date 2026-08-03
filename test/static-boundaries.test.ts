@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import test from 'node:test';
 import ts from 'typescript';
@@ -26,6 +26,21 @@ function typescriptFiles(relativeRoot: string): string[] {
       const path = join(directory, entry.name);
       if (entry.isDirectory()) walk(path);
       else if (entry.isFile() && entry.name.endsWith('.ts')) files.push(path);
+    }
+  };
+  walk(root);
+  return files.sort((left, right) => repositoryPath(left).localeCompare(repositoryPath(right), 'en'));
+}
+
+function regularFiles(relativeRoot: string): string[] {
+  const root = join(PROJECT_ROOT, relativeRoot);
+  const files: string[] = [];
+  const walk = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      assert.equal(entry.isSymbolicLink(), false, `${repositoryPath(path)} must not be a symlink`);
+      if (entry.isDirectory()) walk(path);
+      else if (entry.isFile()) files.push(path);
     }
   };
   walk(root);
@@ -387,7 +402,7 @@ test('complete workspace snapshots have one internal mint and one registry-owned
   );
 });
 
-test('prepared context sources and their read capability have one production and one test importer', () => {
+test('prepared context sources and their read capability have one production and exactly two test importers', () => {
   const sourceFiles = typescriptFiles('src');
   const testFiles = typescriptFiles('test');
   const files = [...sourceFiles, ...testFiles];
@@ -415,10 +430,16 @@ test('prepared context sources and their read capability have one production and
     file: 'src/lib/workspace-context.ts',
     local: capability,
   }]);
-  assert.deepEqual(importers(testFiles, registryModule, capability), [{
-    file: 'test/workspace-context.test.ts',
-    local: capability,
-  }]);
+  assert.deepEqual(importers(testFiles, registryModule, capability), [
+    {
+      file: 'test/support/seeded-workspace-context.ts',
+      local: capability,
+    },
+    {
+      file: 'test/workspace-context.test.ts',
+      local: capability,
+    },
+  ]);
 
   const protectedEdges = files.flatMap((path) => moduleEdges(path)).filter((edge) => (
     moduleMatches(edge.module, registryModule)
@@ -434,7 +455,11 @@ test('prepared context sources and their read capability have one production and
     [...new Set(protectedEdges
       .filter((edge) => edge.file.startsWith('test/'))
       .map((edge) => edge.file))],
-    ['test/workspace-context.test.ts'],
+    ['test/support/seeded-workspace-context.ts', 'test/workspace-context.test.ts'],
+  );
+  assert.deepEqual(
+    protectedEdges.filter((edge) => edge.kind === 'export'),
+    [],
   );
   assert.deepEqual(
     files.flatMap((path) => dynamicModuleReferences(path)
@@ -442,6 +467,435 @@ test('prepared context sources and their read capability have one production and
       .map((module) => `${repositoryPath(path)}:${module}`)),
     [],
   );
+});
+
+test('the seeded host learning proof cannot become a shipped capability or source dependency', () => {
+  const forbiddenMarkers = [
+    'host-led-learning',
+    'roster-350-fixture',
+    'seeded-learning-store',
+    'seeded-workspace-context',
+  ];
+  const sourceMentions = typescriptFiles('src').flatMap((path) => {
+    const content = readFileSync(path, 'utf8').toLowerCase();
+    return forbiddenMarkers
+      .filter((marker) => content.includes(marker))
+      .map((marker) => `${repositoryPath(path)}:${marker}`);
+  });
+  assert.deepEqual(sourceMentions, []);
+
+  const packageFiles = JSON.parse(readFileSync(join(PROJECT_ROOT, 'package.json'), 'utf8')) as {
+    files?: unknown;
+  };
+  assert.ok(Array.isArray(packageFiles.files));
+  assert.deepEqual(
+    packageFiles.files.filter((entry): entry is string => typeof entry === 'string')
+      .filter((entry) => entry === 'test' || entry.startsWith('test/')),
+    [],
+  );
+});
+
+test('host certification uses ambient auth and truthfully bounds transient personal-state handling', () => {
+  const supportPath = join(PROJECT_ROOT, 'test/support/host-led-learning-certification.ts');
+  const contractPath = join(
+    PROJECT_ROOT,
+    'test/fixtures/host-led-learning/common/host-launch-contract.json',
+  );
+  const support = readFileSync(supportPath, 'utf8');
+  const contractBytes = readFileSync(contractPath, 'utf8');
+  const contract = JSON.parse(contractBytes) as {
+    schema_version?: unknown;
+    certification_profile?: unknown;
+  };
+
+  for (const forbidden of [
+    'ANTHROPIC_API_KEY',
+    'OPENAI_API_KEY',
+  ]) {
+    assert.equal(contractBytes.includes(forbidden), false, forbidden);
+  }
+  for (const forbidden of [
+    'roster-certification-openai',
+    'roster-model-free-probe',
+    'requires_openai_auth',
+    'managed_settings_sha256',
+  ]) assert.equal(support.includes(forbidden), false, forbidden);
+  assert.doesNotMatch(support, /\bhostApiKey\b|\bapiKey\b/u);
+  assert.doesNotMatch(support, /\.\.\.process\.env/u);
+  assert.doesNotMatch(support, /env\[['"](?:ANTHROPIC_API_KEY|OPENAI_API_KEY)['"]\]\s*=/u);
+  assert.doesNotMatch(support, /['"]model_provider=[^'"]+['"]/u);
+  assert.match(support, /function sanitizeClaudeAuthStatus[\s\S]+logged_in:\s*true[\s\S]+model_api_key_injected:\s*false/u);
+  assert.match(support, /function sanitizeCodexLoginStatus[\s\S]+Logged in using ChatGPT/u);
+  assert.match(support, /trace\.initialization\['apiKeySource'\]\s*!==\s*'none'/u);
+  assert.match(support, /effective\['model_provider'\]\s*!==\s*null/u);
+  assert.match(support, /stdout_sha256:\s*sha256\(stdout\)/u);
+  assert.match(support, /stderr_sha256:\s*sha256\(stderr\)/u);
+
+  const codexConfigBody = /function codexConfigArgs\([\s\S]+?\n\}\n\nexport function codexGlobalLaunchArgs/u.exec(support)?.[0];
+  assert.ok(codexConfigBody !== undefined);
+  assert.doesNotMatch(codexConfigBody, /model_provider|model_providers|OPENAI_API_KEY/u);
+  assert.doesNotMatch(codexConfigBody, /shell_environment_policy\.set\.CODEX_HOME/u);
+
+  const claudePermissionsBody = /function claudeAllowedSkillPermissions\([\s\S]+?\n\}\n\nfunction lstatIfPresent/u.exec(support)?.[0];
+  assert.ok(claudePermissionsBody !== undefined);
+  assert.match(claudePermissionsBody, /contract\.claude\.skills\.map\(\(skill\) => skill\.identity\)/u);
+  assert.match(claudePermissionsBody, /`Skill\(\$\{identity\}\)`/u);
+  const claudeSettingsBody = /function writeClaudeSettings\([\s\S]+?\n\}\n\nfunction claudeArgs/u.exec(support)?.[0];
+  assert.ok(claudeSettingsBody !== undefined);
+  assert.match(claudeSettingsBody, /allowWrite:\s*\[workspace,\s*\.\.\.isolatedRoots\]/u);
+  assert.doesNotMatch(claudeSettingsBody, /ambientHome|hostStateHome|CODEX_HOME/u);
+
+  const claudeCanaryBody = /function assertClaudeSandboxProof\([\s\S]+?\n\}\n\nfunction cleanupClaudeSandboxCanaryAfterFailure[\s\S]+?\n\}/u.exec(support)?.[0];
+  assert.ok(claudeCanaryBody !== undefined);
+  assert.match(claudeCanaryBody, /precondition_sha256/u);
+  assert.match(claudeCanaryBody, /isSymbolicLink\(\)|!\w+\.isFile\(\)/u);
+  assert.match(claudeCanaryBody, /rmSync\(probe\.outsidePath\)/u);
+  assert.equal(contract.schema_version, 2);
+  assert.deepEqual(contract.certification_profile, {
+    id: 'ambient-auth-v1',
+    authentication: {
+      claude: {
+        mode: 'host-managed',
+        provider: 'claude.ai',
+        source: 'firstParty',
+        model_api_key_injected: false,
+      },
+      codex: {
+        mode: 'host-managed',
+        provider: 'chatgpt',
+        model_api_key_injected: false,
+      },
+    },
+    external_host_state: {
+      policy: 'accepted-unpinned',
+      paid_session_scope: 'auth-cache-only',
+      copied: false,
+      recursive_scan: false,
+      transient_inspection: true,
+      transient_output_hashing: true,
+      raw_personal_state_persisted: false,
+      personal_state_authority: false,
+    },
+  });
+  assert.doesNotMatch(contractBytes, /"(?:scanned|hashed|persisted)"\s*:\s*false/u);
+  assert.doesNotMatch(contractBytes, /(?:\/Users\/|\/home\/|[A-Za-z]:[\\/])/u);
+});
+
+test('host-led fixture skills are byte-identical and cannot leak the semantic answer or oracle', () => {
+  const fixtureRoot = 'test/fixtures/host-led-learning';
+  const skillCopies = [
+    [
+      'common/skills/fake-social-search/SKILL.md',
+      'claude-plugin/skills/roster-350-fixture-learning-loop/SKILL.md',
+      'codex-project/.agents/skills/roster-350-fixture-learning-loop/SKILL.md',
+    ],
+    [
+      'common/skills/dreamer/SKILL.md',
+      'claude-plugin/skills/fixture-dreamer/SKILL.md',
+      'codex-project/.agents/skills/fixture-dreamer/SKILL.md',
+    ],
+  ];
+  for (const [canonical, ...delivered] of skillCopies) {
+    const canonicalBytes = readFileSync(join(PROJECT_ROOT, fixtureRoot, canonical!));
+    for (const path of delivered) {
+      assert.deepEqual(readFileSync(join(PROJECT_ROOT, fixtureRoot, path)), canonicalBytes, path);
+    }
+  }
+  const primarySkill = readFileSync(join(
+    PROJECT_ROOT,
+    fixtureRoot,
+    'common/skills/fake-social-search/SKILL.md',
+  ), 'utf8');
+  assert.ok(Buffer.byteLength(primarySkill, 'utf8') <= 5_200);
+  for (const marker of [
+    'raw_context_sha256 is already complete',
+    'target=[agentOrPlanQualifiedId,agentH]',
+    'target agent=before #',
+    'For false D slots only',
+    'effects null=unset|[]=deny-all|items=ceiling',
+    'qualified ID=<scope-or-target>/tools/<id>',
+    'Never omit a plan step or',
+  ]) {
+    assert.match(primarySkill, new RegExp(marker.replaceAll(/[.*+?^${}()|[\]\\]/gu, '\\$&'), 'u'));
+  }
+  const dreamerSkill = readFileSync(join(
+    PROJECT_ROOT,
+    fixtureRoot,
+    'common/skills/dreamer/SKILL.md',
+  ), 'utf8');
+  assert.doesNotMatch(dreamerSkill, /--recommendation|--falsifiable-by/u);
+  const candidateCommand = /`roster-350-fixture-candidate-create[^`]+`/u.exec(dreamerSkill)?.[0];
+  assert.equal(typeof candidateCommand, 'string');
+  assert.doesNotMatch(candidateCommand!, /[\r\n\\]/u);
+  for (const option of [
+    'prefer',
+    'avoid',
+    'attributable-practitioner',
+    'profile-page',
+    'anonymous-source',
+    'operational-problem',
+    'crypto-promotion',
+    'generic-ad',
+    'reject',
+    'retain',
+    'reviewed-outcomes-contradict',
+    'reviewed-outcomes-confirm',
+    'no-counterevidence',
+  ]) assert.match(dreamerSkill, new RegExp(`\\b${option}\\b`, 'u'));
+  for (const orderedChoices of [
+    'disposition: `avoid` or `prefer`',
+    'source kind: `anonymous-source`, `profile-page`, or `attributable-practitioner`',
+    'topic kind: `operational-problem`, `generic-ad`, or `crypto-promotion`',
+    'falsifier action: `reject` or `retain`',
+    'falsifier observation: `no-counterevidence`,\n  `reviewed-outcomes-contradict`, or `reviewed-outcomes-confirm`',
+  ]) assert.equal(dreamerSkill.includes(orderedChoices), true);
+
+  const launchContract = JSON.parse(readFileSync(join(
+    PROJECT_ROOT,
+    fixtureRoot,
+    'common/host-launch-contract.json',
+  ), 'utf8')) as {
+    adapters: { command: string; required_flags: string[] }[];
+    host_readable_inputs: Record<string, string>;
+    runtime: { workspace_entries: { common: { source: string; destination: string }[] } };
+  };
+  assert.equal('output_schema' in launchContract.host_readable_inputs, false);
+  assert.equal('lifecycle' in launchContract.host_readable_inputs, false);
+  assert.equal(launchContract.runtime.workspace_entries.common.some((entry) => (
+    entry.source === 'common/fixture-lifecycle.md'
+    || entry.destination === '.fixture/fixture-lifecycle.md'
+  )), false);
+  assert.equal(existsSync(join(PROJECT_ROOT, fixtureRoot, 'common/fixture-lifecycle.md')), false);
+  assert.equal(
+    launchContract.host_readable_inputs['discover_output_schema'],
+    'common/discover-output-schema.json',
+  );
+  assert.equal(
+    launchContract.host_readable_inputs['approve_output_schema'],
+    'common/approve-output-schema.json',
+  );
+  const discoverOutputSchema = JSON.parse(readFileSync(join(
+    PROJECT_ROOT,
+    fixtureRoot,
+    'common/discover-output-schema.json',
+  ), 'utf8')) as {
+    properties: Record<string, { items: { required: string[]; properties: Record<string, { enum?: string[] }> } }>;
+  };
+  const selectedDecision = discoverOutputSchema.properties['selected_results']!.items;
+  const rejectedDecision = discoverOutputSchema.properties['rejected_results']!.items;
+  const neutralResultCodes = [
+    'previously-used',
+    'attributable-practitioner-problem',
+    'untrusted-instruction',
+    'cryptocurrency',
+    'profile-or-homepage',
+  ];
+  assert.deepEqual(selectedDecision.required, ['result_id', 'canonical_url', 'relevance_code']);
+  assert.deepEqual(selectedDecision.properties['relevance_code']?.enum, neutralResultCodes);
+  assert.deepEqual(rejectedDecision.required, ['result_id', 'policy_code']);
+  assert.deepEqual(rejectedDecision.properties['policy_code']?.enum, neutralResultCodes);
+  const expectedResultCodeIndexes = [
+    'attributable-practitioner-problem',
+    'profile-or-homepage',
+    'cryptocurrency',
+    'previously-used',
+    'untrusted-instruction',
+  ].map((code) => neutralResultCodes.indexOf(code));
+  assert.deepEqual([...new Set(expectedResultCodeIndexes)].sort(), [0, 1, 2, 3, 4]);
+  const meaningChoices = (discoverOutputSchema as unknown as {
+    properties: {
+      learning: {
+        properties: {
+          candidate: {
+            properties: {
+              meaning: { properties: Record<string, { enum: string[] }> };
+            };
+          };
+        };
+      };
+    };
+  }).properties.learning.properties.candidate.properties.meaning.properties;
+  const approveOutputSchema = JSON.parse(readFileSync(join(
+    PROJECT_ROOT,
+    fixtureRoot,
+    'common/approve-output-schema.json',
+  ), 'utf8')) as typeof discoverOutputSchema;
+  const approveMeaningChoices = (approveOutputSchema as unknown as {
+    properties: {
+      learning: {
+        properties: {
+          candidate: {
+            properties: {
+              meaning: { properties: Record<string, { enum: string[] }> };
+            };
+          };
+        };
+      };
+    };
+  }).properties.learning.properties.candidate.properties.meaning.properties;
+  const expectedMeaningChoices: Record<string, string[]> = {
+    disposition: ['avoid', 'prefer'],
+    source_kind: ['anonymous-source', 'profile-page', 'attributable-practitioner'],
+    topic_kind: ['operational-problem', 'generic-ad', 'crypto-promotion'],
+    falsifier_action: ['reject', 'retain'],
+    falsifier_observation: [
+      'no-counterevidence',
+      'reviewed-outcomes-contradict',
+      'reviewed-outcomes-confirm',
+    ],
+  };
+  assert.deepEqual(
+    Object.fromEntries(Object.keys(expectedMeaningChoices).map((field) => [
+      field,
+      meaningChoices[field]?.enum,
+    ])),
+    expectedMeaningChoices,
+  );
+  assert.deepEqual(
+    Object.fromEntries(Object.keys(expectedMeaningChoices).map((field) => [
+      field,
+      approveMeaningChoices[field]?.enum,
+    ])),
+    expectedMeaningChoices,
+  );
+  const acceptedMeaning: Record<string, string> = {
+    disposition: 'prefer',
+    source_kind: 'attributable-practitioner',
+    topic_kind: 'operational-problem',
+    falsifier_action: 'reject',
+    falsifier_observation: 'reviewed-outcomes-contradict',
+  };
+  const orderedMeaningFields = Object.keys(expectedMeaningChoices);
+  const acceptedIndexes = orderedMeaningFields.map((field) => (
+    expectedMeaningChoices[field]!.indexOf(acceptedMeaning[field]!)
+  ));
+  assert.deepEqual(acceptedIndexes, [1, 2, 0, 0, 1]);
+  assert.notDeepEqual(acceptedIndexes, [...acceptedIndexes].reverse());
+  assert.deepEqual([...new Set(acceptedIndexes)].sort(), [0, 1, 2]);
+  const ordinalHeuristics = {
+    first: orderedMeaningFields.map(() => 0),
+    lower_middle: orderedMeaningFields.map((field) => (
+      Math.floor((expectedMeaningChoices[field]!.length - 1) / 2)
+    )),
+    upper_middle: orderedMeaningFields.map((field) => (
+      Math.floor(expectedMeaningChoices[field]!.length / 2)
+    )),
+    last: orderedMeaningFields.map((field) => expectedMeaningChoices[field]!.length - 1),
+  };
+  for (const [heuristic, indexes] of Object.entries(ordinalHeuristics)) {
+    assert.equal(
+      acceptedIndexes.every((index, fieldIndex) => index === indexes[fieldIndex]),
+      false,
+      `${heuristic} must not yield every accepted candidate value`,
+    );
+  }
+  for (let index = 0; index <= Math.max(...acceptedIndexes); index++) {
+    assert.equal(
+      acceptedIndexes.every((acceptedIndex) => acceptedIndex === index),
+      false,
+      `same index ${index} must not yield every accepted candidate value`,
+    );
+  }
+  const candidateAdapter = launchContract.adapters.find((entry) => (
+    entry.command === 'roster-350-fixture-candidate-create'
+  ));
+  assert.deepEqual(candidateAdapter?.required_flags, [
+    '--run-id',
+    '--feedback-id',
+    '--disposition',
+    '--source-kind',
+    '--topic-kind',
+    '--falsifier-action',
+    '--falsifier-observation',
+    '--skill-challenge',
+  ]);
+  const promotionAdapter = launchContract.adapters.find((entry) => (
+    entry.command === 'roster-350-fixture-candidate-promote'
+  ));
+  assert.deepEqual(promotionAdapter?.required_flags, ['--candidate-id', '--candidate-hash']);
+
+  const oracleMarkers = ['expected-semantic-result', 'host-led-learning-oracle'];
+  const adapterPath = 'test/support/host-led-learning-adapter.ts';
+  const oracleLeaks = regularFiles(fixtureRoot).flatMap((path) => {
+    const content = readFileSync(path, 'utf8').toLowerCase();
+    return oracleMarkers
+      .filter((marker) => content.includes(marker))
+      .map((marker) => `${repositoryPath(path)}:${marker}`);
+  }).concat(oracleMarkers
+    .filter((marker) => readFileSync(join(PROJECT_ROOT, adapterPath), 'utf8').toLowerCase().includes(marker))
+    .map((marker) => `${adapterPath}:${marker}`));
+  assert.deepEqual(oracleLeaks, []);
+
+  const mechanicsOnly = [
+    'common/host-launch-contract.json',
+    'common/discover-output-schema.json',
+    'common/approve-output-schema.json',
+    ...skillCopies.flat(),
+  ];
+  const forbiddenAnswerMarkers = [
+    'result-valid-practitioner',
+    'result-profile',
+    'result-crypto',
+    'result-prior',
+    'result-injection',
+    'result-a17f',
+    'result-b62c',
+    'result-c04d',
+    'result-d91e',
+    'result-e38a',
+    'brain-record-a17f',
+    'brain-record-b62c',
+    'brain-record-c04d',
+    'brain-record-d91e',
+    'candidate-opportunity-discovery-001',
+    'prefer-attributable-practitioner-posts',
+    'require a canonical public url',
+    'exclude cryptocurrency topics',
+    'reject profile and company-homepage urls',
+    'exclude urls presented in prior discovery runs',
+  ];
+  const answerLeaks = [...mechanicsOnly.map((path) => ({
+    label: path,
+    absolute: join(PROJECT_ROOT, fixtureRoot, path),
+  })), {
+    label: adapterPath,
+    absolute: join(PROJECT_ROOT, adapterPath),
+  }].flatMap(({ label, absolute }) => {
+    const content = readFileSync(absolute, 'utf8').toLowerCase();
+    return forbiddenAnswerMarkers
+      .filter((marker) => content.includes(marker)
+        && !(label === adapterPath && marker === 'candidate-opportunity-discovery-001'))
+      .map((marker) => `${label}:${marker}`);
+  });
+  assert.deepEqual(answerLeaks, []);
+
+  const semanticRole = /(?:^|[-_.])(?:valid|winner|selected|profile|crypto|prior|injection|override|inert|canary|reject(?:ed)?)(?:[-_.]|$)/iu;
+  const identifierLeaks: string[] = [];
+  const visitIdentifiers = (value: unknown, path: string, inspectString = false): void => {
+    if (typeof value === 'string') {
+      if (inspectString && semanticRole.test(value)) identifierLeaks.push(`${path}:${value}`);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((entry, index) => visitIdentifiers(entry, `${path}[${index}]`, inspectString));
+      return;
+    }
+    if (value === null || typeof value !== 'object') return;
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      visitIdentifiers(
+        child,
+        `${path}.${key}`,
+        /(?:^|_)(?:id|ids)$/u.test(key) || key === 'locator',
+      );
+    }
+  };
+  for (const path of ['common/fake-search-results.json', 'common/brain-evidence.json']) {
+    visitIdentifiers(
+      JSON.parse(readFileSync(join(PROJECT_ROOT, fixtureRoot, path), 'utf8')) as unknown,
+      path,
+    );
+  }
+  assert.deepEqual(identifierLeaks, []);
 });
 
 test('workspace update lock capability stays inside update and generated-artifact transaction seams', () => {

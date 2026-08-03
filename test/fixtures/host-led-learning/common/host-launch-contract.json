@@ -1,0 +1,355 @@
+{
+  "schema_version": 2,
+  "fixture_id": "host-led-learning",
+  "behavior_revision": "host-led-learning-v5",
+  "fixture_iteration": 6,
+  "certification_profile": {
+    "id": "ambient-auth-v1",
+    "authentication": {
+      "claude": {
+        "mode": "host-managed",
+        "provider": "claude.ai",
+        "source": "firstParty",
+        "model_api_key_injected": false
+      },
+      "codex": {
+        "mode": "host-managed",
+        "provider": "chatgpt",
+        "model_api_key_injected": false
+      }
+    },
+    "external_host_state": {
+      "policy": "accepted-unpinned",
+      "paid_session_scope": "auth-cache-only",
+      "copied": false,
+      "recursive_scan": false,
+      "transient_inspection": true,
+      "transient_output_hashing": true,
+      "raw_personal_state_persisted": false,
+      "personal_state_authority": false
+    }
+  },
+  "runtime": {
+    "state_path": ".fixture/learning-state.json",
+    "adapter_log_path": ".fixture/adapter-calls.jsonl",
+    "adapter_directory": ".fixture/bin",
+    "workspace_entries": {
+      "common": [
+        {
+          "source": "common/brain-evidence.json",
+          "destination": ".fixture/input/brain-evidence.json"
+        },
+        {
+          "source": "common/fake-search-results.json",
+          "destination": ".fixture/input/fake-search-results.json"
+        }
+      ],
+      "claude": [],
+      "codex": [
+        {
+          "source": "codex-project/.agents",
+          "destination": ".agents"
+        }
+      ]
+    }
+  },
+  "host_readable_inputs": {
+    "discover_request": "common/requests/discover-opportunities.txt",
+    "approval_request": "common/requests/approve-learning.txt",
+    "brain_evidence": "common/brain-evidence.json",
+    "tool_results": "common/fake-search-results.json",
+    "discover_output_schema": "common/discover-output-schema.json",
+    "approve_output_schema": "common/approve-output-schema.json"
+  },
+  "roster": {
+    "executable": "$NODE $REPO/bin/roster.js",
+    "target": "gtm/social-manager#opportunity-discovery",
+    "allowed_model_invocations": [
+      {
+        "verb": "discover",
+        "required_argv": [
+          "$TARGET",
+          "--exact",
+          "--json"
+        ],
+        "log_category": "roster.discover"
+      },
+      {
+        "verb": "context",
+        "required_argv": [
+          "$TARGET",
+          "--query",
+          "$DERIVED_QUERY",
+          "--json"
+        ],
+        "log_category": "roster.context"
+      }
+    ]
+  },
+  "adapters": [
+    {
+      "command": "roster-350-fixture-search",
+      "log_category": "tool.search",
+      "allowed_turns": [
+        "discover"
+      ],
+      "required_flags": [
+        "--query"
+      ],
+      "repeatable_flags": []
+    },
+    {
+      "command": "roster-350-fixture-run-record",
+      "log_category": "evidence.run-record",
+      "allowed_turns": [
+        "discover"
+      ],
+      "required_flags": [
+        "--request-hash",
+        "--selected-result",
+        "--brain-citation"
+      ],
+      "repeatable_flags": [
+        "--brain-citation"
+      ]
+    },
+    {
+      "command": "roster-350-fixture-feedback-record",
+      "log_category": "evidence.feedback-record",
+      "allowed_turns": [
+        "discover"
+      ],
+      "required_flags": [
+        "--run-id",
+        "--signal"
+      ],
+      "repeatable_flags": []
+    },
+    {
+      "command": "roster-350-fixture-dream-status",
+      "log_category": "learning.status",
+      "allowed_turns": [
+        "discover"
+      ],
+      "required_flags": [],
+      "repeatable_flags": []
+    },
+    {
+      "command": "roster-350-fixture-candidate-create",
+      "log_category": "learning.candidate-create",
+      "allowed_turns": [
+        "discover"
+      ],
+      "required_flags": [
+        "--run-id",
+        "--feedback-id",
+        "--disposition",
+        "--source-kind",
+        "--topic-kind",
+        "--falsifier-action",
+        "--falsifier-observation",
+        "--skill-challenge"
+      ],
+      "repeatable_flags": []
+    },
+    {
+      "command": "roster-350-fixture-state-show",
+      "log_category": "learning.state-read",
+      "allowed_turns": [
+        "approve"
+      ],
+      "required_flags": [],
+      "repeatable_flags": []
+    },
+    {
+      "command": "roster-350-fixture-candidate-promote",
+      "log_category": "learning.candidate-promote",
+      "allowed_turns": [
+        "approve"
+      ],
+      "required_flags": [
+        "--candidate-id",
+        "--candidate-hash"
+      ],
+      "repeatable_flags": []
+    }
+  ],
+  "turn_expectations": {
+    "discover": {
+      "required_log_categories": [
+        "roster.discover",
+        "roster.context",
+        "tool.search",
+        "evidence.run-record",
+        "evidence.feedback-record",
+        "learning.status",
+        "learning.candidate-create"
+      ],
+      "forbidden_log_categories": [
+        "learning.state-read",
+        "learning.candidate-promote"
+      ],
+      "terminal_phase": "awaiting_human"
+    },
+    "approve": {
+      "required_log_categories": [
+        "learning.state-read",
+        "learning.candidate-promote",
+        "roster.context"
+      ],
+      "forbidden_log_categories": [
+        "tool.search",
+        "evidence.run-record",
+        "evidence.feedback-record",
+        "learning.candidate-create"
+      ],
+      "terminal_phase": "promoted"
+    }
+  },
+  "claude": {
+    "version": "2.1.220",
+    "plugin_root": "claude-plugin",
+    "plugin_name": "roster-350-host-led-learning",
+    "skill_tool_name": "Skill",
+    "skill_permission_policy": "exact-fixture-identities-only",
+    "skills": [
+      {
+        "name": "roster-350-fixture-learning-loop",
+        "identity": "roster-350-host-led-learning:roster-350-fixture-learning-loop",
+        "path": "claude-plugin/skills/roster-350-fixture-learning-loop/SKILL.md",
+        "canonical_source": "common/skills/fake-social-search/SKILL.md"
+      },
+      {
+        "name": "fixture-dreamer",
+        "identity": "roster-350-host-led-learning:fixture-dreamer",
+        "path": "claude-plugin/skills/fixture-dreamer/SKILL.md",
+        "canonical_source": "common/skills/dreamer/SKILL.md"
+      }
+    ],
+    "dreamer_invocation_proof": [
+      "assistant-tool-use-exact-skill-identity",
+      "successful-skill-tool-result",
+      "later-adapter-call-with-skill-only-challenge"
+    ]
+  },
+  "codex": {
+    "version": "0.144.1",
+    "project_overlay": "codex-project",
+    "generated_skill": {
+      "name": "roster",
+      "path": ".agents/skills/roster/SKILL.md"
+    },
+    "skills_list": {
+      "transport": "stdio-jsonl",
+      "required_skill_policy": "repo-scoped-exactly-once-enabled-path-and-bytes",
+      "ambient_skill_policy": "accepted-unpinned-non-authoritative",
+      "request_sequence": [
+        {
+          "method": "initialize",
+          "id": 1,
+          "params": {
+            "clientInfo": {
+              "name": "roster-350-certification",
+              "title": "Roster 350 certification",
+              "version": "1.0.0"
+            }
+          }
+        },
+        {
+          "method": "initialized"
+        },
+        {
+          "method": "skills/list",
+          "id": 2,
+          "params": {
+            "cwds": [
+              "$WORKSPACE"
+            ],
+            "forceReload": true
+          }
+        }
+      ]
+    },
+    "skills": [
+      {
+        "name": "roster-350-fixture-learning-loop",
+        "path": ".agents/skills/roster-350-fixture-learning-loop/SKILL.md",
+        "source": "codex-project/.agents/skills/roster-350-fixture-learning-loop/SKILL.md",
+        "canonical_source": "common/skills/fake-social-search/SKILL.md"
+      },
+      {
+        "name": "fixture-dreamer",
+        "path": ".agents/skills/fixture-dreamer/SKILL.md",
+        "source": "codex-project/.agents/skills/fixture-dreamer/SKILL.md",
+        "canonical_source": "common/skills/dreamer/SKILL.md"
+      }
+    ],
+    "prompt_input": {
+      "command": [
+        "codex",
+        "debug",
+        "prompt-input"
+      ],
+      "literal_prompt_source": "attested-request-positional-argument",
+      "intentional_launch_delta": {
+        "strict_config_exception": "codex-debug-prompt-input-0.144.1-rejects-strict-config",
+        "unsupported_probe_global_flags": [
+          "--strict-config"
+        ],
+        "paid_exec_only_flags": [
+          "--ignore-user-config",
+          "--ignore-rules",
+          "--ephemeral",
+          "--output-schema",
+          "--json",
+          "--color"
+        ],
+        "probe_user_config_policy": "ambient-visible",
+        "paid_user_config_policy": "ignored",
+        "proof_scope": "ordered-required-subset-one-directional"
+      },
+      "required_configurable_contributions": [
+        "canonical-roster-instructions",
+        "expected-project-skills",
+        "sandbox-canary-instructions",
+        "literal-human-request"
+      ],
+      "ordered_required_subset": [
+        "permissions",
+        "sandbox-canary-instructions",
+        "expected-project-skills",
+        "binary-collaboration",
+        "binary-multi-agent",
+        "canonical-roster-instructions",
+        "environment",
+        "literal-human-request"
+      ],
+      "ambient_contributions": {
+        "policy": "accepted-unpinned",
+        "may_add": [
+          "system-skill-summary",
+          "user-skill-summary",
+          "user-config-contribution"
+        ],
+        "must_not": [
+          "replace-required-contribution",
+          "duplicate-required-contribution",
+          "reorder-required-contribution",
+          "shadow-required-skill"
+        ],
+        "persist": "none"
+      },
+      "pinned_contribution_sha256": {
+        "permissions": "dba160a791bbfa61a0fd7775efc99b38d3eed72720fb913b73e022bb819f713b",
+        "sandbox_instructions": "654ff3cf04f215bfbfe16910191cff5d8b22af6fce8403e4d3dda8a744cacfc2",
+        "binary_collaboration": "fccb993bd0ff45747511e4c90dd1524d804d353084a0767e09684d10512c20fe",
+        "binary_multi_agent": "65523c71c4fa1ed65e831bd7a589a5c2c0d4a5f7dfac562e431e1a10937b374e"
+      }
+    },
+    "dreamer_invocation_proof": [
+      "model-free-skills-list-entry",
+      "jsonl-observed-full-skill-read",
+      "later-adapter-call-with-skill-only-challenge"
+    ]
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "roster-350-host-led-learning",
+  "version": "0.0.0",
+  "description": "Test-only host-led learning fixture for Roster issue 350",
+  "author": {
+    "name": "Roster test fixture"
+  }
+}
