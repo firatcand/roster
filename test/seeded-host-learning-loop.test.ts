@@ -399,7 +399,7 @@ test('seeded host-led learning uses product context and lesson seams around boun
     }, renderSeededCandidateMeaning(meaning));
     store = openSeededLearningStore(statePath);
     const stateShow = hostLedLearningAdapterTestApi.stateShowProjection(store);
-    assert.deepEqual(Object.keys(stateShow).sort(), ['pending_candidate', 'reviewed_query', 'state', 'status']);
+    assert.deepEqual(Object.keys(stateShow).sort(), ['pending_candidate', 'reviewed_query', 'status']);
     assert.deepEqual(
       Object.keys(stateShow.pending_candidate).sort(),
       ['content_hash', 'record', 'status'],
@@ -408,8 +408,6 @@ test('seeded host-led learning uses product context and lesson seams around boun
     assert.equal(stateShow.pending_candidate.content_hash, createdCandidate.content_hash);
     assert.deepEqual(stateShow.pending_candidate.record, lessonCandidate);
     assert.deepEqual(stateShow.reviewed_query, completedRun.context_query);
-    assert.deepEqual(stateShow.state.completed_runs[0]!.context_query, completedRun.context_query);
-    assert.deepEqual(stateShow.state.candidates, [lessonCandidate]);
     assert.equal(Object.isFrozen(stateShow), true);
     assert.equal(store.status().status, 'not_due');
     assert.equal(store.snapshot().candidates.length, 1);

@@ -16,6 +16,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  type Stats,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir, userInfo } from 'node:os';
@@ -53,8 +54,8 @@ import {
 } from './host-led-learning-adapter.ts';
 
 export const HOST_LED_LEARNING_SMOKE_ENV = 'ROSTER_HOST_LED_LOOP_SMOKE';
-export const HOST_LED_LEARNING_ATTESTATION_SCHEMA_VERSION = 1 as const;
-export const HOST_LED_LEARNING_CONTRACT_SCHEMA_VERSION = 1 as const;
+export const HOST_LED_LEARNING_ATTESTATION_SCHEMA_VERSION = 2 as const;
+export const HOST_LED_LEARNING_CONTRACT_SCHEMA_VERSION = 2 as const;
 export const CLAUDE_CODE_VERSION = '2.1.220 (Claude Code)';
 export const CODEX_CLI_VERSION = 'codex-cli 0.144.1';
 export const CLAUDE_MODEL = 'claude-opus-5';
@@ -75,6 +76,8 @@ const SOCIAL_MANAGER_FIXTURE_PATH = 'test/fixtures/social-manager-context';
 const MAX_FILE_COUNT = 16_384;
 const MAX_MANIFEST_BYTES = 64 * 1024 * 1024;
 const MAX_PROCESS_OUTPUT_BYTES = 16 * 1024 * 1024;
+const MAX_CLAUDE_THINKING_TOKEN_EVENTS = 4_096;
+const MAX_CLAUDE_BOUNDARY_ID_BYTES = 256;
 const HOST_TIMEOUT_MS = 10 * 60_000;
 const PROBE_TIMEOUT_MS = 30_000;
 const CLAUDE_TOOL_RESULT_PERSISTENCE_MARKERS = [
@@ -85,6 +88,25 @@ const CLAUDE_TOOL_RESULT_PERSISTENCE_MARKERS = [
   'Full output saved to:',
 ] as const;
 const CLAUDE_BASH_FIRST_LIMITER_MAX_OUTPUT_LENGTH = '150000';
+const CLAUDE_CONTROLLED_RESULT_AGGREGATE_LIMIT = 25_000;
+const JSON_SCHEMA_DRAFT_07_URI = 'http://json-schema.org/draft-07/schema#';
+const POST_DRAFT_07_SCHEMA_KEYWORDS = new Set([
+  '$anchor',
+  '$defs',
+  '$dynamicAnchor',
+  '$dynamicRef',
+  '$recursiveAnchor',
+  '$recursiveRef',
+  '$vocabulary',
+  'contentSchema',
+  'dependentRequired',
+  'dependentSchemas',
+  'maxContains',
+  'minContains',
+  'prefixItems',
+  'unevaluatedItems',
+  'unevaluatedProperties',
+]);
 
 const modulePath = fileURLToPath(import.meta.url);
 export const HOST_LED_LEARNING_REPO_ROOT = resolve(dirname(modulePath), '../..');
@@ -93,6 +115,28 @@ export type CertificationHost = 'claude' | 'codex';
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | readonly JsonValue[] | { readonly [key: string]: JsonValue };
 export type JsonObject = { readonly [key: string]: JsonValue };
+
+export type HostAuthenticationProjection =
+  | Readonly<{
+      host: 'claude';
+      logged_in: true;
+      mode: 'host-managed';
+      provider: 'claude.ai';
+      source: 'firstParty';
+      model_api_key_injected: false;
+    }>
+  | Readonly<{
+      host: 'codex';
+      logged_in: true;
+      mode: 'host-managed';
+      provider: 'chatgpt';
+      model_api_key_injected: false;
+    }>;
+
+export type AmbientHostState = Readonly<{
+  claudeHome: string;
+  codexHome: string;
+}>;
 
 export type ManifestFile = Readonly<{
   path: string;
@@ -160,6 +204,11 @@ type HostTurnOutcome = Readonly<{
   config_sha256: string;
 }>;
 
+export type ClaudeSyntheticSkillContext = Readonly<{
+  identity: string;
+  rendered_text: string;
+}>;
+
 export type HostLaunchProbe = Readonly<{
   executable_sha256: string;
   version: string;
@@ -168,10 +217,13 @@ export type HostLaunchProbe = Readonly<{
   model: string;
   effort: string;
   capability_sha256: string;
+  auth_status_help_output_sha256: string;
+  authentication: HostAuthenticationProjection;
+  environment_keys_sha256: string;
 }>;
 
 export type HostLedLearningAttestation = Readonly<{
-  schema_version: 1;
+  schema_version: 2;
   status: 'certified';
   fixture_id: string;
   behavior_revision: string;
@@ -188,6 +240,8 @@ export type HostLedLearningAttestation = Readonly<{
   support_semantics_sha256: string;
   launch_contract_sha256: string;
   oracle_sha256: string;
+  certification_profile: HostLedLearningLaunchContract['certification_profile'];
+  authentication: Readonly<Record<CertificationHost, HostAuthenticationProjection>>;
   probes: Readonly<Record<CertificationHost, HostLaunchProbe>>;
   outcomes: Readonly<Record<CertificationHost, readonly CertificationPassOutcome[]>>;
   normalized_result_sha256: string;
@@ -205,7 +259,6 @@ export type CertificationInputSnapshot = Readonly<{
   roster_bundle_sha256: string;
   certification_roster_bundle_sha256: string;
   adapter_bundle_sha256: string;
-  managed_settings_sha256: string;
   host_binaries: Readonly<Record<CertificationHost, Readonly<{
     executable_sha256: string;
     probe_sha256: string;
@@ -213,10 +266,36 @@ export type CertificationInputSnapshot = Readonly<{
 }>;
 
 export type HostLedLearningLaunchContract = Readonly<{
-  schema_version: 1;
+  schema_version: 2;
   fixture_id: string;
   behavior_revision: string;
   fixture_iteration: number;
+  certification_profile: Readonly<{
+    id: 'ambient-auth-v1';
+    authentication: Readonly<{
+      claude: Readonly<{
+        mode: 'host-managed';
+        provider: 'claude.ai';
+        source: 'firstParty';
+        model_api_key_injected: false;
+      }>;
+      codex: Readonly<{
+        mode: 'host-managed';
+        provider: 'chatgpt';
+        model_api_key_injected: false;
+      }>;
+    }>;
+    external_host_state: Readonly<{
+      policy: 'accepted-unpinned';
+      paid_session_scope: 'auth-cache-only';
+      copied: false;
+      recursive_scan: false;
+      transient_inspection: true;
+      transient_output_hashing: true;
+      raw_personal_state_persisted: false;
+      personal_state_authority: false;
+    }>;
+  }>;
   runtime: Readonly<{
     state_path: string;
     adapter_log_path: string;
@@ -260,6 +339,7 @@ export type HostLedLearningLaunchContract = Readonly<{
     plugin_root: string;
     plugin_name: string;
     skill_tool_name: string;
+    skill_permission_policy: 'exact-fixture-identities-only';
     skills: readonly Readonly<{
       name: string;
       identity: string;
@@ -274,6 +354,8 @@ export type HostLedLearningLaunchContract = Readonly<{
     generated_skill: Readonly<{ name: string; path: string }>;
     skills_list: Readonly<{
       transport: string;
+      required_skill_policy: 'repo-scoped-exactly-once-enabled-path-and-bytes';
+      ambient_skill_policy: 'accepted-unpinned-non-authoritative';
       request_sequence: readonly JsonObject[];
     }>;
     skills: readonly Readonly<{
@@ -287,17 +369,25 @@ export type HostLedLearningLaunchContract = Readonly<{
       literal_prompt_source: string;
       intentional_launch_delta: Readonly<{
         strict_config_exception: string;
+        unsupported_probe_global_flags: readonly string[];
         paid_exec_only_flags: readonly string[];
+        probe_user_config_policy: 'ambient-visible';
+        paid_user_config_policy: 'ignored';
+        proof_scope: 'ordered-required-subset-one-directional';
       }>;
       required_configurable_contributions: readonly string[];
+      ordered_required_subset: readonly string[];
+      ambient_contributions: Readonly<{
+        policy: 'accepted-unpinned';
+        may_add: readonly string[];
+        must_not: readonly string[];
+        persist: 'none';
+      }>;
       pinned_contribution_sha256: Readonly<{
         permissions: string;
         sandbox_instructions: string;
-        skills: string;
         binary_collaboration: string;
         binary_multi_agent: string;
-        workspace_instructions: string;
-        environment: string;
       }>;
     }>;
     dreamer_invocation_proof: readonly string[];
@@ -372,9 +462,45 @@ export function assertNoClaudeToolResultPersistenceWrapper(value: unknown): void
     }
   };
   visit(value);
-  if (CLAUDE_TOOL_RESULT_PERSISTENCE_MARKERS.some((marker) => strings.some((entry) => entry.includes(marker)))) {
-    throw new CertificationError('Claude tool result was replaced by a persisted or truncated output wrapper.');
+  const wrapped = strings.find((entry) => (
+    CLAUDE_TOOL_RESULT_PERSISTENCE_MARKERS.some((marker) => entry.includes(marker))
+  ));
+  if (wrapped !== undefined) {
+    const markerOrdinal = CLAUDE_TOOL_RESULT_PERSISTENCE_MARKERS.findIndex((marker) => wrapped.includes(marker)) + 1;
+    const reportedCharacters = /(?:Output too large \((\d+) chars\)|Output truncated \(original char count: (\d+)\))/u
+      .exec(wrapped)?.slice(1).find((entry) => entry !== undefined);
+    const suffix = reportedCharacters === undefined ? '' : ` Host reported ${reportedCharacters} original characters.`;
+    throw new CertificationError(
+      `Claude tool result was replaced by a persisted or truncated output wrapper. Wrapper marker ${markerOrdinal}; wrapper characters ${wrapped.length}; wrapper sha256 ${sha256(wrapped)}.${suffix}`,
+    );
   }
+}
+
+export function validateClaudeOutputSchemaDialect(schemas: Readonly<{
+  discover: unknown;
+  approve: unknown;
+}>): void {
+  const validate = (value: unknown, label: 'discover' | 'approve'): void => {
+    if (!isJsonObject(value) || value['$schema'] !== JSON_SCHEMA_DRAFT_07_URI) {
+      throw new CertificationError(`Claude ${label} output schema must declare the exact draft-07 dialect.`);
+    }
+    const visit = (entry: unknown): void => {
+      if (Array.isArray(entry)) {
+        for (const child of entry) visit(child);
+        return;
+      }
+      if (!isJsonObject(entry)) return;
+      for (const [key, child] of Object.entries(entry)) {
+        if (POST_DRAFT_07_SCHEMA_KEYWORDS.has(key)) {
+          throw new CertificationError(`Claude ${label} output schema uses a post-draft-07 keyword.`);
+        }
+        visit(child);
+      }
+    };
+    visit(value);
+  };
+  validate(schemas.discover, 'discover');
+  validate(schemas.approve, 'approve');
 }
 
 export function assertContextRawHashBinding(
@@ -580,12 +706,12 @@ function parseTurnExpectation(
 
 export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearningLaunchContract {
   const root = requiredObject(value, 'host launch contract', [
-    'schema_version', 'fixture_id', 'behavior_revision', 'fixture_iteration', 'runtime',
+    'schema_version', 'fixture_id', 'behavior_revision', 'fixture_iteration', 'certification_profile', 'runtime',
     'host_readable_inputs', 'roster', 'adapters',
     'turn_expectations', 'claude', 'codex',
   ]);
   if (root['schema_version'] !== HOST_LED_LEARNING_CONTRACT_SCHEMA_VERSION) {
-    throw new CertificationError('Host launch contract has an unsupported schema version.');
+    throw new CertificationError('Host launch contract requires schema v2.');
   }
   const runtime = requiredObject(root['runtime'], 'runtime', [
     'state_path', 'adapter_log_path', 'adapter_directory', 'workspace_entries',
@@ -632,15 +758,62 @@ export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearn
     });
   }));
   const turnExpectations = requiredObject(root['turn_expectations'], 'turn_expectations', ['discover', 'approve']);
+  const certificationProfile = requiredObject(root['certification_profile'], 'certification_profile', [
+    'id', 'authentication', 'external_host_state',
+  ]);
+  const profileAuthentication = requiredObject(
+    certificationProfile['authentication'],
+    'certification_profile.authentication',
+    ['claude', 'codex'],
+  );
+  const profileClaudeAuth = requiredObject(
+    profileAuthentication['claude'],
+    'certification_profile.authentication.claude',
+    ['mode', 'provider', 'source', 'model_api_key_injected'],
+  );
+  const profileCodexAuth = requiredObject(
+    profileAuthentication['codex'],
+    'certification_profile.authentication.codex',
+    ['mode', 'provider', 'model_api_key_injected'],
+  );
+  const externalHostState = requiredObject(
+    certificationProfile['external_host_state'],
+    'certification_profile.external_host_state',
+    [
+      'policy', 'paid_session_scope', 'copied', 'recursive_scan', 'transient_inspection',
+      'transient_output_hashing', 'raw_personal_state_persisted', 'personal_state_authority',
+    ],
+  );
+  if (certificationProfile['id'] !== 'ambient-auth-v1'
+    || profileClaudeAuth['mode'] !== 'host-managed'
+    || profileClaudeAuth['provider'] !== 'claude.ai'
+    || profileClaudeAuth['source'] !== 'firstParty'
+    || profileClaudeAuth['model_api_key_injected'] !== false
+    || profileCodexAuth['mode'] !== 'host-managed'
+    || profileCodexAuth['provider'] !== 'chatgpt'
+    || profileCodexAuth['model_api_key_injected'] !== false
+    || externalHostState['policy'] !== 'accepted-unpinned'
+    || externalHostState['paid_session_scope'] !== 'auth-cache-only'
+    || externalHostState['copied'] !== false
+    || externalHostState['recursive_scan'] !== false
+    || externalHostState['transient_inspection'] !== true
+    || externalHostState['transient_output_hashing'] !== true
+    || externalHostState['raw_personal_state_persisted'] !== false
+    || externalHostState['personal_state_authority'] !== false) {
+    throw new CertificationError('Certification profile differs from the exact ambient-auth-v1 boundary.');
+  }
   const claude = requiredObject(root['claude'], 'claude', [
-    'version', 'plugin_root', 'plugin_name', 'skill_tool_name', 'skills', 'dreamer_invocation_proof',
+    'version', 'plugin_root', 'plugin_name', 'skill_tool_name', 'skill_permission_policy',
+    'skills', 'dreamer_invocation_proof',
   ]);
   const codex = requiredObject(root['codex'], 'codex', [
     'version', 'project_overlay', 'generated_skill', 'skills_list', 'skills', 'prompt_input',
     'dreamer_invocation_proof',
   ]);
   const generatedSkill = requiredObject(codex['generated_skill'], 'codex.generated_skill', ['name', 'path']);
-  const skillsList = requiredObject(codex['skills_list'], 'codex.skills_list', ['transport', 'request_sequence']);
+  const skillsList = requiredObject(codex['skills_list'], 'codex.skills_list', [
+    'transport', 'required_skill_policy', 'ambient_skill_policy', 'request_sequence',
+  ]);
   if (!Array.isArray(skillsList['request_sequence']) || skillsList['request_sequence'].length !== 3) {
     throw new CertificationError('codex.skills_list.request_sequence must contain exactly three messages.');
   }
@@ -650,26 +823,57 @@ export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearn
   });
   const promptInput = requiredObject(codex['prompt_input'], 'codex.prompt_input', [
     'command', 'literal_prompt_source', 'intentional_launch_delta', 'required_configurable_contributions',
-    'pinned_contribution_sha256',
+    'ordered_required_subset', 'ambient_contributions', 'pinned_contribution_sha256',
   ]);
   const promptLaunchDelta = requiredObject(
     promptInput['intentional_launch_delta'],
     'codex.prompt_input.intentional_launch_delta',
-    ['strict_config_exception', 'paid_exec_only_flags'],
+    [
+      'strict_config_exception', 'unsupported_probe_global_flags', 'paid_exec_only_flags',
+      'probe_user_config_policy', 'paid_user_config_policy', 'proof_scope',
+    ],
+  );
+  const ambientPromptContributions = requiredObject(
+    promptInput['ambient_contributions'],
+    'codex.prompt_input.ambient_contributions',
+    ['policy', 'may_add', 'must_not', 'persist'],
   );
   const pinnedPromptContributions = requiredObject(
     promptInput['pinned_contribution_sha256'],
     'codex.prompt_input.pinned_contribution_sha256',
-    [
-      'permissions', 'sandbox_instructions', 'skills', 'binary_collaboration', 'binary_multi_agent',
-      'workspace_instructions', 'environment',
-    ],
+    ['permissions', 'sandbox_instructions', 'binary_collaboration', 'binary_multi_agent'],
   );
   const contract = {
     schema_version: HOST_LED_LEARNING_CONTRACT_SCHEMA_VERSION,
     fixture_id: requiredString(root['fixture_id'], 'fixture_id'),
     behavior_revision: requiredString(root['behavior_revision'], 'behavior_revision'),
     fixture_iteration: requiredInteger(root['fixture_iteration'], 'fixture_iteration'),
+    certification_profile: Object.freeze({
+      id: 'ambient-auth-v1' as const,
+      authentication: Object.freeze({
+        claude: Object.freeze({
+          mode: 'host-managed' as const,
+          provider: 'claude.ai' as const,
+          source: 'firstParty' as const,
+          model_api_key_injected: false as const,
+        }),
+        codex: Object.freeze({
+          mode: 'host-managed' as const,
+          provider: 'chatgpt' as const,
+          model_api_key_injected: false as const,
+        }),
+      }),
+      external_host_state: Object.freeze({
+        policy: 'accepted-unpinned' as const,
+        paid_session_scope: 'auth-cache-only' as const,
+        copied: false as const,
+        recursive_scan: false as const,
+        transient_inspection: true as const,
+        transient_output_hashing: true as const,
+        raw_personal_state_persisted: false as const,
+        personal_state_authority: false as const,
+      }),
+    }),
     runtime: Object.freeze({
       state_path: assertRelativePath(requiredString(runtime['state_path'], 'runtime.state_path'), 'runtime state path'),
       adapter_log_path: assertRelativePath(
@@ -702,6 +906,7 @@ export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearn
       plugin_root: assertRelativePath(requiredString(claude['plugin_root'], 'claude.plugin_root'), 'Claude plugin root'),
       plugin_name: requiredString(claude['plugin_name'], 'claude.plugin_name'),
       skill_tool_name: requiredString(claude['skill_tool_name'], 'claude.skill_tool_name'),
+      skill_permission_policy: claude['skill_permission_policy'] as 'exact-fixture-identities-only',
       skills: parseContractSkills(claude['skills'], 'claude'),
       dreamer_invocation_proof: requiredStringArray(claude['dreamer_invocation_proof'], 'claude.dreamer_invocation_proof'),
     }),
@@ -714,6 +919,8 @@ export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearn
       }),
       skills_list: Object.freeze({
         transport: requiredString(skillsList['transport'], 'codex.skills_list.transport'),
+        required_skill_policy: skillsList['required_skill_policy'] as 'repo-scoped-exactly-once-enabled-path-and-bytes',
+        ambient_skill_policy: skillsList['ambient_skill_policy'] as 'accepted-unpinned-non-authoritative',
         request_sequence: Object.freeze(requestSequence),
       }),
       skills: parseContractSkills(codex['skills'], 'codex'),
@@ -725,15 +932,38 @@ export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearn
             promptLaunchDelta['strict_config_exception'],
             'codex.prompt_input.intentional_launch_delta.strict_config_exception',
           ),
+          unsupported_probe_global_flags: requiredStringArray(
+            promptLaunchDelta['unsupported_probe_global_flags'],
+            'codex.prompt_input.intentional_launch_delta.unsupported_probe_global_flags',
+          ),
           paid_exec_only_flags: requiredStringArray(
             promptLaunchDelta['paid_exec_only_flags'],
             'codex.prompt_input.intentional_launch_delta.paid_exec_only_flags',
           ),
+          probe_user_config_policy: promptLaunchDelta['probe_user_config_policy'] as 'ambient-visible',
+          paid_user_config_policy: promptLaunchDelta['paid_user_config_policy'] as 'ignored',
+          proof_scope: promptLaunchDelta['proof_scope'] as 'ordered-required-subset-one-directional',
         }),
         required_configurable_contributions: requiredStringArray(
           promptInput['required_configurable_contributions'],
           'codex.prompt_input.required_configurable_contributions',
         ),
+        ordered_required_subset: requiredStringArray(
+          promptInput['ordered_required_subset'],
+          'codex.prompt_input.ordered_required_subset',
+        ),
+        ambient_contributions: Object.freeze({
+          policy: ambientPromptContributions['policy'] as 'accepted-unpinned',
+          may_add: requiredStringArray(
+            ambientPromptContributions['may_add'],
+            'codex.prompt_input.ambient_contributions.may_add',
+          ),
+          must_not: requiredStringArray(
+            ambientPromptContributions['must_not'],
+            'codex.prompt_input.ambient_contributions.must_not',
+          ),
+          persist: ambientPromptContributions['persist'] as 'none',
+        }),
         pinned_contribution_sha256: Object.freeze(Object.fromEntries(
           Object.entries(pinnedPromptContributions).map(([key, value]) => [
             key,
@@ -773,21 +1003,55 @@ export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearn
   if (canonicalJson(contract.codex.skills_list.request_sequence) !== expectedRequestSequence) {
     throw new CertificationError('Codex skills-list request sequence must match the exact phased protocol.');
   }
-  if (contract.codex.skills_list.transport !== 'stdio-jsonl'
+  const claudeSkillIdentities = contract.claude.skills.map((skill) => skill.identity);
+  if (new Set(claudeSkillIdentities).size !== claudeSkillIdentities.length
+    || contract.claude.skills.some((skill) => (
+      skill.identity !== `${contract.claude.plugin_name}:${skill.name}`
+    ))) {
+    throw new CertificationError('Claude skills must use unique exact plugin-scoped skill identities.');
+  }
+  if (contract.behavior_revision !== 'host-led-learning-v5'
+    || contract.fixture_iteration !== 6
+    || contract.claude.skill_permission_policy !== 'exact-fixture-identities-only'
+    || contract.codex.skills_list.transport !== 'stdio-jsonl'
+    || contract.codex.skills_list.required_skill_policy
+      !== 'repo-scoped-exactly-once-enabled-path-and-bytes'
+    || contract.codex.skills_list.ambient_skill_policy !== 'accepted-unpinned-non-authoritative'
     || canonicalJson(contract.codex.prompt_input.command) !== canonicalJson(['codex', 'debug', 'prompt-input'])
     || contract.codex.prompt_input.literal_prompt_source !== 'attested-request-positional-argument'
     || contract.codex.prompt_input.intentional_launch_delta.strict_config_exception
       !== 'codex-debug-prompt-input-0.144.1-rejects-strict-config'
+    || canonicalJson(contract.codex.prompt_input.intentional_launch_delta.unsupported_probe_global_flags)
+      !== canonicalJson(['--strict-config'])
     || canonicalJson(contract.codex.prompt_input.intentional_launch_delta.paid_exec_only_flags)
       !== canonicalJson([
         '--ignore-user-config', '--ignore-rules', '--ephemeral', '--output-schema', '--json', '--color',
       ])
+    || contract.codex.prompt_input.intentional_launch_delta.probe_user_config_policy !== 'ambient-visible'
+    || contract.codex.prompt_input.intentional_launch_delta.paid_user_config_policy !== 'ignored'
+    || contract.codex.prompt_input.intentional_launch_delta.proof_scope
+      !== 'ordered-required-subset-one-directional'
     || canonicalJson(contract.codex.prompt_input.required_configurable_contributions)
       !== canonicalJson([
         'canonical-roster-instructions',
         'expected-project-skills',
         'sandbox-canary-instructions',
         'literal-human-request',
+      ])
+    || canonicalJson(contract.codex.prompt_input.ordered_required_subset)
+      !== canonicalJson([
+        'permissions', 'sandbox-canary-instructions', 'expected-project-skills',
+        'binary-collaboration', 'binary-multi-agent', 'canonical-roster-instructions',
+        'environment', 'literal-human-request',
+      ])
+    || contract.codex.prompt_input.ambient_contributions.policy !== 'accepted-unpinned'
+    || contract.codex.prompt_input.ambient_contributions.persist !== 'none'
+    || canonicalJson(contract.codex.prompt_input.ambient_contributions.may_add)
+      !== canonicalJson(['system-skill-summary', 'user-skill-summary', 'user-config-contribution'])
+    || canonicalJson(contract.codex.prompt_input.ambient_contributions.must_not)
+      !== canonicalJson([
+        'replace-required-contribution', 'duplicate-required-contribution',
+        'reorder-required-contribution', 'shadow-required-skill',
       ])) {
     throw new CertificationError('Codex prompt-input contract differs from the exact model-free probe.');
   }
@@ -954,6 +1218,10 @@ function replaceAllLiteral(value: string, search: string, replacement: string): 
   return search === '' ? value : value.split(search).join(replacement);
 }
 
+function posixSingleQuotedContent(value: string): string {
+  return value.replaceAll("'", `'"'"'`);
+}
+
 export function normalizeMachinePaths(
   value: unknown,
   replacements: Readonly<Record<string, string>>,
@@ -963,11 +1231,16 @@ export function normalizeMachinePaths(
       const resolved = resolve(path);
       try {
         const real = realpathSync(resolved);
-        return real === resolved
-          ? [[resolved, placeholder] as const]
-          : [[resolved, placeholder] as const, [real, placeholder] as const];
+        const paths = real === resolved ? [resolved] : [resolved, real];
+        return paths.flatMap((candidate) => [
+          [candidate, placeholder] as const,
+          [posixSingleQuotedContent(candidate), placeholder] as const,
+        ]);
       } catch {
-        return [[resolved, placeholder] as const];
+        return [
+          [resolved, placeholder] as const,
+          [posixSingleQuotedContent(resolved), placeholder] as const,
+        ];
       }
     })
     .sort(([left], [right]) => right.length - left.length || compareCodePoints(left, right));
@@ -1034,6 +1307,153 @@ export function runCapturedProcess(options: Readonly<{
     stdout_sha256: sha256(stdout),
     stderr_sha256: sha256(stderr),
   });
+}
+
+type PaidHostProcessOptions = Readonly<{
+  command: string;
+  args: readonly string[];
+  cwd: string;
+  env: Readonly<Record<string, string>>;
+  input?: string;
+}>;
+
+function processErrorDetail(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function terminateDetachedProcessGroup(
+  child: ChildProcessWithoutNullStreams,
+  label: string,
+): Error | undefined {
+  const pid = child.pid;
+  if (!Number.isSafeInteger(pid) || pid === undefined || pid <= 1) {
+    return new CertificationError(`${label} has no safe detached process-group PID.`);
+  }
+  try {
+    process.kill(-pid, 'SIGKILL');
+    return undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return undefined;
+    return new CertificationError(
+      `${label} process-group termination failed (${sha256(processErrorDetail(error))}).`,
+    );
+  }
+}
+
+function testProcessTimeout(timeoutMs: number): number {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > PROBE_TIMEOUT_MS) {
+    throw new CertificationError('Test process timeout must be a positive bounded integer.');
+  }
+  return timeoutMs;
+}
+
+function runPaidHostProcessWithTimeout(
+  options: PaidHostProcessOptions,
+  timeoutMs: number,
+): Promise<ProcessCapture> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = spawn(options.command, [...options.args], {
+        cwd: options.cwd,
+        env: { ...options.env },
+        detached: true,
+        shell: false,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      rejectPromise(new CertificationError(`Paid host spawn failed (${sha256(processErrorDetail(error))}).`));
+      return;
+    }
+
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    let totalOutputBytes = 0;
+    let failure: Error | undefined;
+    let terminationAttempted = false;
+    let closed = false;
+    const requestFailure = (error: Error): void => {
+      if (failure === undefined) failure = error;
+      if (terminationAttempted || closed) return;
+      terminationAttempted = true;
+      const terminationError = terminateDetachedProcessGroup(child, 'Paid host');
+      if (terminationError !== undefined) failure = terminationError;
+    };
+    const captureOutput = (chunks: Buffer[], chunk: Buffer | string): void => {
+      if (failure !== undefined) return;
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const remaining = MAX_PROCESS_OUTPUT_BYTES - totalOutputBytes;
+      if (bytes.length > remaining) {
+        if (remaining > 0) chunks.push(bytes.subarray(0, remaining));
+        totalOutputBytes = MAX_PROCESS_OUTPUT_BYTES;
+        requestFailure(new CertificationError('Paid host exceeded its combined process-output bound.'));
+        return;
+      }
+      chunks.push(bytes);
+      totalOutputBytes += bytes.length;
+    };
+    const timeout = setTimeout(() => {
+      requestFailure(new CertificationError('Paid host timed out.'));
+    }, timeoutMs);
+
+    child.stdin.on('error', (error) => {
+      requestFailure(new CertificationError(`Paid host stdin failed (${sha256(error.message)}).`));
+    });
+    child.stdout.on('data', (chunk: Buffer | string) => captureOutput(stdoutChunks, chunk));
+    child.stdout.on('error', (error) => {
+      requestFailure(new CertificationError(`Paid host stdout failed (${sha256(error.message)}).`));
+    });
+    child.stderr.on('data', (chunk: Buffer | string) => captureOutput(stderrChunks, chunk));
+    child.stderr.on('error', (error) => {
+      requestFailure(new CertificationError(`Paid host stderr failed (${sha256(error.message)}).`));
+    });
+    child.on('error', (error) => {
+      requestFailure(new CertificationError(`Paid host spawn failed (${sha256(error.message)}).`));
+    });
+    child.on('close', (status, signal) => {
+      if (closed) return;
+      closed = true;
+      clearTimeout(timeout);
+      if (failure !== undefined) {
+        rejectPromise(failure);
+        return;
+      }
+      const stdout = stripAnsi(Buffer.concat(stdoutChunks).toString('utf8'));
+      const stderr = stripAnsi(Buffer.concat(stderrChunks).toString('utf8'));
+      resolvePromise(Object.freeze({
+        command: options.command,
+        args: Object.freeze([...options.args]),
+        status,
+        signal,
+        timed_out: false,
+        stdout,
+        stderr,
+        stdout_sha256: sha256(stdout),
+        stderr_sha256: sha256(stderr),
+      }));
+    });
+
+    if (!Number.isSafeInteger(child.pid) || child.pid === undefined || child.pid <= 1) {
+      requestFailure(new CertificationError('Paid host received an unsafe process-group PID.'));
+    }
+    if (failure === undefined) {
+      try {
+        child.stdin.end(options.input);
+      } catch (error) {
+        requestFailure(new CertificationError(`Paid host stdin write failed (${sha256(processErrorDetail(error))}).`));
+      }
+    }
+  });
+}
+
+function runPaidHostProcess(options: PaidHostProcessOptions): Promise<ProcessCapture> {
+  return runPaidHostProcessWithTimeout(options, HOST_TIMEOUT_MS);
+}
+
+export function runPaidHostProcessForTest(
+  options: PaidHostProcessOptions & Readonly<{ timeoutMs: number }>,
+): Promise<ProcessCapture> {
+  return runPaidHostProcessWithTimeout(options, testProcessTimeout(options.timeoutMs));
 }
 
 function requireSuccess(result: ProcessCapture, stage: string): ProcessCapture {
@@ -1108,6 +1528,7 @@ export function probeHostBinary(
   host: CertificationHost,
   binary: string,
   temporaryHome: string,
+  authEnv: Readonly<Record<string, string>>,
 ): HostLaunchProbe {
   mkdirSync(join(temporaryHome, 'tmp'), { recursive: true, mode: 0o700 });
   const env = minimalProbeEnv(temporaryHome, `${dirname(binary)}:/usr/bin:/bin`);
@@ -1132,6 +1553,16 @@ export function probeHostBinary(
         'codex-exec-help',
       )
     : null;
+  const authStatusHelpResult = requireSuccess(
+    runCapturedProcess({
+      command: binary,
+      args: host === 'claude' ? ['auth', 'status', '--help'] : ['login', 'status', '--help'],
+      cwd: temporaryHome,
+      env: authEnv,
+      timeoutMs: PROBE_TIMEOUT_MS,
+    }),
+    `${host}-authentication-status-help`,
+  );
   const version = versionResult.stdout.trim();
   if (version !== (host === 'claude' ? CLAUDE_CODE_VERSION : CODEX_CLI_VERSION)) {
     throw new CertificationError(`${host} version is not the exact certified patch (${sha256(version)}).`);
@@ -1147,6 +1578,13 @@ export function probeHostBinary(
     : [];
   assertHelpFlags(helpResult.stdout, topLevelFlags, host);
   if (execHelpResult !== null) assertHelpFlags(execHelpResult.stdout, execFlags, host);
+  if (host === 'claude') {
+    assertHelpFlags(authStatusHelpResult.stdout, ['--json'], host);
+  } else if (!authStatusHelpResult.stdout.includes('Show login status')) {
+    throw new CertificationError('codex login-status help differs from the certified capability surface.');
+  }
+  const authentication = probeHostAuthentication(host, binary, authEnv, temporaryHome);
+  const environmentKeysSha256 = curatedHostEnvironmentKeysSha256(host, authEnv);
   const helpOutputSha256 = sha256(canonicalJson({
     top_level: helpResult.stdout_sha256,
     ...(execHelpResult === null ? {} : { exec: execHelpResult.stdout_sha256 }),
@@ -1158,7 +1596,13 @@ export function probeHostBinary(
       ...(execHelpResult === null
         ? {}
         : { exec: { required_flags: execFlags, output_sha256: execHelpResult.stdout_sha256 } }),
+      authentication_status: {
+        required_flags: host === 'claude' ? ['--json'] : [],
+        output_sha256: authStatusHelpResult.stdout_sha256,
+      },
     },
+    authentication,
+    environment_keys_sha256: environmentKeysSha256,
   });
   if (sha256(readFileSync(binary)) !== executableSha256) {
     throw new CertificationError(`${host} executable bytes changed during its launch probe.`);
@@ -1168,6 +1612,9 @@ export function probeHostBinary(
     version,
     version_output_sha256: versionResult.stdout_sha256,
     help_output_sha256: helpOutputSha256,
+    auth_status_help_output_sha256: authStatusHelpResult.stdout_sha256,
+    authentication,
+    environment_keys_sha256: environmentKeysSha256,
     model: host === 'claude' ? CLAUDE_MODEL : CODEX_MODEL,
     effort: host === 'claude' ? CLAUDE_EFFORT : CODEX_REASONING_EFFORT,
     capability_sha256: sha256(capability),
@@ -1323,11 +1770,7 @@ function passPaths(certificationRoot: string, host: CertificationHost): HostPass
   });
 }
 
-export function createHostProbePaths(
-  paidWorkspace: string,
-  hostRoot: string,
-  label: string,
-): HostProbePaths {
+function allocateHostProbePaths(hostRoot: string, label: string): HostProbePaths {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(label)) {
     throw new CertificationError('Host probe label is invalid.');
   }
@@ -1341,6 +1784,30 @@ export function createHostProbePaths(
     config: join(root, 'config'),
     temp: join(root, 'tmp'),
   });
+  return paths;
+}
+
+function initializeHostProbePaths(paths: HostProbePaths): HostProbePaths {
+  for (const directory of [paths.home, paths.config, paths.temp]) {
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+  }
+  initializeGitRoot(paths.workspace, minimalProbeEnv(paths.home, '/usr/bin:/bin'));
+  inventoryAncestorInstructions(paths.workspace);
+  return paths;
+}
+
+export function createEmptyHostProbePaths(hostRoot: string, label: string): HostProbePaths {
+  const paths = allocateHostProbePaths(hostRoot, label);
+  mkdirSync(paths.workspace, { recursive: true, mode: 0o700 });
+  return initializeHostProbePaths(paths);
+}
+
+export function createHostProbePaths(
+  paidWorkspace: string,
+  hostRoot: string,
+  label: string,
+): HostProbePaths {
+  const paths = allocateHostProbePaths(hostRoot, label);
   cpSync(paidWorkspace, paths.workspace, {
     recursive: true,
     errorOnExist: true,
@@ -1350,12 +1817,7 @@ export function createHostProbePaths(
       return relativePath !== '.git' && !relativePath.startsWith('.git/');
     },
   });
-  for (const directory of [paths.home, paths.config, paths.temp]) {
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-  }
-  initializeGitRoot(paths.workspace, minimalProbeEnv(paths.home, '/usr/bin:/bin'));
-  inventoryAncestorInstructions(paths.workspace);
-  return paths;
+  return initializeHostProbePaths(paths);
 }
 
 function inventoryAncestorInstructions(workspace: string): JsonValue {
@@ -1398,51 +1860,26 @@ function inventoryManagedSettings(): JsonValue {
   return Object.freeze({ candidates: Object.freeze(candidates), present: Object.freeze([]) });
 }
 
-function inventoryHostConfig(
-  host: CertificationHost,
-  root: string,
-  secrets: readonly string[],
-): JsonValue {
-  const files: string[] = [];
-  let totalBytes = 0;
-  const visit = (absolute: string, relativePath: string): void => {
-    const stat = lstatSync(absolute);
-    if (stat.isSymbolicLink()) {
-      throw new CertificationError(`${host} created a symbolic link in its isolated config root.`);
-    }
-    if (stat.isDirectory()) {
-      for (const name of readdirSync(absolute).sort(compareCodePoints)) {
-        visit(join(absolute, name), relativePath === '' ? name : `${relativePath}/${name}`);
-      }
-      return;
-    }
-    if (!stat.isFile()) throw new CertificationError(`${host} created a non-regular config entry.`);
-    const bytes = readFileSync(absolute);
-    totalBytes += bytes.length;
-    for (const secret of secrets) {
-      if (secret.length > 0 && bytes.includes(Buffer.from(secret))) {
-        throw new CertificationError(`${host} retained a raw API key in its isolated config state.`);
-      }
-    }
-    files.push(relativePath.replaceAll('\\', '/'));
-  };
-  visit(realpathSync(root), '');
-  if (files.length > MAX_FILE_COUNT || totalBytes > MAX_MANIFEST_BYTES) {
-    throw new CertificationError(`${host} config state exceeded its closed file or byte bound.`);
+function codexScratchConfigManifest(root: string): JsonValue {
+  const stat = lstatSync(root);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new CertificationError('Codex scratch config root is not one real directory.');
   }
-  files.sort(compareCodePoints);
-  const allowed = host === 'claude'
-    ? /^(?:settings\.json|empty-mcp\.json|\.claude\.json(?:\.backup)?|backups\/\.claude\.json\.backup\.[A-Za-z0-9._-]+|debug\/.+|history\.jsonl|plugins\/.+|projects\/.+|session-env\/.+|statsig\/.+|telemetry\/.+|todos\/.+)$/u
-    : /^(?:\.codex-global-state\.json|history\.jsonl|installation_id|log\/.+|logs\/.+|models_cache\.json|sessions\/.+|skills\/\.system\/.+|(?:state|codex).*\.sqlite(?:-shm|-wal)?)$/u;
-  const unexpected = files.filter((path) => !allowed.test(path));
-  if (unexpected.length > 0) {
-    throw new CertificationError(`${host} created unexpected isolated config state (${sha256(canonicalJson(unexpected))}).`);
+  const entries = readdirSync(root).sort(compareCodePoints);
+  if (entries.length !== 0) {
+    throw new CertificationError('Codex scratch config root is not empty.');
   }
-  return canonicalize({ host, allowed_transient_paths: files });
+  return canonicalize({
+    path: '.',
+    kind: 'directory',
+    mode: stat.mode & 0o777,
+    entries,
+  });
 }
 
-function authoredHostConfigManifest(host: CertificationHost, root: string): JsonValue {
-  const paths = host === 'claude' ? ['settings.json', 'empty-mcp.json'] : [];
+export function authoredHostConfigManifest(host: CertificationHost, root: string): JsonValue {
+  if (host === 'codex') return canonicalize([codexScratchConfigManifest(root)]);
+  const paths = ['settings.json', 'empty-mcp.json'];
   return canonicalize(paths.map((relativePath) => {
     const absolute = join(root, relativePath);
     const stat = lstatSync(absolute);
@@ -1459,21 +1896,114 @@ function authoredHostConfigManifest(host: CertificationHost, root: string): Json
   }));
 }
 
+export function normalizedAuthoredHostConfigManifest(
+  host: CertificationHost,
+  root: string,
+  replacements: Readonly<Record<string, string>>,
+): JsonValue {
+  if (host === 'codex') {
+    const normalized = normalizeMachinePaths(codexScratchConfigManifest(root), replacements);
+    return canonicalize([{
+      path: '.',
+      normalized_sha256: sha256(canonicalJson(normalized)),
+    }]);
+  }
+  const paths = ['settings.json', 'empty-mcp.json'];
+  return canonicalize(paths.map((relativePath) => {
+    const absolute = join(root, relativePath);
+    const normalized = normalizeMachinePaths(
+      parseJson(readFileSync(absolute, 'utf8'), `${host} authored ${relativePath}`),
+      replacements,
+    );
+    return { path: relativePath, normalized_sha256: sha256(canonicalJson(normalized)) };
+  }));
+}
+
+const FORBIDDEN_PROVIDER_ENV_KEYS = Object.freeze([
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  'OPENAI_API_KEY',
+  'OPENAI_BASE_URL',
+  'CODEX_API_KEY',
+  'CLAUDE_CONFIG_DIR',
+]);
+
+function assertNoProviderEnvironment(source: NodeJS.ProcessEnv | Readonly<Record<string, string>>): void {
+  const forbidden = Object.keys(source).filter((key) => (
+    FORBIDDEN_PROVIDER_ENV_KEYS.includes(key)
+    || key.startsWith('CLAUDE_CODE_USE_')
+  ));
+  if (forbidden.length > 0) {
+    throw new CertificationError(`Provider credential or routing environment is forbidden (${sha256(canonicalJson(forbidden.sort(compareCodePoints)))}).`);
+  }
+}
+
+function requiredAmbientDirectory(value: string | undefined, label: string): string {
+  if (value === undefined || value.length === 0 || !isAbsolute(value)) {
+    throw new CertificationError(`${label} must be an absolute ambient host directory.`);
+  }
+  const normalized = resolve(value);
+  let stat;
+  try {
+    stat = lstatSync(normalized);
+  } catch {
+    throw new CertificationError(`${label} is not available.`);
+  }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new CertificationError(`${label} must be one real ambient host directory, not a symbolic link.`);
+  }
+  return realpathSync(normalized);
+}
+
+export function resolveAmbientHostState(env: NodeJS.ProcessEnv = process.env): AmbientHostState {
+  const claudeHome = requiredAmbientDirectory(env['HOME'], 'Ambient Claude HOME');
+  const codexHome = requiredAmbientDirectory(env['CODEX_HOME'] ?? join(claudeHome, '.codex'), 'Ambient CODEX_HOME');
+  return Object.freeze({ claudeHome, codexHome });
+}
+
+function expectedHostEnvironmentKeys(host: CertificationHost): readonly string[] {
+  return Object.freeze([
+    'CI',
+    ...(host === 'claude' ? ['BASH_MAX_OUTPUT_LENGTH'] : ['CODEX_HOME']),
+    'HOME', 'LANG', 'LC_ALL', 'NO_COLOR', 'PATH',
+    'ROSTER_350_DREAMER_CHALLENGE_SHA256', 'ROSTER_350_HOST',
+    'ROSTER_350_REQUEST_SHA256', 'ROSTER_350_ROSTER_VERSION', 'ROSTER_350_TURN',
+    'TMPDIR', 'TZ',
+  ].sort(compareCodePoints));
+}
+
+export function expectedHostEnvironmentKeysSha256(host: CertificationHost): string {
+  return sha256(canonicalJson(expectedHostEnvironmentKeys(host)));
+}
+
+export function curatedHostEnvironmentKeysSha256(
+  host: CertificationHost,
+  env: Readonly<Record<string, string>>,
+): string {
+  assertNoProviderEnvironment(env);
+  const actual = Object.keys(env).sort(compareCodePoints);
+  const expected = expectedHostEnvironmentKeys(host);
+  if (canonicalJson(actual) !== canonicalJson(expected)) {
+    throw new CertificationError(`${host} curated host environment keys differ from the ambient-auth-v1 contract.`);
+  }
+  return expectedHostEnvironmentKeysSha256(host);
+}
+
 export function explicitHostEnv(options: Readonly<{
   host: CertificationHost;
   turn: 'discover' | 'approve';
-  home: string;
-  configHome: string;
+  processHome: string;
+  hostStateHome: string;
   temp: string;
   workspace: string;
-  apiKey?: string;
   hostBinary: string;
   requestHash: string;
   challengeHash: string;
   rosterVersion: string;
 }>): Readonly<Record<string, string>> {
   const env: Record<string, string> = {
-    HOME: options.home,
+    HOME: options.host === 'claude' ? options.hostStateHome : options.processHome,
     TMPDIR: options.temp,
     PATH: `${join(options.workspace, '.fixture/bin')}:${dirname(process.execPath)}:${dirname(options.hostBinary)}:/usr/bin:/bin`,
     LANG: 'C.UTF-8',
@@ -1488,14 +2018,62 @@ export function explicitHostEnv(options: Readonly<{
     ROSTER_350_ROSTER_VERSION: options.rosterVersion,
   };
   if (options.host === 'claude') {
-    env['CLAUDE_CONFIG_DIR'] = options.configHome;
     env['BASH_MAX_OUTPUT_LENGTH'] = CLAUDE_BASH_FIRST_LIMITER_MAX_OUTPUT_LENGTH;
-    if (options.apiKey !== undefined) env['ANTHROPIC_API_KEY'] = options.apiKey;
   } else {
-    env['CODEX_HOME'] = options.configHome;
-    env['OPENAI_API_KEY'] = options.apiKey ?? 'roster-model-free-probe';
+    env['CODEX_HOME'] = options.hostStateHome;
   }
+  curatedHostEnvironmentKeysSha256(options.host, env);
   return Object.freeze(env);
+}
+
+export function sanitizeClaudeAuthStatus(value: unknown): HostAuthenticationProjection {
+  if (!isJsonObject(value)
+    || value['loggedIn'] !== true
+    || value['authMethod'] !== 'claude.ai'
+    || value['apiProvider'] !== 'firstParty') {
+    throw new CertificationError('Claude authentication is not one logged-in first-party Claude account.');
+  }
+  return Object.freeze({
+    host: 'claude',
+    logged_in: true,
+    mode: 'host-managed',
+    provider: 'claude.ai',
+    source: 'firstParty',
+    model_api_key_injected: false,
+  });
+}
+
+export function sanitizeCodexLoginStatus(value: string): HostAuthenticationProjection {
+  const lines = stripAnsi(value).split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+  if (lines[0] !== 'Logged in using ChatGPT') {
+    throw new CertificationError('Codex authentication is not one logged-in ChatGPT account.');
+  }
+  return Object.freeze({
+    host: 'codex',
+    logged_in: true,
+    mode: 'host-managed',
+    provider: 'chatgpt',
+    model_api_key_injected: false,
+  });
+}
+
+function probeHostAuthentication(
+  host: CertificationHost,
+  binary: string,
+  env: Readonly<Record<string, string>>,
+  cwd: string,
+): HostAuthenticationProjection {
+  curatedHostEnvironmentKeysSha256(host, env);
+  const result = requireSuccess(runCapturedProcess({
+    command: binary,
+    args: host === 'claude' ? ['auth', 'status', '--json'] : ['login', 'status'],
+    cwd,
+    env,
+    timeoutMs: PROBE_TIMEOUT_MS,
+  }), `${host}-authentication-status`);
+  return host === 'claude'
+    ? sanitizeClaudeAuthStatus(parseJson(result.stdout, 'Claude authentication status'))
+    : sanitizeCodexLoginStatus(result.stdout.trim() === '' ? result.stderr : result.stdout);
 }
 
 function dreamerChallenge(paths: CertificationPaths, contract: HostLedLearningLaunchContract): string {
@@ -1505,6 +2083,33 @@ function dreamerChallenge(paths: CertificationPaths, contract: HostLedLearningLa
   const matches = bytes.match(/roster-350-dreamer-challenge:v\d+:[a-f0-9]+/gu) ?? [];
   if (matches.length !== 1) throw new CertificationError('Dreamer skill must contain exactly one challenge literal.');
   return matches[0]!;
+}
+
+function skillBodyWithoutFrontmatter(source: string, label: string): string {
+  const match = /^---\n[\s\S]*?\n---\n+(?<body>[\s\S]+)$/u.exec(source);
+  if (match?.groups?.['body'] === undefined) {
+    throw new CertificationError(`${label} does not have one closed YAML-frontmatter envelope.`);
+  }
+  return match.groups['body'];
+}
+
+function claudeSyntheticSkillContexts(
+  paths: CertificationPaths,
+  contract: HostLedLearningLaunchContract,
+): readonly ClaudeSyntheticSkillContext[] {
+  return Object.freeze(contract.claude.skills.map((skill) => {
+    const skillPath = join(paths.fixtureRoot, skill.path);
+    const source = readFileSync(skillPath, 'utf8');
+    const canonicalSource = readFileSync(join(paths.fixtureRoot, skill.canonical_source), 'utf8');
+    if (source !== canonicalSource) {
+      throw new CertificationError(`Claude fixture skill '${skill.identity}' differs from its canonical source.`);
+    }
+    const body = skillBodyWithoutFrontmatter(source, `Claude fixture skill '${skill.identity}'`);
+    return Object.freeze({
+      identity: skill.identity,
+      rendered_text: `Base directory for this skill: ${dirname(skillPath)}\n\n${body}`,
+    });
+  }));
 }
 
 function probeClaudePlugin(options: Readonly<{
@@ -1561,19 +2166,10 @@ function probeClaudePlugin(options: Readonly<{
 }
 
 function envAttestation(env: Readonly<Record<string, string>>, host: CertificationHost): JsonValue {
-  const secretName = host === 'claude' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
-  return Object.fromEntries(Object.keys(env).sort(compareCodePoints).map((key) => [
-    key,
-    key === secretName ? Object.freeze({ present: env[key]!.length > 0, provider: host }) : env[key]!,
-  ]));
-}
-
-function assertNoRawSecrets(value: string, secrets: readonly string[]): void {
-  for (const secret of secrets) {
-    if (secret.length > 0 && value.includes(secret)) {
-      throw new CertificationError('A host secret reached a persistable certification value.');
-    }
-  }
+  return canonicalize({
+    values: env,
+    environment_keys_sha256: curatedHostEnvironmentKeysSha256(host, env),
+  });
 }
 
 function assertNoAbsoluteMachinePaths(value: unknown): void {
@@ -1675,41 +2271,148 @@ function claudeAllowedCommands(
   ]);
 }
 
-function claudeSandboxCanaries(hostRoot: string, loopbackPort: number): Readonly<{
+function claudeAllowedSkillPermissions(contract: HostLedLearningLaunchContract): readonly string[] {
+  const identities = contract.claude.skills.map((skill) => skill.identity);
+  if (new Set(identities).size !== identities.length || identities.some((identity) => identity.length === 0)) {
+    throw new CertificationError('Claude fixture skill identities are not one exact permission set.');
+  }
+  return Object.freeze(identities.map((identity) => `Skill(${identity})`));
+}
+
+export function renderPosixSingleQuotedArgv(
+  executable: string,
+  argv: readonly string[],
+): string {
+  const executableTokens = tokenizeLiteralHostCommand(executable);
+  if (executableTokens.length !== 1 || executableTokens[0] !== executable) {
+    throw new CertificationError('POSIX argv renderer requires one literal executable token.');
+  }
+  const rendered = [
+    executable,
+    ...argv.map((argument) => {
+      if (/[\u0000-\u001f\u007f-\u009f]/u.test(argument)) {
+        throw new CertificationError('POSIX argv renderer rejects control characters.');
+      }
+      return `'${posixSingleQuotedContent(argument)}'`;
+    }),
+  ].join(' ');
+  if (canonicalJson(tokenizeLiteralHostCommand(rendered)) !== canonicalJson([executable, ...argv])) {
+    throw new CertificationError('POSIX argv renderer did not round-trip one exact argv vector.');
+  }
+  return rendered;
+}
+
+export function normalizeClaudeSandboxCanaryCommands(
+  commands: readonly [string, string],
+  ambientHome: string,
+): readonly [string, string] {
+  const normalized = normalizeMachinePaths(commands, { [ambientHome]: '$HOST_HOME' });
+  if (!Array.isArray(normalized) || normalized.length !== 2
+    || typeof normalized[0] !== 'string' || typeof normalized[1] !== 'string') {
+    throw new CertificationError('Claude sandbox canary commands did not normalize to one exact pair.');
+  }
+  tokenizeLiteralHostCommand(normalized[0], true);
+  tokenizeLiteralHostCommand(normalized[1], true);
+  return Object.freeze([normalized[0], normalized[1]]);
+}
+
+type LoopbackListener = Readonly<{
+  once: (event: 'error', listener: (error: Error) => void) => unknown;
+  listen: (port: number, host: string, listener: () => void) => unknown;
+  address: () => string | null | Readonly<{ port: number }>;
+  listening: boolean;
+  close: (listener: () => void) => unknown;
+}>;
+
+export async function withLoopbackListener<T>(
+  use: (port: number) => T | Promise<T>,
+  createListener: () => LoopbackListener = () => (
+    createServer((socket) => socket.end()) as unknown as LoopbackListener
+  ),
+): Promise<T> {
+  const listener = createListener();
+  try {
+    await new Promise<void>((resolvePromise, rejectPromise) => {
+      listener.once('error', rejectPromise);
+      listener.listen(0, '127.0.0.1', () => resolvePromise());
+    });
+    const address = listener.address();
+    if (address === null || typeof address === 'string') {
+      throw new CertificationError('Claude network canary listener has no TCP address.');
+    }
+    return await use(address.port);
+  } finally {
+    if (listener.listening) {
+      await new Promise<void>((resolvePromise) => listener.close(() => resolvePromise()));
+    }
+  }
+}
+
+function lstatIfPresent(path: string): Stats | null {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function claudeSandboxCanaries(
+  ambientHome: string,
+  controlRoot: string,
+  pass: number,
+  loopbackPort: number,
+): Readonly<{
   outsidePath: string;
-  writeCommand: string;
-  networkCommand: string;
+  rawCommands: readonly [string, string];
+  normalizedCommands: readonly [string, string];
   systemPrompt: string;
+  preconditionSha256: string;
   outsideControlSha256: string;
   networkControlSha256: string;
 }> {
-  const outsidePath = join(hostRoot, 'claude-outside-write-canary');
-  const writeCommand = `/usr/bin/touch ${outsidePath}`;
-  const networkCommand = `/usr/bin/nc -z 127.0.0.1 ${loopbackPort}`;
-  if (existsSync(outsidePath)) throw new CertificationError('Claude outside-write canary already exists.');
-  const controlHome = join(hostRoot, 'canary-control-home');
+  const canaryName = `.roster-350-sandbox-canary-${pass}`;
+  const outsidePath = join(ambientHome, canaryName);
+  const writeCommand = renderPosixSingleQuotedArgv('/usr/bin/touch', [outsidePath]);
+  const networkCommand = renderPosixSingleQuotedArgv('/usr/bin/nc', [
+    '-z',
+    '127.0.0.1',
+    String(loopbackPort),
+  ]);
+  const rawCommands = Object.freeze([writeCommand, networkCommand]) as readonly [string, string];
+  const normalizedCommands = normalizeClaudeSandboxCanaryCommands(rawCommands, ambientHome);
+  if (lstatIfPresent(outsidePath) !== null) {
+    throw new CertificationError('Claude outside-write canary already exists.');
+  }
+  const preconditionSha256 = sha256(canonicalJson({ name: canaryName, present: false }));
+  const controlHome = join(controlRoot, 'canary-control-home');
+  const controlPath = join(controlHome, canaryName);
   mkdirSync(join(controlHome, 'tmp'), { recursive: true, mode: 0o700 });
   const controlEnv = minimalProbeEnv(controlHome, '/usr/bin:/bin');
   const outsideControl = requireSuccess(runCapturedProcess({
     command: '/usr/bin/touch',
-    args: [outsidePath],
-    cwd: hostRoot,
+    args: [controlPath],
+    cwd: controlHome,
     env: controlEnv,
     timeoutMs: PROBE_TIMEOUT_MS,
   }), 'claude-sandbox-outside-control');
-  if (!existsSync(outsidePath)) throw new CertificationError('Claude outside-write positive control created no canary.');
-  rmSync(outsidePath);
+  const controlStat = lstatIfPresent(controlPath);
+  if (controlStat === null || !controlStat.isFile() || controlStat.isSymbolicLink()) {
+    throw new CertificationError('Claude outside-write positive control created no regular canary.');
+  }
+  rmSync(controlPath);
   const networkControl = requireSuccess(runCapturedProcess({
     command: '/usr/bin/nc',
     args: ['-z', '127.0.0.1', String(loopbackPort)],
-    cwd: hostRoot,
+    cwd: controlHome,
     env: controlEnv,
     timeoutMs: PROBE_TIMEOUT_MS,
   }), 'claude-sandbox-network-control');
   return Object.freeze({
     outsidePath,
-    writeCommand,
-    networkCommand,
+    rawCommands,
+    normalizedCommands,
+    preconditionSha256,
     outsideControlSha256: sha256(canonicalJson({
       status: outsideControl.status,
       stdout: outsideControl.stdout_sha256,
@@ -1739,7 +2442,7 @@ function writeClaudeSettings(
   const settings = {
     permissions: {
       allow: [
-        'Skill',
+        ...claudeAllowedSkillPermissions(contract),
         ...claudeAllowedCommands(contract, includeSandboxCanaries).map((command) => `Bash(${command}:*)`),
       ],
       deny: [
@@ -1812,7 +2515,7 @@ function claudeArgs(
     '--permission-mode', 'dontAsk',
     '--tools', 'Bash,Skill',
     '--allowedTools', [
-      'Skill',
+      ...claudeAllowedSkillPermissions(contract),
       ...claudeAllowedCommands(contract, includeSandboxCanaries).map((command) => `Bash(${command}:*)`),
     ].join(','),
     '--disallowedTools', 'Read,Edit,Write,NotebookEdit,WebFetch,WebSearch,Task,Agent',
@@ -1847,12 +2550,7 @@ function codexConfigArgs(env: Readonly<Record<string, string>>): string[] {
   ] as const;
   const args = [
     '-c', `model_reasoning_effort=${JSON.stringify(CODEX_REASONING_EFFORT)}`,
-    '-c', 'model_provider="roster-certification-openai"',
-    '-c', 'model_providers.roster-certification-openai.name="OpenAI"',
-    '-c', 'model_providers.roster-certification-openai.base_url="https://api.openai.com/v1"',
-    '-c', 'model_providers.roster-certification-openai.env_key="OPENAI_API_KEY"',
-    '-c', 'model_providers.roster-certification-openai.wire_api="responses"',
-    '-c', 'model_providers.roster-certification-openai.requires_openai_auth=false',
+    '-c', 'history.persistence="none"',
     '-c', 'shell_environment_policy.inherit="none"',
     '-c', 'allow_login_shell=false',
     '-c', 'sandbox_workspace_write.network_access=false',
@@ -1995,51 +2693,83 @@ export function classifyCodexAppServerFrame(
   return Object.freeze({ kind: 'notification' });
 }
 
-async function runSequentialJsonlRpc(options: Readonly<{
+type SequentialJsonlRpcOptions = Readonly<{
   command: string;
   args: readonly string[];
   cwd: string;
   env: Readonly<Record<string, string>>;
   messages: readonly JsonObject[];
-}>): Promise<Readonly<{
+}>;
+
+type SequentialJsonlRpcResult = Readonly<{
   responses: readonly JsonObject[];
   notification_summary: JsonValue;
-}>> {
+}>;
+
+function runSequentialJsonlRpcWithTimeout(
+  options: SequentialJsonlRpcOptions,
+  timeoutMs: number,
+): Promise<SequentialJsonlRpcResult> {
   return new Promise((resolvePromise, rejectPromise) => {
-    const child: ChildProcessWithoutNullStreams = spawn(options.command, [...options.args], {
-      cwd: options.cwd,
-      env: { ...options.env },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = spawn(options.command, [...options.args], {
+        cwd: options.cwd,
+        env: { ...options.env },
+        detached: true,
+        shell: false,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      rejectPromise(new CertificationError(
+        `Codex app-server spawn failed (${sha256(processErrorDetail(error))}).`,
+      ));
+      return;
+    }
     const responses: JsonObject[] = [];
     let stdoutBuffer = '';
     let stderr = '';
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
     let messageIndex = 0;
     let awaitedId: JsonPrimitive | undefined;
     let disabledRemoteControlNotifications = 0;
-    let settled = false;
-    const finish = (error?: Error): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      if (error === undefined) {
-        resolvePromise(Object.freeze({
-          responses: Object.freeze(responses),
-          notification_summary: canonicalize({
-            disabled_remote_control: disabledRemoteControlNotifications,
-          }),
-        }));
-      }
-      else rejectPromise(error);
+    let failure: Error | undefined;
+    let terminationAttempted = false;
+    let stdinEnded = false;
+    let closed = false;
+    const requestFailure = (error: Error): void => {
+      if (failure === undefined) failure = error;
+      if (terminationAttempted || closed) return;
+      terminationAttempted = true;
+      const terminationError = terminateDetachedProcessGroup(child, 'Codex app-server');
+      if (terminationError !== undefined) failure = terminationError;
     };
     const sendAvailable = (): void => {
-      while (messageIndex < options.messages.length && awaitedId === undefined) {
+      while (failure === undefined && messageIndex < options.messages.length && awaitedId === undefined) {
         const message = options.messages[messageIndex++]!;
         const id = message['id'];
-        child.stdin.write(`${canonicalJson(message)}\n`);
+        try {
+          child.stdin.write(`${canonicalJson(message)}\n`);
+        } catch (error) {
+          requestFailure(new CertificationError(
+            `Codex app-server stdin write failed (${sha256(processErrorDetail(error))}).`,
+          ));
+          return;
+        }
         if (id !== undefined) awaitedId = id as JsonPrimitive;
       }
-      if (messageIndex === options.messages.length && awaitedId === undefined) child.stdin.end();
+      if (failure === undefined && messageIndex === options.messages.length
+        && awaitedId === undefined && !stdinEnded) {
+        stdinEnded = true;
+        try {
+          child.stdin.end();
+        } catch (error) {
+          requestFailure(new CertificationError(
+            `Codex app-server stdin close failed (${sha256(processErrorDetail(error))}).`,
+          ));
+        }
+      }
     };
     const consumeLine = (line: string): void => {
       if (line.trim() === '') return;
@@ -2058,12 +2788,18 @@ async function runSequentialJsonlRpc(options: Readonly<{
       disabledRemoteControlNotifications++;
     };
     const timeout = setTimeout(() => {
-      child.kill('SIGKILL');
-      finish(new CertificationError(`Codex app-server timed out (${sha256(stderr)}).`));
-    }, PROBE_TIMEOUT_MS);
+      requestFailure(new CertificationError(`Codex app-server timed out (${sha256(stderr)}).`));
+    }, timeoutMs);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
+      if (failure !== undefined) return;
+      const chunkBytes = Buffer.byteLength(chunk, 'utf8');
+      if (stdoutBytes + chunkBytes > MAX_PROCESS_OUTPUT_BYTES) {
+        requestFailure(new CertificationError('Codex app-server exceeded its cumulative stdout bound.'));
+        return;
+      }
+      stdoutBytes += chunkBytes;
       stdoutBuffer += stripAnsi(chunk);
       try {
         let newline = stdoutBuffer.indexOf('\n');
@@ -2074,31 +2810,49 @@ async function runSequentialJsonlRpc(options: Readonly<{
           newline = stdoutBuffer.indexOf('\n');
         }
       } catch (error) {
-        child.kill('SIGKILL');
-        finish(error instanceof Error ? error : new CertificationError('Codex app-server parsing failed.'));
+        requestFailure(error instanceof Error
+          ? error
+          : new CertificationError('Codex app-server parsing failed.'));
       }
     });
     child.stderr.on('data', (chunk: string) => {
-      stderr += stripAnsi(chunk);
-      if (Buffer.byteLength(stderr, 'utf8') > MAX_PROCESS_OUTPUT_BYTES) {
-        child.kill('SIGKILL');
-        finish(new CertificationError(`Codex app-server exceeded its stderr bound (${sha256(stderr)}).`));
+      if (failure !== undefined) return;
+      const chunkBytes = Buffer.byteLength(chunk, 'utf8');
+      if (stderrBytes + chunkBytes > MAX_PROCESS_OUTPUT_BYTES) {
+        requestFailure(new CertificationError(`Codex app-server exceeded its stderr bound (${sha256(stderr)}).`));
+        return;
       }
+      stderrBytes += chunkBytes;
+      stderr += stripAnsi(chunk);
     });
-    child.on('error', (error) => finish(new CertificationError(`Codex app-server spawn failed (${sha256(error.message)}).`)));
+    child.stdin.on('error', (error) => {
+      requestFailure(new CertificationError(`Codex app-server stdin failed (${sha256(error.message)}).`));
+    });
+    child.stdout.on('error', (error) => {
+      requestFailure(new CertificationError(`Codex app-server stdout failed (${sha256(error.message)}).`));
+    });
+    child.stderr.on('error', (error) => {
+      requestFailure(new CertificationError(`Codex app-server stderr failed (${sha256(error.message)}).`));
+    });
+    child.on('error', (error) => {
+      requestFailure(new CertificationError(`Codex app-server spawn failed (${sha256(error.message)}).`));
+    });
     child.on('close', (status, signal) => {
-      if (stdoutBuffer.trim() !== '') {
+      if (closed) return;
+      clearTimeout(timeout);
+      if (failure === undefined && stdoutBuffer.trim() !== '') {
         try {
           consumeLine(stdoutBuffer);
         } catch (error) {
-          finish(error instanceof Error ? error : new CertificationError('Codex app-server parsing failed.'));
-          return;
+          requestFailure(error instanceof Error
+            ? error
+            : new CertificationError('Codex app-server parsing failed.'));
         }
       }
       const expectedResponses = options.messages.filter((message) => message['id'] !== undefined).length;
-      if (status !== 0 || awaitedId !== undefined || responses.length !== expectedResponses
-        || disabledRemoteControlNotifications !== 1) {
-        finish(new CertificationError(`Codex app-server closed outside its exact protocol (${sha256(canonicalJson({
+      if (failure === undefined && (status !== 0 || awaitedId !== undefined || responses.length !== expectedResponses
+        || disabledRemoteControlNotifications !== 1)) {
+        requestFailure(new CertificationError(`Codex app-server closed outside its exact protocol (${sha256(canonicalJson({
           status,
           signal,
           awaited_id: awaitedId ?? null,
@@ -2107,12 +2861,34 @@ async function runSequentialJsonlRpc(options: Readonly<{
           disabled_remote_control_notifications: disabledRemoteControlNotifications,
           stderr_sha256: sha256(stderr),
         }))}).`));
-      } else {
-        finish();
       }
+      closed = true;
+      if (failure !== undefined) {
+        rejectPromise(failure);
+        return;
+      }
+      resolvePromise(Object.freeze({
+        responses: Object.freeze(responses),
+        notification_summary: canonicalize({
+          disabled_remote_control: disabledRemoteControlNotifications,
+        }),
+      }));
     });
+    if (!Number.isSafeInteger(child.pid) || child.pid === undefined || child.pid <= 1) {
+      requestFailure(new CertificationError('Codex app-server received an unsafe process-group PID.'));
+    }
     sendAvailable();
   });
+}
+
+function runSequentialJsonlRpc(options: SequentialJsonlRpcOptions): Promise<SequentialJsonlRpcResult> {
+  return runSequentialJsonlRpcWithTimeout(options, PROBE_TIMEOUT_MS);
+}
+
+export function runSequentialJsonlRpcForTest(
+  options: SequentialJsonlRpcOptions & Readonly<{ timeoutMs: number }>,
+): Promise<SequentialJsonlRpcResult> {
+  return runSequentialJsonlRpcWithTimeout(options, testProcessTimeout(options.timeoutMs));
 }
 
 export function validateCodexManagedConfigResponses(options: Readonly<{
@@ -2120,6 +2896,7 @@ export function validateCodexManagedConfigResponses(options: Readonly<{
   requirementsResponse: unknown;
   workspace: string;
   configHome: string;
+  env: Readonly<Record<string, string>>;
 }>): JsonValue {
   const configEnvelope = requiredObject(options.configResponse, 'Codex config/read response', ['id', 'result']);
   if (configEnvelope['id'] !== 3) throw new CertificationError('Codex config/read response ID is not exact.');
@@ -2130,59 +2907,64 @@ export function validateCodexManagedConfigResponses(options: Readonly<{
     throw new CertificationError('Codex config/read result is not a closed effective-config inventory.');
   }
   const effective = result['config'];
+  const expectedShellKeys = [
+    'PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'TZ',
+    'ROSTER_350_HOST', 'ROSTER_350_TURN', 'ROSTER_350_REQUEST_SHA256',
+    'ROSTER_350_DREAMER_CHALLENGE_SHA256', 'ROSTER_350_ROSTER_VERSION',
+  ].sort(compareCodePoints);
+  const shellPolicy = isJsonObject(effective['shell_environment_policy'])
+    ? effective['shell_environment_policy']
+    : null;
+  const shellSet = shellPolicy !== null && isJsonObject(shellPolicy['set']) ? shellPolicy['set'] : null;
+  const sandboxPolicy = isJsonObject(effective['sandbox_workspace_write'])
+    ? effective['sandbox_workspace_write']
+    : null;
+  const history = isJsonObject(effective['history']) ? effective['history'] : null;
   if (effective['model'] !== CODEX_MODEL
-    || effective['model_provider'] !== 'roster-certification-openai'
-    || effective['approval_policy'] !== 'never'
-    || effective['sandbox_mode'] !== 'workspace-write'
+    || effective['model_reasoning_effort'] !== CODEX_REASONING_EFFORT
+    || effective['model_provider'] !== null
+    || effective['approval_policy'] !== null
+    || effective['sandbox_mode'] !== null
     || effective['allow_login_shell'] !== false
-    || !isJsonObject(effective['mcp_servers']) || Object.keys(effective['mcp_servers']).length !== 0
-    || effective['instructions'] !== null
-    || effective['developer_instructions'] !== null
-    || effective['hooks'] !== null) {
-    throw new CertificationError('Codex effective configuration differs from the exact isolated launch policy.');
+    || effective['check_for_update_on_startup'] !== false
+    || shellPolicy?.['inherit'] !== 'none'
+    || shellSet === null
+    || canonicalJson(Object.keys(shellSet).sort(compareCodePoints)) !== canonicalJson(expectedShellKeys)
+    || expectedShellKeys.some((key) => shellSet[key] !== options.env[key])
+    || sandboxPolicy?.['network_access'] !== false
+    || sandboxPolicy['exclude_tmpdir_env_var'] !== true
+    || sandboxPolicy['exclude_slash_tmp'] !== true
+    || !Array.isArray(sandboxPolicy['writable_roots'])
+    || sandboxPolicy['writable_roots'].length !== 0
+    || history?.['persistence'] !== 'none') {
+    throw new CertificationError('Codex effective configuration differs from the exact session-controlled safety subset.');
   }
-  const layers = result['layers'].map((entry, index) => {
-    const layer = requiredObject(entry, `Codex config layer ${index + 1}`, ['name', 'version', 'config']);
-    const version = requiredString(layer['version'], `Codex config layer ${index + 1} version`);
-    if (!/^sha256:[a-f0-9]{64}$/u.test(version) || !isJsonObject(layer['config'])) {
-      throw new CertificationError('Codex config layer is not one hash-bound object.');
+  for (const [index, entry] of result['layers'].entries()) {
+    if (!isJsonObject(entry) || !isJsonObject(entry['name']) || !isJsonObject(entry['config'])) {
+      throw new CertificationError(`Codex config layer ${index + 1} is malformed.`);
     }
-    if (!isJsonObject(layer['name'])) throw new CertificationError('Codex config layer source is invalid.');
-    const type = requiredString(layer['name']['type'], `Codex config layer ${index + 1} type`);
-    if (type === 'user') {
-      const source = requiredObject(layer['name'], 'Codex user config layer', ['type', 'file', 'profile']);
-      if (source['file'] !== join(options.configHome, 'config.toml') || source['profile'] !== null
-        || Object.keys(layer['config']).length !== 0) {
-        throw new CertificationError('Codex user config layer is not one absent isolated file.');
-      }
-    } else if (type === 'system') {
-      const source = requiredObject(layer['name'], 'Codex system config layer', ['type', 'file']);
-      if (source['file'] !== '/etc/codex/config.toml' || Object.keys(layer['config']).length !== 0) {
-        throw new CertificationError('Codex system config layer is present or has an unexpected identity.');
-      }
-    } else if (type === 'sessionFlags') {
-      requiredObject(layer['name'], 'Codex session config layer', ['type']);
-      if (Object.keys(layer['config']).length === 0) {
-        throw new CertificationError('Codex session config layer omitted the exact launch overrides.');
-      }
-    } else {
-      throw new CertificationError(`Codex loaded forbidden managed, enterprise, project, or legacy layer '${type}'.`);
+    const type = requiredString(entry['name']['type'], `Codex config layer ${index + 1} type`);
+    if (/managed|enterprise|mdm/iu.test(type)) {
+      throw new CertificationError('Codex loaded a managed or enterprise configuration layer.');
     }
-    return { type, version };
-  });
-  const layerTypes = layers.map((entry) => entry.type).sort(compareCodePoints);
-  if (canonicalJson(layerTypes) !== canonicalJson(['sessionFlags', 'system', 'user'])) {
-    throw new CertificationError('Codex config/read did not expose the exact closed layer set.');
+    const providerOverride = Object.keys(entry['config']).some((key) => (
+      key === 'model_provider' || key === 'model_providers' || key.startsWith('model_providers.')
+    ));
+    if (type === 'sessionFlags' && providerOverride) {
+      throw new CertificationError('Codex session flags contain a forbidden provider override.');
+    }
   }
-  const originTypes = Object.entries(result['origins']).map(([key, value]) => {
-    const metadata = requiredObject(value, `Codex config origin '${key}'`, ['name', 'version']);
-    requiredString(metadata['version'], `Codex config origin '${key}' version`);
-    if (!isJsonObject(metadata['name']) || metadata['name']['type'] !== 'sessionFlags') {
-      throw new CertificationError('Codex effective config contains a non-session origin.');
+  const controlledOriginKeys = [
+    'model', 'model_reasoning_effort', 'allow_login_shell', 'check_for_update_on_startup',
+    'shell_environment_policy', 'sandbox_workspace_write', 'history',
+  ];
+  for (const key of controlledOriginKeys) {
+    const metadata = result['origins'][key];
+    if (!isJsonObject(metadata) || !isJsonObject(metadata['name'])
+      || metadata['name']['type'] !== 'sessionFlags') {
+      throw new CertificationError(`Codex safety-controlled config '${key}' lacks a sessionFlags origin.`);
     }
-    requiredObject(metadata['name'], `Codex config origin '${key}' source`, ['type']);
-    return 'sessionFlags';
-  });
+  }
   const requirementsEnvelope = requiredObject(
     options.requirementsResponse,
     'Codex configRequirements/read response',
@@ -2200,12 +2982,72 @@ export function validateCodexManagedConfigResponses(options: Readonly<{
     throw new CertificationError('Codex loaded managed requirements from file, MDM, or enterprise state.');
   }
   return canonicalize({
-    layer_types: layerTypes,
-    origin_count: originTypes.length,
+    controlled_values: {
+      model: CODEX_MODEL,
+      model_reasoning_effort: CODEX_REASONING_EFFORT,
+      model_provider: null,
+      allow_login_shell: false,
+      check_for_update_on_startup: false,
+      history_persistence: 'none',
+      shell_environment_keys: expectedShellKeys,
+      shell_environment_inherit: 'none',
+      sandbox_network_access: false,
+      sandbox_writable_roots: [],
+    },
+    controlled_origin: 'sessionFlags',
     requirements: null,
-    workspace: options.workspace,
-    config_home: options.configHome,
   });
+}
+
+export function validateCodexRequiredSkills(
+  value: unknown,
+  workspace: string,
+  contract: HostLedLearningLaunchContract,
+): JsonValue {
+  const entry = requiredObject(value, 'Codex skills-list workspace result', ['cwd', 'errors', 'skills']);
+  if (entry['cwd'] !== workspace || !Array.isArray(entry['errors']) || entry['errors'].length !== 0
+    || !Array.isArray(entry['skills'])) {
+    throw new CertificationError('Codex project skill discovery returned an error or wrong workspace.');
+  }
+  const discovered = entry['skills'].map((skill, index) => {
+    if (!isJsonObject(skill)) throw new CertificationError(`Codex discovered skill ${index + 1} is malformed.`);
+    return {
+      name: requiredString(skill['name'], 'Codex discovered skill name'),
+      path: requiredString(skill['path'], 'Codex discovered skill path'),
+      scope: requiredString(skill['scope'], 'Codex discovered skill scope'),
+      enabled: skill['enabled'],
+    };
+  });
+  const requiredSkills = [contract.codex.generated_skill, ...contract.codex.skills].map((expected) => {
+    const matches = discovered.filter((skill) => skill.name === expected.name);
+    if (matches.length !== 1) {
+      throw new CertificationError(`Codex required skill '${expected.name}' is missing, duplicated, or shadowed.`);
+    }
+    const actual = matches[0]!;
+    const expectedPath = join(workspace, expected.path);
+    const expectedStat = lstatIfPresent(expectedPath);
+    if (actual.scope !== 'repo' || actual.enabled !== true
+      || expectedStat === null || expectedStat.isSymbolicLink() || !expectedStat.isFile()
+      || resolve(actual.path) !== resolve(expectedPath)
+      || realpathSync(actual.path) !== realpathSync(expectedPath)) {
+      throw new CertificationError(`Codex required skill '${expected.name}' has the wrong scope, state, or path.`);
+    }
+    const bytes = readFileSync(expectedPath);
+    if ('canonical_source' in expected && typeof expected.canonical_source === 'string') {
+      const canonicalSource = join(HOST_LED_LEARNING_REPO_ROOT, FIXTURE_ROOT_PATH, expected.canonical_source);
+      if (!bytes.equals(readFileSync(canonicalSource))) {
+        throw new CertificationError(`Codex required skill '${expected.name}' differs from its canonical bytes.`);
+      }
+    }
+    return Object.freeze({
+      name: expected.name,
+      path: `$WORKSPACE/${expected.path}`,
+      scope: 'repo',
+      enabled: true,
+      bytes_sha256: sha256(bytes),
+    });
+  });
+  return canonicalize({ required_skills: requiredSkills });
 }
 
 async function probeCodexProjectSkills(options: Readonly<{
@@ -2257,55 +3099,25 @@ async function probeCodexProjectSkills(options: Readonly<{
     throw new CertificationError('Codex skills-list response has invalid cardinality.');
   }
   const entry = result['data'][0];
-  if (!isJsonObject(entry) || entry['cwd'] !== options.workspace
-    || !Array.isArray(entry['errors']) || entry['errors'].length !== 0
-    || !Array.isArray(entry['skills'])) {
-    throw new CertificationError('Codex project skill discovery returned an error or wrong workspace.');
-  }
-  const expectedRepository = [options.contract.codex.generated_skill, ...options.contract.codex.skills]
-    .map((skill) => ({
-      name: skill.name,
-      path: join(options.workspace, skill.path),
-      scope: 'repo',
-    }));
-  const expectedSystem = ['imagegen', 'openai-docs', 'plugin-creator', 'skill-creator', 'skill-installer'].map((name) => ({
-    name,
-    path: join(options.env['CODEX_HOME']!, 'skills/.system', name, 'SKILL.md'),
-    scope: 'system',
-  }));
-  const expected = [...expectedRepository, ...expectedSystem].sort((left, right) => compareCodePoints(left.name, right.name));
-  const actual = entry['skills'].map((skill) => {
-    if (!isJsonObject(skill)) throw new CertificationError('Codex discovered a malformed skill entry.');
-    return {
-      name: requiredString(skill['name'], 'Codex discovered skill name'),
-      path: requiredString(skill['path'], 'Codex discovered skill path'),
-      scope: requiredString(skill['scope'], 'Codex discovered skill scope'),
-      enabled: skill['enabled'],
-    };
-  }).sort((left, right) => compareCodePoints(left.name, right.name));
-  if (actual.length !== expected.length || actual.some((skill, index) => (
-    skill.name !== expected[index]!.name
-    || realpathSync(skill.path) !== realpathSync(expected[index]!.path)
-    || skill.scope !== expected[index]!.scope
-    || skill.enabled !== true
-  ))) {
-    throw new CertificationError('Codex skill discovery differs from the exact five-system/three-repository inventory.');
-  }
+  const requiredSkills = validateCodexRequiredSkills(entry, options.workspace, options.contract);
   const managedConfig = validateCodexManagedConfigResponses({
     configResponse: responses.find((response) => response['id'] === 3),
     requirementsResponse: responses.find((response) => response['id'] === 4),
     workspace: options.workspace,
     configHome: options.env['CODEX_HOME']!,
+    env: options.env,
   });
-  return sha256(canonicalJson(normalizeMachinePaths({
-    initialization: initializeResult,
-    skills: actual,
+  return sha256(canonicalJson({
+    initialization: {
+      codex_home: 'ambient-host-managed',
+      platform_family: initializeResult['platformFamily'],
+      platform_os: initializeResult['platformOs'],
+      user_agent_version: '0.144.1',
+    },
+    skills: requiredSkills,
     managed_config: managedConfig,
     notifications: rpc.notification_summary,
-  }, {
-    [options.workspace]: '$WORKSPACE',
-    [options.env['CODEX_HOME']!]: '$CODEX_HOME',
-  })));
+  }));
 }
 
 function captureCodexPromptInputSummary(options: Readonly<{
@@ -2337,7 +3149,7 @@ function captureCodexPromptInputSummary(options: Readonly<{
     [options.paths.repoRoot]: '$REPO',
     [options.workspace]: '$WORKSPACE',
     [options.env['HOME']!]: '$TEMP_HOME',
-    [options.env['CODEX_HOME']!]: '$HOST_CONFIG',
+    [options.env['CODEX_HOME']!]: '$CODEX_HOME',
     [options.env['TMPDIR']!]: '$TMPDIR',
   });
   const summary = validateCodexPromptInputContributions({
@@ -2369,8 +3181,8 @@ export function validateCodexPromptInputContributions(options: Readonly<{
   contract: HostLedLearningLaunchContract;
   expectedUtcDate: string;
 }>): JsonValue {
-  if (!Array.isArray(options.value) || options.value.length !== 5) {
-    throw new CertificationError('Codex prompt-input must contain exactly five closed messages.');
+  if (!Array.isArray(options.value) || options.value.length === 0) {
+    throw new CertificationError('Codex prompt-input must contain closed messages.');
   }
   const messages = options.value.map((entry, index) => {
     const record = requiredObject(entry, `Codex prompt message ${index + 1}`, [
@@ -2399,60 +3211,119 @@ export function validateCodexPromptInputContributions(options: Readonly<{
       }),
     };
   });
-  if (messages[0]!.role !== 'developer' || messages[0]!.texts.length !== 3
-    || messages[1]!.role !== 'developer' || messages[1]!.texts.length !== 1
-    || messages[2]!.role !== 'developer' || messages[2]!.texts.length !== 1
-    || messages[3]!.role !== 'user' || messages[3]!.texts.length !== 2
-    || messages[4]!.role !== 'user' || canonicalJson(messages[4]!.texts) !== canonicalJson([options.prompt])) {
-    throw new CertificationError('Codex prompt-input role or contribution grouping is not exact.');
-  }
   if (new Set(messages.map((message) => message.turnId)).size !== 1) {
     throw new CertificationError('Codex prompt-input messages do not share one exact turn identity.');
   }
-  const [permissions, sandboxInstructions, skills] = messages[0]!.texts;
-  const [binaryCollaboration] = messages[1]!.texts;
-  const [binaryMultiAgent] = messages[2]!.texts;
-  const [instructions, rawEnvironment] = messages[3]!.texts;
-  const environment = rawEnvironment === undefined
-    ? undefined
-    : normalizeCodexCurrentDateContribution(rawEnvironment, options.expectedUtcDate);
-  if (permissions === undefined || !permissions.startsWith('<permissions instructions>')
-    || !permissions.endsWith('</permissions instructions>')
-    || !permissions.includes('`sandbox_mode` is `workspace-write`')
-    || !permissions.includes('Approval policy is currently never')
-    || !permissions.includes('$WORKSPACE')
-    || skills === undefined || !skills.startsWith('<skills_instructions>')
-    || !skills.endsWith('</skills_instructions>')
-    || sandboxInstructions !== codexSandboxDeveloperInstructions()
-    || binaryCollaboration === undefined || binaryCollaboration.length === 0
-    || binaryMultiAgent === undefined || binaryMultiAgent.length === 0) {
-    throw new CertificationError('Codex prompt-input permission or skill contribution is not exact and isolated.');
+  let nextOrdinal = 0;
+  const contributions = messages.flatMap((message) => message.texts.map((value) => ({
+    value,
+    role: message.role,
+    ordinal: nextOrdinal++,
+  })));
+  const uniqueMatch = (label: string, predicate: (value: string) => boolean): typeof contributions[number] => {
+    const matches = contributions.filter((entry) => predicate(entry.value));
+    if (matches.length !== 1) {
+      throw new CertificationError(`Codex prompt-input required contribution '${label}' is missing or duplicated.`);
+    }
+    return matches[0]!;
+  };
+  const expectedPins = options.contract.codex.prompt_input.pinned_contribution_sha256;
+  const permissions = uniqueMatch('permissions', (value) => sha256(value) === expectedPins.permissions);
+  if (permissions.role !== 'developer'
+    || !permissions.value.startsWith('<permissions instructions>')
+    || !permissions.value.endsWith('</permissions instructions>')
+    || !permissions.value.includes('`sandbox_mode` is `workspace-write`')
+    || !permissions.value.includes('Approval policy is currently never')
+    || !permissions.value.includes('$WORKSPACE')) {
+    throw new CertificationError('Codex prompt-input permissions contribution is not exact.');
   }
-  const discoveredSkills = [...skills.matchAll(/^- ([^:\n]+): .+ \(file: ([^)]+)\)$/gmu)]
-    .map((match) => ({ name: match[1]!, path: match[2]! }))
-    .sort((left, right) => compareCodePoints(left.name, right.name));
-  const systemSkillNames = ['imagegen', 'openai-docs', 'plugin-creator', 'skill-creator', 'skill-installer'];
-  const expectedSkills = [
-    ...[options.contract.codex.generated_skill, ...options.contract.codex.skills].map((skill) => ({
-      name: skill.name,
-      path: `$WORKSPACE/${skill.path}`,
-    })),
-    ...systemSkillNames.map((name) => ({
-      name,
-      path: `$HOST_CONFIG/skills/.system/${name}/SKILL.md`,
-    })),
-  ].sort((left, right) => compareCodePoints(left.name, right.name));
-  if (canonicalJson(discoveredSkills) !== canonicalJson(expectedSkills)) {
-    throw new CertificationError('Codex prompt-input skill contribution is outside the exact eight-skill inventory.');
+  const sandboxInstructions = uniqueMatch(
+    'sandbox-canary-instructions',
+    (value) => value === codexSandboxDeveloperInstructions(),
+  );
+  const binaryCollaboration = uniqueMatch(
+    'binary-collaboration',
+    (value) => sha256(value) === expectedPins.binary_collaboration,
+  );
+  const binaryMultiAgent = uniqueMatch(
+    'binary-multi-agent',
+    (value) => sha256(value) === expectedPins.binary_multi_agent,
+  );
+  if ([sandboxInstructions, binaryCollaboration, binaryMultiAgent].some((entry) => entry.role !== 'developer')) {
+    throw new CertificationError('Codex prompt-input binary-controlled contributions must be developer messages.');
   }
+  const requiredSkillDefinitions = [options.contract.codex.generated_skill, ...options.contract.codex.skills];
+  const discoveredSkillLines = contributions.flatMap((entry) => (
+    [...entry.value.matchAll(/^- ([^:\n]+): .+ \(file: ([^)]+)\)$/gmu)].map((match) => ({
+      name: match[1]!,
+      path: match[2]!,
+      ordinal: entry.ordinal,
+      role: entry.role,
+      canonicalDeveloperContribution: entry.role === 'developer'
+        && entry.value.startsWith('<skills_instructions>')
+        && entry.value.endsWith('</skills_instructions>'),
+    }))
+  ));
+  const requiredSkillProof = requiredSkillDefinitions.map((expected) => {
+    const matches = discoveredSkillLines.filter((entry) => entry.name === expected.name);
+    const expectedPath = `$WORKSPACE/${expected.path}`;
+    if (matches.length !== 1 || matches[0]!.path !== expectedPath) {
+      throw new CertificationError(`Codex prompt-input required skill '${expected.name}' is missing, shadowed, or duplicated.`);
+    }
+    if (matches[0]!.role !== 'developer' || !matches[0]!.canonicalDeveloperContribution) {
+      throw new CertificationError(`Codex prompt-input required skill '${expected.name}' did not come from the canonical developer contribution.`);
+    }
+    const skillPath = join(options.workspace, expected.path);
+    const stat = lstatIfPresent(skillPath);
+    if (stat === null || stat.isSymbolicLink() || !stat.isFile()) {
+      throw new CertificationError(`Codex prompt-input required skill '${expected.name}' is not one regular file.`);
+    }
+    const bytes = readFileSync(skillPath);
+    if ('canonical_source' in expected && typeof expected.canonical_source === 'string'
+      && !bytes.equals(readFileSync(join(
+        HOST_LED_LEARNING_REPO_ROOT,
+        FIXTURE_ROOT_PATH,
+        expected.canonical_source,
+      )))) {
+      throw new CertificationError(`Codex prompt-input required skill '${expected.name}' differs from canonical bytes.`);
+    }
+    return {
+      name: expected.name,
+      path: expectedPath,
+      bytes_sha256: sha256(bytes),
+      ordinal: matches[0]!.ordinal,
+    };
+  });
+  if (new Set(requiredSkillProof.map((entry) => entry.ordinal)).size !== 1) {
+    throw new CertificationError('Codex prompt-input required project skills are split across contributions.');
+  }
+  const requiredSkillsOrdinal = requiredSkillProof[0]!.ordinal;
   const agentInstructions = readFileSync(join(options.workspace, 'AGENTS.md'), 'utf8');
   const expectedInstructions = `# AGENTS.md instructions for $WORKSPACE\n\n<INSTRUCTIONS>\n${agentInstructions}\n</INSTRUCTIONS>`;
-  if (instructions !== expectedInstructions
-    || environment === undefined
-    || !environment.startsWith('<environment_context>')
-    || !environment.endsWith('</environment_context>')
-    || !environment.includes('<cwd>$WORKSPACE</cwd>')) {
-    throw new CertificationError('Codex prompt-input workspace instruction contribution is not exact and isolated.');
+  const instructions = uniqueMatch('canonical-roster-instructions', (value) => value === expectedInstructions);
+  const rawEnvironment = uniqueMatch('environment', (value) => (
+    value.startsWith('<environment_context>')
+    && value.endsWith('</environment_context>')
+    && value.includes('<cwd>$WORKSPACE</cwd>')
+  ));
+  normalizeCodexCurrentDateContribution(rawEnvironment.value, options.expectedUtcDate);
+  const literalRequest = uniqueMatch('literal-human-request', (value) => value === options.prompt);
+  if (instructions.role !== 'user' || rawEnvironment.role !== 'user' || literalRequest.role !== 'user'
+    || literalRequest.ordinal !== contributions.at(-1)?.ordinal) {
+    throw new CertificationError('Codex prompt-input workspace, environment, or final human request contribution is not exact.');
+  }
+  const actualRequiredOrder = [
+    permissions.ordinal,
+    sandboxInstructions.ordinal,
+    requiredSkillsOrdinal,
+    binaryCollaboration.ordinal,
+    binaryMultiAgent.ordinal,
+    instructions.ordinal,
+    rawEnvironment.ordinal,
+    literalRequest.ordinal,
+  ];
+  if (actualRequiredOrder.some((ordinal, index) => index > 0 && ordinal <= actualRequiredOrder[index - 1]!)) {
+    throw new CertificationError('Codex prompt-input required contributions are duplicated, replaced, or reordered.');
   }
   if (canonicalJson(options.contract.codex.prompt_input.required_configurable_contributions)
     !== canonicalJson([
@@ -2467,28 +3338,27 @@ export function validateCodexPromptInputContributions(options: Readonly<{
     launch_fidelity: {
       shared_global_launch_except_strict_config: true,
       strict_config_exception: options.contract.codex.prompt_input.intentional_launch_delta.strict_config_exception,
+      unsupported_probe_global_flags:
+        options.contract.codex.prompt_input.intentional_launch_delta.unsupported_probe_global_flags,
       paid_exec_only_flags: options.contract.codex.prompt_input.intentional_launch_delta.paid_exec_only_flags,
+      probe_user_config_policy:
+        options.contract.codex.prompt_input.intentional_launch_delta.probe_user_config_policy,
+      paid_user_config_policy:
+        options.contract.codex.prompt_input.intentional_launch_delta.paid_user_config_policy,
+      proof_scope: options.contract.codex.prompt_input.intentional_launch_delta.proof_scope,
     },
-    prompt_metadata: {
-      single_turn: true,
-      message_count: messages.length,
-    },
-    message_roles: messages.map((message) => message.role),
-    contribution_order: [
-      'permissions', 'sandbox-instructions', 'skills', 'binary-collaboration', 'binary-multi-agent',
-      'workspace-instructions', 'environment', 'literal-human-request',
-    ],
+    single_turn: true,
+    contribution_order: options.contract.codex.prompt_input.ordered_required_subset,
     contribution_sha256: {
-      permissions: sha256(permissions),
-      sandbox_instructions: sha256(sandboxInstructions),
-      skills: sha256(skills),
-      binary_collaboration: sha256(binaryCollaboration),
-      binary_multi_agent: sha256(binaryMultiAgent),
-      workspace_instructions: sha256(instructions),
-      environment: sha256(environment),
-      literal_human_request: sha256(options.prompt),
+      permissions: sha256(permissions.value),
+      sandbox_instructions: sha256(sandboxInstructions.value),
+      binary_collaboration: sha256(binaryCollaboration.value),
+      binary_multi_agent: sha256(binaryMultiAgent.value),
     },
-    skills: discoveredSkills,
+    required_skills: requiredSkillProof.map(({ ordinal: _ordinal, ...entry }) => entry),
+    workspace_instructions: 'exact',
+    environment: 'exact-current-date-normalized',
+    literal_human_request: 'exact-final-positional-argument',
   });
 }
 
@@ -2517,8 +3387,7 @@ export function assertCodexPromptContributionPins(
     throw new CertificationError('Codex prompt-input contribution summary is invalid.');
   }
   const actual = requiredObject(summary['contribution_sha256'], 'Codex prompt contribution hashes', [
-    'permissions', 'sandbox_instructions', 'skills', 'binary_collaboration', 'binary_multi_agent',
-    'workspace_instructions', 'environment', 'literal_human_request',
+    'permissions', 'sandbox_instructions', 'binary_collaboration', 'binary_multi_agent',
   ]);
   for (const [key, hash] of Object.entries(expected)) {
     if (actual[key] !== hash) {
@@ -2670,22 +3539,339 @@ function findSemanticResult(host: CertificationHost, events: readonly JsonValue[
   throw new CertificationError(`${host} did not emit a structured semantic result.`);
 }
 
-function extractClaudeTrace(events: readonly JsonValue[]): Pick<NormalizedHostTrace, 'initialization' | 'events' | 'tool_calls' | 'tool_results' | 'commands'> {
+function assertClaudeAllowedRateLimitEvent(event: JsonObject): void {
+  const envelope = requiredObject(event, 'Claude rate-limit telemetry event', [
+    'type', 'rate_limit_info', 'uuid', 'session_id',
+  ]);
+  const info = requiredObject(envelope['rate_limit_info'], 'Claude rate-limit telemetry info', [
+    'status', 'resetsAt', 'rateLimitType', 'overageStatus',
+    'overageDisabledReason', 'isUsingOverage',
+  ]);
+  if (envelope['type'] !== 'rate_limit_event'
+    || typeof envelope['uuid'] !== 'string' || envelope['uuid'].length === 0
+    || typeof envelope['session_id'] !== 'string' || envelope['session_id'].length === 0
+    || info['status'] !== 'allowed'
+    || !Number.isSafeInteger(info['resetsAt']) || (info['resetsAt'] as number) <= 0
+    || typeof info['rateLimitType'] !== 'string' || info['rateLimitType'].length === 0
+    || typeof info['overageStatus'] !== 'string' || info['overageStatus'].length === 0
+    || typeof info['overageDisabledReason'] !== 'string'
+    || typeof info['isUsingOverage'] !== 'boolean') {
+    throw new CertificationError('Claude rate-limit telemetry was not one exact structurally valid allowed event.');
+  }
+}
+
+function assertClaudeThinkingTokensEvent(event: JsonObject): void {
+  const envelope = requiredObject(event, 'Claude thinking-token telemetry event', [
+    'type', 'subtype', 'estimated_tokens', 'estimated_tokens_delta', 'uuid', 'session_id',
+  ]);
+  if (envelope['type'] !== 'system' || envelope['subtype'] !== 'thinking_tokens'
+    || typeof envelope['uuid'] !== 'string' || envelope['uuid'].length === 0
+    || typeof envelope['session_id'] !== 'string' || envelope['session_id'].length === 0
+    || !Number.isSafeInteger(envelope['estimated_tokens'])
+    || (envelope['estimated_tokens'] as number) < 0
+    || !Number.isSafeInteger(envelope['estimated_tokens_delta'])
+    || (envelope['estimated_tokens_delta'] as number) < 0
+    || (envelope['estimated_tokens_delta'] as number) > (envelope['estimated_tokens'] as number)) {
+    throw new CertificationError('Claude thinking-token telemetry escaped its exact nonnegative progress contract.');
+  }
+}
+
+function requiredClaudeBoundaryId(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.length === 0
+    || Buffer.byteLength(value, 'utf8') > MAX_CLAUDE_BOUNDARY_ID_BYTES
+    || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) {
+    throw new CertificationError(`${label} must be one bounded control-free identifier.`);
+  }
+  return value;
+}
+
+function requiredClaudeBoundaryTimestamp(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))
+    || new Date(value).toISOString() !== value) {
+    throw new CertificationError(`${label} must be one exact ISO timestamp.`);
+  }
+  return value;
+}
+
+function registerClaudeBoundaryUuid(
+  value: unknown,
+  label: string,
+  seen: Set<string>,
+): string {
+  const uuid = requiredClaudeBoundaryId(value, label);
+  if (seen.has(uuid)) throw new CertificationError(`${label} must be unique within the Skill lifecycle.`);
+  seen.add(uuid);
+  return uuid;
+}
+
+function assertClaudeSyntheticSkillExpansion(options: Readonly<{
+  event: JsonObject;
+  expected: ClaudeSyntheticSkillContext;
+  expectedSessionId: string;
+  seenBoundaryUuids: Set<string>;
+  eventOrdinal: number;
+  callOrdinal: number;
+}>): JsonValue {
+  const event = requiredObject(options.event, 'Claude synthetic Skill expansion', [
+    'type', 'message', 'parent_tool_use_id', 'session_id', 'timestamp', 'uuid', 'isSynthetic',
+  ]);
+  const message = requiredObject(event['message'], 'Claude synthetic Skill expansion message', [
+    'role', 'content',
+  ]);
+  if (!Array.isArray(message['content']) || message['content'].length !== 1) {
+    throw new CertificationError('Claude synthetic Skill expansion must contain one text block.');
+  }
+  const block = requiredObject(
+    message['content'][0],
+    'Claude synthetic Skill expansion text block',
+    ['type', 'text'],
+  );
+  const sessionId = requiredClaudeBoundaryId(
+    event['session_id'],
+    'Claude synthetic Skill expansion session ID',
+  );
+  requiredClaudeBoundaryTimestamp(event['timestamp'], 'Claude synthetic Skill expansion timestamp');
+  if (event['type'] !== 'user' || event['isSynthetic'] !== true || event['parent_tool_use_id'] !== null
+    || message['role'] !== 'user' || block['type'] !== 'text'
+    || block['text'] !== options.expected.rendered_text
+    || sessionId !== options.expectedSessionId) {
+    throw new CertificationError('Claude synthetic Skill expansion differs from the exact reviewed skill bytes or lifecycle.');
+  }
+  registerClaudeBoundaryUuid(
+    event['uuid'],
+    'Claude synthetic Skill expansion UUID',
+    options.seenBoundaryUuids,
+  );
+  return canonicalize({
+    kind: 'synthetic_skill_context',
+    event_ordinal: options.eventOrdinal,
+    call_ordinal: options.callOrdinal,
+    skill_identity: options.expected.identity,
+  });
+}
+
+function assertClaudeExclusiveSkillCallEvent(options: Readonly<{
+  event: JsonObject;
+  block: Record<string, unknown>;
+  expectedSessionId: string;
+}>): void {
+  const event = requiredObject(options.event, 'Claude exclusive Skill call event', [
+    'type', 'message', 'parent_tool_use_id', 'request_id', 'session_id', 'timestamp', 'uuid',
+  ]);
+  const message = requiredObject(event['message'], 'Claude exclusive Skill call message', [
+    'content', 'context_management', 'diagnostics', 'id', 'model', 'role', 'stop_details',
+    'stop_reason', 'stop_sequence', 'type', 'usage',
+  ]);
+  const block = requiredObject(options.block, 'Claude exclusive Skill call block', [
+    'caller', 'id', 'input', 'name', 'type',
+  ]);
+  const caller = requiredObject(block['caller'], 'Claude exclusive Skill caller', ['type']);
+  const contextManagement = message['context_management'];
+  const diagnostics = message['diagnostics'];
+  if (event['type'] !== 'assistant' || event['parent_tool_use_id'] !== null
+    || message['role'] !== 'assistant' || message['type'] !== 'message'
+    || message['model'] !== CLAUDE_MODEL
+    || (message['stop_reason'] !== null && message['stop_reason'] !== 'tool_use')
+    || message['stop_sequence'] !== null || message['stop_details'] !== null
+    || (contextManagement !== null && !isJsonObject(contextManagement))
+    || (diagnostics !== null && !isJsonObject(diagnostics) && !Array.isArray(diagnostics))
+    || !isJsonObject(message['usage'])
+    || caller['type'] !== 'direct'
+    || requiredClaudeBoundaryId(event['session_id'], 'Claude Skill call session ID') !== options.expectedSessionId) {
+    throw new CertificationError('Claude Skill call escaped its exact root-session action envelope.');
+  }
+  requiredClaudeBoundaryId(event['request_id'], 'Claude Skill call request ID');
+  requiredClaudeBoundaryId(message['id'], 'Claude Skill call message ID');
+  requiredClaudeBoundaryTimestamp(event['timestamp'], 'Claude Skill call timestamp');
+}
+
+function assertClaudeExclusiveSkillResultEvent(options: Readonly<{
+  event: JsonObject;
+  expectedCallId: string;
+  expectedIdentity: string;
+  expectedSessionId: string;
+}>): void {
+  const event = requiredObject(options.event, 'Claude exclusive Skill result event', [
+    'message', 'parent_tool_use_id', 'session_id', 'timestamp', 'tool_use_result', 'type', 'uuid',
+  ]);
+  const message = requiredObject(event['message'], 'Claude exclusive Skill result message', [
+    'content', 'role',
+  ]);
+  if (!Array.isArray(message['content']) || message['content'].length !== 1) {
+    throw new CertificationError('Claude Skill call was not an exclusive action barrier before its result.');
+  }
+  const block = requiredObject(message['content'][0], 'Claude exclusive Skill result block', [
+    'content', 'tool_use_id', 'type',
+  ]);
+  const toolUseResult = requiredObject(event['tool_use_result'], 'Claude exclusive Skill result metadata', [
+    'commandName', 'success',
+  ]);
+  if (event['type'] !== 'user' || event['parent_tool_use_id'] !== null || message['role'] !== 'user'
+    || block['type'] !== 'tool_result'
+    || requiredClaudeBoundaryId(block['tool_use_id'], 'Claude Skill result tool-use ID') !== options.expectedCallId
+    || block['content'] !== `Launching skill: ${options.expectedIdentity}`
+    || toolUseResult['commandName'] !== options.expectedIdentity || toolUseResult['success'] !== true
+    || requiredClaudeBoundaryId(event['session_id'], 'Claude Skill result session ID') !== options.expectedSessionId) {
+    throw new CertificationError('Claude Skill call was not followed immediately by its sole matching result.');
+  }
+  requiredClaudeBoundaryTimestamp(event['timestamp'], 'Claude Skill result timestamp');
+}
+
+function assertClaudeActionEventIdentity(options: Readonly<{
+  event: JsonObject;
+  type: 'assistant' | 'user';
+  expectedSessionId: string;
+  seenBoundaryUuids: Set<string>;
+}>): void {
+  const message = isJsonObject(options.event['message']) ? options.event['message'] : null;
+  if (options.event['type'] !== options.type || options.event['parent_tool_use_id'] !== null
+    || message === null || message['role'] !== options.type
+    || requiredClaudeBoundaryId(
+      options.event['session_id'],
+      `Claude ${options.type} action session ID`,
+    ) !== options.expectedSessionId) {
+    throw new CertificationError('Claude actionable event escaped the initialized root session.');
+  }
+  requiredClaudeBoundaryTimestamp(
+    options.event['timestamp'],
+    `Claude ${options.type} action timestamp`,
+  );
+  registerClaudeBoundaryUuid(
+    options.event['uuid'],
+    `Claude ${options.type} action UUID`,
+    options.seenBoundaryUuids,
+  );
+}
+
+function safeClaudeActionLabel(value: JsonValue | undefined): string {
+  if (!isJsonObject(value) || typeof value['name'] !== 'string') return 'unknown action';
+  if (value['name'] === 'Skill') return 'Skill action';
+  if (value['name'] !== 'Bash' || !isJsonObject(value['input'])
+    || typeof value['input']['command'] !== 'string') return 'unknown action';
+  try {
+    const executable = tokenizeLiteralHostCommand(value['input']['command'], true)[0]?.split('/').at(-1);
+    const known = new Set([
+      'nc', 'roster', 'roster-350-fixture-candidate-create',
+      'roster-350-fixture-candidate-promote', 'roster-350-fixture-dream-status',
+      'roster-350-fixture-feedback-record', 'roster-350-fixture-run-record',
+      'roster-350-fixture-search', 'roster-350-fixture-state-show', 'touch',
+    ]);
+    return executable !== undefined && known.has(executable)
+      ? `Bash/${executable} action`
+      : 'unrecognized Bash action';
+  } catch {
+    return 'unrecognized Bash action';
+  }
+}
+
+function safeClaudeActionDiagnostic(value: JsonValue | undefined): string {
+  if (!isJsonObject(value) || value['name'] !== 'Bash' || !isJsonObject(value['input'])
+    || typeof value['input']['command'] !== 'string') return '';
+  const command = value['input']['command'];
+  const candidatePrefix = command.startsWith('roster-350-fixture-candidate-create ');
+  const hasControl = /[\u0000-\u001f\u007f-\u009f]/u.test(command);
+  const hasBackslash = command.includes('\\');
+  const hasShellSyntax = /[;&|<>`(){}\[\]*?!$]/u.test(command);
+  return ` Command characters ${command.length}; command sha256 ${sha256(command)}; candidate prefix ${candidatePrefix}; control ${hasControl}; backslash ${hasBackslash}; shell syntax ${hasShellSyntax}.`;
+}
+
+function extractClaudeTrace(
+  events: readonly JsonValue[],
+  syntheticSkillContexts: readonly ClaudeSyntheticSkillContext[],
+): Pick<NormalizedHostTrace, 'initialization' | 'events' | 'tool_calls' | 'tool_results' | 'commands'> {
+  const firstEvent = events[0];
+  if (!isJsonObject(firstEvent)
+    || firstEvent['type'] !== 'system' || firstEvent['subtype'] !== 'init') {
+    throw new CertificationError('Claude initialization must be the first raw stream event.');
+  }
   const initialization: JsonValue[] = [];
   const orderedEvents: JsonValue[] = [];
   const toolCalls: JsonValue[] = [];
   const toolResults: JsonValue[] = [];
   const commands: string[] = [];
-  const callPositions = new Map<string, Readonly<{ eventOrdinal: number; blockOrdinal: number }>>();
+  const callPositions = new Map<string, Readonly<{
+    eventOrdinal: number;
+    blockOrdinal: number;
+    callOrdinal: number;
+  }>>();
   const resultIds = new Set<string>();
-  for (const [eventOrdinal, event] of events.entries()) {
+  const expectedSyntheticSkills = new Map(syntheticSkillContexts.map((entry) => [entry.identity, entry]));
+  if (expectedSyntheticSkills.size !== syntheticSkillContexts.length) {
+    throw new CertificationError('Claude synthetic Skill identities are not unique.');
+  }
+  const skillCallIdentities = new Map<string, string>();
+  let openSkillCall: Readonly<{
+    id: string;
+    callOrdinal: number;
+    expected: ClaudeSyntheticSkillContext;
+  }> | null = null;
+  let pendingSyntheticSkill: Readonly<{
+    callOrdinal: number;
+    expected: ClaudeSyntheticSkillContext;
+  }> | null = null;
+  const seenBoundaryUuids = new Set<string>();
+  const expectedSessionId = requiredClaudeBoundaryId(
+    firstEvent['session_id'],
+    'Claude initialization session ID',
+  );
+  if (syntheticSkillContexts.length > 0) {
+    registerClaudeBoundaryUuid(firstEvent['uuid'], 'Claude initialization UUID', seenBoundaryUuids);
+  }
+  let rateLimitEventSeen = false;
+  let thinkingTokenEventCount = 0;
+  let eventOrdinal = 0;
+  for (const event of events) {
     if (!isJsonObject(event) || typeof event['type'] !== 'string') {
       throw new CertificationError('Claude emitted a non-object or untyped stream event.');
     }
     const type = event['type'];
+    if (pendingSyntheticSkill !== null) {
+      if (expectedSessionId === null) {
+        throw new CertificationError('Claude Skill expansion has no initialization session identity.');
+      }
+      const normalizedEventOrdinal = eventOrdinal++;
+      orderedEvents.push(assertClaudeSyntheticSkillExpansion({
+        event,
+        expected: pendingSyntheticSkill.expected,
+        expectedSessionId,
+        seenBoundaryUuids,
+        eventOrdinal: normalizedEventOrdinal,
+        callOrdinal: pendingSyntheticSkill.callOrdinal,
+      }));
+      pendingSyntheticSkill = null;
+      continue;
+    }
+    if (openSkillCall !== null) {
+      if (expectedSessionId === null) {
+        throw new CertificationError('Claude Skill result has no initialization session identity.');
+      }
+      assertClaudeExclusiveSkillResultEvent({
+        event,
+        expectedCallId: openSkillCall.id,
+        expectedIdentity: openSkillCall.expected.identity,
+        expectedSessionId,
+      });
+    }
+    if (type === 'rate_limit_event') {
+      if (rateLimitEventSeen) {
+        throw new CertificationError('Claude emitted duplicate rate-limit telemetry events.');
+      }
+      assertClaudeAllowedRateLimitEvent(event);
+      rateLimitEventSeen = true;
+      continue;
+    }
+    if (type === 'system' && event['subtype'] === 'thinking_tokens') {
+      thinkingTokenEventCount++;
+      if (thinkingTokenEventCount > MAX_CLAUDE_THINKING_TOKEN_EVENTS) {
+        throw new CertificationError('Claude thinking-token telemetry exceeded its per-turn event budget.');
+      }
+      assertClaudeThinkingTokensEvent(event);
+      continue;
+    }
+    const normalizedEventOrdinal = eventOrdinal++;
     if (type === 'system') {
       if (event['subtype'] !== 'init') {
-        throw new CertificationError('Claude system event escaped the exact initialization subtype.');
+        throw new CertificationError('Claude system event escaped the exact initialization or thinking-token telemetry subtype.');
       }
       initialization.push(canonicalize(event));
       continue;
@@ -2694,6 +3880,12 @@ function extractClaudeTrace(events: readonly JsonValue[]): Pick<NormalizedHostTr
       if (event['subtype'] !== 'success' || event['is_error'] !== false
         || event['structured_output'] === undefined) {
         throw new CertificationError('Claude terminal result was not one successful structured result.');
+      }
+      if (requiredClaudeBoundaryId(
+        event['session_id'],
+        'Claude terminal result session ID',
+      ) !== expectedSessionId) {
+        throw new CertificationError('Claude terminal result escaped the initialized root session.');
       }
       continue;
     }
@@ -2708,6 +3900,16 @@ function extractClaudeTrace(events: readonly JsonValue[]): Pick<NormalizedHostTr
       || !Array.isArray(event['message']['content'])) {
       throw new CertificationError('Claude message event escaped the exact assistant/user grammar.');
     }
+    if (expectedSessionId !== null && event['message']['content'].some((block) => (
+      isJsonObject(block) && (block['type'] === 'tool_use' || block['type'] === 'tool_result')
+    ))) {
+      assertClaudeActionEventIdentity({
+        event,
+        type,
+        expectedSessionId,
+        seenBoundaryUuids,
+      });
+    }
     for (const [blockOrdinal, block] of event['message']['content'].entries()) {
       if (!isJsonObject(block) || typeof block['type'] !== 'string') {
         throw new CertificationError('Claude message contains a malformed content block.');
@@ -2717,7 +3919,39 @@ function extractClaudeTrace(events: readonly JsonValue[]): Pick<NormalizedHostTr
         : ['tool_result'];
       if (block['type'] !== 'tool_use' && block['type'] !== 'tool_result'
         && !allowedBlocks.includes(block['type'])) {
-        throw new CertificationError('Claude message contains a block outside its closed stream grammar.');
+        const blockType = /^[a-z][a-z0-9_-]{0,79}$/iu.test(block['type'])
+          ? block['type']
+          : '<unsafe-type>';
+        const fieldTypes = Object.entries(block)
+          .map(([key, entry]) => {
+            const safeKey = /^[a-z][a-z0-9_-]{0,79}$/iu.test(key) ? key : '<unsafe-key>';
+            const kind = entry === null ? 'null' : Array.isArray(entry) ? 'array' : typeof entry;
+            return `${safeKey}:${kind}`;
+          })
+          .sort()
+          .join(',');
+        const eventFieldTypes = Object.entries(event)
+          .map(([key, entry]) => {
+            const safeKey = /^[a-z][a-z0-9_-]{0,79}$/iu.test(key) ? key : '<unsafe-key>';
+            const kind = entry === null ? 'null' : Array.isArray(entry) ? 'array' : typeof entry;
+            return `${safeKey}:${kind}`;
+          })
+          .sort()
+          .join(',');
+        const messageFieldTypes = Object.entries(event['message'])
+          .map(([key, entry]) => {
+            const safeKey = /^[a-z][a-z0-9_-]{0,79}$/iu.test(key) ? key : '<unsafe-key>';
+            const kind = entry === null ? 'null' : Array.isArray(entry) ? 'array' : typeof entry;
+            return `${safeKey}:${kind}`;
+          })
+          .sort()
+          .join(',');
+        const textDetail = typeof block['text'] === 'string'
+          ? ` text_chars=${block['text'].length}; text_sha256=${sha256(block['text'])};`
+          : '';
+        throw new CertificationError(
+          `Claude ${type} message block ${normalizedEventOrdinal}:${blockOrdinal} escaped its closed stream grammar: type=${blockType}; fields=${fieldTypes}; event_fields=${eventFieldTypes}; message_fields=${messageFieldTypes};${textDetail}`,
+        );
       }
       if (block['type'] !== 'tool_use' && block['type'] !== 'tool_result') continue;
       if (block['type'] === 'tool_use') {
@@ -2727,14 +3961,39 @@ function extractClaudeTrace(events: readonly JsonValue[]): Pick<NormalizedHostTr
         if (block['name'] !== 'Bash' && block['name'] !== 'Skill') {
           throw new CertificationError('Claude used an action outside the closed Bash/Skill surface.');
         }
-        const id = typeof block['id'] === 'string' ? block['id'] : null;
-        if (id === null || callPositions.has(id)) {
+        const id = requiredClaudeBoundaryId(block['id'], 'Claude tool-use ID');
+        if (callPositions.has(id)) {
           throw new CertificationError('Claude tool calls must have unique stable identities.');
         }
-        callPositions.set(id, Object.freeze({ eventOrdinal, blockOrdinal }));
+        callPositions.set(id, Object.freeze({
+          eventOrdinal: normalizedEventOrdinal,
+          blockOrdinal,
+          callOrdinal: toolCalls.length,
+        }));
         const value = canonicalize(block);
+        if (block['name'] === 'Skill') {
+          if (event['message']['content'].length !== 1 || openSkillCall !== null) {
+            throw new CertificationError('Claude Skill calls must be exclusive action barriers.');
+          }
+          if (expectedSessionId === null) {
+            throw new CertificationError('Claude Skill call has no initialization session identity.');
+          }
+          assertClaudeExclusiveSkillCallEvent({
+            event,
+            block,
+            expectedSessionId,
+          });
+          const input = requiredObject(block['input'], 'Claude Skill input', ['skill']);
+          const identity = requiredString(input['skill'], 'Claude Skill identity');
+          const expected = expectedSyntheticSkills.get(identity);
+          if (expected === undefined) {
+            throw new CertificationError('Claude Skill action has no exact reviewed synthetic context.');
+          }
+          skillCallIdentities.set(id, identity);
+          openSkillCall = Object.freeze({ id, callOrdinal: toolCalls.length, expected });
+        }
         toolCalls.push(value);
-        orderedEvents.push(canonicalize({ kind: 'tool_call', event_ordinal: eventOrdinal, block_ordinal: blockOrdinal, value }));
+        orderedEvents.push(canonicalize({ kind: 'tool_call', event_ordinal: normalizedEventOrdinal, block_ordinal: blockOrdinal, value }));
         if (block['name'] === 'Bash' && isJsonObject(block['input']) && typeof block['input']['command'] === 'string') {
           commands.push(block['input']['command']);
         }
@@ -2743,18 +4002,54 @@ function extractClaudeTrace(events: readonly JsonValue[]): Pick<NormalizedHostTr
       if (type !== 'user') {
         throw new CertificationError('Claude tool results must originate from a user message.');
       }
-      assertNoClaudeToolResultPersistenceWrapper(block);
-      const id = typeof block['tool_use_id'] === 'string' ? block['tool_use_id'] : null;
-      const callPosition = id === null ? undefined : callPositions.get(id);
-      if (id === null || callPosition === undefined || resultIds.has(id)
-        || eventOrdinal <= callPosition.eventOrdinal) {
+      const id = requiredClaudeBoundaryId(block['tool_use_id'], 'Claude tool-result tool-use ID');
+      const callPosition = callPositions.get(id);
+      if (callPosition === undefined || resultIds.has(id)
+        || normalizedEventOrdinal <= callPosition.eventOrdinal) {
         throw new CertificationError('Claude tool results must follow one prior unmatched tool call.');
+      }
+      try {
+        assertNoClaudeToolResultPersistenceWrapper(block);
+      } catch (error) {
+        if (!(error instanceof CertificationError)) throw error;
+        const reportedCharacters = /Host reported \d+ original characters\./u.exec(error.message)?.[0] ?? '';
+        const wrapperDetail = /Wrapper marker \d+; wrapper characters \d+; wrapper sha256 [a-f0-9]{64}\./u
+          .exec(error.message)?.[0] ?? '';
+        const action = safeClaudeActionLabel(toolCalls[callPosition.callOrdinal]);
+        throw new CertificationError(
+          `Claude ${action} result at call ordinal ${callPosition.callOrdinal + 1} was replaced by a persisted or truncated output wrapper.${wrapperDetail === '' ? '' : ` ${wrapperDetail}`}${reportedCharacters === '' ? '' : ` ${reportedCharacters}`}${safeClaudeActionDiagnostic(toolCalls[callPosition.callOrdinal])}`,
+        );
       }
       resultIds.add(id);
       const value = canonicalize(block);
       toolResults.push(value);
-      orderedEvents.push(canonicalize({ kind: 'tool_result', event_ordinal: eventOrdinal, block_ordinal: blockOrdinal, value }));
+      orderedEvents.push(canonicalize({ kind: 'tool_result', event_ordinal: normalizedEventOrdinal, block_ordinal: blockOrdinal, value }));
+      const skillIdentity = skillCallIdentities.get(id);
+      if (skillIdentity !== undefined) {
+        const expected = expectedSyntheticSkills.get(skillIdentity);
+        if (expected === undefined || pendingSyntheticSkill !== null
+          || openSkillCall?.id !== id || openSkillCall.callOrdinal !== callPosition.callOrdinal) {
+          throw new CertificationError('Claude Skill expansion lifecycle is ambiguous.');
+        }
+        const skillResult = requiredObject(block, 'Claude successful Skill result', [
+          'type', 'tool_use_id', 'content',
+        ]);
+        if (skillResult['content'] !== `Launching skill: ${skillIdentity}`) {
+          throw new CertificationError('Claude Skill result does not bind the exact reviewed skill identity.');
+        }
+        pendingSyntheticSkill = Object.freeze({
+          callOrdinal: callPosition.callOrdinal,
+          expected,
+        });
+        openSkillCall = null;
+      }
     }
+  }
+  if (pendingSyntheticSkill !== null) {
+    throw new CertificationError('Claude Skill result has no immediate exact synthetic context expansion.');
+  }
+  if (openSkillCall !== null) {
+    throw new CertificationError('Claude Skill call has no immediate sole matching result.');
   }
   if (initialization.length !== 1) throw new CertificationError('Claude emitted an invalid initialization event count.');
   if (callPositions.size !== resultIds.size
@@ -2976,11 +4271,18 @@ export function normalizeHostTrace(options: Readonly<{
   stdout: string;
   pathReplacements: Readonly<Record<string, string>>;
   forbiddenTokens: readonly string[];
-  secrets?: readonly string[];
+  claudeSyntheticSkillContexts?: readonly ClaudeSyntheticSkillContext[];
 }>): NormalizedHostTrace {
   const events = jsonLines(options.stdout, `${options.host} trace`);
-  const extracted = options.host === 'claude' ? extractClaudeTrace(events) : extractCodexTrace(events);
-  for (const command of extracted.commands) tokenizeLiteralHostCommand(command);
+  const extracted = options.host === 'claude'
+    ? extractClaudeTrace(events, options.claudeSyntheticSkillContexts ?? [])
+    : extractCodexTrace(events);
+  for (const command of extracted.commands) {
+    tokenizeLiteralHostCommand(command);
+    if (options.host === 'codex' && options.forbiddenTokens.some((token) => command.includes(token))) {
+      throw new CertificationError('A Codex model command exposed raw ambient host-state paths.');
+    }
+  }
   const semantic = canonicalize(findSemanticResult(options.host, events));
   rejectForbiddenSemanticKeys(semantic);
   const normalized = normalizeMachinePaths({
@@ -2992,9 +4294,10 @@ export function normalizeHostTrace(options: Readonly<{
     semantic_result: semantic,
   }, options.pathReplacements);
   const serialized = canonicalJson(normalized);
-  assertNoRawSecrets(serialized, options.secrets ?? []);
   for (const token of options.forbiddenTokens) {
-    if (serialized.includes(token)) throw new CertificationError('A forbidden fixture token reached normalized host output.');
+    if (serialized.includes(token) || serialized.includes(posixSingleQuotedContent(token))) {
+      throw new CertificationError('A forbidden fixture token reached normalized host output.');
+    }
   }
   if (!isJsonObject(normalized)) throw new CertificationError('Normalized trace is not an object.');
   return Object.freeze({
@@ -3064,17 +4367,33 @@ function assertClaudeSandboxProof(
   trace: NormalizedHostTrace,
   probe: ReturnType<typeof claudeSandboxCanaries>,
 ): string {
-  if (existsSync(probe.outsidePath)) {
-    throw new CertificationError('Claude did not run both sandbox canaries before controlled workflow commands.');
+  const postStat = lstatIfPresent(probe.outsidePath);
+  if (postStat !== null) {
+    if (postStat.isSymbolicLink() || !postStat.isFile()) {
+      throw new CertificationError('Claude sandbox canary became a non-regular ambient-home entry; refusing cleanup.');
+    }
+    rmSync(probe.outsidePath);
+    throw new CertificationError('Claude sandbox allowed the exact ambient-home write canary; the file was removed.');
   }
-  const expectedCommands = [probe.writeCommand, probe.networkCommand] as const;
-  const proofs = assertClaudeSandboxCanaryTrace(trace, expectedCommands);
+  const proofs = assertClaudeSandboxCanaryTrace(trace, probe.normalizedCommands);
   return sha256(canonicalJson({
     canary_order: ['outside-workspace-write', 'loopback-network-connect'],
+    precondition_sha256: probe.preconditionSha256,
     outside_control_sha256: probe.outsideControlSha256,
     network_control_sha256: probe.networkControlSha256,
     denials: proofs,
   }));
+}
+
+function cleanupClaudeSandboxCanaryAfterFailure(
+  probe: ReturnType<typeof claudeSandboxCanaries>,
+): void {
+  const stat = lstatIfPresent(probe.outsidePath);
+  if (stat === null) return;
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new CertificationError('Claude failure left a non-regular ambient-home canary; refusing cleanup.');
+  }
+  rmSync(probe.outsidePath);
 }
 
 export function assertCodexSandboxCanaryTrace(
@@ -3123,7 +4442,7 @@ function assertCodexSandboxProof(
   }));
 }
 
-function assertClaudeDreamerProof(
+export function assertClaudeDreamerProof(
   trace: NormalizedHostTrace,
   contract: HostLedLearningLaunchContract,
   challenge: string,
@@ -3141,17 +4460,29 @@ function assertClaudeDreamerProof(
   const skillCall = orderedTraceValue(trace.events[skillIndex]!, 'tool_call');
   const id = skillCall === null ? null : toolCallId(skillCall);
   if (id === null) throw new CertificationError('Claude Dreamer Skill call has no tool-use ID.');
+  const callOrdinal = trace.tool_calls.findIndex((entry) => toolCallId(entry) === id);
+  if (callOrdinal < 0) throw new CertificationError('Claude Dreamer Skill call has no normalized call ordinal.');
   const resultIndex = trace.events.findIndex((entry, index) => {
     const result = orderedTraceValue(entry, 'tool_result');
     return index > skillIndex && result?.['tool_use_id'] === id;
   });
   const result = resultIndex < 0 ? null : orderedTraceValue(trace.events[resultIndex]!, 'tool_result');
-  if (result === null || result['is_error'] === true || !canonicalJson(result).includes(challenge)) {
+  if (result === null || result['content'] !== `Launching skill: ${dreamer.identity}`) {
     throw new CertificationError('Claude Dreamer Skill call has no later matching successful tool result.');
+  }
+  const expansionIndex = trace.events.findIndex((entry, index) => (
+    index > resultIndex
+      && isJsonObject(entry)
+      && entry['kind'] === 'synthetic_skill_context'
+      && entry['skill_identity'] === dreamer.identity
+      && entry['call_ordinal'] === callOrdinal
+  ));
+  if (expansionIndex < 0) {
+    throw new CertificationError('Claude Dreamer Skill result has no exact reviewed synthetic context marker.');
   }
   const candidateIndex = trace.events.findIndex((entry, index) => {
     const call = orderedTraceValue(entry, 'tool_call');
-    if (index <= resultIndex || call?.['name'] !== 'Bash' || !isJsonObject(call['input'])) return false;
+    if (index <= expansionIndex || call?.['name'] !== 'Bash' || !isJsonObject(call['input'])) return false;
     const command = call['input']['command'];
     if (typeof command !== 'string') return false;
     const tokens = tokenizeLiteralHostCommand(command, true);
@@ -3162,7 +4493,7 @@ function assertClaudeDreamerProof(
       && tokens[challengeIndex + 1] === challenge;
   });
   if (candidateIndex < 0) {
-    throw new CertificationError('Claude candidate creation did not follow the successful Dreamer skill with its challenge.');
+    throw new CertificationError('Claude candidate creation did not follow the exact Dreamer expansion with its challenge.');
   }
 }
 
@@ -3338,6 +4669,9 @@ export function tokenizeLiteralHostCommand(
         .replaceAll('$REPO', '/__roster_repo__')
         .replaceAll('$TEMP_HOME', '/__roster_home__')
         .replaceAll('$HOST_CONFIG', '/__roster_config__')
+        .replaceAll('$SCRATCH_CONFIG', '/__roster_scratch_config__')
+        .replaceAll('$HOST_HOME', '/__roster_host_home__')
+        .replaceAll('$CODEX_HOME', '/__roster_codex_home__')
         .replaceAll('$TMPDIR', '/__roster_tmp__')
         .replaceAll('$HOST_BIN', '/__roster_host_bin__')
     : command;
@@ -3521,7 +4855,7 @@ function validateClaudeActionSurface(
   }));
   const permittedErrorCommands = new Set(claudeCanaries === undefined
     ? []
-    : [claudeCanaries.writeCommand, claudeCanaries.networkCommand]);
+    : claudeCanaries.normalizedCommands);
   for (const entry of trace.tool_calls) {
     if (!isJsonObject(entry) || typeof entry['id'] !== 'string' || !isJsonObject(entry['input'])) continue;
     const result = resultsById.get(entry['id']);
@@ -3586,7 +4920,7 @@ export function validateHostTraceCommands(options: Readonly<{
     }
     if (options.host === 'claude' && options.turn === 'discover'
       && options.claudeCanaries !== undefined
-      && (command === options.claudeCanaries.writeCommand || command === options.claudeCanaries.networkCommand)) {
+      && options.claudeCanaries.normalizedCommands.includes(command)) {
       continue;
     }
     if (options.host === 'codex' && options.turn === 'discover'
@@ -3618,7 +4952,7 @@ export function validateHostTraceCommands(options: Readonly<{
   } else {
     const permittedCanaries = new Set(options.claudeCanaries === undefined
       ? []
-      : [options.claudeCanaries.writeCommand, options.claudeCanaries.networkCommand]);
+      : options.claudeCanaries.normalizedCommands);
     const claudeSequence = options.trace.tool_calls.flatMap((entry) => {
       if (!isJsonObject(entry) || !isJsonObject(entry['input'])) return [];
       if (entry['name'] === options.contract.claude.skill_tool_name) {
@@ -3875,6 +5209,7 @@ function assertPluginAndToolInitialization(
     || canonicalJson([...tools].sort(compareCodePoints)) !== canonicalJson(['Bash', 'Skill'])
     || !Array.isArray(mcpServers) || mcpServers.length !== 0
     || trace.initialization['permissionMode'] !== 'dontAsk'
+    || trace.initialization['apiKeySource'] !== 'none'
     || typeof trace.initialization['model'] !== 'string'
     || !trace.initialization['model'].includes(CLAUDE_MODEL)
     || !serialized.includes(contract.claude.plugin_name)
@@ -3889,20 +5224,20 @@ function hostTurnEnvironment(options: Readonly<{
   passPaths: HostPassPaths;
   contract: HostLedLearningLaunchContract;
   turn: 1 | 2;
-  apiKey: string;
+  ambientState: AmbientHostState;
 }>): Readonly<Record<string, string>> {
   const home = options.turn === 1 ? options.passPaths.turnOneHome : options.passPaths.turnTwoHome;
-  const config = options.turn === 1 ? options.passPaths.turnOneConfig : options.passPaths.turnTwoConfig;
   const temp = options.turn === 1 ? options.passPaths.turnOneTmp : options.passPaths.turnTwoTmp;
   const hostBinary = options.host === 'claude' ? options.paths.claudeBin : options.paths.codexBin;
   return explicitHostEnv({
     host: options.host,
     turn: options.turn === 1 ? 'discover' : 'approve',
-    home,
-    configHome: config,
+    processHome: home,
+    hostStateHome: options.host === 'claude'
+      ? options.ambientState.claudeHome
+      : options.ambientState.codexHome,
     temp,
     workspace: options.passPaths.workspace,
-    apiKey: options.apiKey,
     hostBinary,
     requestHash: `sha256:${sha256(readFileSync(join(
       options.paths.fixtureRoot,
@@ -3920,20 +5255,23 @@ function hostProbeEnvironment(options: Readonly<{
   contract: HostLedLearningLaunchContract;
   turn: 1 | 2;
   label: string;
+  ambientState: AmbientHostState;
+  useAmbientHostState: boolean;
+  workspaceMode?: 'clone' | 'empty';
 }>): Readonly<{ env: Readonly<Record<string, string>>; roots: HostProbePaths }> {
-  const roots = createHostProbePaths(
-    options.passPaths.workspace,
-    options.passPaths.hostRoot,
-    options.label,
-  );
+  const roots = options.workspaceMode === 'empty'
+    ? createEmptyHostProbePaths(options.passPaths.hostRoot, options.label)
+    : createHostProbePaths(options.passPaths.workspace, options.passPaths.hostRoot, options.label);
   const hostBinary = options.host === 'claude' ? options.paths.claudeBin : options.paths.codexBin;
   return Object.freeze({
     roots,
     env: explicitHostEnv({
       host: options.host,
       turn: options.turn === 1 ? 'discover' : 'approve',
-      home: roots.home,
-      configHome: roots.config,
+      processHome: roots.home,
+      hostStateHome: options.useAmbientHostState
+        ? (options.host === 'claude' ? options.ambientState.claudeHome : options.ambientState.codexHome)
+        : (options.host === 'claude' ? roots.home : roots.config),
       temp: roots.temp,
       workspace: roots.workspace,
       hostBinary,
@@ -3947,17 +5285,17 @@ function hostProbeEnvironment(options: Readonly<{
   });
 }
 
-function runHostTurn(options: Readonly<{
+async function runHostTurn(options: Readonly<{
   host: CertificationHost;
   paths: LiveCertificationPaths;
   passPaths: HostPassPaths;
   contract: HostLedLearningLaunchContract;
   turn: 1 | 2;
   prompt: string;
-  apiKey: string;
+  ambientState: AmbientHostState;
   hostProbe: HostLaunchProbe;
   claudeSandboxProbe?: ReturnType<typeof claudeSandboxCanaries>;
-}>): HostTurnOutcome {
+}>): Promise<HostTurnOutcome> {
   const home = options.turn === 1 ? options.passPaths.turnOneHome : options.passPaths.turnTwoHome;
   const config = options.turn === 1 ? options.passPaths.turnOneConfig : options.passPaths.turnTwoConfig;
   const temp = options.turn === 1 ? options.passPaths.turnOneTmp : options.passPaths.turnTwoTmp;
@@ -3971,7 +5309,7 @@ function runHostTurn(options: Readonly<{
         writeClaudeSettings(
           settingsPath,
           options.passPaths.workspace,
-          [home, config, temp],
+          [config, temp],
           options.contract,
           includeSandboxCanaries,
         );
@@ -3991,17 +5329,44 @@ function runHostTurn(options: Readonly<{
     [options.paths.repoRoot]: '$REPO',
     [options.passPaths.workspace]: '$WORKSPACE',
     [home]: '$TEMP_HOME',
-    [config]: '$HOST_CONFIG',
+    [config]: '$SCRATCH_CONFIG',
     [temp]: '$TMPDIR',
     [hostBinary]: '$HOST_BIN',
+    [dirname(hostBinary)]: '$HOST_BIN_DIR',
+    [dirname(process.execPath)]: '$NODE_BIN_DIR',
+    [options.ambientState.claudeHome]: '$HOST_HOME',
+    [options.ambientState.codexHome]: '$CODEX_HOME',
   };
   const authoredConfigBefore = authoredHostConfigManifest(options.host, config);
+  const authoredConfigProof = normalizedAuthoredHostConfigManifest(options.host, config, replacements);
   const launchConfig = normalizeMachinePaths({
     args,
     env: envAttestation(env, options.host),
   }, replacements);
-  const result = withHostBinaryProof(options.host, hostBinary, options.hostProbe, () => (
-    requireSuccess(runCapturedProcess({
+  const authenticationBeforeProbe = hostProbeEnvironment({
+    host: options.host,
+    paths: options.paths,
+    passPaths: options.passPaths,
+    contract: options.contract,
+    turn: options.turn,
+    label: `turn-${options.turn}-auth-before`,
+    ambientState: options.ambientState,
+    useAmbientHostState: true,
+    workspaceMode: 'empty',
+  });
+  const authenticationBefore = withHostBinaryProof(options.host, hostBinary, options.hostProbe, () => (
+    probeHostAuthentication(
+      options.host,
+      hostBinary,
+      authenticationBeforeProbe.env,
+      authenticationBeforeProbe.roots.workspace,
+    )
+  ));
+  if (canonicalJson(authenticationBefore) !== canonicalJson(options.hostProbe.authentication)) {
+    throw new CertificationError(`${options.host} authentication changed before paid turn ${options.turn}.`);
+  }
+  const result = await withHostBinaryProofAsync(options.host, hostBinary, options.hostProbe, async () => (
+    requireSuccess(await runPaidHostProcess({
       command: hostBinary,
       args,
       cwd: options.passPaths.workspace,
@@ -4009,40 +5374,49 @@ function runHostTurn(options: Readonly<{
       ...(options.host === 'claude' ? { input: options.prompt } : {}),
     }), `${options.host}-turn-${options.turn}`)
   ));
+  const authenticationAfterProbe = hostProbeEnvironment({
+    host: options.host,
+    paths: options.paths,
+    passPaths: options.passPaths,
+    contract: options.contract,
+    turn: options.turn,
+    label: `turn-${options.turn}-auth-after`,
+    ambientState: options.ambientState,
+    useAmbientHostState: true,
+    workspaceMode: 'empty',
+  });
+  const authenticationAfter = withHostBinaryProof(options.host, hostBinary, options.hostProbe, () => (
+    probeHostAuthentication(
+      options.host,
+      hostBinary,
+      authenticationAfterProbe.env,
+      authenticationAfterProbe.roots.workspace,
+    )
+  ));
+  if (canonicalJson(authenticationAfter) !== canonicalJson(authenticationBefore)) {
+    throw new CertificationError(`${options.host} authentication changed during paid turn ${options.turn}.`);
+  }
   const authoredConfigAfter = authoredHostConfigManifest(options.host, config);
   if (canonicalJson(authoredConfigBefore) !== canonicalJson(authoredConfigAfter)) {
     throw new CertificationError(`${options.host} mutated a harness-authored config input during turn ${options.turn}.`);
   }
-  const transientInventory = inventoryHostConfig(options.host, config, [options.apiKey]);
   const trace = normalizeHostTrace({
     host: options.host,
     stdout: result.stdout,
     pathReplacements: replacements,
-    forbiddenTokens: [],
-    secrets: [options.apiKey],
+    forbiddenTokens: [options.ambientState.claudeHome, options.ambientState.codexHome],
+    ...(options.host === 'claude'
+      ? { claudeSyntheticSkillContexts: claudeSyntheticSkillContexts(options.paths, options.contract) }
+      : {}),
   });
   assertPluginAndToolInitialization(options.host, trace, options.contract);
   return Object.freeze({
     trace,
     config_sha256: sha256(canonicalJson({
-      authored_config: authoredConfigBefore,
+      authored_config: authoredConfigProof,
       launch: launchConfig,
-      transient_inventory: transientInventory,
     })),
   });
-}
-
-function hostApiKey(host: CertificationHost, env: NodeJS.ProcessEnv): string {
-  const name = host === 'claude' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
-  const otherName = host === 'claude' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY';
-  const value = env[name];
-  if (value === undefined || value.length === 0) {
-    throw new CertificationError(`${name} must be injected for live certification.`);
-  }
-  if (env[otherName] !== undefined && env[otherName]!.length > 0 && env[otherName] === value) {
-    throw new CertificationError('Host API-key variables must not alias the same secret value.');
-  }
-  return value;
 }
 
 function packageVersion(paths: CertificationPaths): string {
@@ -4052,12 +5426,13 @@ function packageVersion(paths: CertificationPaths): string {
 }
 
 function runBuild(paths: CertificationPaths): void {
-  const pnpm = findExecutable('pnpm', process.env['PATH']);
+  const tsdown = join(paths.repoRoot, 'node_modules/.bin/tsdown');
+  accessSync(tsdown, constants.X_OK);
   const env = minimalProbeEnv(mkdtempSync(join(tmpdir(), 'roster-350-build-home-')), process.env['PATH'] ?? '');
   try {
     requireSuccess(runCapturedProcess({
-      command: pnpm,
-      args: ['build'],
+      command: tsdown,
+      args: [],
       cwd: paths.repoRoot,
       env,
       timeoutMs: HOST_TIMEOUT_MS,
@@ -4132,6 +5507,43 @@ function createCertificationRoot(): string {
   return root;
 }
 
+function hasPreparedSeededBrainProjection(
+  contextValue: Readonly<Record<string, unknown>>,
+  contract: HostLedLearningLaunchContract,
+): boolean {
+  const brain = contextValue['brain'];
+  if (contextValue['hash_prefix'] !== 'sha256:' || !Array.isArray(brain) || brain.length !== 3) return false;
+  const [defaults, prefixes, rows] = brain;
+  const planId = contract.roster.target.split('#')[1];
+  if (planId === undefined
+    || canonicalJson(defaults) !== canonicalJson([
+      'internal', planId, 'fixture-text-extractor', 'version-one',
+    ])
+    || canonicalJson(prefixes) !== canonicalJson([
+      'brain-record-',
+      'source-record-',
+      'version-record-',
+      'object-record-',
+      's3://company-brain/fixtures/host-led-learning/evidence-',
+    ])
+    || !Array.isArray(rows) || rows.length !== 3) {
+    return false;
+  }
+  const expectedSuffixes = ['a17f', 'b62c', 'd91e'];
+  return rows.every((row, index) => {
+    if (!Array.isArray(row) || row.length !== 8 || row[0] !== expectedSuffixes[index]) return false;
+    const [idSuffix, text, retrievalReasonCode, logicalSuffix, versionSuffix, objectSuffix, locatorSuffix, hashSuffix] = row;
+    return typeof text === 'string' && text.length > 0
+      && (retrievalReasonCode === 0 || retrievalReasonCode === 1)
+      && logicalSuffix === idSuffix
+      && versionSuffix === idSuffix
+      && objectSuffix === idSuffix
+      && locatorSuffix === `${idSuffix}.txt`
+      && typeof hashSuffix === 'string'
+      && /^sha256:[a-f0-9]{64}$/u.test(`${contextValue['hash_prefix']}${hashSuffix}`);
+  });
+}
+
 function probePreparedRosterAdapterRuntime(
   paths: CertificationPaths,
   currentPaths: HostPassPaths,
@@ -4179,8 +5591,10 @@ function probePreparedRosterAdapterRuntime(
   const contextValue = parseJson(context.stdout, 'prepared Roster context output');
   if (!isJsonObject(discoverValue) || !Array.isArray(discoverValue['records'])
     || discoverValue['records'].length !== 1
-    || !isJsonObject(contextValue) || !isJsonObject(contextValue['agent'])
-    || !isJsonObject(contextValue['plan']) || !Array.isArray(contextValue['brain_evidence'])) {
+    || !isJsonObject(contextValue) || contextValue['schema'] !== 'host-context.v2'
+    || !Array.isArray(contextValue['agent']) || contextValue['agent'].length !== 2
+    || !Array.isArray(contextValue['plans']) || contextValue['plans'].length === 0
+    || !hasPreparedSeededBrainProjection(contextValue, contract)) {
     throw new CertificationError('Prepared self-contained Roster adapter/runtime probe returned the wrong product shape.');
   }
 }
@@ -4189,7 +5603,11 @@ function preflightControlledModelVisibleOutputs(
   paths: CertificationPaths,
   currentPaths: HostPassPaths,
   contract: HostLedLearningLaunchContract,
-): Readonly<{ maximum_characters: number; output_count: number }> {
+): Readonly<{
+  maximum_characters: number;
+  total_characters: number;
+  output_count: number;
+}> {
   const roots = createHostProbePaths(currentPaths.workspace, currentPaths.hostRoot, 'model-visible-json');
   const requestHash = `sha256:${sha256(readFileSync(join(
     paths.fixtureRoot,
@@ -4258,9 +5676,32 @@ function preflightControlledModelVisibleOutputs(
     '--candidate-hash', candidateHash,
   ], 'approve');
   invoke('roster', ['context', contract.roster.target, '--query', query, '--json'], 'approve');
+  const totalCharacters = characterCounts.reduce((total, characters) => total + characters, 0);
+  if (totalCharacters > CLAUDE_CONTROLLED_RESULT_AGGREGATE_LIMIT) {
+    throw new CertificationError(
+      `Controlled model-visible outputs exceed the ${CLAUDE_CONTROLLED_RESULT_AGGREGATE_LIMIT}-character aggregate safety limit.`,
+    );
+  }
   return Object.freeze({
     maximum_characters: Math.max(...characterCounts),
+    total_characters: totalCharacters,
     output_count: characterCounts.length,
+  });
+}
+
+function preflightClaudeOutputSchemas(
+  paths: CertificationPaths,
+  contract: HostLedLearningLaunchContract,
+): void {
+  validateClaudeOutputSchemaDialect({
+    discover: readJson(join(
+      paths.fixtureRoot,
+      contract.host_readable_inputs.discover_output_schema,
+    ), 'Claude discovery output schema'),
+    approve: readJson(join(
+      paths.fixtureRoot,
+      contract.host_readable_inputs.approve_output_schema,
+    ), 'Claude approval output schema'),
   });
 }
 
@@ -4280,8 +5721,8 @@ function rebuildModelFreeCertificationInputs(
     contract_mode: number;
     lifecycle_present: boolean;
   }>>>;
-  codexWorkspaceInstructionsSha256: string;
 }> {
+  preflightClaudeOutputSchemas(paths, contract);
   const root = createCertificationRoot();
   try {
     const bundles = buildCertificationBundles(paths, root);
@@ -4294,7 +5735,6 @@ function rebuildModelFreeCertificationInputs(
       contract_mode: number;
       lifecycle_present: boolean;
     }>>> = {};
-    let codexWorkspaceInstructionsSha256: string | null = null;
     const initialWorkspaceSha256 = Object.fromEntries((['claude', 'codex'] as const).map((host) => {
       const currentPaths = passPaths(root, host);
       prepareWorkspace(host, paths, currentPaths, contract, bundles);
@@ -4306,12 +5746,6 @@ function rebuildModelFreeCertificationInputs(
       const lifecyclePresent = existsSync(join(currentPaths.workspace, '.fixture/fixture-lifecycle.md'));
       if (rosterMode !== 0o700 || contractMode !== 0o600 || lifecyclePresent) {
         throw new CertificationError('Prepared runtime modes or lifecycle-file boundary drifted.');
-      }
-      if (host === 'codex') {
-        const agentInstructions = readFileSync(join(currentPaths.workspace, 'AGENTS.md'), 'utf8');
-        codexWorkspaceInstructionsSha256 = sha256(
-          `# AGENTS.md instructions for $WORKSPACE\n\n<INSTRUCTIONS>\n${agentInstructions}\n</INSTRUCTIONS>`,
-        );
       }
       preparedRuntime[host] = Object.freeze({
         roster_mode: rosterMode,
@@ -4327,9 +5761,6 @@ function rebuildModelFreeCertificationInputs(
       probePreparedRosterAdapterRuntime(paths, currentPaths, contract);
       return [host, manifest.sha256];
     })) as Record<CertificationHost, string>;
-    if (codexWorkspaceInstructionsSha256 === null) {
-      throw new CertificationError('Model-free rebuild omitted Codex workspace instructions.');
-    }
     return Object.freeze({
       adapterBundleSha256: sha256(readFileSync(bundles.adapterPath)),
       certificationRosterBundleSha256: sha256(readFileSync(bundles.rosterPath)),
@@ -4343,7 +5774,6 @@ function rebuildModelFreeCertificationInputs(
         contract_mode: number;
         lifecycle_present: boolean;
       }>>>,
-      codexWorkspaceInstructionsSha256,
     });
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -4698,7 +6128,6 @@ function assertDurableSemanticCoherence(
       run_ids: [run.id],
       feedback_ids: [feedback.id],
     },
-    state,
     pending_candidate: {
       status: 'existing',
       record: candidate,
@@ -4794,7 +6223,7 @@ export function captureCertificationInputSnapshot(options: Readonly<{
 }>): CertificationInputSnapshot {
   const contract = loadHostLedLearningLaunchContract(options.paths.repoRoot);
   const manifest = certificationInputManifest(options.paths);
-  const managedSettings = inventoryManagedSettings();
+  inventoryManagedSettings();
   const hostBinaries = Object.fromEntries((['claude', 'codex'] as const).map((host) => {
     const binary = host === 'claude' ? options.paths.claudeBin : options.paths.codexBin;
     const executableSha256 = sha256(readFileSync(binary));
@@ -4816,7 +6245,6 @@ export function captureCertificationInputSnapshot(options: Readonly<{
     roster_bundle_sha256: sha256(readFileSync(options.paths.rosterBundlePath)),
     certification_roster_bundle_sha256: sha256(readFileSync(options.bundles.rosterPath)),
     adapter_bundle_sha256: sha256(readFileSync(options.bundles.adapterPath)),
-    managed_settings_sha256: sha256(canonicalJson(managedSettings)),
     host_binaries: Object.freeze(hostBinaries),
   });
 }
@@ -4864,7 +6292,7 @@ async function runPass(options: Readonly<{
   certificationRoot: string;
   contract: HostLedLearningLaunchContract;
   expected: JsonValue;
-  apiKey: string;
+  ambientState: AmbientHostState;
   bundles: CertificationBundles;
   hostProbe: HostLaunchProbe;
 }>): Promise<CertificationPassOutcome> {
@@ -4904,6 +6332,8 @@ async function runPass(options: Readonly<{
       contract: options.contract,
       turn: 1,
       label: 'skill-discovery',
+      ambientState: options.ambientState,
+      useAmbientHostState: false,
     });
     skillDiscoveryHash = withHostBinaryProof(options.host, hostBinary, options.hostProbe, () => (
       probeClaudePlugin({
@@ -4921,34 +6351,34 @@ async function runPass(options: Readonly<{
     if (beforePaidTurn.sha256 !== initialWorkspace.sha256) {
       throw new CertificationError('A model-free Claude probe mutated the paid workspace before launch.');
     }
-    const listener = createServer((socket) => socket.end());
-    await new Promise<void>((resolvePromise, rejectPromise) => {
-      listener.once('error', rejectPromise);
-      listener.listen(0, '127.0.0.1', () => resolvePromise());
+    const paidTurn = await withLoopbackListener(async (loopbackPort) => {
+      const canaries = claudeSandboxCanaries(
+        options.ambientState.claudeHome,
+        currentPaths.hostRoot,
+        options.pass,
+        loopbackPort,
+      );
+      try {
+        const outcome = await runHostTurn({
+          host: options.host,
+          paths: options.paths,
+          passPaths: currentPaths,
+          contract: options.contract,
+          turn: 1,
+          prompt: request,
+          ambientState: options.ambientState,
+          hostProbe: options.hostProbe,
+          claudeSandboxProbe: canaries,
+        });
+        return Object.freeze({ outcome, canaries });
+      } catch (error) {
+        cleanupClaudeSandboxCanaryAfterFailure(canaries);
+        throw error;
+      }
     });
-    const address = listener.address();
-    if (address === null || typeof address === 'string') {
-      listener.close();
-      throw new CertificationError('Claude network canary listener has no TCP address.');
-    }
-    const canaries = claudeSandboxCanaries(currentPaths.hostRoot, address.port);
-    claudeCanaries = canaries;
-    try {
-      turnOne = runHostTurn({
-        host: options.host,
-        paths: options.paths,
-        passPaths: currentPaths,
-        contract: options.contract,
-        turn: 1,
-        prompt: request,
-        apiKey: options.apiKey,
-        hostProbe: options.hostProbe,
-        claudeSandboxProbe: canaries,
-      });
-    } finally {
-      await new Promise<void>((resolvePromise) => listener.close(() => resolvePromise()));
-    }
-    sandboxProbeHash = assertClaudeSandboxProof(turnOne.trace, canaries);
+    turnOne = paidTurn.outcome;
+    claudeCanaries = paidTurn.canaries;
+    sandboxProbeHash = assertClaudeSandboxProof(turnOne.trace, claudeCanaries);
     assertClaudeDreamerProof(
       turnOne.trace,
       options.contract,
@@ -4962,6 +6392,8 @@ async function runPass(options: Readonly<{
       contract: options.contract,
       turn: 1,
       label: 'skill-discovery',
+      ambientState: options.ambientState,
+      useAmbientHostState: true,
     });
     skillDiscoveryHash = await withHostBinaryProofAsync(options.host, hostBinary, options.hostProbe, () => (
       probeCodexProjectSkills({
@@ -4978,6 +6410,8 @@ async function runPass(options: Readonly<{
       contract: options.contract,
       turn: 1,
       label: 'discover-prompt',
+      ambientState: options.ambientState,
+      useAmbientHostState: true,
     });
     const discoverPromptHash = withHostBinaryProof(options.host, hostBinary, options.hostProbe, () => (
       probeCodexPromptInput({
@@ -4995,6 +6429,8 @@ async function runPass(options: Readonly<{
       contract: options.contract,
       turn: 2,
       label: 'approve-prompt',
+      ambientState: options.ambientState,
+      useAmbientHostState: true,
     });
     const approvePromptHash = withHostBinaryProof(options.host, hostBinary, options.hostProbe, () => (
       probeCodexPromptInput({
@@ -5016,6 +6452,8 @@ async function runPass(options: Readonly<{
       contract: options.contract,
       turn: 1,
       label: 'sandbox',
+      ambientState: options.ambientState,
+      useAmbientHostState: false,
     });
     const standaloneSandboxProbeHash = await withHostBinaryProofAsync(options.host, hostBinary, options.hostProbe, () => (
       probeCodexSandbox({
@@ -5044,14 +6482,14 @@ async function runPass(options: Readonly<{
     try {
       canaries = codexSandboxCanaries(currentPaths.hostRoot, currentPaths.workspace);
       codexCanaries = canaries;
-      turnOne = runHostTurn({
+      turnOne = await runHostTurn({
         host: options.host,
         paths: options.paths,
         passPaths: currentPaths,
         contract: options.contract,
         turn: 1,
         prompt: request,
-        apiKey: options.apiKey,
+        ambientState: options.ambientState,
         hostProbe: options.hostProbe,
       });
     } finally {
@@ -5123,14 +6561,14 @@ async function runPass(options: Readonly<{
   if (persistedQuery.query !== derivedQuery) {
     throw new CertificationError('Discovery completed-run state changed the exact derived context query.');
   }
-  const turnTwo = runHostTurn({
+  const turnTwo = await runHostTurn({
     host: options.host,
     paths: options.paths,
     passPaths: currentPaths,
     contract: options.contract,
     turn: 2,
     prompt: readFileSync(approvalPath, 'utf8'),
-    apiKey: options.apiKey,
+    ambientState: options.ambientState,
     hostProbe: options.hostProbe,
   });
   if (options.host === 'codex') {
@@ -5307,6 +6745,11 @@ function buildAttestation(options: Readonly<{
     support_semantics_sha256: options.snapshot.support_semantics_sha256,
     launch_contract_sha256: options.snapshot.launch_contract_sha256,
     oracle_sha256: options.snapshot.oracle_sha256,
+    certification_profile: options.contract.certification_profile,
+    authentication: Object.freeze({
+      claude: options.probes.claude.authentication,
+      codex: options.probes.codex.authentication,
+    }),
     probes: options.probes,
     outcomes: options.outcomes,
     normalized_result_sha256: sha256(canonicalJson(normalizedResult)),
@@ -5315,9 +6758,15 @@ function buildAttestation(options: Readonly<{
   return Object.freeze({ ...withoutHash, attestation_sha256: sha256(canonicalJson(withoutHash)) });
 }
 
-function writeAttestation(path: string, attestation: HostLedLearningAttestation, secrets: readonly string[]): void {
+function writeAttestation(
+  path: string,
+  attestation: HostLedLearningAttestation,
+  forbiddenAmbientPaths: readonly string[],
+): void {
   const serialized = `${JSON.stringify(attestation, null, 2)}\n`;
-  assertNoRawSecrets(serialized, secrets);
+  if (forbiddenAmbientPaths.some((entry) => serialized.includes(entry))) {
+    throw new CertificationError('A raw ambient host-state path reached the certification attestation.');
+  }
   assertNoAbsoluteMachinePaths(attestation);
   mkdirSync(dirname(path), { recursive: true });
   const temporary = `${path}.tmp-${process.pid}`;
@@ -5331,12 +6780,13 @@ export function parseHostLedLearningAttestation(value: unknown): HostLedLearning
     'certification_platform',
     'package_version', 'node_version', 'typescript_version', 'roster_bundle_sha256',
     'certification_roster_bundle_sha256', 'adapter_bundle_sha256', 'input_manifest_sha256',
-    'support_semantics_sha256', 'launch_contract_sha256', 'oracle_sha256', 'probes', 'outcomes',
+    'support_semantics_sha256', 'launch_contract_sha256', 'oracle_sha256', 'certification_profile',
+    'authentication', 'probes', 'outcomes',
     'normalized_result_sha256', 'normalized_result', 'attestation_sha256',
   ]);
   if (root['schema_version'] !== HOST_LED_LEARNING_ATTESTATION_SCHEMA_VERSION
     || root['status'] !== 'certified') {
-    throw new CertificationError('Host-led learning attestation is not certified schema v1.');
+    throw new CertificationError('Host-led learning attestation requires certified schema v2.');
   }
   const hashes = [
     'roster_bundle_sha256', 'certification_roster_bundle_sha256', 'adapter_bundle_sha256',
@@ -5355,18 +6805,65 @@ export function parseHostLedLearningAttestation(value: unknown): HostLedLearning
   requiredString(root['typescript_version'], 'typescript_version');
   const generatedAt = requiredString(root['generated_at'], 'generated_at');
   if (Number.isNaN(Date.parse(generatedAt))) throw new CertificationError('Attestation generated_at is invalid.');
+  const profile = requiredObject(root['certification_profile'], 'attestation.certification_profile', [
+    'id', 'authentication', 'external_host_state',
+  ]);
+  const profileAuth = requiredObject(profile['authentication'], 'attestation certification-profile auth', [
+    'claude', 'codex',
+  ]);
+  const profileExternal = requiredObject(profile['external_host_state'], 'attestation external host state', [
+    'policy', 'paid_session_scope', 'copied', 'recursive_scan', 'transient_inspection',
+    'transient_output_hashing', 'raw_personal_state_persisted', 'personal_state_authority',
+  ]);
+  if (profile['id'] !== 'ambient-auth-v1'
+    || canonicalJson(profileAuth) !== canonicalJson({
+      claude: {
+        mode: 'host-managed', provider: 'claude.ai', source: 'firstParty', model_api_key_injected: false,
+      },
+      codex: { mode: 'host-managed', provider: 'chatgpt', model_api_key_injected: false },
+    })
+    || canonicalJson(profileExternal) !== canonicalJson({
+      policy: 'accepted-unpinned',
+      paid_session_scope: 'auth-cache-only',
+      copied: false,
+      recursive_scan: false,
+      transient_inspection: true,
+      transient_output_hashing: true,
+      raw_personal_state_persisted: false,
+      personal_state_authority: false,
+    })) {
+    throw new CertificationError('Attestation certification profile differs from ambient-auth-v1.');
+  }
+  const authentication = requiredObject(root['authentication'], 'attestation.authentication', ['claude', 'codex']);
   const probes = requiredObject(root['probes'], 'attestation.probes', ['claude', 'codex']);
   for (const host of ['claude', 'codex'] as const) {
+    const auth = requiredObject(authentication[host], `attestation.authentication.${host}`, host === 'claude'
+      ? ['host', 'logged_in', 'mode', 'provider', 'source', 'model_api_key_injected']
+      : ['host', 'logged_in', 'mode', 'provider', 'model_api_key_injected']);
+    if (auth['host'] !== host || auth['logged_in'] !== true || auth['mode'] !== 'host-managed'
+      || auth['provider'] !== (host === 'claude' ? 'claude.ai' : 'chatgpt')
+      || auth['model_api_key_injected'] !== false
+      || (host === 'claude' && auth['source'] !== 'firstParty')) {
+      throw new CertificationError(`Attestation ${host} authentication projection is invalid.`);
+    }
     const probe = requiredObject(probes[host], `attestation.probes.${host}`, [
       'executable_sha256', 'version', 'version_output_sha256', 'help_output_sha256', 'model', 'effort',
-      'capability_sha256',
+      'capability_sha256', 'auth_status_help_output_sha256', 'authentication',
+      'environment_keys_sha256',
     ]);
-    for (const key of ['executable_sha256', 'version_output_sha256', 'help_output_sha256', 'capability_sha256']) {
+    for (const key of [
+      'executable_sha256', 'version_output_sha256', 'help_output_sha256', 'capability_sha256',
+      'auth_status_help_output_sha256', 'environment_keys_sha256',
+    ]) {
       requireBareHash(probe[key], `attestation.probes.${host}.${key}`);
+    }
+    if (probe['environment_keys_sha256'] !== expectedHostEnvironmentKeysSha256(host)) {
+      throw new CertificationError(`Attestation ${host} environment-key-set proof is invalid.`);
     }
     if (probe['version'] !== (host === 'claude' ? CLAUDE_CODE_VERSION : CODEX_CLI_VERSION)
       || probe['model'] !== (host === 'claude' ? CLAUDE_MODEL : CODEX_MODEL)
-      || probe['effort'] !== (host === 'claude' ? CLAUDE_EFFORT : CODEX_REASONING_EFFORT)) {
+      || probe['effort'] !== (host === 'claude' ? CLAUDE_EFFORT : CODEX_REASONING_EFFORT)
+      || canonicalJson(probe['authentication']) !== canonicalJson(auth)) {
       throw new CertificationError(`Attestation ${host} launch probe does not match the exact certified host.`);
     }
   }
@@ -5535,7 +7032,8 @@ export function verifyHostLedLearningAttestationFreshness(options: Readonly<{
     || attestation.typescript_version !== ts.version
     || attestation.fixture_id !== contract.fixture_id
     || attestation.behavior_revision !== contract.behavior_revision
-    || attestation.fixture_iteration !== contract.fixture_iteration) {
+    || attestation.fixture_iteration !== contract.fixture_iteration
+    || canonicalJson(attestation.certification_profile) !== canonicalJson(contract.certification_profile)) {
     throw new CertificationError('Host-led learning version or behavior attestation is stale.');
   }
   return attestation;
@@ -5553,19 +7051,44 @@ export async function runHostLedLearningCertification(
   }
   const paths = resolveLiveCertificationPaths(repoRoot, env);
   const contract = loadHostLedLearningLaunchContract(repoRoot);
+  preflightClaudeOutputSchemas(paths, contract);
   const expected = oracle(paths);
-  const claudeKey = hostApiKey('claude', env);
-  const codexKey = hostApiKey('codex', env);
+  const ambientState = resolveAmbientHostState(env);
   inventoryManagedSettings();
   runBuild(paths);
   const certificationRoot = createCertificationRoot();
   try {
     const bundles = buildCertificationBundles(paths, certificationRoot);
     const probeHome = join(certificationRoot, 'probes');
-    const probes = Object.freeze({
-      claude: probeHostBinary('claude', paths.claudeBin, join(probeHome, 'claude')),
-      codex: probeHostBinary('codex', paths.codexBin, join(probeHome, 'codex')),
+    const probeEntries = (['claude', 'codex'] as const).map((host) => {
+      const root = join(probeHome, host);
+      const processHome = join(root, 'home');
+      const temp = join(root, 'tmp');
+      const workspace = join(root, 'workspace');
+      for (const path of [root, processHome, temp, workspace]) {
+        mkdirSync(path, { recursive: true, mode: 0o700 });
+      }
+      const binary = host === 'claude' ? paths.claudeBin : paths.codexBin;
+      const probeEnv = explicitHostEnv({
+        host,
+        turn: 'discover',
+        processHome,
+        hostStateHome: host === 'claude' ? ambientState.claudeHome : ambientState.codexHome,
+        temp,
+        workspace,
+        hostBinary: binary,
+        requestHash: `sha256:${sha256(readFileSync(join(
+          paths.fixtureRoot,
+          contract.host_readable_inputs.discover_request,
+        )))}`,
+        challengeHash: `sha256:${sha256(dreamerChallenge(paths, contract))}`,
+        rosterVersion: packageVersion(paths),
+      });
+      return [host, probeHostBinary(host, binary, root, probeEnv)] as const;
     });
+    const probes = Object.freeze(Object.fromEntries(probeEntries)) as Readonly<
+      Record<CertificationHost, HostLaunchProbe>
+    >;
     const snapshot = captureCertificationInputSnapshot({ paths, bundles, probes });
     if (snapshot.launch_contract_sha256 !== sha256(canonicalJson(contract))
       || snapshot.oracle_sha256 !== sha256(canonicalJson(expected))) {
@@ -5576,7 +7099,6 @@ export async function runHostLedLearningCertification(
       codex: [],
     };
     for (const host of ['claude', 'codex'] as const) {
-      const apiKey = host === 'claude' ? claudeKey : codexKey;
       const hostOutcomes: CertificationPassOutcome[] = [];
       for (let pass = 1; pass <= HOST_LED_LEARNING_PASS_COUNT; pass++) {
         const outcome = await runPass({
@@ -5586,7 +7108,7 @@ export async function runHostLedLearningCertification(
           certificationRoot,
           contract,
           expected,
-          apiKey,
+          ambientState,
           bundles,
           hostProbe: probes[host],
         });
@@ -5629,7 +7151,10 @@ export async function runHostLedLearningCertification(
       baseline: snapshot,
       capture: () => captureCertificationInputSnapshot({ paths, bundles, probes }),
       publish: () => {
-        writeAttestation(paths.attestationPath, attestation, [claudeKey, codexKey]);
+        writeAttestation(paths.attestationPath, attestation, [
+          ambientState.claudeHome,
+          ambientState.codexHome,
+        ]);
         return attestation;
       },
     });
@@ -5650,6 +7175,5 @@ export function verifyHostLedLearningModelFreeInputs(
     initial_workspace_sha256: rebuilt.initialWorkspaceSha256,
     model_visible_json: rebuilt.modelVisibleJson,
     prepared_runtime: rebuilt.preparedRuntime,
-    codex_workspace_instructions_sha256: rebuilt.codexWorkspaceInstructionsSha256,
   });
 }

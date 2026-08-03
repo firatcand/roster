@@ -24,14 +24,11 @@ The options describe possible meanings, not the correct answer. The controlled
 adapter validates the literal choices, derives the lesson ID from all five
 choices, and renders canonical recommendation and falsifier prose; it must not
 choose the values for the host. The candidate cites both returned evidence IDs,
-never this skill invocation, and does not activate itself as policy. Then call:
+never this skill invocation, and does not activate itself as policy. Then make
+exactly one single-line Bash call, with no line break, backslash, shell
+composition, or extra flag:
 
-`roster-350-fixture-candidate-create --run-id <run-id> --feedback-id
-<feedback-id> --disposition <disposition>
---source-kind <source-kind> --topic-kind <topic-kind> --falsifier-action
-<falsifier-action> --falsifier-observation <falsifier-observation>
---skill-challenge
-roster-350-dreamer-challenge:v1:9b6e2d47a5c183f0`
+`roster-350-fixture-candidate-create --run-id <run-id> --feedback-id <feedback-id> --disposition <disposition> --source-kind <source-kind> --topic-kind <topic-kind> --falsifier-action <falsifier-action> --falsifier-observation <falsifier-observation> --skill-challenge roster-350-dreamer-challenge:v1:9b6e2d47a5c183f0`
 
 Use the challenge exactly as written. It is proof that the host read this
 attested skill. Do not copy it into semantic output, persisted evidence,

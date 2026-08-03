@@ -495,6 +495,92 @@ test('the seeded host learning proof cannot become a shipped capability or sourc
   );
 });
 
+test('host certification uses ambient auth and truthfully bounds transient personal-state handling', () => {
+  const supportPath = join(PROJECT_ROOT, 'test/support/host-led-learning-certification.ts');
+  const contractPath = join(
+    PROJECT_ROOT,
+    'test/fixtures/host-led-learning/common/host-launch-contract.json',
+  );
+  const support = readFileSync(supportPath, 'utf8');
+  const contractBytes = readFileSync(contractPath, 'utf8');
+  const contract = JSON.parse(contractBytes) as {
+    schema_version?: unknown;
+    certification_profile?: unknown;
+  };
+
+  for (const forbidden of [
+    'ANTHROPIC_API_KEY',
+    'OPENAI_API_KEY',
+  ]) {
+    assert.equal(contractBytes.includes(forbidden), false, forbidden);
+  }
+  for (const forbidden of [
+    'roster-certification-openai',
+    'roster-model-free-probe',
+    'requires_openai_auth',
+    'managed_settings_sha256',
+  ]) assert.equal(support.includes(forbidden), false, forbidden);
+  assert.doesNotMatch(support, /\bhostApiKey\b|\bapiKey\b/u);
+  assert.doesNotMatch(support, /\.\.\.process\.env/u);
+  assert.doesNotMatch(support, /env\[['"](?:ANTHROPIC_API_KEY|OPENAI_API_KEY)['"]\]\s*=/u);
+  assert.doesNotMatch(support, /['"]model_provider=[^'"]+['"]/u);
+  assert.match(support, /function sanitizeClaudeAuthStatus[\s\S]+logged_in:\s*true[\s\S]+model_api_key_injected:\s*false/u);
+  assert.match(support, /function sanitizeCodexLoginStatus[\s\S]+Logged in using ChatGPT/u);
+  assert.match(support, /trace\.initialization\['apiKeySource'\]\s*!==\s*'none'/u);
+  assert.match(support, /effective\['model_provider'\]\s*!==\s*null/u);
+  assert.match(support, /stdout_sha256:\s*sha256\(stdout\)/u);
+  assert.match(support, /stderr_sha256:\s*sha256\(stderr\)/u);
+
+  const codexConfigBody = /function codexConfigArgs\([\s\S]+?\n\}\n\nexport function codexGlobalLaunchArgs/u.exec(support)?.[0];
+  assert.ok(codexConfigBody !== undefined);
+  assert.doesNotMatch(codexConfigBody, /model_provider|model_providers|OPENAI_API_KEY/u);
+  assert.doesNotMatch(codexConfigBody, /shell_environment_policy\.set\.CODEX_HOME/u);
+
+  const claudePermissionsBody = /function claudeAllowedSkillPermissions\([\s\S]+?\n\}\n\nfunction lstatIfPresent/u.exec(support)?.[0];
+  assert.ok(claudePermissionsBody !== undefined);
+  assert.match(claudePermissionsBody, /contract\.claude\.skills\.map\(\(skill\) => skill\.identity\)/u);
+  assert.match(claudePermissionsBody, /`Skill\(\$\{identity\}\)`/u);
+  const claudeSettingsBody = /function writeClaudeSettings\([\s\S]+?\n\}\n\nfunction claudeArgs/u.exec(support)?.[0];
+  assert.ok(claudeSettingsBody !== undefined);
+  assert.match(claudeSettingsBody, /allowWrite:\s*\[workspace,\s*\.\.\.isolatedRoots\]/u);
+  assert.doesNotMatch(claudeSettingsBody, /ambientHome|hostStateHome|CODEX_HOME/u);
+
+  const claudeCanaryBody = /function assertClaudeSandboxProof\([\s\S]+?\n\}\n\nfunction cleanupClaudeSandboxCanaryAfterFailure[\s\S]+?\n\}/u.exec(support)?.[0];
+  assert.ok(claudeCanaryBody !== undefined);
+  assert.match(claudeCanaryBody, /precondition_sha256/u);
+  assert.match(claudeCanaryBody, /isSymbolicLink\(\)|!\w+\.isFile\(\)/u);
+  assert.match(claudeCanaryBody, /rmSync\(probe\.outsidePath\)/u);
+  assert.equal(contract.schema_version, 2);
+  assert.deepEqual(contract.certification_profile, {
+    id: 'ambient-auth-v1',
+    authentication: {
+      claude: {
+        mode: 'host-managed',
+        provider: 'claude.ai',
+        source: 'firstParty',
+        model_api_key_injected: false,
+      },
+      codex: {
+        mode: 'host-managed',
+        provider: 'chatgpt',
+        model_api_key_injected: false,
+      },
+    },
+    external_host_state: {
+      policy: 'accepted-unpinned',
+      paid_session_scope: 'auth-cache-only',
+      copied: false,
+      recursive_scan: false,
+      transient_inspection: true,
+      transient_output_hashing: true,
+      raw_personal_state_persisted: false,
+      personal_state_authority: false,
+    },
+  });
+  assert.doesNotMatch(contractBytes, /"(?:scanned|hashed|persisted)"\s*:\s*false/u);
+  assert.doesNotMatch(contractBytes, /(?:\/Users\/|\/home\/|[A-Za-z]:[\\/])/u);
+});
+
 test('host-led fixture skills are byte-identical and cannot leak the semantic answer or oracle', () => {
   const fixtureRoot = 'test/fixtures/host-led-learning';
   const skillCopies = [
@@ -515,12 +601,32 @@ test('host-led fixture skills are byte-identical and cannot leak the semantic an
       assert.deepEqual(readFileSync(join(PROJECT_ROOT, fixtureRoot, path)), canonicalBytes, path);
     }
   }
+  const primarySkill = readFileSync(join(
+    PROJECT_ROOT,
+    fixtureRoot,
+    'common/skills/fake-social-search/SKILL.md',
+  ), 'utf8');
+  assert.ok(Buffer.byteLength(primarySkill, 'utf8') <= 5_200);
+  for (const marker of [
+    'raw_context_sha256 is already complete',
+    'target=[agentOrPlanQualifiedId,agentH]',
+    'target agent=before #',
+    'For false D slots only',
+    'effects null=unset|[]=deny-all|items=ceiling',
+    'qualified ID=<scope-or-target>/tools/<id>',
+    'Never omit a plan step or',
+  ]) {
+    assert.match(primarySkill, new RegExp(marker.replaceAll(/[.*+?^${}()|[\]\\]/gu, '\\$&'), 'u'));
+  }
   const dreamerSkill = readFileSync(join(
     PROJECT_ROOT,
     fixtureRoot,
     'common/skills/dreamer/SKILL.md',
   ), 'utf8');
   assert.doesNotMatch(dreamerSkill, /--recommendation|--falsifiable-by/u);
+  const candidateCommand = /`roster-350-fixture-candidate-create[^`]+`/u.exec(dreamerSkill)?.[0];
+  assert.equal(typeof candidateCommand, 'string');
+  assert.doesNotMatch(candidateCommand!, /[\r\n\\]/u);
   for (const option of [
     'prefer',
     'avoid',
