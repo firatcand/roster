@@ -6,3 +6,4 @@
 
 - 2026-06-23 — `roster-brain` — **retired**; superseded by the [Roster v2 contract](../SPEC.md). Historical implementation records: [workspace knowledge Brain design](../../docs/superpowers/specs/2026-06-23-roster-brain-design.md) and [ADR-0003: Brain file system](../../docs/adr/0003-brain-file-system.md).
 - 2026-08-02 — `complete-plan-context-closure`
+- 2026-08-04 — `one-brain-database-per-workspace`

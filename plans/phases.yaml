@@ -98,7 +98,7 @@ phases:
           - Equivalent inputs produce semantically identical bundles for Claude Code and Codex with stable identities, hashes, trust classes, inclusion reasons, and deterministic budget accounting.
           - A selected root plan returns first with the complete deduplicated transitive nested-plan definition closure from one validated snapshot; Roster selects no current step and executes nothing.
           - Required function/agent/policy content and every closure tool-step effective tool-use/canonical-skill pair are reserved before optional approved lessons or Brain evidence; membership catalogs select nothing.
-          - Missing Brain binding returns the complete local bundle, empty evidence, exit zero, and one warning diagnostic; optional retrieval failures and candidate diagnostic examples cannot corrupt mandatory context.
+          - Missing Brain configuration returns the complete local bundle, empty evidence, exit zero, and one warning diagnostic; optional retrieval failures and candidate diagnostic examples cannot corrupt mandatory context.
           - Reachable required overflow reports an exact accepted retry and an above-ceiling mandatory minimum reports a distinct unservable error; neither emits a partial bundle.
           - Authored policy, approved lessons, vendor instructions, Brain evidence, and tool output remain structurally trust-separated, with no Roster-selected current step, prior-output binding, provider route, approval receipt, next action, or transition.
 
@@ -149,17 +149,19 @@ phases:
       - id: "P2-T01"
         tracker_issue_id: "351"
         title: "Stabilize company Brain identity and source lifecycle"
-        description: "Introduce stable company Brain spaces, explicit workspace bindings/scopes, immutable logical source versions, recoverable S3/Postgres ingest intents, privacy/trust classification, tombstones, and provenance independent of checkout paths. Preserve useful structured knowledge and graph history."
+        description: "Bind each logical Roster workspace to exactly one workspace-owned PostgreSQL database and one configured S3 namespace. Add tracked non-secret Brain organization in roster.yaml, a protected matching database workspace_id, immutable logical source versions, recoverable S3/Postgres ingest intents, privacy/trust classification, tombstones, and checkout-independent provenance while preserving useful structured knowledge and graph history. The database is the workspace isolation boundary; workspace/function/agent/plan scopes are retrieval labels, not authorization principals."
         type: "data"
         priority: "P0"
         depends_on: ["P1-T07"]
         estimate: "L"
         owner_type: "db-architect"
         acceptance:
-          - "File, fetched media, text, structured record, and produced-artifact ingest stores/reuses immutable bytes and converges to a recoverable current source version."
-          - "Identical retries do not duplicate current versions; changed content preserves history and checkout relocation does not change logical identity."
-          - "brain_space_id, workspace/function/agent/plan scopes, privacy, trust, actor assurance, RLS, and least-privilege roles are enforced."
-          - "Postgres/S3 partial failures resume or reconcile; absolute paths survive only as legacy locators."
+          - File and fetched-media ingest derive logical source identity automatically; inline text, structured records, and produced artifacts require a host-supplied stable key. Every accepted ingest stores or reuses immutable bytes and converges to one recoverable current source version.
+          - Identical retries do not duplicate current versions; changed content preserves history, and checkout relocation does not change logical workspace or source identity.
+          - Tracked roster.yaml declares stable workspace_id, the Infisical secret reference/path, and non-secret S3 namespace configuration without storing credentials; a mismatch stops after the protected-metadata handshake and before company-content reads, S3 access, or mutation.
+          - Workspace/function/agent/plan scopes are typed retrieval labels; privacy, trust, actor assurance, current-version, tombstone, and secret-content policies are enforced without treating scopes as database authorization.
+          - Admin and least-privilege runtime roles are separated; runtime cannot mutate schema, protected workspace identity/provenance, or bypass the closed Brain write surface.
+          - Postgres/S3 partial failures resume or reconcile; absolute paths survive only as legacy locators, and existing structured knowledge, graph history, and verifiable S3 data migrate in place without a Brain-space wrapper or permanent compatibility shim.
 
       - id: "P2-T02"
         tracker_issue_id: "370"
@@ -179,32 +181,32 @@ phases:
       - id: "P2-T03"
         tracker_issue_id: "352"
         title: "Connect cited company Brain retrieval"
-        description: "Connect authorized current-version structured, lexical, optional embedding, and configured graph retrieval to the context resolver using one immutable citation envelope and deterministic reason codes."
+        description: "Connect scope-eligible current-version structured, lexical, optional embedding, and configured graph retrieval to the context resolver using one immutable citation envelope and deterministic reason codes."
         type: "data"
         priority: "P0"
         depends_on: ["P2-T02", "P1-T05"]
         estimate: "L"
         owner_type: "backend-dev"
         acceptance:
-          - "Default retrieval excludes superseded, tombstoned, out-of-Brain, out-of-scope, and privacy-incompatible content."
-          - "Keyword/structured retrieval remains correct when embeddings are disabled or unavailable."
-          - "Every result resolves exact source/object/extractor versions, locator, trust/privacy class, scope, and retrieval reason."
-          - "Structured entities/facts/events/edges and document extracts can coexist in one bounded context without provenance loss."
+          - Default retrieval excludes superseded, tombstoned, scope-ineligible, and privacy-incompatible content.
+          - Keyword/structured retrieval remains correct when embeddings are disabled or unavailable.
+          - Every result resolves exact source/object/extractor versions, locator, trust/privacy class, scope, and retrieval reason.
+          - Structured entities/facts/events/edges and document extracts can coexist in one bounded context without provenance loss.
 
       - id: "P2-T04"
         tracker_issue_id: "353"
         title: "Evaluate adopter retrieval quality"
-        description: "Build a non-sensitive gold set from representative my-roster and roster-lobu queries and measure current-version filtering, scopes, lexical retrieval, optional embeddings/graph expansion, citation completeness, latency, cost, privacy, and activation thresholds for advanced retrieval."
+        description: "Build a non-sensitive gold set from representative my-roster and roster-lobu queries and measure current-version filtering, scope-selection correctness, lexical retrieval, optional embeddings/graph expansion, citation completeness, latency, cost, privacy, and activation thresholds for advanced retrieval."
         type: "data"
         priority: "P0"
         depends_on: ["P2-T03"]
         estimate: "M"
         owner_type: "qa-engineer"
         acceptance:
-          - "The gold set records queries, relevant immutable source versions/structured records, explicit exclusions, and authorized scope."
-          - "Recall@k, precision/exclusion, citation completeness, latency, cost, and privacy results are reproducible."
-          - "The evaluation recommends evidence-based dispositions for trigram aliases, default embeddings, multi-hop graph, automatic edges, and hosted reranking."
-          - "No advanced retrieval feature becomes a launch requirement solely because it already exists or was previously proposed."
+          - The gold set records queries, relevant immutable source versions/structured records, explicit exclusions, and expected retrieval eligibility under workspace/function/agent/plan scope labels.
+          - Recall@k, precision/exclusion, citation completeness, latency, cost, and privacy results are reproducible.
+          - The evaluation recommends evidence-based dispositions for trigram aliases, default embeddings, multi-hop graph, automatic edges, and hosted reranking.
+          - No advanced retrieval feature becomes a launch requirement solely because it already exists or was previously proposed.
 
       - id: "P2-T05"
         tracker_issue_id: "354"
@@ -321,10 +323,10 @@ phases:
         estimate: "L"
         owner_type: "qa-engineer"
         acceptance:
-          - "Both adopters complete a real human-style task through both hosts with the host explicitly interpreting the authored YAML plan."
-          - "Real cited Brain context and real external tool provenance are present; Roster contains no business-specific executor."
-          - "Completed evidence makes Dreamer due, a human-approved candidate becomes a lesson, and the lesson affects the next applicable context."
-          - "Retrieval/context quality, secret safety, scope isolation, idempotency, and interruption recovery thresholds pass."
+          - Both adopters complete a real human-style task through both hosts with the host explicitly interpreting the authored YAML plan.
+          - Real cited Brain context and real external tool provenance are present; Roster contains no business-specific executor.
+          - Completed evidence makes Dreamer due, a human-approved candidate becomes a lesson, and the lesson affects the next applicable context.
+          - Retrieval/context quality, secret safety, scope-selection correctness, idempotency, and interruption recovery thresholds pass.
 
   - id: "phase-3"
     name: "Breaking Simplification and Launch"
@@ -389,17 +391,19 @@ phases:
       - id: "P3-T04"
         tracker_issue_id: "364"
         title: "Harden Roster-owned security boundaries"
-        description: "Threat-model and test only the boundaries Roster actually owns: bounded parsing, workspace/external paths, company Brain/RLS isolation, S3 trust, retrieval/context trust, embedding privacy, tool-use definitions/vendor skill provenance, evidence/decision semantics, migrations, and secret-free outputs."
+        description: "Threat-model and test only the boundaries Roster actually owns: bounded parsing, workspace/external paths, tracked workspace-to-database identity, workspace-owned S3 namespace confinement, least-privilege Brain roles, retrieval-label correctness, retrieval/context trust, embedding privacy, tool-use definitions/vendor skill provenance, evidence/decision semantics, migrations, and secret-free outputs."
         type: "infra"
         priority: "P0"
         depends_on: ["P2-T05", "P2-T06", "P2-T07", "P2-T09"]
         estimate: "L"
         owner_type: "security-auditor"
         acceptance:
-          - "Every default file read/write is workspace-confined and component-wise symlink safe; external access requires an exact host-obtained grant."
-          - "RLS and least privilege prevent cross-Brain/cross-scope access and runtime schema mutation."
-          - "HTTPS/endpoint trust, object-key validation, embedding privacy, immutable vendor pins/provenance, and prompt trust separation have adversarial tests."
-          - "Secret canaries never appear in context, JSON, diagnostics, logs, migrations, artifacts, generated files, or package contents; decision evidence never bypasses host safety."
+          - Every default file read/write is workspace-confined and component-wise symlink safe; external access requires an exact host-obtained grant.
+          - Adversarial tests prove that a logical workspace cannot activate a database with a different protected workspace_id or an unvalidated S3 namespace, and that mismatch rejection occurs after only the protected-metadata handshake and before company-content reads, S3 access, or mutation.
+          - Least privilege prevents runtime schema mutation, protected workspace identity/provenance mutation, or bypass of the closed Brain write surface; no cross-workspace RLS, per-binding login, or per-agent credential model is introduced.
+          - Retrieval scopes are tested as typed selection, ranking, explanation, and exclusion labels—not authorization principals—and privacy/trust/current-version/tombstone policy cannot be bypassed through crafted scope values.
+          - HTTPS/endpoint trust, bucket/root-prefix and object-key confinement, embedding privacy, immutable vendor pins/provenance, and prompt trust separation have adversarial tests.
+          - Secret canaries never appear in context, JSON, diagnostics, logs, migrations, artifacts, generated files, or package contents; decision evidence never bypasses host safety.
 
       - id: "P3-T05"
         tracker_issue_id: "368"
@@ -419,32 +423,37 @@ phases:
       - id: "P3-T06"
         tracker_issue_id: "363"
         title: "Build the one-way v2 workspace migrator"
-        description: "Implement fingerprinted dry-run/apply migration for registry paths, structured plans, tool-use definitions, Brain identity/source versions, portable evidence, lessons, host adapters, Infisical key references, schedule removal, and general-ops archival without permanent compatibility code."
+        description: "Implement fingerprinted dry-run/apply migration for registry paths, structured plans, tool-use definitions, the tracked one-workspace Brain contract and in-place source-lifecycle upgrade, portable evidence, lessons, host adapters, Infisical key references, schedule removal, and general-ops archival without permanent compatibility code."
         type: "infra"
         priority: "P0"
         depends_on: ["P3-T01", "P3-T02", "P3-T03"]
         estimate: "L"
         owner_type: "backend-dev"
         acceptance:
-          - "Dry run classifies every preserve/transform/import/archive/delete/decision action and records fingerprints, conflicts, backup, and possible secret-key locations without values."
-          - "Apply revalidates fingerprints, locks, writes atomically, resumes remote idempotency state, and emits an audit report."
-          - "Legacy logs/actors/approvals/candidates import only as legacy-unverified and absolute paths remain locators, not Brain identity."
-          - "Only exact Roster-managed cron targets are removed with consent; host-native schedules and authored edits are preserved."
+          - Dry run classifies every preserve/transform/import/archive/delete/decision action and records fingerprints, conflicts, backup, the intended stable workspace_id, tracked non-secret Brain configuration, database identity state, configured S3 namespace, and possible secret-key locations without secret values.
+          - Apply revalidates the dry-run fingerprints, acquires the workspace and remote migration locks, writes local files atomically, resumes remote idempotency state, and emits a redacted audit report.
+          - For a database with no protected identity, migration initializes the approved logical workspace's workspace_id; an existing different identity, ambiguous workspace identity, or unvalidated bucket/root prefix fails closed after only the protected-metadata handshake and before company-content reads, S3 access, or mutation, and becomes an explicit human-decision item.
+          - "Each existing workspace Brain upgrades in place into its own database and S3 namespace: migration creates or updates the tracked roster.yaml Brain description, converts source identity and immutable versions, retains absolute paths only as legacy locators, and preserves verifiable structured knowledge, graph history, and object data."
+          - Migration does not create brain_spaces, workspace_bindings, per-binding credentials, cross-workspace/cross-scope RLS, or a synthetic company-space wrapper; existing tables and S3 keys remain backed up and readable for verification until the one-way cutover completes, with no permanent dual-write or compatibility shim.
+          - Legacy logs, actors, approvals, and candidates import only as legacy-unverified; Infisical key names become references without reading or persisting values.
+          - Only exact Roster-managed cron targets are removed with consent; host-native schedules and authored edits are preserved.
 
       - id: "P3-T07"
         tracker_issue_id: "366"
         title: "Build v2 activation and integrity doctor"
-        description: "Rewrite doctor around the v2 product: sparse scaffold/discovery, structured plan references, context budgets, company Brain scopes/citations/S3, vendor skills and tool-use definitions, evidence separation, Dreamer readiness and host activation, adapter drift, migration, paths, and secrets."
+        description: "Rewrite doctor around the v2 product: sparse scaffold/discovery, structured plan references, context budgets, tracked workspace Brain configuration, protected database identity, least-privilege roles, immutable source/object/citation integrity, workspace-owned S3 namespace, retrieval-label scopes, vendor skills and tool-use definitions, evidence separation, Dreamer readiness and host activation, adapter drift, migration, paths, and secrets."
         type: "integration"
         priority: "P0"
         depends_on: ["P3-T03", "P3-T04", "P3-T06"]
         estimate: "M"
         owner_type: "qa-engineer"
         acceptance:
-          - "Doctor reports each subsystem independently with stable codes, actionable fixes, redacted detail, and JSON output."
-          - "It distinguishes Dreamer files existing from the end-to-end readiness/invocation/candidate/decision path working."
-          - "It detects broken plan/tool refs, required-context overflow, cross-scope Brain risk, unsafe S3/embedding config, semantic evidence leakage, stale adapters, and incomplete migration."
-          - "No execution dry-run, provider health, schedule fire, step transition, lease, queue, or approval-authority check remains."
+          - Doctor reports each subsystem independently with stable codes, actionable fixes, redacted detail, and JSON output.
+          - It distinguishes Dreamer files existing from the end-to-end readiness/invocation/candidate/decision path working.
+          - Brain diagnostics distinguish missing tracked configuration, unavailable Infisical references, unavailable services, roster.yaml/database workspace_id mismatch, schema or role drift, untrusted or misbound S3 namespace, source/object integrity failure, and incomplete ingest recovery without exposing credentials.
+          - It detects broken plan/tool refs, required-context overflow, invalid retrieval-label scopes, privacy/trust/current-version/tombstone violations, citation loss, unsafe S3/embedding configuration, semantic evidence leakage, stale adapters, and incomplete migration.
+          - Scope diagnostics describe selection and exclusion behavior rather than claiming function/agent/plan scopes are RLS authorization boundaries.
+          - No execution dry-run, external-provider health, schedule fire, step transition, lease, queue, or approval-authority check remains.
 
       - id: "P3-T08"
         tracker_issue_id: "367"
