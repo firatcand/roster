@@ -7,10 +7,10 @@ gate_check_command: "pnpm typecheck && pnpm build && pnpm test && pnpm test:scaf
 source:
   tracker: "github"
   project_id: "340"
-  synced_at: "2026-07-31T23:01:26.247Z"
-  spec_revision: "253ebbcf71279ac2fa58419842777a03cf95c548"
+  synced_at: "2026-08-04T01:06:46.539Z"
+  spec_revision: "64ee06389fcff2acdea838594b59a29f3cee9957"
   tracker_url: "https://github.com/firatcand/roster/issues/340"
-  tracker_revision: "github:2026-07-31T23:00:42Z"
+  tracker_revision: "github:2026-08-04T01:06:05Z"
 
 phases:
   - id: "phase-1"
@@ -426,7 +426,7 @@ phases:
         description: "Implement fingerprinted dry-run/apply migration for registry paths, structured plans, tool-use definitions, the tracked one-workspace Brain contract and in-place source-lifecycle upgrade, portable evidence, lessons, host adapters, Infisical key references, schedule removal, and general-ops archival without permanent compatibility code."
         type: "infra"
         priority: "P0"
-        depends_on: ["P3-T01", "P3-T02", "P3-T03"]
+        depends_on: ["P3-T01", "P3-T02", "P3-T03", "P2-T02", "P2-T03"]
         estimate: "L"
         owner_type: "backend-dev"
         acceptance:
