@@ -19,7 +19,7 @@ The primary user is a person running company work through Claude Code or Codex i
 When the user asks the host to perform a recurring or specialized job, they need the host to:
 
 - find the correct agent, structured plan, guidelines, lessons, and tool-use definitions without eagerly loading the whole repository;
-- retrieve the smallest relevant, cited slice of company knowledge from a shared Brain;
+- retrieve the smallest relevant, cited slice of company knowledge from the logical workspace's Brain;
 - use external tools according to the company's purpose, filters, business rules, and evidence policy;
 - record portable outcomes and feedback; and
 - improve later work through human-approved lessons.
@@ -42,7 +42,7 @@ Brain is a Roster-owned, remote company knowledge system backed by Postgres and 
 
 Postgres owns identity, scope, metadata, provenance, structured knowledge, indexes, retrieval state, and learning state. S3 owns raw media and large immutable artifacts. OpenAI embeddings are optional indexing infrastructure, not the only retrieval mode.
 
-Multiple explicitly bound workspaces and machines may share one company Brain. External systems such as Notion remain authoritative until selected information is explicitly ingested with provenance.
+Clones and machines of one logical workspace share its remote company Brain. Each distinct `workspace_id` owns a different PostgreSQL database and S3 namespace. External systems such as Notion remain authoritative until selected information is explicitly ingested with provenance.
 
 ### Tools
 
@@ -96,11 +96,11 @@ Roster v2 is complete when the Social Media Manager discovery plan in `my-roster
 6. Dreamer becomes due from durable evidence, the host invokes the Dreamer skill, and a cited candidate is stored.
 7. After human approval, the lesson is materialized in the working directory and changes a later applicable context bundle.
 
-The representative bundle must use at least 60 percent fewer tokens than the frozen eager-load baseline while meeting required-context recall, irrelevant-context exclusion, citation completeness, deterministic selection, secret-safety, and scope-isolation thresholds.
+The representative bundle must use at least 60 percent fewer tokens than the frozen eager-load baseline while meeting required-context recall, irrelevant-context exclusion, citation completeness, deterministic selection, secret-safety, and scope-selection thresholds.
 
 ## Defaults and constraints
 
-- `roster init` may succeed without Brain credentials. Brain-dependent operations fail clearly until a company Brain is bound.
+- `roster init` may succeed without Brain credentials. Brain-dependent operations fail clearly until Brain is configured.
 - Neon/Postgres and S3 are remote so Brain and run evidence are portable across machines.
 - Markdown run logs are optional projections; Brain is canonical for portable run and learning evidence.
 - Operational evidence is stored separately from semantic company knowledge and is not embedded or retrieved as ordinary knowledge by default.

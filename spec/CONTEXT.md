@@ -1,6 +1,6 @@
 # Roster v2 — Project Context
 
-Generated from `spec/BRIEF.md`, `spec/PRD.md`, and `spec/SPEC.md` after the host-ownership decision.
+Generated from `spec/BRIEF.md`, `spec/PRD.md`, and `spec/SPEC.md` after the host-ownership and per-workspace Brain decisions.
 
 ## Product
 
@@ -32,12 +32,14 @@ Roster never owns a plan compiler/reducer, current-step cursor, workflow transit
 
 ### Brain
 
-- Roster-owned remote company Brain, broader than Roster product data.
-- Neon/Postgres owns Brain identity, workspace bindings, scopes, provenance, structured knowledge, indexes, evidence, and learning state.
-- S3-compatible storage owns immutable raw media and large artifacts.
+- Each logical Roster workspace owns one remote company Brain, broader than Roster product data: one PostgreSQL database and one configured S3 namespace.
+- Tracked `roster.yaml` stores the stable `workspace_id`, Infisical secret reference, and non-secret S3 organization; credentials remain ambient.
+- Protected database metadata stores the same workspace and namespace identity. Each Brain command performs only that identity handshake before company-content reads, S3 access, or mutation.
+- Workspace/function/agent/plan scopes are typed retrieval labels for selection, ranking, explanation, and exclusion—not credentials or RLS principals.
+- Neon/Postgres owns identity, provenance, structured knowledge, indexes, evidence, and learning state. S3-compatible storage owns immutable raw media and large artifacts.
 - Supports people, organizations, prospects, customers, content, ideas, tasks, examples, documents, facts, events, edges, decisions, runs, feedback, and lesson candidates.
 - Lexical and structured retrieval work without embeddings; OpenAI embeddings and graph enhancements are privacy-aware, optional, and evidence-gated.
-- Multiple authorized machines/workspaces may share a company Brain.
+- Clones and machines of the same logical workspace share its Brain through authorized Infisical access. A different `workspace_id` uses a different database and S3 namespace.
 - External systems remain authoritative until selected data is explicitly ingested with provenance.
 
 ### Tools
@@ -86,10 +88,12 @@ Roster returns:
 - applicable guidelines and approved lessons;
 - cited Brain facts, structured records, and extracts;
 - applicable workspace tool-use definitions and canonical vendor skill refs;
-- trust classes, scope, versions/hashes, provenance, inclusion reasons, and budget accounting; and
+- trust classes, workspace and narrower scope labels, versions/hashes, immutable workspace/source/version/object/extractor citations, inclusion reasons, and budget accounting; and
 - deterministic exclusions and diagnostics.
 
 Roster does not return or persist a selected current step, next action, prior-output binding, transition, provider route, or approval receipt.
+
+Without Brain configuration, context resolution returns the complete local bundle, empty Brain evidence, and one `BRAIN_NOT_CONFIGURED` warning. A configured workspace/database/S3 mismatch stops after the protected-metadata handshake and before company-content reads, S3 access, or mutation.
 
 ## Minimal CLI
 
@@ -175,8 +179,9 @@ Candidate creation may be automatic through the host. Policy activation remains 
 
 - All default paths are workspace-confined, regular-file-only, bounded, and component-wise symlink safe.
 - External paths require an exact host-obtained human grant.
-- Every Brain row is isolated by `brain_space_id` and authorized scope using RLS/least-privilege roles.
-- Runtime roles cannot mutate schema or create arbitrary tables.
+- The database is the cross-workspace boundary; one logical workspace cannot activate another workspace's database or S3 namespace.
+- Scope labels cannot widen retrieval and are never treated as credentials; v2 has no shared-Brain tenancy, per-scope logins, or cross-workspace/cross-scope RLS.
+- Runtime roles cannot mutate schema, protected workspace identity/provenance, or create arbitrary tables.
 - HTTPS and explicit endpoint trust protect S3 configuration.
 - Privacy class governs storage, extraction, embedding, retrieval, and export; secret-class content is never embedded.
 - Authored policy, vendor instruction, Brain evidence, and tool output remain structurally separated by trust class.
@@ -186,7 +191,7 @@ Candidate creation may be automatic through the host. Policy activation remains 
 
 ## Migration
 
-One-way, dry-run-first migration preserves authored useful structures and Brain history, converts tool intent into tool-use definitions, replaces absolute Brain source identity, imports legacy evidence as unverified, maps only secret key names to Infisical references, removes exact Roster-managed cron blocks with consent, and archives/deletes general operations state after extracting minimal evidence.
+One-way, dry-run-first migration upgrades each existing workspace Brain in its current database and S3 namespace. It creates or validates tracked non-secret Brain configuration and protected workspace identity, preserves authored structures, structured knowledge, graph/source/object history, converts tool intent into tool-use definitions, replaces absolute paths with stable source identity while retaining them as legacy locators, imports legacy evidence as unverified, maps only secret key names to Infisical references, removes exact Roster-managed cron blocks with consent, and archives/deletes general operations state after extracting minimal evidence. It creates no shared company-space wrapper, permanent dual-write, or compatibility shim.
 
 Frozen `my-roster` and `roster-lobu` snapshots are required fixtures. No permanent compatibility shim.
 
@@ -209,7 +214,7 @@ The same model must work for a distinct `roster-lobu` workflow.
 
 - Static plan and reference validation passes.
 - Both host adapters complete the seeded and real golden flows without a Roster executor.
-- Brain source/version/retrieval citations, scope isolation, recovery, and privacy pass.
+- Brain workspace/source/version/object/extractor citations, protected identity handshake, S3 namespace confinement, scope-selection correctness, recovery, and privacy pass.
 - Real vendor skill use is host-executed through a workspace tool-use definition.
 - Dreamer readiness and promotion work after evidence recording and next-session recovery.
 - Context quality passes required recall, exclusion, citation, determinism, and at least 60 percent token reduction.
@@ -218,8 +223,8 @@ The same model must work for a distinct `roster-lobu` workflow.
 
 ## Default implementation decisions
 
-- Initialization succeeds without Brain credentials; Brain commands fail explicitly until binding.
+- Initialization succeeds without Brain credentials; Brain commands fail explicitly until configured, while context returns the complete local bundle with `BRAIN_NOT_CONFIGURED`.
 - `skill_ref` has one canonical external identity with host-specific generated aliases.
-- Brain is remote by default for cross-machine portability.
+- Brain is remote by default for cross-machine portability within one logical workspace; distinct workspaces use distinct databases and S3 namespaces.
 - Git is canonical for operating policy; Brain is canonical for portable evidence and company knowledge; S3 is canonical for large bytes.
 - No product-boundary question remains open. Tasks may decide implementation details only within this contract.
