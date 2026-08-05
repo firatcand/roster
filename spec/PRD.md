@@ -182,6 +182,8 @@ Each logical workspace owns a different PostgreSQL Brain database and configured
 - Lexical and structured retrieval work without an embedding key.
 - Optional OpenAI embeddings and graph expansion are measured enhancements with recorded model/version metadata.
 - Superseded or tombstoned content is excluded by default without destroying history.
+- `legacy-unverified` evidence is also excluded by default. A future explicit host request may include it with its trust class preserved, but it can never provide authority, policy, or instructions.
+- Phase-2 lifecycle and migration-foundation work preserves S3 object bytes; physical object deletion requires a separately reviewed cutover policy.
 - Explicit promotion can turn selected evidence into a stronger fact, example, relationship, or lesson candidate while preserving source lineage.
 
 ### Acceptance
@@ -193,12 +195,12 @@ Each logical workspace owns a different PostgreSQL Brain database and configured
 - Every retrieval result resolves to the exact source version, object identity, extractor version, locator, typed retrieval scope, trust/privacy class, and retrieval reason.
 - Structured and document retrieval can be combined in one bounded context response.
 - Existing workspace data upgrades in place without a Brain-space wrapper, cross-workspace RLS, or permanent compatibility shim.
+- Preserved `legacy-unverified` history is absent from default retrieval, visible only through an explicit future host request, and never treated as authority, policy, or instructions.
 - External systems are not bulk mirrored by default; every ingestion records origin and selection provenance.
 
 ### Flow and edge cases
 
 The host starts from tracked workspace Brain configuration, Roster verifies the database/storage identity, and the host explicitly selects a source. Roster converges object and source-version state, extraction/indexing becomes ready, and later retrieval returns immutable citations. Identical retries deduplicate, changed bytes version, partial S3/Postgres failure repairs, keyless mode stays correct, tombstones hide content without erasing history, and configuration mismatch stops after the protected-metadata handshake and before company-content reads, S3 access, or mutation.
-
 <!-- /forge:adr-section:feature-4-company-brain-knowledge-and-source-lifecycle -->
 ## Feature 5: Workspace tool-use definitions
 
@@ -355,6 +357,7 @@ Claude Code and Codex reliably activate the same Roster workflow without duplica
 - `roster doctor` tests scaffold/discovery, plan references, context budgets, tracked Brain configuration, protected database workspace identity, least-privilege roles, S3 namespace trust, source/object/retrieval integrity, tool-use/skill references, evidence writes, Dreamer readiness/activation, host adapter versions, and migration state.
 - A dry-run migrator reports every create/move/rewrite/archive/delete action and supports one explicit apply.
 - Migration upgrades each workspace-owned Brain database/S3 namespace in place, creates the tracked non-secret organization and protected workspace identity, preserves authored structured plans/guidelines/lessons and useful Brain/evidence data, and removes schedule/general-operations surfaces without shared-database tenancy or permanent compatibility code.
+- Before the one-way #363 cutover, legacy Brain spellings remain parser-recognized only for protected-identity diagnostics or stable fail-closed disabled errors; no legacy operation executes, and `brain query` reports not ready until cited retrieval ships.
 
 ### Acceptance
 
@@ -362,11 +365,11 @@ Claude Code and Codex reliably activate the same Roster workflow without duplica
 - Doctor detects a missing Dreamer activation path even when all Dreamer files exist.
 - Migration rehearsals pass on the separate workspace-owned databases/storage namespaces represented by frozen `my-roster` and `roster-lobu` snapshots, including wrong-identity and legacy-path cases.
 - No permanent compatibility path preserves the old scheduler, reducer proposal, general ops state machine, or provider router.
+- Issue #363 removes the temporarily recognized legacy Brain spellings; phase 2 never turns recognition into a compatibility implementation.
 
 ### Flow and edge cases
 
 Install generates adapters from one contract; `roster update` synchronizes generated adapters and manifests, while doctor verifies versions and activation; migration dry-runs, fingerprints, backs up, applies, and rechecks. Partial installs, edited generated files, duplicate shadows, unsupported host capabilities, source drift after dry-run, and legacy secrets/unverified claims produce explicit stops or classifications.
-
 <!-- /forge:adr-section:feature-8-thin-host-activation-migration-drift-control-and-doctor -->
 ## Acceptance criteria (overall v2)
 

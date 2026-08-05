@@ -560,12 +560,13 @@ The database connection establishes the workspace boundary before query. Roster 
 
 Retrieval applies selector-compatible scope labels, privacy, trust, current-version, and tombstone filters before final ranking. Scope labels guide context selection and exclusion; they do not grant authority. Results contain exact source-version citations and deterministic retrieval reasons. A workspace identity or storage-namespace mismatch stops after the protected-metadata handshake and before company-content reads, S3 access, or mutation, and returns an actionable sanitized diagnostic.
 
+Default retrieval excludes `legacy-unverified` evidence. A future explicit host request may include it, but every result retains that trust class and remains evidence only; it can never supply authority, policy, or instructions.
+
 Advanced retrieval remains evidence-gated:
 
 - trigram aliases activate only if the adopter gold set shows benefit;
 - embeddings are never default-on solely by assumption;
 - multi-hop graph expansion, automatic edge extraction, and hosted reranking remain optional until measured quality, latency, cost, privacy, and maintenance thresholds pass.
-
 <!-- /forge:adr-section:brain-retrieval -->
 ## Portable evidence
 
@@ -713,8 +714,9 @@ Migration must:
 - delete or archive general ops/HITL state after extracting minimal evidence; and
 - provide no `brain_spaces`, `workspace_bindings`, per-binding credentials, cross-workspace/cross-scope RLS, permanent dual-write, or compatibility shim.
 
-Existing tables and legacy S3 keys remain backed up and readable for verification until the one-way cutover completes. Frozen snapshots of `my-roster` and `roster-lobu` are mandatory migration fixtures.
+During phase 2, the legacy Brain spellings `mount`, `table`, `sql`, `config`, `reindex`, `gc`, `export`, and `import` remain parser-recognized only to return protected-identity diagnostics or a stable fail-closed disabled-command error; they never perform legacy behavior. `brain query` remains recognized but reports not ready until extraction, indexing, and cited retrieval ship. Issue #363 performs the one-way cutover that removes these spellings.
 
+Existing tables and legacy S3 keys remain backed up and readable for verification until the one-way cutover completes. Frozen snapshots of `my-roster` and `roster-lobu` are mandatory migration fixtures. Phase-2 lifecycle and migration-foundation work does not delete S3 object bytes.
 <!-- /forge:adr-section:migration -->
 ## Surplus and removal map
 
