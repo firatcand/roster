@@ -156,13 +156,14 @@ phases:
         estimate: "M"
         owner_type: "db-architect"
         acceptance:
-          - "Strict optional roster.yaml Brain configuration stores the stable workspace_id, an Infisical path/reference, and normalized non-secret S3 bucket/optional-root-prefix organization without credentials."
-          - "One transaction on one locked physical client creates migrations, the protected singleton identity, and grants for a truly uninitialized database; identical initialization is idempotent, while any nonempty unidentified Brain requires explicit reviewed adoption without mutation."
-          - "Every authority-managed physical admin or runtime connection performs only the protected-metadata handshake before exposing caller SQL; missing, migrating, workspace-mismatch, and namespace-mismatch states fail closed with redacted diagnostics. P2-T15 owns routing doctor and every retained public Brain command through this API."
-          - "Legacy brain import remains parser-recognized but returns BRAIN_LEGACY_COMMAND_DISABLED before workspace, credential, URL, pool, filesystem, or database access and cannot apply the authority migration; P2-T15 generalizes this fail-closed policy."
-          - "The runtime path can read but cannot mutate protected identity, and a checkout relocation carrying the same authored workspace ID reaches the same remote Brain."
-          - "S3 endpoint and namespace validation is bounded, secret-free, and fail-closed; this task never reads, writes, or deletes company object bytes."
-          - "Context exposes brain_configured and preserves the existing nonfatal local-only BRAIN_NOT_CONFIGURED behavior without adding host approval gates, hooks, or runtime state machines."
+          - Strict optional roster.yaml Brain configuration stores the stable workspace_id, an Infisical path/reference, and normalized non-secret S3 bucket/optional-root-prefix organization without credentials; retired brain.binding input fails with migration guidance.
+          - The host owns a strong workspace-specific ROSTER_BRAIN_URL in Infisical. Init validates the derived role and credential before database access, uses it only for first role creation and a fresh runtime authority proof, and never mints, stores, returns, prints, or silently rotates it.
+          - One transaction on one locked physical client creates migrations, the protected singleton identity, and grants for a truly uninitialized database; identical initialization is idempotent, while any nonempty unidentified Brain requires explicit reviewed adoption without mutation.
+          - Every authority-managed physical admin or runtime connection performs only the protected-metadata handshake before exposing caller SQL; missing, migrating, workspace-mismatch, and namespace-mismatch states fail closed with redacted diagnostics. P2-T15 owns routing doctor and every retained public Brain command through this API.
+          - Legacy brain import remains parser-recognized but returns BRAIN_LEGACY_COMMAND_DISABLED before workspace, credential, URL, pool, filesystem, or database access and cannot apply the authority migration; P2-T15 generalizes this fail-closed policy.
+          - The runtime path can read but cannot mutate protected identity, and a checkout relocation carrying the same authored workspace ID reaches the same remote Brain.
+          - S3 endpoint and namespace validation is bounded, secret-free, and fail-closed; this task never reads, writes, or deletes company object bytes.
+          - Context exposes brain_configured and preserves the existing nonfatal local-only BRAIN_NOT_CONFIGURED behavior without adding host approval gates, hooks, or runtime state machines.
 
       - id: "P2-T02"
         tracker_issue_id: "370"
@@ -389,6 +390,7 @@ phases:
           - Brain init, ingest, doctor, fs, semantic writes, and every retained command use verified workspace authority; doctor and migration diagnostics may inspect protected metadata before identity is ready but cannot read company content or touch S3.
           - "Legacy spellings mount, table, sql, config, reindex, gc, export, and import remain recognized but fail closed with stable diagnostics until their one-way removal in #363."
           - "Brain query remains recognized but fails with BRAIN_RETRIEVAL_NOT_READY until #370 and #352; default context excludes legacy-unverified evidence while preserving it for explicit future retrieval."
+          - An explicit runtime credential rotation flow uses a previously authenticated runtime role or a reviewed provider-admin recovery path, updates Infisical without printing secrets, and cannot be triggered as an init side effect.
           - Save, event, link, and merge cite an immutable structured-record source version, and fs removal records a tombstone without deleting S3 bytes.
           - CLI parsing, help, JSON errors, skills, templates, docs, negative role tests, and both existing host harnesses pass without API-key-only dependencies.
         write_globs:

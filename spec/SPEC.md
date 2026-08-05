@@ -155,7 +155,9 @@ hosts:
   codex: enabled
 ```
 
-`brain` is optional at initialization. It contains only portable non-secret organization: the Infisical path/reference and the S3 bucket, region, optional endpoint/path-style settings, and optional root prefix that together form this workspace's storage namespace. Connection URLs and credentials remain ambient and Infisical-injected.
+`brain` is optional at initialization. It contains only portable non-secret organization: the Infisical path/reference and the S3 bucket, region, optional endpoint/path-style settings, and optional root prefix that together form this workspace's storage namespace. Connection URLs and credentials remain ambient and Infisical-injected. The retired `brain.binding` shape is rejected with migration guidance rather than preserved as a compatibility shim.
+
+For first initialization, the host asks Roster for the deterministic non-secret runtime role name, stores a strong workspace-specific `ROSTER_BRAIN_URL` at the tracked Infisical path, and retries under ambient injection. Roster validates and uses that credential but never mints, stores, returns, or prints it.
 
 Each configured Brain database stores a protected `workspace_id` and the validated S3 namespace fingerprint. Roster first reads only that protected metadata, compares it with `roster.yaml`, and fails closed on a mismatch before reading company content, touching S3, or mutating Brain state. Any clone carrying the same authored `workspace_id` and authorized Infisical access reaches the same Brain; a different workspace ID must use a different database.
 
@@ -809,7 +811,7 @@ Roster configuration stores references and non-secret metadata only. Each worksp
 | Variable | Required for | Secret handling |
 |---|---|---|
 | `ROSTER_BRAIN_ADMIN_URL` | Explicit initialization/migration/repair for this workspace-owned Brain database | Infisical-injected through the tracked secret reference; never logged or stored in workspace files |
-| `ROSTER_BRAIN_URL` | Agent-facing reads/writes, context, evidence, and Dreamer state for this workspace-owned Brain database | Infisical-injected least-privilege runtime URL; rejected when database `workspace_id` mismatches |
+| `ROSTER_BRAIN_URL` | First Brain initialization plus agent-facing reads/writes, context, evidence, and Dreamer state for this workspace-owned Brain database | Host-created and Infisical-injected least-privilege runtime URL; Roster validates its derived role, uses it for initial role creation and a fresh authority proof, never returns or prints it, and rejects a database `workspace_id` mismatch |
 | `OPENAI_API_KEY` | Optional privacy-permitted OpenAI embedding generation/reindex only | Infisical-injected; absence preserves lexical/structured behavior |
 | `AWS_ACCESS_KEY_ID` | S3-compatible Brain object access | Infisical-injected; never stored in Brain config |
 | `AWS_SECRET_ACCESS_KEY` | S3-compatible Brain object access | Infisical-injected; never stored in Brain config |

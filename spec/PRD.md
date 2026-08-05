@@ -172,6 +172,7 @@ Each logical workspace owns a different PostgreSQL Brain database and configured
 ### Required behavior
 
 - Tracked `roster.yaml` carries the stable `workspace_id`, Infisical path/reference, and non-secret S3 namespace organization; secrets remain ambient.
+- The host creates and stores the workspace-specific runtime URL in Infisical. Roster derives the expected role, validates and proves the ambient credential during initialization, and never mints, stores, returns, or prints the URL or password.
 - The Brain database stores protected matching workspace/storage identity. Every Brain command first performs the minimum identity handshake and rejects a mismatch before company-content reads, S3 access, or mutation.
 - A different workspace ID uses a different database. Clones of the same workspace may share its database and S3 namespace.
 - Workspace/function/agent/plan scopes are typed context-selection labels, not database authorization principals.
@@ -190,7 +191,8 @@ Each logical workspace owns a different PostgreSQL Brain database and configured
 
 - Retrying identical ingestion converges without duplicate current versions; changed content preserves history and becomes current.
 - Checkout relocation does not change logical workspace or source identity.
-- Wrong-database or S3 namespace configuration stops after the protected-metadata handshake and before company-content reads, S3 access, or mutation, and reports an actionable redacted error.
+- Wrong-database, S3 namespace, runtime-role, or runtime-credential configuration stops before company-content reads, S3 access, or mutation and reports an actionable redacted error.
+- No Roster JSON, human output, generated file, diagnostic, or context contains the runtime URL or password.
 - S3/Postgres partial failures resume or reconcile without orphaning authoritative state.
 - Every retrieval result resolves to the exact source version, object identity, extractor version, locator, typed retrieval scope, trust/privacy class, and retrieval reason.
 - Structured and document retrieval can be combined in one bounded context response.
@@ -200,7 +202,8 @@ Each logical workspace owns a different PostgreSQL Brain database and configured
 
 ### Flow and edge cases
 
-The host starts from tracked workspace Brain configuration, Roster verifies the database/storage identity, and the host explicitly selects a source. Roster converges object and source-version state, extraction/indexing becomes ready, and later retrieval returns immutable citations. Identical retries deduplicate, changed bytes version, partial S3/Postgres failure repairs, keyless mode stays correct, tombstones hide content without erasing history, and configuration mismatch stops after the protected-metadata handshake and before company-content reads, S3 access, or mutation.
+The host starts from tracked workspace Brain configuration and an Infisical-injected admin URL. If the runtime URL is missing, Roster returns only the expected derived role and tracked secret path; the host prepares the secret and retries. Roster initializes and verifies the database/storage identity and runtime credential, after which the host explicitly selects a source. Roster converges object and source-version state, extraction/indexing becomes ready, and later retrieval returns immutable citations. Identical retries deduplicate, changed bytes version, partial S3/Postgres failure repairs, keyless mode stays correct, tombstones hide content without erasing history, and configuration mismatch stops after the protected-metadata handshake and before company-content reads, S3 access, or mutation. Runtime credential rotation is explicit and never occurs as an init side effect.
+
 <!-- /forge:adr-section:feature-4-company-brain-knowledge-and-source-lifecycle -->
 ## Feature 5: Workspace tool-use definitions
 

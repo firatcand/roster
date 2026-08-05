@@ -8,3 +8,4 @@
 - 2026-08-02 — `complete-plan-context-closure`
 - 2026-08-04 — `one-brain-database-per-workspace`
 - 2026-08-05 — `phase-two-legacy-brain-cutover`
+- 2026-08-05 — `host-owned-brain-runtime-credentials`
