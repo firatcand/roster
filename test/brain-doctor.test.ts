@@ -93,6 +93,40 @@ test('doctor red when a schema CREATE grant is applied (case 9)', opts, async ()
   }
 });
 
+test('doctor accepts only the protected workspace identity handshake columns', opts, async () => {
+  const { fresh, teardown } = await provision();
+  const pool = createBrainPool('admin', fresh.url);
+  try {
+    const healthy = await runDoctor(pool, fresh.role);
+    assert.equal(healthy.ok, true, JSON.stringify(healthy.checks.filter((c) => !c.ok)));
+
+    await pool.query(
+      `REVOKE SELECT (database_authority_id) ON brain_meta.workspace_identity FROM ${fresh.role}`,
+    );
+    const missing = await runDoctor(pool, fresh.role);
+    assert.equal(missing.ok, false);
+    const missingMetadata = missing.checks.find(
+      (c) => c.name === `brain-meta-config-read-only [${fresh.role}]`,
+    );
+    assert.match(missingMetadata!.detail, /missing SELECT on brain_meta\.workspace_identity\.database_authority_id/u);
+
+    await pool.query(
+      `GRANT SELECT (database_authority_id) ON brain_meta.workspace_identity TO ${fresh.role}`,
+    );
+    await pool.query(`GRANT SELECT (singleton) ON brain_meta.workspace_identity TO ${fresh.role}`);
+    const dirty = await runDoctor(pool, fresh.role);
+    assert.equal(dirty.ok, false);
+    const metadata = dirty.checks.find(
+      (c) => c.name === `brain-meta-config-read-only [${fresh.role}]`,
+    );
+    assert.equal(metadata!.ok, false);
+    assert.match(metadata!.detail, /workspace_identity\.singleton SELECT/);
+  } finally {
+    await pool.end();
+    await teardown();
+  }
+});
+
 test('doctor red when out-of-band column-level GRANT UPDATE(title) is applied (case 2)', opts, async () => {
   const { fresh, teardown } = await provision();
   const pool = createBrainPool('admin', fresh.url);

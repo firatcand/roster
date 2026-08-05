@@ -170,13 +170,13 @@ function printHelp(version: string): void {
     `  roster task status [sel]     ${chalk.dim('Stage-grouped digest + needs-your-attention, or one task\'s stage (--json)')}`,
     `  roster task claim <sel>      ${chalk.dim('Claim a task: self-assign + advance (start/submit/done/revise/block/unblock/cancel)')}`,
     `  roster hooks install         ${chalk.dim('Install SessionStart banner hooks for Claude + Codex')}`,
-    `  roster brain init            ${chalk.dim('Provision the Postgres knowledge brain (admin URL); prints runtime URL once')}`,
+    `  roster brain init            ${chalk.dim('Bind a configured workspace Brain using ambient admin/runtime credentials')}`,
     `  roster brain doctor          ${chalk.dim('Audit brain append-only safety + report pending migrations')}`,
     `  roster brain save/get/event/link/merge/table/sql  ${chalk.dim('Append-only write/read verbs (runtime role)')}`,
     `  roster brain mount <file>    ${chalk.dim('Ingest a file as append-only document chunks + keyword index (runtime role)')}`,
     `  roster brain fs put|get|ls|rm  ${chalk.dim('S3-backed file store keyed by --kind/--slug; text is chunk-indexed for query (runtime role)')}`,
     `  roster brain export          ${chalk.dim('Dump all brain tables to a portable backup dir (--out, --format jsonl|sql; admin URL)')}`,
-    `  roster brain import <dir>    ${chalk.dim('Restore a backup into a fresh, empty brain (admin URL)')}`,
+    `  roster brain import <dir>    ${chalk.dim('Legacy restore spelling; fails closed pending reviewed adoption')}`,
     `  roster brain query "<text>"  ${chalk.dim('Hybrid semantic + keyword + graph search (--kind, --limit, --json)')}`,
     `  roster brain config get|set  ${chalk.dim('Read/set brain settings (embeddings.enabled, provider, model, search knobs)')}`,
     `  roster brain reindex [--yes]  ${chalk.dim('Backfill embeddings for active chunks missing/stale vectors (--since, --model; admin URL)')}`,
@@ -871,6 +871,7 @@ async function runBrain(args: readonly string[]): Promise<number> {
   }
   if (parsed.subcommand === 'init') {
     return await executeBrainInit({
+      cwd: process.cwd(),
       json: parsed.json,
       silent: parsed.silent,
       embeddings: parsed.embeddings,
@@ -879,6 +880,7 @@ async function runBrain(args: readonly string[]): Promise<number> {
   }
   if (parsed.subcommand === 'doctor') {
     return await executeBrainDoctor({
+      cwd: process.cwd(),
       json: parsed.json,
       silent: parsed.silent,
       role: parsed.role,

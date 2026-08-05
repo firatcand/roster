@@ -204,8 +204,8 @@ has no success `ok` field.
 The selected root plan and its complete statically referenced nested-plan
 closure are mandatory and never truncated. Applicable approved lessons and
 cited Brain evidence are optional and ranked under the token budget. If the
-workspace has no Brain binding, context resolution still succeeds with the
-complete local bundle, empty `brain_evidence`, and a `BRAIN_NOT_BOUND` warning.
+workspace has no Brain configuration, context resolution still succeeds with the
+complete local bundle, empty `brain_evidence`, and a `BRAIN_NOT_CONFIGURED` warning.
 
 Claude Code or Codex interprets and executes the returned definitions. Roster
 does not choose a current step, invoke a vendor tool, carry runtime outputs,
@@ -388,7 +388,7 @@ strict, Brain intent is append-only, and every layer must retain the same
 `skill_ref`. The result is one flat effective definition with field-level
 provenance and a deterministic semantic hash. A narrower layer can never relax
 broader safety. Brain read/write entries are requested intent, never grants;
-the independently loaded Brain binding and scope still authorize access.
+the configured workspace Brain and scope still constrain evidence selection.
 
 For example, Social Manager can own the reusable Exa ceiling in
 `functions/gtm/agents/social-manager/tools/social-opportunity-research.yaml`:

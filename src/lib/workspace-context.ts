@@ -64,14 +64,14 @@ export const MAX_CONTEXT_EVIDENCE_CONTENT_BYTES = 256 * 1024;
 export const MAX_CONTEXT_SELECTORS = 4_096;
 export const MAX_CONTEXT_MANDATORY_DIAGNOSTICS = 8;
 export const MAX_CONTEXT_OPTIONAL_DIAGNOSTICS = 64;
-export const BUDGET_BLOCK_RESERVE_BYTES = 730;
-export const BUDGET_BLOCK_RESERVE_TOKENS = 183;
+export const BUDGET_BLOCK_RESERVE_BYTES = 740;
+export const BUDGET_BLOCK_RESERVE_TOKENS = 185;
 export const MIN_CONTEXT_BUDGET_TOKENS = BUDGET_BLOCK_RESERVE_TOKENS + 1;
 
 export const CONTEXT_EXCLUSION_REASONS = [
   'budget-exhausted',
-  'cross-binding',
-  'cross-scope',
+  'workspace-mismatch',
+  'scope-ineligible',
   'duplicate',
   'invalid-rank',
   'low-trust',
@@ -216,7 +216,7 @@ export type WorkspaceContext = {
     schema_version: 2;
     workspace_id: string;
     source_hash: string;
-    brain_binding: string | null;
+    brain_configured: boolean;
   };
   target: {
     function_id: string;
@@ -249,7 +249,6 @@ export type WorkspaceContext = {
 
 export type SeedBrainCandidate = {
   candidate_id: string;
-  binding: string;
   selector: string;
   scope: {
     workspace: string;
@@ -1111,7 +1110,7 @@ function buildMandatoryContext(
       schema_version: source.registry_metadata.schema_version,
       workspace_id: workspaceId,
       source_hash: source.registry_source_hash,
-      brain_binding: source.registry_metadata.brain_binding,
+      brain_configured: source.registry_metadata.brain_configured,
     },
     target: {
       function_id: local.functionId,
@@ -1307,7 +1306,6 @@ function validateEvidenceEnvelope(input: ContextEvidenceInput): void {
     const record = candidate as Record<string, unknown>;
     const seedIds: Array<readonly [string, unknown]> = [
       ['candidate_id', record['candidate_id']],
-      ['binding', record['binding']],
     ];
     const scope = record['scope'];
     if (scope !== null && typeof scope === 'object' && !Array.isArray(scope)) {
@@ -1436,7 +1434,6 @@ function candidateMalformed(value: unknown): value is SeedBrainCandidate {
     ].includes(field));
   return !Object.keys(candidate).every((field) => [
     'candidate_id',
-    'binding',
     'selector',
     'scope',
     'content',
@@ -1448,7 +1445,6 @@ function candidateMalformed(value: unknown): value is SeedBrainCandidate {
   ].includes(field))
     || !citationKeysValid
     || !safeSeedId(candidate['candidate_id'])
-    || !safeSeedId(candidate['binding'])
     || !boundedNonemptySeedString(candidate['selector'], MAX_SELECTOR_OR_LOCATOR_BYTES)
     || !validScope(candidate['scope'])
     || !boundedEvidenceContent(candidate['content'])
@@ -1462,7 +1458,6 @@ function evaluateCandidates(
   input: ContextEvidenceInput,
   local: ResolvedLocalContext,
   workspaceId: string,
-  binding: string,
   request: ContextRequest,
 ): CandidateEvaluation[] {
   const candidateIds = new Map<string, number>();
@@ -1497,14 +1492,14 @@ function evaluateCandidates(
       || compareUnicodeCodePoints(left.detector_id, right.detector_id)
       || left.match_length - right.match_length);
     const selector = candidate === null ? undefined : selectorById.get(candidate.selector);
-    const crossScope = candidate !== null && (
-      candidate.scope.workspace !== workspaceId
-      || (candidate.scope.plan !== undefined
+    const workspaceMismatch = candidate !== null && candidate.scope.workspace !== workspaceId;
+    const scopeIneligible = candidate !== null && !workspaceMismatch && (
+      candidate.scope.plan !== undefined
         ? !closureQualifiedPlans.has(
           `${candidate.scope.function}/${candidate.scope.agent}#${candidate.scope.plan}`,
         )
         : (candidate.scope.function !== undefined && candidate.scope.function !== local.functionId)
-          || (candidate.scope.agent !== undefined && candidate.scope.agent !== local.agentId))
+          || (candidate.scope.agent !== undefined && candidate.scope.agent !== local.agentId)
     );
     const invalidRank = candidate !== null && (!Number.isSafeInteger(candidate.retrieval_rank)
       || candidate.retrieval_rank < 0
@@ -1523,10 +1518,10 @@ function evaluateCandidates(
           ? 'secret-material'
           : candidate!.privacy === 'secret'
             ? 'privacy-incompatible'
-            : candidate!.binding !== binding
-              ? 'cross-binding'
-              : crossScope
-                ? 'cross-scope'
+            : workspaceMismatch
+              ? 'workspace-mismatch'
+              : scopeIneligible
+                ? 'scope-ineligible'
                 : candidate!.tombstoned
                   ? 'tombstoned'
                   : !candidate!.current
@@ -1626,18 +1621,18 @@ function accountedDomain(options: {
 }
 
 function mandatoryDiagnostics(
-  binding: string | null,
+  brainConfigured: boolean,
   evidenceStatus: ContextEvidenceInput['status'] | null,
   requiredSelectorsUnmatched: number,
 ): WorkspaceDiagnostic[] {
   const diagnostics: WorkspaceDiagnostic[] = [];
-  if (binding === null) {
+  if (!brainConfigured) {
     diagnostics.push(workspaceDiagnostic(
-      'BRAIN_NOT_BOUND',
-      'The workspace has no Brain binding; optional evidence was omitted.',
+      'BRAIN_NOT_CONFIGURED',
+      'The workspace has no Brain configuration; optional evidence was omitted.',
       {
         severity: 'warning',
-        remedy: 'Bind a Brain only when company evidence is needed for this workspace.',
+        remedy: 'Configure a Brain only when company evidence is needed for this workspace.',
         details: {},
       },
     ));
@@ -1900,10 +1895,10 @@ function assembleResolvedContext(
   local: ResolvedLocalContext,
   instrumentation?: ContextAssemblyInstrumentation,
 ): WorkspaceContext {
-  const binding = source.registry_metadata.brain_binding;
+  const brainConfigured = source.registry_metadata.brain_configured;
   let evaluations: CandidateEvaluation[] = [];
   let evidenceStatus: ContextEvidenceInput['status'] | null = null;
-  if (binding !== null) {
+  if (brainConfigured) {
     validateEvidenceEnvelope(evidenceInput);
     evidenceStatus = evidenceInput.status;
     if (evidenceInput.status === 'seeded') {
@@ -1911,7 +1906,6 @@ function assembleResolvedContext(
         evidenceInput,
         local,
         source.registry_metadata.workspace_id,
-        binding,
         request,
       );
     }
@@ -1919,10 +1913,10 @@ function assembleResolvedContext(
   const eligible = evaluations.filter((evaluation) => evaluation.reason === null)
     .sort(compareEligibleCandidates);
   const matchedSelectors = new Set(eligible.map((evaluation) => evaluation.candidate!.selector));
-  const requiredSelectorsUnmatched = binding === null || evidenceStatus !== 'seeded'
+  const requiredSelectorsUnmatched = !brainConfigured || evidenceStatus !== 'seeded'
     ? 0
     : local.selectors.filter((selector) => selector.required && !matchedSelectors.has(selector.selector)).length;
-  const diagnostics = mandatoryDiagnostics(binding, evidenceStatus, requiredSelectorsUnmatched);
+  const diagnostics = mandatoryDiagnostics(brainConfigured, evidenceStatus, requiredSelectorsUnmatched);
   const mandatory = buildMandatoryContext(source, request, local, vendorProjection);
   const mandatoryMetrics = assertMandatoryBudget(mandatory, diagnostics);
   let domainBytes = mandatoryMetrics.bytes;
@@ -2283,9 +2277,9 @@ const SANITIZED_CONTEXT_FAILURES: Readonly<Record<string, { message: string; rem
     message: 'Selected nested plans form a cycle.',
     remedy: 'Remove at least one nested-plan edge before retrying.',
   },
-  BRAIN_NOT_BOUND: {
-    message: 'The workspace has no Brain binding.',
-    remedy: 'Bind the workspace to a Brain when company evidence is needed.',
+  BRAIN_NOT_CONFIGURED: {
+    message: 'The workspace has no Brain configuration.',
+    remedy: 'Configure the workspace Brain when company evidence is needed.',
   },
   CONTEXT_BUDGET_REQUIRED_OVERFLOW: {
     message: 'Mandatory context exceeds the requested token budget.',

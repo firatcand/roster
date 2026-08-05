@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createBrainPool } from '../src/lib/brain/connect.ts';
-import { loadMigrations, runMigrations } from '../src/lib/brain/migrate.ts';
+import { loadMigrations, pendingMigrations, runMigrations } from '../src/lib/brain/migrate.ts';
 import { HAS_DB, createFreshDb } from './brain-helpers.ts';
 
 const opts = { skip: HAS_DB ? false : 'ROSTER_BRAIN_ADMIN_URL not set' };
@@ -38,6 +38,38 @@ test('loadMigrations sorts by numeric prefix and fails on duplicate prefix', () 
   }
 });
 
+test('loadMigrations rejects non-transactional concurrent index DDL', () => {
+  const dir = tmpSchemaDir({
+    '001_init.sql': 'CREATE TABLE t1 (id int); CREATE INDEX CONCURRENTLY t1_id_idx ON t1 (id);',
+  });
+  try {
+    assert.throws(() => loadMigrations(dir), /non-transactional concurrent index/i);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadMigrations rejects transaction control without matching comments, strings, or function bodies', () => {
+  const escaped = tmpSchemaDir({
+    '001_init.sql': `CREATE TABLE first_table (id int); COMMIT; CREATE TABLE escaped_table (id int);`,
+  });
+  const inert = tmpSchemaDir({
+    '001_init.sql': `-- COMMIT must remain inert
+CREATE FUNCTION inert_transaction_words() RETURNS text LANGUAGE plpgsql AS $body$
+BEGIN
+  RETURN 'COMMIT; ROLLBACK; CREATE INDEX CONCURRENTLY';
+END;
+$body$;`,
+  });
+  try {
+    assert.throws(() => loadMigrations(escaped), /transaction-control SQL/i);
+    assert.doesNotThrow(() => loadMigrations(inert));
+  } finally {
+    rmSync(escaped, { recursive: true, force: true });
+    rmSync(inert, { recursive: true, force: true });
+  }
+});
+
 test('runMigrations applies in order, records, and idempotent re-run skips (case 8)', opts, async () => {
   const fresh = await createFreshDb();
   const dir = tmpSchemaDir({
@@ -65,6 +97,29 @@ CREATE TABLE t1 (id int);`,
   }
 });
 
+test('transaction-control migration is rejected before any earlier migration can commit', opts, async () => {
+  const fresh = await createFreshDb();
+  const dir = tmpSchemaDir({
+    '001_init.sql': `CREATE SCHEMA brain_meta;
+CREATE TABLE brain_meta.schema_migrations (filename text PRIMARY KEY, sha256 text NOT NULL);
+CREATE TABLE must_rollback (id int);`,
+    '002_escape.sql': `COMMIT; CREATE TABLE must_not_exist (id int);`,
+  });
+  const pool = createBrainPool('admin', fresh.url);
+  try {
+    await assert.rejects(runMigrations(pool, dir), /transaction-control SQL/i);
+    const state = await pool.query<{ first: string | null; second: string | null }>(
+      `SELECT to_regclass('public.must_rollback')::text AS first,
+              to_regclass('public.must_not_exist')::text AS second`,
+    );
+    assert.deepEqual(state.rows[0], { first: null, second: null });
+  } finally {
+    await pool.end();
+    rmSync(dir, { recursive: true, force: true });
+    await fresh.drop();
+  }
+});
+
 test('runMigrations aborts when an applied file sha256 changed (case 8)', opts, async () => {
   const fresh = await createFreshDb();
   const dir = tmpSchemaDir({
@@ -79,6 +134,61 @@ CREATE TABLE t1 (id int);`,
 CREATE TABLE IF NOT EXISTS brain_meta.schema_migrations (filename text PRIMARY KEY, sha256 text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE t1 (id int); -- tampered`, 'utf8');
     await assert.rejects(runMigrations(pool, dir), /sha256 mismatch/i);
+  } finally {
+    await pool.end();
+    rmSync(dir, { recursive: true, force: true });
+    await fresh.drop();
+  }
+});
+
+test('migration ledger must be the exact loaded-file prefix before run or pending inspection', opts, async () => {
+  const fresh = await createFreshDb();
+  const dir = tmpSchemaDir({
+    '001_init.sql': `CREATE SCHEMA IF NOT EXISTS brain_meta;
+CREATE TABLE IF NOT EXISTS brain_meta.schema_migrations (filename text PRIMARY KEY, sha256 text NOT NULL); CREATE TABLE t1 (id int);`,
+    '002_more.sql': `CREATE TABLE t2 (id int);`,
+  });
+  const pool = createBrainPool('admin', fresh.url);
+  const files = loadMigrations(dir);
+  try {
+    await pool.query(`CREATE SCHEMA brain_meta`);
+    await pool.query(`CREATE TABLE brain_meta.schema_migrations (filename text PRIMARY KEY, sha256 text NOT NULL)`);
+    for (const row of [
+      { filename: files[1]!.filename, sha256: files[1]!.sha256 },
+      { filename: '999_future.sql', sha256: '0'.repeat(64) },
+    ]) {
+      await pool.query(`TRUNCATE brain_meta.schema_migrations`);
+      await pool.query(`INSERT INTO brain_meta.schema_migrations (filename, sha256) VALUES ($1, $2)`, [row.filename, row.sha256]);
+      await assert.rejects(runMigrations(pool, dir), /exact ordered prefix/i);
+      await assert.rejects(pendingMigrations(pool, dir), /exact ordered prefix/i);
+      const noDdl = await pool.query<{ t1: string | null; t2: string | null }>(
+        `SELECT to_regclass('public.t1')::text AS t1, to_regclass('public.t2')::text AS t2`,
+      );
+      assert.deepEqual(noDdl.rows[0], { t1: null, t2: null });
+    }
+  } finally {
+    await pool.end();
+    rmSync(dir, { recursive: true, force: true });
+    await fresh.drop();
+  }
+});
+
+test('pendingMigrations accepts an exact numeric-prefix ledger with nonuniform filename padding', opts, async () => {
+  const fresh = await createFreshDb();
+  const dir = tmpSchemaDir({
+    '2_first.sql': `SELECT 1;`,
+    '010_second.sql': `SELECT 1;`,
+  });
+  const pool = createBrainPool('admin', fresh.url);
+  const files = loadMigrations(dir);
+  try {
+    await pool.query(`CREATE SCHEMA brain_meta`);
+    await pool.query(`CREATE TABLE brain_meta.schema_migrations (filename text PRIMARY KEY, sha256 text NOT NULL)`);
+    await pool.query(`INSERT INTO brain_meta.schema_migrations (filename, sha256) VALUES ($1, $2)`, [
+      files[0]!.filename,
+      files[0]!.sha256,
+    ]);
+    assert.deepEqual(await pendingMigrations(pool, dir), ['010_second.sql']);
   } finally {
     await pool.end();
     rmSync(dir, { recursive: true, force: true });

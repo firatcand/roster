@@ -3,7 +3,6 @@
   "candidates": [
     {
       "candidate_id": "brain-record-a17f",
-      "binding": "company-brain",
       "selector": "strong-examples",
       "scope": {
         "workspace": "social-manager-context",
@@ -28,7 +27,6 @@
     },
     {
       "candidate_id": "brain-record-b62c",
-      "binding": "company-brain",
       "selector": "company-positioning",
       "scope": {
         "workspace": "social-manager-context",
@@ -53,7 +51,6 @@
     },
     {
       "candidate_id": "brain-record-c04d",
-      "binding": "company-brain",
       "selector": "strong-examples",
       "scope": {
         "workspace": "social-manager-context",
@@ -78,7 +75,6 @@
     },
     {
       "candidate_id": "brain-record-d91e",
-      "binding": "company-brain",
       "selector": "company-positioning",
       "scope": {
         "workspace": "social-manager-context",

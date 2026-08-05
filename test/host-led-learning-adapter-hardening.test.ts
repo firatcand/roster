@@ -289,13 +289,13 @@ function rawContextFixture(): Record<string, unknown> {
     fragment_hash: fragment['fragment_hash'],
   }));
   const exclusions = Object.fromEntries([
-    'budget-exhausted', 'cross-binding', 'cross-scope', 'duplicate', 'invalid-rank', 'low-trust',
+    'budget-exhausted', 'workspace-mismatch', 'scope-ineligible', 'duplicate', 'invalid-rank', 'low-trust',
     'malformed', 'privacy-incompatible', 'secret-material', 'stale', 'tombstoned', 'unauthorized',
     'uncited', 'unrequested-selector',
   ].map((reason) => [reason, reason === 'low-trust' ? 1 : 0]));
   return {
     schema_version: 2,
-    workspace: { schema_version: 2, workspace_id: 'company', source_hash: sha256('workspace'), brain_binding: 'brain' },
+    workspace: { schema_version: 2, workspace_id: 'company', source_hash: sha256('workspace'), brain_configured: true },
     target: { function_id: 'gtm', agent_id: 'social-manager', plan_id: 'opportunity-discovery' },
     request: { query: 'reliable ai practitioners', step_hint: null, budget_tokens: 12_000, explain: false },
     agent: { function: functionFragment, agent: agentFragment },
@@ -340,7 +340,7 @@ test('compact context retains actionable policy, flattened scope, and closed pro
   assert.deepEqual(compact['workspace'], [
     'company',
     sha256('workspace').slice('sha256:'.length),
-    'brain',
+    1,
   ]);
   const rawAgent = raw['agent'] as Record<string, Record<string, unknown>>;
   assert.deepEqual(compact['target'], [

@@ -1,5 +1,7 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type pg from 'pg';
+import { EXIT_ERROR, RosterError } from '../errors.ts';
+import { assertWorkspaceId } from '../workspace-layout.ts';
 
 export const RUNTIME_ROLE = 'roster_brain_rw';
 
@@ -11,6 +13,12 @@ export type EnsureRoleResult = {
   // remove a bootstrap-granted membership. Doctor stays red until a superuser
   // revokes it; callers surface the remedial SQL.
   creatorGrantRemains: boolean;
+};
+
+export type EnsureWorkspaceRuntimeRoleResult = {
+  created: boolean;
+  creatorGrantRemains: boolean;
+  roleName: string;
 };
 
 function generatePassword(): string {
@@ -28,6 +36,30 @@ function qIdent(name: string): string {
   return '"' + ident(name) + '"';
 }
 
+function runtimeRoleCollision(roleName: string): RosterError {
+  return new RosterError({
+    header: 'Brain runtime role collision',
+    body: 'The requested derived workspace runtime role conflicts with this cluster or this Brain database registration.',
+    remedy: 'Use the original approved runtime role base, or have an administrator inspect the conflicting cluster role.',
+    exitCode: EXIT_ERROR,
+    code: 'BRAIN_RUNTIME_ROLE_COLLISION',
+    details: { role_name: roleName },
+  });
+}
+
+export function deriveWorkspaceRuntimeRoleName(workspaceId: string, roleBase: string = RUNTIME_ROLE): string {
+  const workspace = assertWorkspaceId(workspaceId);
+  const base = ident(roleBase);
+  const digest = createHash('sha256')
+    .update('roster.brain.runtime-role.v1\u0000', 'utf8')
+    .update(base, 'utf8')
+    .update('\u0000', 'utf8')
+    .update(workspace, 'utf8')
+    .digest('hex');
+  const prefix = base.slice(0, 38);
+  return `${prefix}_${digest.slice(0, 24)}`;
+}
+
 export async function roleExists(
   client: pg.PoolClient,
   roleName: string = RUNTIME_ROLE,
@@ -41,6 +73,82 @@ async function registerRuntimeRole(client: pg.PoolClient, role: string): Promise
     `INSERT INTO brain_meta.runtime_roles (rolname) VALUES ($1) ON CONFLICT DO NOTHING`,
     [role],
   );
+}
+
+async function runtimeRoleRegistered(client: pg.PoolClient, role: string): Promise<boolean> {
+  const result = await client.query(
+    `SELECT 1 FROM brain_meta.runtime_roles WHERE rolname = $1`,
+    [role],
+  );
+  return (result.rowCount ?? 0) === 1;
+}
+
+async function registeredRuntimeRoles(client: pg.PoolClient): Promise<string[]> {
+  const result = await client.query<{ rolname: string }>(
+    `SELECT rolname FROM brain_meta.runtime_roles ORDER BY rolname ASC`,
+  );
+  return result.rows.map((row) => row.rolname);
+}
+
+async function existingWorkspaceRuntimeRoleIsUnsafe(
+  client: pg.PoolClient,
+  role: string,
+): Promise<boolean> {
+  const result = await client.query(
+    `SELECT 'attributes' AS violation
+       FROM pg_roles
+      WHERE rolname = $1
+        AND (NOT rolcanlogin OR rolinherit OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)
+     UNION ALL
+     SELECT 'outbound-membership'
+       FROM pg_auth_members membership
+       JOIN pg_roles member_role ON member_role.oid = membership.member
+      WHERE member_role.rolname = $1
+     UNION ALL
+     SELECT 'unsafe-inbound-membership'
+       FROM pg_auth_members membership
+       JOIN pg_roles granted_role ON granted_role.oid = membership.roleid
+       JOIN pg_roles member_role ON member_role.oid = membership.member
+      WHERE granted_role.rolname = $1
+        AND member_role.rolname <> current_user
+        AND NOT member_role.rolsuper
+     UNION ALL
+     SELECT 'database-owner'
+       FROM pg_database database_row
+       JOIN pg_roles owner_role ON owner_role.oid = database_row.datdba
+      WHERE owner_role.rolname = $1
+     UNION ALL
+     SELECT 'database-create'
+      WHERE has_database_privilege($1, current_database(), 'CREATE')
+     UNION ALL
+     SELECT 'schema-create'
+       FROM pg_namespace namespace_row
+      WHERE namespace_row.nspname IN ('public', 'brain', 'brain_meta')
+        AND has_schema_privilege($1, namespace_row.oid, 'CREATE')
+     UNION ALL
+     SELECT 'owned-relation'
+       FROM pg_class relation
+       JOIN pg_namespace namespace_row ON namespace_row.oid = relation.relnamespace
+       JOIN pg_roles owner_role ON owner_role.oid = relation.relowner
+      WHERE namespace_row.nspname IN ('brain', 'brain_meta')
+        AND owner_role.rolname = $1
+     UNION ALL
+     SELECT 'owned-schema'
+       FROM pg_namespace namespace_row
+       JOIN pg_roles owner_role ON owner_role.oid = namespace_row.nspowner
+      WHERE namespace_row.nspname IN ('brain', 'brain_meta')
+        AND owner_role.rolname = $1
+     UNION ALL
+     SELECT 'owned-routine'
+       FROM pg_proc routine
+       JOIN pg_namespace namespace_row ON namespace_row.oid = routine.pronamespace
+       JOIN pg_roles owner_role ON owner_role.oid = routine.proowner
+      WHERE namespace_row.nspname IN ('brain', 'brain_meta')
+        AND owner_role.rolname = $1
+     LIMIT 1`,
+    [role],
+  );
+  return (result.rowCount ?? result.rows.length) > 0;
 }
 
 // PG16+/managed Postgres (Neon): CREATE ROLE by a non-superuser auto-grants the
@@ -92,6 +200,51 @@ export async function ensureRuntimeRole(
   await applyGrants(client, role);
   const creatorGrantRemains = await stripCreatorGrant(client, role);
   return { created: true, password, creatorGrantRemains };
+}
+
+export async function ensureWorkspaceRuntimeRole(
+  client: pg.PoolClient,
+  workspaceId: string,
+  password: string,
+  roleBase: string = RUNTIME_ROLE,
+): Promise<EnsureWorkspaceRuntimeRoleResult> {
+  const roleName = deriveWorkspaceRuntimeRoleName(workspaceId, roleBase);
+  const exists = await roleExists(client, roleName);
+  const registered = await runtimeRoleRegistered(client, roleName);
+  const otherRegisteredRole = (await registeredRuntimeRoles(client)).find((role) => role !== roleName);
+  if (otherRegisteredRole !== undefined) {
+    throw runtimeRoleCollision(roleName);
+  }
+  if (exists && !registered) throw runtimeRoleCollision(roleName);
+  if (!exists && registered) {
+    throw new RosterError({
+      header: 'Brain runtime role registration is invalid',
+      body: 'This Brain database registers a derived runtime role that is absent from the PostgreSQL cluster.',
+      remedy: 'Have an administrator repair the role registration before retrying initialization.',
+      exitCode: EXIT_ERROR,
+      code: 'BRAIN_RUNTIME_ROLE_COLLISION',
+      details: { role_name: roleName },
+    });
+  }
+  if (exists) {
+    if (await existingWorkspaceRuntimeRoleIsUnsafe(client, roleName)) {
+      throw runtimeRoleCollision(roleName);
+    }
+    await applyGrants(client, roleName);
+    const creatorGrantRemains = await stripCreatorGrant(client, roleName);
+    return { created: false, creatorGrantRemains, roleName };
+  }
+  if (!/^[A-Za-z0-9_-]{43,128}$/.test(password)) {
+    throw new Error('invalid workspace runtime role password');
+  }
+  await client.query(
+    `CREATE ROLE ${qIdent(roleName)} LOGIN PASSWORD '${password}'
+       NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`,
+  );
+  await registerRuntimeRole(client, roleName);
+  await applyGrants(client, roleName);
+  const creatorGrantRemains = await stripCreatorGrant(client, roleName);
+  return { created: true, creatorGrantRemains, roleName };
 }
 
 async function brainTableNames(client: pg.PoolClient): Promise<string[]> {
@@ -177,6 +330,17 @@ export async function applyGrants(
   if (hasConfig.rows[0]?.t) {
     await client.query(`GRANT USAGE ON SCHEMA brain_meta TO ${qrole}`);
     await client.query(`GRANT SELECT ON brain_meta.config TO ${qrole}`);
+  }
+
+  const hasWorkspaceIdentity = await client.query<{ t: string | null }>(
+    `SELECT to_regclass('brain_meta.workspace_identity')::text AS t`,
+  );
+  if (hasWorkspaceIdentity.rows[0]?.t) {
+    await client.query(`GRANT USAGE ON SCHEMA brain_meta TO ${qrole}`);
+    await client.query(
+      `GRANT SELECT (workspace_id, fingerprint_format_version, namespace_fingerprint, database_authority_id, initialized_at, migration_state)
+       ON brain_meta.workspace_identity TO ${qrole}`,
+    );
   }
 
   for (const table of await brainTableNames(client)) {

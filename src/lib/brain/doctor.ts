@@ -176,11 +176,9 @@ async function checksForRole(client: pg.PoolClient, roleName: string): Promise<D
     ),
   );
 
-  // ROS-138: brain_meta access invariant. Before 007 there is no config table
-  // and the runtime role must have ZERO brain_meta access (the original rule).
-  // From 007 on, it must have EXACTLY usage + SELECT on config and nothing else:
-  // assert the required grant is present, and that no other brain_meta privilege
-  // exists (table- OR column-level, incl. writes on config).
+  // brain_meta access is limited to read-only runtime configuration plus the
+  // protected workspace-authority handshake columns. Everything else remains
+  // admin-only, including the singleton guard column and every write privilege.
   const hasConfig = await client.query<{ t: string | null }>(
     `SELECT to_regclass('brain_meta.config')::text AS t`,
   );
@@ -189,7 +187,7 @@ async function checksForRole(client: pg.PoolClient, roleName: string): Promise<D
       await check(
         client,
         'brain-meta-config-read-only',
-        'runtime role brain_meta access is exactly USAGE + SELECT on config',
+        'runtime role brain_meta access is exactly USAGE + approved read-only metadata',
         'runtime role brain_meta privileges are wrong',
         `SELECT 'missing USAGE on brain_meta' WHERE NOT has_schema_privilege($1, 'brain_meta', 'USAGE')
           UNION ALL
@@ -206,10 +204,48 @@ async function checksForRole(client: pg.PoolClient, roleName: string): Promise<D
            FROM (VALUES ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')) AS p(priv)
           WHERE has_table_privilege($1, 'brain_meta.config', p.priv)
           UNION ALL
+         SELECT 'brain_meta.workspace_identity ' || p.priv
+           FROM (VALUES ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')) AS p(priv)
+          WHERE to_regclass('brain_meta.workspace_identity') IS NOT NULL
+            AND has_table_privilege($1, to_regclass('brain_meta.workspace_identity'), p.priv)
+          UNION ALL
+         SELECT 'missing SELECT on brain_meta.workspace_identity.' || expected.column_name
+           FROM (VALUES
+             ('workspace_id'),
+             ('fingerprint_format_version'),
+             ('namespace_fingerprint'),
+             ('database_authority_id'),
+             ('initialized_at'),
+             ('migration_state')
+           ) AS expected(column_name)
+          WHERE to_regclass('brain_meta.workspace_identity') IS NOT NULL
+            AND NOT has_column_privilege(
+              $1,
+              to_regclass('brain_meta.workspace_identity'),
+              expected.column_name,
+              'SELECT'
+            )
+          UNION ALL
          SELECT cp.table_name || '.' || cp.column_name || ' ' || cp.privilege_type
            FROM information_schema.column_privileges cp
           WHERE cp.grantee = $1 AND cp.table_schema = 'brain_meta'
-            AND NOT (cp.table_name = 'config' AND cp.privilege_type = 'SELECT')`,
+            AND NOT (
+              cp.privilege_type = 'SELECT'
+              AND (
+                cp.table_name = 'config'
+                OR (
+                  cp.table_name = 'workspace_identity'
+                  AND cp.column_name IN (
+                    'workspace_id',
+                    'fingerprint_format_version',
+                    'namespace_fingerprint',
+                    'database_authority_id',
+                    'initialized_at',
+                    'migration_state'
+                  )
+                )
+              )
+            )`,
         [roleName],
       ),
     );

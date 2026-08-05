@@ -2003,7 +2003,7 @@ test('compact context log binding rejects raw, projection, and claimed-hash tamp
     fragment_hash: entry['fragment_hash'],
   }));
   const exclusions = Object.fromEntries([
-    'budget-exhausted', 'cross-binding', 'cross-scope', 'duplicate', 'invalid-rank', 'low-trust',
+    'budget-exhausted', 'workspace-mismatch', 'scope-ineligible', 'duplicate', 'invalid-rank', 'low-trust',
     'malformed', 'privacy-incompatible', 'secret-material', 'stale', 'tombstoned', 'unauthorized',
     'uncited', 'unrequested-selector',
   ].map((reason) => [reason, 0]));
@@ -2013,7 +2013,7 @@ test('compact context log binding rejects raw, projection, and claimed-hash tamp
       schema_version: 2,
       workspace_id: 'workspace',
       source_hash: `sha256:${digest('workspace-source')}`,
-      brain_binding: null,
+      brain_configured: false,
     },
     target: { function_id: 'target', agent_id: 'agent', plan_id: null },
     request: { query: 'reliable ai practitioners', step_hint: null, budget_tokens: 1_000, explain: false },

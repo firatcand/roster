@@ -163,7 +163,7 @@ test('context emits one closed JSON document for an exact agent-only target', ()
     assert.deepEqual(bundle['plan'], { root_id: null, definitions: [] });
     assert.deepEqual(bundle['brain_evidence'], []);
     const diagnostics = bundle['diagnostics'] as Array<{ code: string; severity: string }>;
-    const missingBrain = diagnostics.filter((diagnostic) => diagnostic.code === 'BRAIN_NOT_BOUND');
+    const missingBrain = diagnostics.filter((diagnostic) => diagnostic.code === 'BRAIN_NOT_CONFIGURED');
     assert.equal(missingBrain.length, 1);
     assert.equal(missingBrain[0]?.severity, 'warning');
   } finally {

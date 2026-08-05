@@ -164,8 +164,8 @@ const TOOL_EFFECT_CLASSES = new Set([
 ]);
 const CONTEXT_BUDGET_EXCLUSION_REASONS = [
   'budget-exhausted',
-  'cross-binding',
-  'cross-scope',
+  'workspace-mismatch',
+  'scope-ineligible',
   'duplicate',
   'invalid-rank',
   'low-trust',
@@ -1345,13 +1345,13 @@ export function compactContextForHost(value: unknown): Readonly<Record<string, u
   }
   if (record['schema_version'] !== 2) fail('Roster context schema_version is invalid');
   const workspace = contextObject(record['workspace'], 'Roster context workspace');
-  assertExactContextKeys(workspace, ['schema_version', 'workspace_id', 'source_hash', 'brain_binding'], 'Roster context workspace');
+  assertExactContextKeys(workspace, ['schema_version', 'workspace_id', 'source_hash', 'brain_configured'], 'Roster context workspace');
   if (workspace['schema_version'] !== 2) fail('Roster context workspace.schema_version is invalid');
   const workspaceId = contextId(workspace['workspace_id'], 'Roster context workspace.workspace_id');
   if (typeof workspace['source_hash'] !== 'string' || !SHA256.test(workspace['source_hash'])) {
     fail('Roster context workspace.source_hash is invalid');
   }
-  contextNullableString(workspace['brain_binding'], 'Roster context workspace.brain_binding');
+  if (typeof workspace['brain_configured'] !== 'boolean') fail('Roster context workspace.brain_configured is invalid');
   const target = assertTarget(record['target']);
   const request = projectRequest(record['request']);
   if (request['explain'] === true) {
@@ -1427,7 +1427,7 @@ export function compactContextForHost(value: unknown): Readonly<Record<string, u
     schema: 'host-context.v2',
     hash_prefix: 'sha256:',
     source_hash_encoding: 'sha256-base64url',
-    workspace: Object.freeze([workspaceId, hashSuffix(workspace['source_hash']), workspace['brain_binding']]),
+    workspace: Object.freeze([workspaceId, hashSuffix(workspace['source_hash']), workspace['brain_configured'] ? 1 : 0]),
     target: Object.freeze([target.qualified, hashSuffix(agentDefinition['fragment_hash'])]),
     request: trimTrailingNulls([
       request['query'],

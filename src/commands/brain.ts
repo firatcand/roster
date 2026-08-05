@@ -1,7 +1,13 @@
 import chalk from 'chalk';
-import { createBrainPool, resolveBrainUrl, withBrainClient } from '../lib/brain/connect.ts';
-import { runMigrations, pendingMigrations } from '../lib/brain/migrate.ts';
-import { ensureRuntimeRole, buildRuntimeUrl, RUNTIME_ROLE } from '../lib/brain/roles.ts';
+import {
+  createBrainPool,
+  initializeCleanBrain,
+  resolveBrainDoctorRoleName,
+  resolveBrainUrl,
+  withBrainClient,
+} from '../lib/brain/connect.ts';
+import { pendingMigrations } from '../lib/brain/migrate.ts';
+import { RUNTIME_ROLE } from '../lib/brain/roles.ts';
 import { runDoctor } from '../lib/brain/doctor.ts';
 import { saveEntity } from '../lib/brain/save.ts';
 import type { FactPair } from '../lib/brain-args.ts';
@@ -13,7 +19,6 @@ import { createTable, listTables } from '../lib/brain/table.ts';
 import { runReadOnlyQuery } from '../lib/brain/sql.ts';
 import { mountFile } from '../lib/brain/mount.ts';
 import { exportBrain, type ExportFormat } from '../lib/brain/export.ts';
-import { importBrain } from '../lib/brain/import.ts';
 import { loadConfig, setConfig, getConfigRows } from '../lib/brain/config.ts';
 import { resolveEmbedder } from '../lib/brain/embed.ts';
 import { filesConfig, createS3FileStore, type FileStore } from '../lib/brain/s3.ts';
@@ -32,6 +37,7 @@ import {
 import { EXIT_OK, EXIT_ERROR, RosterError } from '../lib/errors.ts';
 
 export type BrainInitOptions = {
+  cwd: string;
   json: boolean;
   silent: boolean;
   embeddings: boolean;
@@ -40,6 +46,7 @@ export type BrainInitOptions = {
 };
 
 export type BrainDoctorOptions = {
+  cwd: string;
   json: boolean;
   silent: boolean;
   adminUrl?: string;
@@ -47,62 +54,54 @@ export type BrainDoctorOptions = {
 };
 
 export async function executeBrainInit(opts: BrainInitOptions): Promise<number> {
-  const adminUrl = opts.adminUrl ?? resolveBrainUrl('admin');
-  const roleName = opts.role ?? RUNTIME_ROLE;
-  const pool = createBrainPool('admin', adminUrl);
-  try {
-    const migration = await runMigrations(pool);
-    const role = await withBrainClient(pool, (client) => ensureRuntimeRole(client, roleName));
-    const runtimeUrl = role.password ? buildRuntimeUrl(adminUrl, role.password, roleName) : null;
-    const adminRole = role.creatorGrantRemains
-      ? (await pool.query<{ u: string }>(`SELECT quote_ident(current_user) AS u`)).rows[0]!.u
-      : null;
+  const initialized = await initializeCleanBrain({
+    cwd: opts.cwd,
+    ...(opts.adminUrl === undefined ? {} : { adminUrl: opts.adminUrl }),
+    role: opts.role ?? RUNTIME_ROLE,
+  });
+  const migration = initialized.bootstrap.migrations;
+  const role = initialized.bootstrap.role;
+  const adminRole = initialized.adminRole;
+  const roleName = role.roleName;
 
-    if (opts.json) {
-      console.log(
-        JSON.stringify(
-          {
-            ok: true,
-            applied: migration.applied,
-            skipped: migration.skipped,
-            roleCreated: role.created,
-            embeddings: opts.embeddings,
-            runtimeUrl: runtimeUrl,
-            creatorGrantRemains: role.creatorGrantRemains,
-          },
-          null,
-          2,
-        ),
-      );
-    } else if (!opts.silent) {
-      console.log('');
-      console.log(chalk.bold('roster brain init'));
-      console.log(`  ${chalk.green('✓')} migrations applied: ${migration.applied.length}, up-to-date: ${migration.skipped.length}`);
-      console.log(`  ${chalk.green('✓')} runtime role ${role.created ? 'created' : 'already present'}`);
-      if (role.creatorGrantRemains) {
-        console.log(`  ${chalk.yellow('⚠')} could not revoke the creator's membership in ${roleName} (stock PG16`);
-        console.log(`    records it as bootstrap-granted). 'brain doctor' will stay red on no-inbound-members`);
-        console.log(`    until a superuser runs: ${chalk.bold(`REVOKE ${roleName} FROM ${adminRole};`)}`);
-      }
-      if (runtimeUrl) {
-        console.log('');
-        console.log(chalk.yellow('  Runtime connection string (shown once — store it now):'));
-        console.log(`  ${runtimeUrl}`);
-      }
-      console.log('');
-      console.log(chalk.dim('  Semantic search embeddings are OFF (no paid API calls).'));
-      console.log(chalk.dim('  Enable: roster brain config set embeddings.enabled true  (needs OPENAI_API_KEY)'));
-      console.log('');
+  if (opts.json) {
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          applied: migration.applied,
+          skipped: migration.skipped,
+          roleCreated: role.created,
+          roleName,
+          embeddings: opts.embeddings,
+          creatorGrantRemains: role.creatorGrantRemains,
+        },
+        null,
+        2,
+      ),
+    );
+  } else if (!opts.silent) {
+    console.log('');
+    console.log(chalk.bold('roster brain init'));
+    console.log(`  ${chalk.green('✓')} migrations applied: ${migration.applied.length}, up-to-date: ${migration.skipped.length}`);
+    console.log(`  ${chalk.green('✓')} runtime role ${roleName} ${role.created ? 'created' : 'already present'}`);
+    if (role.creatorGrantRemains) {
+      console.log(`  ${chalk.yellow('⚠')} could not revoke the creator's membership in ${roleName} (stock PG16`);
+      console.log(`    records it as bootstrap-granted). 'brain doctor' will stay red on no-inbound-members`);
+      console.log(`    until a superuser runs: ${chalk.bold(`REVOKE ${roleName} FROM ${adminRole};`)}`);
     }
-    return EXIT_OK;
-  } finally {
-    await pool.end();
+    console.log(`  ${chalk.green('✓')} ambient runtime credential verified`);
+    console.log('');
+    console.log(chalk.dim('  Semantic search embeddings are OFF (no paid API calls).'));
+    console.log(chalk.dim('  Enable: roster brain config set embeddings.enabled true  (needs OPENAI_API_KEY)'));
+    console.log('');
   }
+  return EXIT_OK;
 }
 
 export async function executeBrainDoctor(opts: BrainDoctorOptions): Promise<number> {
+  const roleName = resolveBrainDoctorRoleName(opts.cwd, opts.role ?? RUNTIME_ROLE);
   const adminUrl = opts.adminUrl ?? resolveBrainUrl('admin');
-  const roleName = opts.role ?? RUNTIME_ROLE;
   const pool = createBrainPool('admin', adminUrl);
   try {
     const report = await runDoctor(pool, roleName);
@@ -670,20 +669,13 @@ export type BrainImportOptions = {
   adminUrl?: string;
 };
 
-export async function executeBrainImport(opts: BrainImportOptions): Promise<number> {
-  const adminUrl = opts.adminUrl ?? resolveBrainUrl('admin');
-  const pool = createBrainPool('admin', adminUrl);
-  try {
-    const result = await importBrain(pool, opts.dir);
-    if (opts.json) {
-      console.log(JSON.stringify({ ok: true, ...result }, null, 2));
-    } else {
-      console.log(
-        `${chalk.green('✓')} restored ${result.totalRows} row(s) across ${result.tables.length} table(s) (${result.format})`,
-      );
-    }
-    return EXIT_OK;
-  } finally {
-    await pool.end();
-  }
+export async function executeBrainImport(_opts: BrainImportOptions): Promise<number> {
+  throw new RosterError({
+    header: `${chalk.red.bold('roster:')} legacy Brain import is disabled`,
+    body: '  The legacy import path cannot prove that the target Brain belongs to this workspace.',
+    remedy: '  Keep the backup unchanged and use the reviewed workspace migration path when it is available.',
+    exitCode: EXIT_ERROR,
+    code: 'BRAIN_LEGACY_COMMAND_DISABLED',
+    details: { command: 'brain import' },
+  });
 }

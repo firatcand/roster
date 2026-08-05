@@ -106,7 +106,7 @@ test('ROSTER.md renders one ordered lifecycle, exact context recovery, and every
   for (const trust of CONTEXT_TRUST_CLASSES) assert.match(rendered, new RegExp(`\\\`${trust}\\\``));
   for (const code of [
     'IDENTITY_AMBIGUOUS',
-    'BRAIN_NOT_BOUND',
+    'BRAIN_NOT_CONFIGURED',
     'CONTEXT_BUDGET_REQUIRED_OVERFLOW',
     'CONTEXT_MANDATORY_UNSERVABLE',
   ] as const) {
@@ -181,7 +181,7 @@ test('Claude and Codex wrappers are minimal pointers with no duplicated lifecycl
     assert.match(wrapper, /Read and follow `ROSTER\.md`/);
     assert.match(wrapper, /roster doctor --json/);
     assert.match(wrapper, /the human owns approval decisions/);
-    assert.doesNotMatch(wrapper, /roster discover|roster context|IDENTITY_AMBIGUOUS|BRAIN_NOT_BOUND/);
+    assert.doesNotMatch(wrapper, /roster discover|roster context|IDENTITY_AMBIGUOUS|BRAIN_NOT_CONFIGURED/);
     assert.doesNotMatch(wrapper, /`roster (?:run|schedule|pending|ops|brain save|brain event)\b/);
     assert.doesNotMatch(wrapper, /plan executor|scheduler|provider router|approval authority/);
     assert.doesNotMatch(wrapper, /owns[^.]*human decisions/);
