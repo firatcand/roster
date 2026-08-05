@@ -156,9 +156,10 @@ phases:
         estimate: "M"
         owner_type: "db-architect"
         acceptance:
-          - "Strict optional roster.yaml Brain configuration stores the stable workspace_id, an Infisical path/reference, and normalized non-secret S3 bucket/root-prefix organization without credentials."
-          - "A create-once protected database singleton records the same workspace ID and S3 namespace fingerprint; identical clean initialization is idempotent, while a nonempty unidentified Brain requires explicit reviewed adoption."
-          - "Every physical admin or runtime connection performs only the protected-metadata handshake before company-content SQL, S3 access, or mutation; missing, migrating, workspace-mismatch, and namespace-mismatch states fail closed with redacted diagnostics."
+          - "Strict optional roster.yaml Brain configuration stores the stable workspace_id, an Infisical path/reference, and normalized non-secret S3 bucket/optional-root-prefix organization without credentials."
+          - "One transaction on one locked physical client creates migrations, the protected singleton identity, and grants for a truly uninitialized database; identical initialization is idempotent, while any nonempty unidentified Brain requires explicit reviewed adoption without mutation."
+          - "Every authority-managed physical admin or runtime connection performs only the protected-metadata handshake before exposing caller SQL; missing, migrating, workspace-mismatch, and namespace-mismatch states fail closed with redacted diagnostics. P2-T15 owns routing doctor and every retained public Brain command through this API."
+          - "Legacy brain import remains parser-recognized but returns BRAIN_LEGACY_COMMAND_DISABLED before workspace, credential, URL, pool, filesystem, or database access and cannot apply the authority migration; P2-T15 generalizes this fail-closed policy."
           - "The runtime path can read but cannot mutate protected identity, and a checkout relocation carrying the same authored workspace ID reaches the same remote Brain."
           - "S3 endpoint and namespace validation is bounded, secret-free, and fail-closed; this task never reads, writes, or deletes company object bytes."
           - "Context exposes brain_configured and preserves the existing nonfatal local-only BRAIN_NOT_CONFIGURED behavior without adding host approval gates, hooks, or runtime state machines."
@@ -341,6 +342,7 @@ phases:
           - Files and fetched media derive checkout-independent continuing identity; inline text, structured records, and produced artifacts require a bounded host-supplied stable key.
           - Immutable objects, logical sources, source versions, typed retrieval labels, privacy/trust/actor assurance, tombstones, and durable ingest intents are stored without Brain-space or cross-scope RLS tenancy.
           - One content-addressed flow performs durable prepare, S3 create-or-verify, and transactional publish without holding a database transaction across S3.
+          - Every S3 request enforces the tracked HTTPS origin and exact host/port, resolves through a bounded policy, and revalidates all resolved addresses at request time so DNS rebinding cannot reach localhost, private, link-local, or other forbidden targets.
           - Identical retries converge; changed requests conflict; changed bytes preserve history; concurrent divergent publishes cannot rewind current; exact tombstone restoration is atomic.
           - Report-first inspection and explicit repair resume only provable intent-owned work after every Postgres/S3 failure boundary; missing bytes are never fabricated or silently adopted.
           - Phase-2 lifecycle operations never delete S3 objects, and focused identity, immutability, concurrency, relocation, policy, and recovery tests pass.
