@@ -42,6 +42,15 @@ src/lib/persistence/**
 src/commands/ops.ts
 data/ops/schema/**
 
+# Brain source lifecycle — immutable company data, authority-verified Postgres
+# mutation, and an exact-origin S3 network boundary
+src/lib/brain/source-*.ts
+src/lib/brain/object-store.ts
+src/lib/brain/s3-network-policy.ts
+src/lib/network-address.ts
+src/lib/brain/roles.ts
+data/brain/schema/**
+
 # Run + artifact ledger (#323) — trust taxonomy, sealed provenance, sanitized
 # index projections, and the admin-only version-id repair (mutates users' ops DB)
 src/commands/run.ts
