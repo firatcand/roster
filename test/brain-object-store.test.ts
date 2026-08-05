@@ -138,6 +138,8 @@ test('create-or-verify is create-only, converges races, and keeps ETag opaque', 
 
   const created = await store.createOrVerify({ sha256, bytes, contentType: 'text/plain' });
   assert.equal(created.outcome, 'stored');
+  assert.equal(created.key, brainObjectKey(undefined, sha256));
+  assert.equal(transport.objects.has(brainObjectKey('workspace', sha256)), true);
   assert.equal(created.etag, '"opaque-etag-not-a-digest"');
   assert.notEqual(created.etag, sha256);
 

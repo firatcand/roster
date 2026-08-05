@@ -248,6 +248,7 @@ export class ContentAddressedBrainObjectStore implements BrainObjectStore {
     if (actualDigest !== input.sha256) {
       throw new BrainObjectStoreError('OBJECT_DIGEST_MISMATCH', 'object bytes do not match their declared digest');
     }
+    const objectKey = brainObjectKey(undefined, input.sha256);
     const key = brainObjectKey(this.rootPrefix, input.sha256);
     const body = Buffer.from(input.bytes);
     try {
@@ -260,7 +261,7 @@ export class ContentAddressedBrainObjectStore implements BrainObjectStore {
       });
       return {
         outcome: 'stored',
-        ...toObservation(key, input.sha256, body.byteLength, stored),
+        ...toObservation(objectKey, input.sha256, body.byteLength, stored),
       };
     } catch (error) {
       const conditional = isConditionalConflict(error);
@@ -297,6 +298,7 @@ export class ContentAddressedBrainObjectStore implements BrainObjectStore {
   }): Promise<BrainObjectInspection> {
     assertDigest(input.sha256);
     assertByteLength(input.byteLength);
+    const objectKey = brainObjectKey(undefined, input.sha256);
     const key = brainObjectKey(this.rootPrefix, input.sha256);
     const versionId = observationValue(input.versionId ?? undefined, 'version ID');
     const objectInput: TransportObjectInput = {
@@ -305,34 +307,34 @@ export class ContentAddressedBrainObjectStore implements BrainObjectStore {
       ...(versionId === null ? {} : { versionId }),
     };
     const head = await this.transport.head(objectInput);
-    if (head === null) return { status: 'missing', key };
+    if (head === null) return { status: 'missing', key: objectKey };
     if (!Number.isSafeInteger(head.contentLength) || head.contentLength !== input.byteLength) {
-      return { status: 'corrupt', key, reason: 'size' };
+      return { status: 'corrupt', key: objectKey, reason: 'size' };
     }
     const object = await this.transport.get(objectInput);
-    if (object === null) return { status: 'missing', key };
+    if (object === null) return { status: 'missing', key: objectKey };
     if (object.contentLength !== undefined
       && (!Number.isSafeInteger(object.contentLength) || object.contentLength !== input.byteLength)) {
       destroyBody(object.body);
-      return { status: 'corrupt', key, reason: 'size' };
+      return { status: 'corrupt', key: objectKey, reason: 'size' };
     }
     let hashed: { digest: string; byteLength: number };
     try {
       hashed = await hashBody(object.body, input.byteLength);
     } catch (error) {
       if (error instanceof BrainObjectStoreError && error.code === 'OBJECT_BODY_LIMIT') {
-        return { status: 'corrupt', key, reason: 'size' };
+        return { status: 'corrupt', key: objectKey, reason: 'size' };
       }
       if (error instanceof BrainObjectStoreError && error.code === 'INVALID_S3_RESPONSE') {
-        return { status: 'corrupt', key, reason: 'body' };
+        return { status: 'corrupt', key: objectKey, reason: 'body' };
       }
       throw error;
     }
-    if (hashed.byteLength !== input.byteLength) return { status: 'corrupt', key, reason: 'size' };
-    if (hashed.digest !== input.sha256) return { status: 'corrupt', key, reason: 'digest' };
+    if (hashed.byteLength !== input.byteLength) return { status: 'corrupt', key: objectKey, reason: 'size' };
+    if (hashed.digest !== input.sha256) return { status: 'corrupt', key: objectKey, reason: 'digest' };
     return {
       status: 'verified',
-      ...toObservation(key, input.sha256, input.byteLength, {
+      ...toObservation(objectKey, input.sha256, input.byteLength, {
         etag: object.etag ?? head.etag,
         versionId: object.versionId ?? head.versionId,
       }),

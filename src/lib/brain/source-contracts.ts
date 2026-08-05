@@ -290,6 +290,10 @@ export function normalizeSourceProvenance(value: unknown): SourceJsonObject {
   return cloned as SourceJsonObject;
 }
 
+export function normalizeSourceRequestKey(value: unknown): string {
+  return boundedString('requestKey', value, MAX_SOURCE_REQUEST_KEY_BYTES, { pattern: STABLE_KEY });
+}
+
 export function normalizeCanonicalHttpsUrl(value: unknown): string {
   const raw = boundedString('source.canonicalUrl', value, MAX_SOURCE_URL_BYTES);
   if (raw.includes('\\')) sourceFailure('source.canonicalUrl', 'backslashes are not canonical URL separators');
@@ -517,7 +521,7 @@ export function normalizeSourceIngest(workspaceId: string, input: SourceIngestIn
     ? 'application/octet-stream'
     : boundedString('mediaType', input.mediaType, MAX_MEDIA_TYPE_BYTES, { pattern: MEDIA_TYPE });
   return Object.freeze({
-    requestKey: boundedString('requestKey', input.requestKey, MAX_SOURCE_REQUEST_KEY_BYTES, { pattern: STABLE_KEY }),
+    requestKey: normalizeSourceRequestKey(input.requestKey),
     expectedTombstoneId: input.expectedTombstoneId === undefined || input.expectedTombstoneId === null
       ? null
       : SHA256.test(input.expectedTombstoneId)
