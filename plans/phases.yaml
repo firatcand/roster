@@ -7,10 +7,10 @@ gate_check_command: "pnpm typecheck && pnpm build && pnpm test && pnpm test:scaf
 source:
   tracker: "github"
   project_id: "340"
-  synced_at: "2026-08-04T01:06:46.539Z"
+  synced_at: "2026-08-05T08:44:51.407Z"
   spec_revision: "64ee06389fcff2acdea838594b59a29f3cee9957"
   tracker_url: "https://github.com/firatcand/roster/issues/340"
-  tracker_revision: "github:2026-08-04T01:06:05Z"
+  tracker_revision: "github:2026-08-05T08:43:49Z"
 
 phases:
   - id: "phase-1"
@@ -148,20 +148,20 @@ phases:
     tasks:
       - id: "P2-T01"
         tracker_issue_id: "351"
-        title: "Stabilize company Brain identity and source lifecycle"
-        description: "Bind each logical Roster workspace to exactly one workspace-owned PostgreSQL database and one configured S3 namespace. Add tracked non-secret Brain organization in roster.yaml, a protected matching database workspace_id, immutable logical source versions, recoverable S3/Postgres ingest intents, privacy/trust classification, tombstones, and checkout-independent provenance while preserving useful structured knowledge and graph history. The database is the workspace isolation boundary; workspace/function/agent/plan scopes are retrieval labels, not authorization principals."
-        type: "data"
+        title: "Establish workspace Brain authority"
+        description: "Give each logical Roster workspace one portable non-secret Brain identity and one protected PostgreSQL/S3 authority before adding company-content lifecycle behavior. The database is the workspace isolation boundary; workspace/function/agent/plan scopes remain retrieval labels rather than authorization principals."
+        type: "foundation"
         priority: "P0"
         depends_on: ["P1-T07"]
-        estimate: "L"
+        estimate: "M"
         owner_type: "db-architect"
         acceptance:
-          - File and fetched-media ingest derive logical source identity automatically; inline text, structured records, and produced artifacts require a host-supplied stable key. Every accepted ingest stores or reuses immutable bytes and converges to one recoverable current source version.
-          - Identical retries do not duplicate current versions; changed content preserves history, and checkout relocation does not change logical workspace or source identity.
-          - Tracked roster.yaml declares stable workspace_id, the Infisical secret reference/path, and non-secret S3 namespace configuration without storing credentials; a mismatch stops after the protected-metadata handshake and before company-content reads, S3 access, or mutation.
-          - Workspace/function/agent/plan scopes are typed retrieval labels; privacy, trust, actor assurance, current-version, tombstone, and secret-content policies are enforced without treating scopes as database authorization.
-          - Admin and least-privilege runtime roles are separated; runtime cannot mutate schema, protected workspace identity/provenance, or bypass the closed Brain write surface.
-          - Postgres/S3 partial failures resume or reconcile; absolute paths survive only as legacy locators, and existing structured knowledge, graph history, and verifiable S3 data migrate in place without a Brain-space wrapper or permanent compatibility shim.
+          - "Strict optional roster.yaml Brain configuration stores the stable workspace_id, an Infisical path/reference, and normalized non-secret S3 bucket/root-prefix organization without credentials."
+          - "A create-once protected database singleton records the same workspace ID and S3 namespace fingerprint; identical clean initialization is idempotent, while a nonempty unidentified Brain requires explicit reviewed adoption."
+          - "Every physical admin or runtime connection performs only the protected-metadata handshake before company-content SQL, S3 access, or mutation; missing, migrating, workspace-mismatch, and namespace-mismatch states fail closed with redacted diagnostics."
+          - "The runtime path can read but cannot mutate protected identity, and a checkout relocation carrying the same authored workspace ID reaches the same remote Brain."
+          - "S3 endpoint and namespace validation is bounded, secret-free, and fail-closed; this task never reads, writes, or deletes company object bytes."
+          - "Context exposes brain_configured and preserves the existing nonfatal local-only BRAIN_NOT_CONFIGURED behavior without adding host approval gates, hooks, or runtime state machines."
 
       - id: "P2-T02"
         tracker_issue_id: "370"
@@ -169,7 +169,7 @@ phases:
         description: "Separate versioned extraction and indexing from source identity: current-version text/chunks, lexical indexes, privacy-permitted optional embeddings, resumable reindex, extractor/model metadata, and correct keyless behavior."
         type: "data"
         priority: "P0"
-        depends_on: ["P2-T01"]
+        depends_on: [P2-T13]
         estimate: "L"
         owner_type: "db-architect"
         acceptance:
@@ -188,7 +188,8 @@ phases:
         estimate: "L"
         owner_type: "backend-dev"
         acceptance:
-          - Default retrieval excludes superseded, tombstoned, scope-ineligible, and privacy-incompatible content.
+          - Default retrieval excludes superseded, tombstoned, scope-ineligible, privacy-incompatible, and legacy-unverified content.
+          - A host may explicitly request legacy-unverified evidence; returned items retain that trust label and can never become authority, policy, or instructions.
           - Keyword/structured retrieval remains correct when embeddings are disabled or unavailable.
           - Every result resolves exact source/object/extractor versions, locator, trust/privacy class, scope, and retrieval reason.
           - Structured entities/facts/events/edges and document extracts can coexist in one bounded context without provenance loss.
@@ -244,7 +245,7 @@ phases:
         description: "Extract a minimal Brain-backed evidence core for completed runs, artifacts, source/tool summaries, outcomes, feedback, and action-digest-bound human decisions. Keep it separate from semantic company knowledge and delete assumptions that evidence advances execution."
         type: "data"
         priority: "P0"
-        depends_on: ["P2-T01", "P1-T07"]
+        depends_on: ["P2-T13", "P1-T07"]
         estimate: "L"
         owner_type: "backend-dev"
         acceptance:
@@ -327,6 +328,102 @@ phases:
           - Real cited Brain context and real external tool provenance are present; Roster contains no business-specific executor.
           - Completed evidence makes Dreamer due, a human-approved candidate becomes a lesson, and the lesson affects the next applicable context.
           - Retrieval/context quality, secret safety, scope-selection correctness, idempotency, and interruption recovery thresholds pass.
+      - id: P2-T13
+        tracker_issue_id: GH-381
+        title: Build recoverable Brain source lifecycle
+        description: Define checkout-independent logical source identity, immutable source versions, content-addressed object storage, tombstones, and one resumable Postgres/S3 ingestion path. Roster receives bytes and metadata selected by Claude Code or Codex; it does not fetch providers, extract or retrieve content, execute plans, schedule work, or approve actions.
+        type: data
+        priority: P0
+        depends_on: [P2-T01]
+        estimate: L
+        owner_type: db-architect
+        acceptance:
+          - Files and fetched media derive checkout-independent continuing identity; inline text, structured records, and produced artifacts require a bounded host-supplied stable key.
+          - Immutable objects, logical sources, source versions, typed retrieval labels, privacy/trust/actor assurance, tombstones, and durable ingest intents are stored without Brain-space or cross-scope RLS tenancy.
+          - One content-addressed flow performs durable prepare, S3 create-or-verify, and transactional publish without holding a database transaction across S3.
+          - Identical retries converge; changed requests conflict; changed bytes preserve history; concurrent divergent publishes cannot rewind current; exact tombstone restoration is atomic.
+          - Report-first inspection and explicit repair resume only provable intent-owned work after every Postgres/S3 failure boundary; missing bytes are never fabricated or silently adopted.
+          - Phase-2 lifecycle operations never delete S3 objects, and focused identity, immutability, concurrency, relocation, policy, and recovery tests pass.
+        write_globs:
+          - data/brain/schema/*source*
+          - src/lib/brain/source-*
+          - src/lib/brain/object-store.ts
+          - src/lib/brain/ingest.ts
+          - test/brain-source-*
+          - test/brain-ingest-*
+      - id: P2-T14
+        tracker_issue_id: GH-382
+        title: Inventory legacy Brain state
+        description: Create a deterministic, bounded, redacted inventory of legacy PostgreSQL and S3 state before lifecycle backfill. This ticket reads and reports only; it performs no schema migration, source derivation, object copy, backfill, role change, adopter mutation, schedule removal, or public import/export.
+        type: data
+        priority: P0
+        depends_on: [P2-T01]
+        estimate: M
+        owner_type: db-architect
+        acceptance:
+          - A bounded inventory records migration and schema hashes, table definitions, row counts and stable IDs, role/default-ACL state, custom tables, legacy content structures, and all S3 versions and delete markers.
+          - Absolute, temporary, and foreign paths; reused hashes; missing bytes; mutable-key history; ETag or version drift; and ambiguous ownership become explicit redacted findings.
+          - Canonical manifest bytes and digest are deterministic across retries, and pagination or resume cannot omit or duplicate rows or object history.
+          - Reports contain no credentials, secret values, company-content bodies, URLs with userinfo, or complete absolute paths.
+          - A compact sanitized fixture proves multiple object versions, delete markers, drift, missing bytes, custom tables, and deterministic replay without accessing my-roster or roster-lobu.
+          - Inventory is read-only and never deletes PostgreSQL rows or S3 objects.
+        write_globs:
+          - src/lib/brain/*inventory*
+          - src/lib/brain/backup-shared.ts
+          - src/lib/persistence/s3-core.ts
+          - test/brain-legacy-inventory.test.ts
+          - test/fixtures/brain-legacy-*
+      - id: P2-T15
+        tracker_issue_id: GH-383
+        title: Close and expose Brain runtime
+        description: Expose the verified source pipeline to Claude Code and Codex through the canonical Brain CLI while replacing direct database mutation with fixed least-privilege runtime operations. The host remains responsible for interpreting plans and invoking tools; Roster adds no workflow reducer, provider executor, scheduler, queue, or approval authority.
+        type: integration
+        priority: P0
+        depends_on: [P2-T13]
+        estimate: L
+        owner_type: backend-dev
+        acceptance:
+          - The runtime role cannot create, alter, or drop schema; own protected objects; change workspace identity or provenance; bypass fixed brokers; or directly mutate lifecycle state.
+          - Brain init, ingest, doctor, fs, semantic writes, and every retained command use verified workspace authority; doctor and migration diagnostics may inspect protected metadata before identity is ready but cannot read company content or touch S3.
+          - "Legacy spellings mount, table, sql, config, reindex, gc, export, and import remain recognized but fail closed with stable diagnostics until their one-way removal in #363."
+          - "Brain query remains recognized but fails with BRAIN_RETRIEVAL_NOT_READY until #370 and #352; default context excludes legacy-unverified evidence while preserving it for explicit future retrieval."
+          - Save, event, link, and merge cite an immutable structured-record source version, and fs removal records a tombstone without deleting S3 bytes.
+          - CLI parsing, help, JSON errors, skills, templates, docs, negative role tests, and both existing host harnesses pass without API-key-only dependencies.
+        write_globs:
+          - data/brain/schema/*runtime*
+          - src/commands/brain.ts
+          - src/lib/brain-args.ts
+          - src/lib/brain/roles.ts
+          - src/lib/brain/doctor.ts
+          - src/lib/brain/fs.ts
+          - src/lib/brain/{save,event,link,merge,get}.ts
+          - src/bin/roster.ts
+          - test/brain-runtime-*
+          - test/cli-brain.test.ts
+          - README.md
+          - docs/{API,HOWTO}.md
+          - skills/brain/SKILL.md
+      - id: P2-T16
+        tracker_issue_id: GH-384
+        title: Backfill legacy Brain history
+        description: "Compose an approved legacy inventory manifest with the production source pipeline to preserve structured knowledge, graph history, source lineage, and verifiable object history. This ticket provides internal backfill and repair primitives only; #363 remains responsible for the real adopter dry-run/apply cutover."
+        type: data
+        priority: P0
+        depends_on: [P2-T13, P2-T14]
+        estimate: L
+        owner_type: db-architect
+        acceptance:
+          - Backfill accepts only the exact approved inventory digest, acquires the remote migration lock, and resumes idempotently from durable progress without rereading unapproved state.
+          - Existing entities, aliases, facts, events, edges, merges, mounts, documents, file history, IDs, timestamps, redirects, and verifiable S3 bytes remain intact with legacy-unverified source lineage.
+          - Proven workspace-relative paths retain stable identity; absolute paths become non-authoritative legacy locators; temporary, foreign, ambiguous, drifted, and missing-byte inputs are never guessed.
+          - Equal bytes may reuse one immutable object without merging logical sources; put, remove, and re-put history preserves tombstones; chunks never fabricate unavailable raw bytes.
+          - Crash recovery and repeated repair converge without changing original rows or keys, deleting S3 objects, or making legacy-unverified evidence eligible for default retrieval.
+          - Sanitized tests prove exact count and ID parity, S3-version matching, conflicts, resume, and no access to real my-roster or roster-lobu adopters.
+        write_globs:
+          - src/lib/brain/legacy-*
+          - src/lib/persistence/migrate-core.ts
+          - test/brain-legacy-backfill.test.ts
+          - test/fixtures/brain-legacy-*
 
   - id: "phase-3"
     name: "Breaking Simplification and Launch"
@@ -426,16 +523,18 @@ phases:
         description: "Implement fingerprinted dry-run/apply migration for registry paths, structured plans, tool-use definitions, the tracked one-workspace Brain contract and in-place source-lifecycle upgrade, portable evidence, lessons, host adapters, Infisical key references, schedule removal, and general-ops archival without permanent compatibility code."
         type: "infra"
         priority: "P0"
-        depends_on: ["P3-T01", "P3-T02", "P3-T03", "P2-T02", "P2-T03"]
+        depends_on: ["P3-T01", "P3-T02", "P3-T03", "P2-T02", "P2-T03", P2-T16]
         estimate: "L"
         owner_type: "backend-dev"
         acceptance:
           - Dry run classifies every preserve/transform/import/archive/delete/decision action and records fingerprints, conflicts, backup, the intended stable workspace_id, tracked non-secret Brain configuration, database identity state, configured S3 namespace, and possible secret-key locations without secret values.
           - Apply revalidates the dry-run fingerprints, acquires the workspace and remote migration locks, writes local files atomically, resumes remote idempotency state, and emits a redacted audit report.
+          - Apply refuses to cut over until P2-T02 extraction/indexing and P2-T03 cited retrieval are complete and verified, so no migrated adopter Brain becomes write-only.
           - For a database with no protected identity, migration initializes the approved logical workspace's workspace_id; an existing different identity, ambiguous workspace identity, or unvalidated bucket/root prefix fails closed after only the protected-metadata handshake and before company-content reads, S3 access, or mutation, and becomes an explicit human-decision item.
           - "Each existing workspace Brain upgrades in place into its own database and S3 namespace: migration creates or updates the tracked roster.yaml Brain description, converts source identity and immutable versions, retains absolute paths only as legacy locators, and preserves verifiable structured knowledge, graph history, and object data."
           - Migration does not create brain_spaces, workspace_bindings, per-binding credentials, cross-workspace/cross-scope RLS, or a synthetic company-space wrapper; existing tables and S3 keys remain backed up and readable for verification until the one-way cutover completes, with no permanent dual-write or compatibility shim.
           - Legacy logs, actors, approvals, and candidates import only as legacy-unverified; Infisical key names become references without reading or persisting values.
+          - The reviewed one-way cutover removes legacy Brain spellings mount, table, sql, config, reindex, gc, export, and import; phase-2 retains only fail-closed diagnostic recognition.
           - Only exact Roster-managed cron targets are removed with consent; host-native schedules and authored edits are preserved.
 
       - id: "P3-T07"
