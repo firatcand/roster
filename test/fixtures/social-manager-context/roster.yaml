@@ -1,7 +1,10 @@
 schema_version: 2
 workspace_id: social-manager-context
 brain:
-  binding: company-brain
+  secrets_path: /social-manager-context
+  storage:
+    bucket: social-manager-context-vault
+    region: eu-central-1
 functions:
   gtm:
     path: functions/gtm

@@ -1,6 +1,6 @@
 ---
 name: brain
-description: "Front door to the roster brain — the workspace's shared, append-only Postgres memory. Use when the user asks to remember/record/look up team knowledge (competitors, posts, metrics, accounts, people), to search the brain, or to set up/configure it. Routes to `roster brain <verb>` (save/get/event/link/merge/query/table/mount/fs/config/export/import) and follows the brain-first protocol. Triggers on /brain or when a request is about persistent team knowledge in a roster workspace."
+description: "Front door to the roster brain — the workspace's shared, append-only Postgres memory. Use when the user asks to remember/record/look up team knowledge (competitors, posts, metrics, accounts, people), to search the brain, or to set up/configure it. Routes to `roster brain <verb>` (save/get/event/link/merge/query/table/mount/fs/config/export) and follows the brain-first protocol. Triggers on /brain or when a request is about persistent team knowledge in a roster workspace."
 version: "1.0.0"
 trigger_conditions:
   - "User invokes /brain"
@@ -17,12 +17,13 @@ the brain's state.
 
 ## Is there a brain here?
 
-A brain is configured when the runtime connection `ROSTER_BRAIN_URL` is set in the
-environment (that's what the read/write verbs use). If it's unset — or any `roster
-brain` verb reports the connection env var is missing — this workspace has **no brain
-configured**: tell the user how to set one up (see *Setup* below) and stop; do not
-invent a local substitute. (`roster brain doctor` is an admin-side diagnostic and needs
-`ROSTER_BRAIN_ADMIN_URL`, so don't rely on it to detect a runtime brain.)
+A brain is configured when `roster.yaml` contains its tracked `brain` block. The
+read/write verbs additionally require `ROSTER_BRAIN_URL` from the configured Infisical
+path. If the block is absent, explain that no brain is configured. If the block exists
+but the environment variable is missing, explain that runtime credentials are not
+injected and follow *Setup* below; do not invent a local substitute. (`roster brain
+doctor` is an admin-side diagnostic and needs `ROSTER_BRAIN_ADMIN_URL`, so don't rely on
+it to detect a runtime brain.)
 
 ## Brain-first protocol
 
@@ -86,16 +87,21 @@ Everything stays on the host subscription and the `roster brain` verbs.
 | List stored files | `roster brain fs ls [--kind <k> [--slug <s>]]` |
 | Remove a stored file (tombstone) | `roster brain fs rm --kind <k> --slug <s> <filename>` |
 | Settings | `roster brain config get` · `roster brain config set <key> <value>` |
-| Backup / restore | `roster brain export [--out <dir>]` · `roster brain import <dir>` |
+| Backup | `roster brain export [--out <dir>]` |
 
 Add `--json` to any verb for machine-readable output.
 
 ## Setup
 
-The brain is **bring-your-own Neon** (or any Postgres): the connection string lives in
-Infisical, never in `.env`. Provision with `roster brain init` (admin URL), which prints
-a restricted runtime connection string once. Semantic search embeddings are **off** by
-default (no paid API calls) — enable with
+The brain is **bring-your-own Neon** (or any Postgres): connection strings live in
+Infisical, never in `.env`. First run `roster brain init` with the admin URL injected.
+When `ROSTER_BRAIN_URL` is absent, init reports only the expected derived runtime role
+and tracked Infisical path, then stops before database access. The host must generate a
+43-128 character unpadded base64url password (at least 32 random bytes), build the full
+workspace-specific URL with that reported role, and store it at that Infisical path as
+`ROSTER_BRAIN_URL`. Rerun init under ambient injection to provision the database.
+Roster never mints, prints, returns, or stores the runtime password or URL. Semantic
+search embeddings are **off** by default (no paid API calls) — enable with
 `roster brain config set embeddings.enabled true` (needs `OPENAI_API_KEY`). Full
 walkthrough: the **Set up the brain** section of the Roster HOWTO.
 

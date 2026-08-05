@@ -60,7 +60,6 @@ function brainCandidate(options: {
 }): SeedBrainCandidate {
   return {
     candidate_id: options.id,
-    binding: 'company-brain',
     selector: options.selector,
     scope: {
       workspace: 'social-manager-context',

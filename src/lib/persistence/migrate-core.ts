@@ -46,6 +46,91 @@ function sha256(content: string): string {
   return createHash('sha256').update(content, 'utf8').digest('hex');
 }
 
+function sqlCodeOnly(sql: string): string {
+  const chars = [...sql];
+  const masked = [...chars];
+  const hide = (start: number, end: number) => {
+    for (let index = start; index < end; index++) {
+      if (masked[index] !== '\n' && masked[index] !== '\r') masked[index] = ' ';
+    }
+  };
+  let index = 0;
+  while (index < chars.length) {
+    if (chars[index] === '-' && chars[index + 1] === '-') {
+      const start = index;
+      index += 2;
+      while (index < chars.length && chars[index] !== '\n') index++;
+      hide(start, index);
+      continue;
+    }
+    if (chars[index] === '/' && chars[index + 1] === '*') {
+      const start = index;
+      let depth = 1;
+      index += 2;
+      while (index < chars.length && depth > 0) {
+        if (chars[index] === '/' && chars[index + 1] === '*') {
+          depth++;
+          index += 2;
+        } else if (chars[index] === '*' && chars[index + 1] === '/') {
+          depth--;
+          index += 2;
+        } else {
+          index++;
+        }
+      }
+      hide(start, index);
+      continue;
+    }
+    if (chars[index] === "'" || chars[index] === '"') {
+      const quote = chars[index]!;
+      const start = index++;
+      while (index < chars.length) {
+        if (quote === "'" && chars[index] === '\\') {
+          index += 2;
+          continue;
+        }
+        if (chars[index] !== quote) {
+          index++;
+          continue;
+        }
+        if (chars[index + 1] === quote) {
+          index += 2;
+          continue;
+        }
+        index++;
+        break;
+      }
+      hide(start, index);
+      continue;
+    }
+    if (chars[index] === '$' && !/[A-Za-z0-9_$]/u.test(chars[index - 1] ?? '')) {
+      const rest = chars.slice(index).join('');
+      const tag = rest.match(/^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/u)?.[0];
+      if (tag !== undefined) {
+        const start = index;
+        index += [...tag].length;
+        const tail = chars.slice(index).join('');
+        const close = tail.indexOf(tag);
+        index = close === -1 ? chars.length : index + [...tail.slice(0, close + tag.length)].length;
+        hide(start, index);
+        continue;
+      }
+    }
+    index++;
+  }
+  return masked.join('');
+}
+
+function assertTransactionSafeMigration(filename: string, sql: string): void {
+  const code = sqlCodeOnly(sql);
+  if (/\b(?:CREATE|DROP)\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\b/iu.test(code)) {
+    throw new Error(`migration ${filename} contains non-transactional concurrent index DDL`);
+  }
+  if (/(?:^|;)\s*(?:BEGIN|START\s+TRANSACTION|COMMIT|END|ROLLBACK|ABORT|SAVEPOINT|RELEASE(?:\s+SAVEPOINT)?|PREPARE\s+TRANSACTION)\b/iu.test(code)) {
+    throw new Error(`migration ${filename} contains transaction-control SQL`);
+  }
+}
+
 export function loadMigrations(dir: string): MigrationFile[] {
   const entries = readdirSync(dir)
     .filter((f) => /^\d+_.*\.sql$/.test(f))
@@ -63,25 +148,81 @@ export function loadMigrations(dir: string): MigrationFile[] {
     }
     seen.set(prefix, filename);
     const sql = readFileSync(join(dir, filename), 'utf8');
+    assertTransactionSafeMigration(filename, sql);
     files.push({ prefix, filename, sql, sha256: sha256(sql) });
   }
   files.sort((a, b) => a.prefix - b.prefix);
   return files;
 }
 
+type RecordedMigration = { filename: string; sha256: string };
+
 async function recordedMigrations(
   client: pg.PoolClient,
   target: MigrationTarget,
-): Promise<Map<string, string>> {
+): Promise<RecordedMigration[]> {
   const exists = await client.query(
     `SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2`,
     [target.schema, target.table],
   );
-  if (exists.rowCount === 0) return new Map();
+  if (exists.rowCount === 0) return [];
   const rows = await client.query<{ filename: string; sha256: string }>(
-    `SELECT filename, sha256 FROM ${target.schema}.${target.table}`,
+    `SELECT filename, sha256 FROM ${target.schema}.${target.table} ORDER BY filename ASC`,
   );
-  return new Map(rows.rows.map((r) => [r.filename, r.sha256]));
+  return rows.rows;
+}
+
+function validateRecordedMigrations(
+  files: readonly MigrationFile[],
+  recorded: readonly RecordedMigration[],
+): void {
+  if (recorded.length > files.length) {
+    throw new Error('migration ledger is not an exact ordered prefix of the loaded migration set');
+  }
+  const recordedByFilename = new Map(recorded.map((entry) => [entry.filename, entry]));
+  for (let index = 0; index < recorded.length; index++) {
+    const expected = files[index];
+    if (expected === undefined) {
+      throw new Error('migration ledger is not an exact ordered prefix of the loaded migration set');
+    }
+    const actual = recordedByFilename.get(expected.filename);
+    if (actual === undefined) {
+      throw new Error('migration ledger is not an exact ordered prefix of the loaded migration set');
+    }
+    if (actual.sha256 !== expected.sha256) {
+      throw new Error(
+        `migration ${actual.filename} sha256 mismatch: recorded ${actual.sha256}, found ${expected.sha256} (edited migration?)`,
+      );
+    }
+  }
+}
+
+export async function runMigrationsOnClient(
+  client: pg.PoolClient,
+  dir: string,
+  target: MigrationTarget,
+): Promise<MigrationResult> {
+  validateTarget(target);
+  const files = loadMigrations(dir);
+  const recorded = await recordedMigrations(client, target);
+  validateRecordedMigrations(files, recorded);
+  const applied: string[] = [];
+  const skipped: string[] = [];
+
+  for (let index = 0; index < files.length; index++) {
+    const file = files[index]!;
+    if (index < recorded.length) {
+      skipped.push(file.filename);
+      continue;
+    }
+    await client.query(file.sql);
+    await client.query(
+      `INSERT INTO ${target.schema}.${target.table} (filename, sha256) VALUES ($1, $2)`,
+      [file.filename, file.sha256],
+    );
+    applied.push(file.filename);
+  }
+  return { applied, skipped };
 }
 
 export async function runMigrations(
@@ -90,37 +231,15 @@ export async function runMigrations(
   target: MigrationTarget,
 ): Promise<MigrationResult> {
   validateTarget(target);
-  const files = loadMigrations(dir);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock($1)', [target.advisoryLockKey]);
 
-    const recorded = await recordedMigrations(client, target);
-    const applied: string[] = [];
-    const skipped: string[] = [];
-
-    for (const file of files) {
-      const priorSha = recorded.get(file.filename);
-      if (priorSha !== undefined) {
-        if (priorSha !== file.sha256) {
-          throw new Error(
-            `migration ${file.filename} sha256 mismatch: recorded ${priorSha}, found ${file.sha256} (edited migration?)`,
-          );
-        }
-        skipped.push(file.filename);
-        continue;
-      }
-      await client.query(file.sql);
-      await client.query(
-        `INSERT INTO ${target.schema}.${target.table} (filename, sha256) VALUES ($1, $2)`,
-        [file.filename, file.sha256],
-      );
-      applied.push(file.filename);
-    }
+    const result = await runMigrationsOnClient(client, dir, target);
 
     await client.query('COMMIT');
-    return { applied, skipped };
+    return result;
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     throw err;
@@ -139,7 +258,8 @@ export async function pendingMigrations(
   const client = await pool.connect();
   try {
     const recorded = await recordedMigrations(client, target);
-    return files.filter((f) => !recorded.has(f.filename)).map((f) => f.filename);
+    validateRecordedMigrations(files, recorded);
+    return files.slice(recorded.length).map((file) => file.filename);
   } finally {
     client.release();
   }

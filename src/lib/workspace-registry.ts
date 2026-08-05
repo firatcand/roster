@@ -170,7 +170,7 @@ const PREPARED_CONTEXT_SOURCE: unique symbol = Symbol('prepared-context-source')
 export type PreparedContextRegistryMetadata = {
   readonly schema_version: 2;
   readonly workspace_id: string;
-  readonly brain_binding: string | null;
+  readonly brain_configured: boolean;
   readonly enabled_hosts: readonly EnabledV2Host[];
 };
 
@@ -1358,7 +1358,7 @@ function mintPreparedContextSource(
     registry_metadata: {
       schema_version: registry.schema_version,
       workspace_id: registry.workspace_id,
-      brain_binding: registry.brain?.binding ?? null,
+      brain_configured: registry.brain !== undefined,
       enabled_hosts: [...enabledV2Hosts(registry)],
     },
     registry_source_hash: collected.loadedRegistry.hash,

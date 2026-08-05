@@ -8,7 +8,7 @@ host: neutral
 activation_assurance: advisory-manual
 supported_host_versions: *
 attestation_fixture: none
-content_hash: sha256:1ee492cbd1cf4dad8595487b8eafadd318823b18543da1fac0a2fe34d2b63eac
+content_hash: sha256:d7eb20623eb8298b7cb7797d3e46231400d0d869313be773b5bafe533b668386
 -->
 # Roster workspace
 
@@ -49,7 +49,7 @@ Roster is the context and scaffolding layer for this repository. The host agent 
 
 For a `kind: subagent` step, retrieve the registered definition with `roster discover --kind subagent --exact <function>/<agent>/subagents/<id> --full --json` before delegation. For `kind: cross-agent`, request the target agent's own context instead of treating a nested plan body as complete agent policy.
 
-If context returns `CONTEXT_BUDGET_REQUIRED_OVERFLOW`, retry once with `--budget <details.required_tokens>`. If it returns `CONTEXT_MANDATORY_UNSERVABLE`, stop and present the authored-policy reduction guidance; never loop or use a partial bundle. `BRAIN_NOT_BOUND` in a successful response is nonfatal: continue with the complete local bundle and empty `brain_evidence`.
+If context returns `CONTEXT_BUDGET_REQUIRED_OVERFLOW`, retry once with `--budget <details.required_tokens>`. If it returns `CONTEXT_MANDATORY_UNSERVABLE`, stop and present the authored-policy reduction guidance; never loop or use a partial bundle. `BRAIN_NOT_CONFIGURED` in a successful response is nonfatal: continue with the complete local bundle and empty `brain_evidence`.
 
 When evidence or Dreamer capability is unavailable, finish the host-owned work, report that durable recording or learning is unavailable, and continue without fabricated state. Do not call `roster run`, `roster schedule`, `roster pending`, `roster ops`, `roster brain save`, or `roster brain event` as substitutes.
 

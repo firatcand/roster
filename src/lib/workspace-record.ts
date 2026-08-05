@@ -1,4 +1,6 @@
 import YAML from 'yaml';
+import { createHash } from 'node:crypto';
+import { detectAuthoredSecretMaterial } from './authored-secret-detector.ts';
 import {
   WORKSPACE_SCHEMA_VERSION,
   assertFunctionId,
@@ -19,10 +21,31 @@ export const MAX_YAML_SCALAR_BYTES = 64 * 1024;
 export type WorkspaceRegistry = {
   schema_version: 2;
   workspace_id: string;
-  brain?: { binding: string };
+  brain?: WorkspaceBrainConfig;
   functions: Record<string, { path: string }>;
   hosts: Record<string, 'enabled'>;
   tool_uses: string[];
+};
+
+const BRAIN_NAMESPACE_FINGERPRINT_FORMAT_VERSION = 1;
+const BRAIN_NAMESPACE_AWS_DEFAULT_ENDPOINT = 'aws-default';
+
+export type WorkspaceBrainStorageConfig = {
+  bucket: string;
+  region: string;
+  root_prefix?: string;
+  endpoint?: string;
+  force_path_style: boolean;
+};
+
+export type WorkspaceBrainConfig = {
+  secrets_path: string;
+  storage: WorkspaceBrainStorageConfig;
+};
+
+type BrainNamespaceFingerprint = {
+  format_version: typeof BRAIN_NAMESPACE_FINGERPRINT_FORMAT_VERSION;
+  fingerprint: string;
 };
 
 export type EnabledV2Host = 'claude' | 'codex';
@@ -209,6 +232,183 @@ function requireString(value: unknown, path: string, field: string): string {
   return value as string;
 }
 
+function boundedConfigString(value: unknown, path: string, field: string, maximum: number): string {
+  const text = requireString(value, path, field);
+  const bytes = Buffer.byteLength(text, 'utf8');
+  if (text.length === 0 || bytes > maximum || /[\u0000-\u001f\u007f-\u009f]/u.test(text)) {
+    schemaFailure(path, `'${field}' must be a non-empty control-safe string no longer than ${maximum} bytes`, { field, maximum });
+  }
+  if (detectAuthoredSecretMaterial(text).length > 0) {
+    throw workspaceFailure(
+      'SECRET_MATERIAL_FORBIDDEN',
+      `${path}: '${field}' must not contain secret material.`,
+      'Store credentials only in Infisical and keep this tracked configuration non-secret.',
+      { path, field },
+    );
+  }
+  return text;
+}
+
+function parseSecretsPath(value: unknown, path: string): string {
+  const secretsPath = boundedConfigString(value, path, 'brain.secrets_path', 512);
+  if (!secretsPath.startsWith('/') || secretsPath === '/' || secretsPath.endsWith('/')) {
+    schemaFailure(path, "'brain.secrets_path' must be an absolute Infisical path with one or more safe components");
+  }
+  const components = secretsPath.slice(1).split('/');
+  if (components.some((component) => !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(component) || component === '.' || component === '..')) {
+    schemaFailure(path, "'brain.secrets_path' contains an unsafe path component");
+  }
+  return secretsPath;
+}
+
+function parseBucket(value: unknown, path: string): string {
+  const bucket = boundedConfigString(value, path, 'brain.storage.bucket', 63);
+  if (!/^[a-z0-9](?:[a-z0-9.-]{1,61}[a-z0-9])$/u.test(bucket)
+    || bucket.includes('..')
+    || /(?:^|\.)-|-\.|\.$/u.test(bucket)
+    || /^\d+\.\d+\.\d+\.\d+$/u.test(bucket)) {
+    schemaFailure(path, "'brain.storage.bucket' must be a canonical S3 bucket name");
+  }
+  return bucket;
+}
+
+function parseRegion(value: unknown, path: string): string {
+  const region = boundedConfigString(value, path, 'brain.storage.region', 128);
+  if (region !== 'auto' && !/^[a-z0-9]+(?:-[a-z0-9]+){1,15}$/u.test(region)) {
+    schemaFailure(path, "'brain.storage.region' must be a canonical region identifier");
+  }
+  return region;
+}
+
+function parseRootPrefix(value: unknown, path: string): string {
+  const prefix = boundedConfigString(value, path, 'brain.storage.root_prefix', 757);
+  if (prefix.startsWith('/') || prefix.endsWith('/') || prefix.includes('\\')) {
+    schemaFailure(path, "'brain.storage.root_prefix' must be a relative slash-delimited prefix");
+  }
+  if (prefix.split('/').some((component) => component.length === 0 || component === '.' || component === '..')) {
+    schemaFailure(path, "'brain.storage.root_prefix' must not contain empty or dot path components");
+  }
+  return prefix;
+}
+
+function ipv4Parts(host: string): [number, number, number, number] | null {
+  const parts = host.split('.').map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return null;
+  return parts as [number, number, number, number];
+}
+
+function isNonGlobalIpv4(host: string): boolean {
+  const parts = ipv4Parts(host);
+  if (parts === null) return false;
+  const [first, second, third] = parts;
+  return first === 0
+    || first === 10
+    || (first === 100 && second >= 64 && second <= 127)
+    || first === 127
+    || first >= 224
+    || (first === 169 && second === 254)
+    || (first === 172 && second >= 16 && second <= 31)
+    || (first === 192 && second === 0 && (third === 0 || third === 2))
+    || (first === 192 && second === 88 && third === 99)
+    || (first === 192 && second === 168)
+    || (first === 198 && (second === 18 || second === 19))
+    || (first === 198 && second === 51 && third === 100)
+    || (first === 203 && second === 0 && third === 113);
+}
+
+function isNonGlobalIpv6(host: string): boolean {
+  const normalized = host.replace(/^\[|\]$/gu, '').toLowerCase();
+  if (!normalized.includes(':')) return false;
+  const mappedIpv4 = normalized.match(/^(?:::ffff:|::)(\d+\.\d+\.\d+\.\d+)$/u)?.[1];
+  if (mappedIpv4 !== undefined) return true;
+  const mappedHextets = normalized.match(/^(?:::ffff:|::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/u);
+  if (mappedHextets !== null) return true;
+  const hextets = normalized.split(':');
+  const first = Number.parseInt(hextets[0] ?? '', 16);
+  const second = Number.parseInt(hextets[1] ?? '', 16);
+  const third = Number.parseInt(hextets[2] ?? '', 16);
+  return !Number.isInteger(first)
+    || first < 0x2000
+    || first > 0x3fff
+    || (first === 0x2001 && second === 0)
+    || (first === 0x2001 && second === 2 && third === 0)
+    || (first === 0x2001 && second >= 0x10 && second <= 0x2f)
+    || (first === 0x2001 && second === 0xdb8)
+    || first === 0x2002
+    || (first === 0x3fff && second >= 0 && second <= 0x0fff);
+}
+
+function parseEndpoint(value: unknown, path: string): string {
+  const endpoint = boundedConfigString(value, path, 'brain.storage.endpoint', 512);
+  let parsed: URL;
+  try {
+    parsed = new URL(endpoint);
+  } catch {
+    schemaFailure(path, "'brain.storage.endpoint' must be a valid public HTTPS origin");
+  }
+  if (parsed!.protocol !== 'https:'
+    || parsed!.username.length > 0
+    || parsed!.password.length > 0
+    || parsed!.pathname !== '/'
+    || parsed!.search.length > 0
+    || parsed!.hash.length > 0
+    || endpoint !== parsed!.origin) {
+    schemaFailure(path, "'brain.storage.endpoint' must be an exact HTTPS origin without userinfo, path, query, or fragment");
+  }
+  const hostname = parsed!.hostname.toLowerCase().replace(/\.$/u, '');
+  if (hostname === 'localhost' || hostname.endsWith('.localhost') || isNonGlobalIpv4(hostname) || isNonGlobalIpv6(hostname)) {
+    schemaFailure(path, "'brain.storage.endpoint' must not use a local, private, or link-local literal address");
+  }
+  return parsed!.origin;
+}
+
+function parseBrainConfig(value: unknown, path: string): WorkspaceBrainConfig {
+  const brain = requireObject(value, path, 'brain');
+  if (Object.hasOwn(brain, 'binding')) {
+    throw workspaceFailure(
+      'UNKNOWN_FIELD',
+      `${path}: unknown field 'brain.binding'; the retired Brain binding format is no longer supported.`,
+      "Replace 'brain.binding' with 'brain.secrets_path' and 'brain.storage', then retry.",
+      { path, fields: ['binding'] },
+    );
+  }
+  assertKnownFields(brain, ['secrets_path', 'storage'], path);
+  const storage = requireObject(brain.storage, path, 'brain.storage');
+  assertKnownFields(storage, ['bucket', 'region', 'root_prefix', 'endpoint', 'force_path_style'], path);
+  if (storage.force_path_style !== undefined && typeof storage.force_path_style !== 'boolean') {
+    schemaFailure(path, "'brain.storage.force_path_style' must be a boolean");
+  }
+  return {
+    secrets_path: parseSecretsPath(brain.secrets_path, path),
+    storage: {
+      bucket: parseBucket(storage.bucket, path),
+      region: parseRegion(storage.region, path),
+      ...(storage.root_prefix === undefined ? {} : { root_prefix: parseRootPrefix(storage.root_prefix, path) }),
+      ...(storage.endpoint === undefined ? {} : { endpoint: parseEndpoint(storage.endpoint, path) }),
+      force_path_style: storage.force_path_style ?? false,
+    },
+  };
+}
+
+export function canonicalBrainNamespace(config: WorkspaceBrainConfig): string {
+  return JSON.stringify({
+    domain: 'roster.brain.s3-namespace.v1',
+    provider: 's3',
+    bucket: config.storage.bucket,
+    region: config.storage.region,
+    endpoint: config.storage.endpoint ?? BRAIN_NAMESPACE_AWS_DEFAULT_ENDPOINT,
+    force_path_style: config.storage.force_path_style,
+    root_prefix: config.storage.root_prefix ?? null,
+  });
+}
+
+export function fingerprintBrainNamespace(config: WorkspaceBrainConfig): BrainNamespaceFingerprint {
+  return {
+    format_version: BRAIN_NAMESPACE_FINGERPRINT_FORMAT_VERSION,
+    fingerprint: `sha256:${createHash('sha256').update(canonicalBrainNamespace(config)).digest('hex')}`,
+  };
+}
+
 function requireStringArray(value: unknown, path: string, field: string): string[] {
   if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string')) {
     schemaFailure(path, `'${field}' must be a string array`);
@@ -329,11 +529,9 @@ export function parseWorkspaceRegistry(text: string, path = 'roster.yaml'): Work
     if (state !== 'enabled') schemaFailure(path, `hosts.${host} must equal 'enabled'`);
     hosts[host] = 'enabled';
   }
-  let brain: { binding: string } | undefined;
+  let brain: WorkspaceBrainConfig | undefined;
   if (value.brain !== undefined) {
-    const rawBrain = requireObject(value.brain, path, 'brain');
-    assertKnownFields(rawBrain, ['binding'], path);
-    brain = { binding: requireString(rawBrain.binding, path, 'brain.binding') };
+    brain = parseBrainConfig(value.brain, path);
   }
   return {
     schema_version: requireSchemaVersion(value.schema_version, path),

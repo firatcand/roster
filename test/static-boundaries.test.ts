@@ -328,6 +328,53 @@ test('context boundary classifier rejects legacy Brain, search, persistence, and
   ].filter(forbiddenBoundaryDependency), []);
 });
 
+test('legacy Brain access stays behind the finite pre-#383 production boundary', () => {
+  const sourceFiles = typescriptFiles('src');
+  const edges = sourceFiles.flatMap((path) => moduleEdges(path));
+
+  assert.deepEqual(
+    edges.filter((edge) => moduleMatches(edge.module, 'brain/import')),
+    [],
+    'the disabled legacy import implementation must have no production importer or re-export',
+  );
+  assert.deepEqual(
+    sourceFiles.flatMap((path) => dynamicModuleReferences(path)
+      .filter((module) => moduleMatches(module, 'brain/import'))
+      .map((module) => `${repositoryPath(path)}:${module}`)),
+    [],
+    'the disabled legacy import implementation must not be loaded dynamically',
+  );
+
+  const rawBrainHelpers = new Set(['createBrainPool', 'resolveBrainUrl', 'withBrainClient']);
+  assert.deepEqual(
+    edges.filter((edge) => (
+      edge.kind === 'import'
+      && (moduleMatches(edge.module, 'brain/connect')
+        || (edge.file.startsWith('src/lib/brain/') && moduleMatches(edge.module, 'connect')))
+      && (rawBrainHelpers.has(edge.imported) || edge.imported === '*')
+    )).map(({ file, imported, local }) => ({ file, imported, local })),
+    [
+      { file: 'src/commands/brain.ts', imported: 'createBrainPool', local: 'createBrainPool' },
+      { file: 'src/commands/brain.ts', imported: 'resolveBrainUrl', local: 'resolveBrainUrl' },
+      { file: 'src/commands/brain.ts', imported: 'withBrainClient', local: 'withBrainClient' },
+      { file: 'src/lib/brain/reindex.ts', imported: 'withBrainClient', local: 'withBrainClient' },
+    ],
+    'ticket #383 owns replacing the finite legacy raw Brain helper callers; no new production caller may bypass workspace authority',
+  );
+
+  const authorityBoundaryFiles = new Set([
+    'src/lib/brain/connect.ts',
+    'src/lib/brain/workspace-authority.ts',
+  ]);
+  assert.deepEqual(
+    edges.filter((edge) => authorityBoundaryFiles.has(edge.file)
+      && new Set(['buildRuntimeUrl', 'ensureRuntimeRole', 'randomBytes']).has(edge.imported))
+      .map(({ file, module, imported }) => ({ file, module, imported })),
+    [],
+    'the workspace authority path must consume host credentials, never mint or reconstruct them',
+  );
+});
+
 test('tool-use and vendor-skill boundary modules depend only on inert validation and workspace primitives', () => {
   const vendorFiles = typescriptFiles('src/lib/vendor-skills');
   assert.ok(vendorFiles.length > 0, 'vendor-skills boundary must remain represented in this test');

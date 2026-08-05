@@ -76,7 +76,6 @@ function candidate(
   const content = `Evidence ${candidateId} about reliable company operations.`;
   return {
     candidate_id: candidateId,
-    binding: 'company-brain',
     selector: 'strong-examples',
     scope: {
       workspace: 'social-manager-context',
@@ -430,7 +429,7 @@ completion:
       result.brain_evidence.map((entry) => entry.fragment_id),
       ['brain-evidence:exact-cross-agent-plan', 'brain-evidence:root-required-example'],
     );
-    assert.equal(result.budget.exclusions['cross-scope'], 1);
+    assert.equal(result.budget.exclusions['scope-ineligible'], 1);
     assert.equal(result.budget.required_selectors_unmatched, 0);
   } finally {
     fx.cleanup();
@@ -459,7 +458,7 @@ test('agent-only context selects no plan, tool, plan-scoped lesson, or Brain sel
     assert.deepEqual(result.skill_refs, []);
     assert.deepEqual(result.brain_evidence, []);
     assert.equal(result.budget.exclusions['unrequested-selector'], 1);
-    assert.equal(result.budget.exclusions['cross-scope'], 1);
+    assert.equal(result.budget.exclusions['scope-ineligible'], 1);
 
     unlinkSync(join(fx.root, VENDOR_SKILL_MAP_PATH));
     const withoutMap = resolveWorkspaceContext({
@@ -493,16 +492,22 @@ test('missing Brain is one nonfatal warning and unavailable evidence stays optio
     writeFileSync(registryPath, YAML.stringify(registry));
 
     const unbound = resolveWorkspaceContext({ root: fx.root, ...DEFAULT_REQUEST });
-    assert.equal(unbound.workspace.brain_binding, null);
+    assert.equal(unbound.workspace.brain_configured, false);
     assert.equal(unbound.plan.definitions.length, 4);
     assert.deepEqual(unbound.brain_evidence, []);
     assert.deepEqual(unbound.diagnostics.map((entry) => [entry.code, entry.severity]), [
-      ['BRAIN_NOT_BOUND', 'warning'],
+      ['BRAIN_NOT_CONFIGURED', 'warning'],
     ]);
     assert.equal(unbound.budget.required_selectors_unmatched, 0);
     assert.equal(Object.values(unbound.budget.exclusions).every((count) => count === 0), true);
 
-    writeFileSync(registryPath, YAML.stringify({ ...registry, brain: { binding: 'company-brain' } }));
+    writeFileSync(registryPath, YAML.stringify({
+      ...registry,
+      brain: {
+        secrets_path: '/social-manager-context',
+        storage: { bucket: 'social-manager-context-vault', region: 'eu-central-1' },
+      },
+    }));
     const unavailable = assemble(fx.root, DEFAULT_REQUEST, deepFreeze({
       status: 'unavailable' as const,
       candidates: [] as SeedBrainCandidate[],
@@ -531,8 +536,8 @@ test('Brain eligibility, duplicate groups, privacy, and secret exclusion are det
       candidate('eligible-internal', { privacy: 'internal', retrieval_rank: 20 }),
       candidate('secret-privacy', { privacy: 'secret' }),
       candidate('secret-content', { content: canary }),
-      candidate('cross-binding', { binding: 'other-brain' }),
-      candidate('cross-scope', {
+      candidate('workspace-mismatch', { scope: { workspace: 'other-workspace' } }),
+      candidate('scope-ineligible', {
         scope: { workspace: 'social-manager-context', function: 'support' },
       }),
       candidate('stale', { current: false }),
@@ -551,8 +556,8 @@ test('Brain eligibility, duplicate groups, privacy, and secret exclusion are det
     );
     assert.equal(first.budget.exclusions['privacy-incompatible'], 1);
     assert.equal(first.budget.exclusions['secret-material'], 1);
-    assert.equal(first.budget.exclusions['cross-binding'], 1);
-    assert.equal(first.budget.exclusions['cross-scope'], 1);
+    assert.equal(first.budget.exclusions['workspace-mismatch'], 1);
+    assert.equal(first.budget.exclusions['scope-ineligible'], 1);
     assert.equal(first.budget.exclusions.stale, 1);
     assert.equal(first.budget.exclusions.tombstoned, 1);
     assert.equal(first.budget.exclusions['unrequested-selector'], 1);
@@ -867,7 +872,7 @@ test('Brain candidate scopes require complete ancestry and never borrow matching
       ['brain-evidence:local-ancestry'],
     );
     assert.equal(result.budget.exclusions.malformed, 2);
-    assert.equal(result.budget.exclusions['cross-scope'], 1);
+    assert.equal(result.budget.exclusions['scope-ineligible'], 1);
   } finally {
     fx.cleanup();
   }
@@ -912,7 +917,7 @@ test('candidate bounds and optional diagnostic accounting preserve complete aggr
   const fx = buildSocialManagerContextFixture();
   try {
     const rejected = Array.from({ length: MAX_CONTEXT_EVIDENCE_CANDIDATES }, (_, index) => (
-      candidate(`candidate-${String(index).padStart(4, '0')}`, { binding: 'other-brain' })
+      candidate(`candidate-${String(index).padStart(4, '0')}`, { scope: { workspace: 'other-workspace' } })
     ));
     const exact = fixedMandatoryBudget(fx.root);
     const result = assemble(
@@ -921,7 +926,7 @@ test('candidate bounds and optional diagnostic accounting preserve complete aggr
       frozenEvidence(rejected),
     );
     assert.deepEqual(result.brain_evidence, []);
-    assert.equal(result.budget.exclusions['cross-binding'], MAX_CONTEXT_EVIDENCE_CANDIDATES);
+    assert.equal(result.budget.exclusions['workspace-mismatch'], MAX_CONTEXT_EVIDENCE_CANDIDATES);
     assert.equal(result.budget.candidate_diagnostics_omitted, MAX_CONTEXT_EVIDENCE_CANDIDATES);
     assert.equal(
       result.diagnostics.filter((entry) => entry.code === 'CONTEXT_EVIDENCE_EXCLUDED').length,

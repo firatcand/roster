@@ -373,19 +373,26 @@ Platform × tool matrix, UI hand-off flow, Codex `--via cron` envscubbing, and t
 The **brain** is a workspace-scoped, append-only Postgres store the agent team reads and writes instead of scattering knowledge across markdown. It's bring-your-own — point it at a Neon (or any Postgres) database. Optional: a scaffolded workspace works fine without one.
 
 ```bash
-# 1. Put the admin connection string in Infisical (never .env), e.g. under /<repo>:
+# 1. Put the admin connection string in Infisical (never .env), at the
+#    brain.secrets_path tracked in roster.yaml:
 #      ROSTER_BRAIN_ADMIN_URL = postgresql://<user>:<pw>@<host>/<db>?sslmode=require
 #    (Neon: copy the connection string from the project dashboard.)
 
-# 2. Provision schema + a restricted, append-only runtime role. Prints a runtime
-#    connection string ONCE — store it back in Infisical as ROSTER_BRAIN_URL.
-infisical run --env dev --path /<repo> -- roster brain init
+# 2. Ask Roster for the expected non-secret runtime role and Infisical path.
+#    Without ROSTER_BRAIN_URL, init reports those values and stops before database access.
+infisical run --env dev --path /<brain-secrets-path> -- roster brain init
 
-# 3. Verify append-only safety + that migrations are current.
-infisical run --env dev --path /<repo> -- roster brain doctor
+# 3. In the host, generate at least 32 random bytes as an unpadded base64url password
+#    (43-128 characters). Build a workspace-specific URL using the reported role, then
+#    store the complete URL at the reported Infisical path as ROSTER_BRAIN_URL:
+#      postgresql://<reported-role>:<base64url-password>@<host>/<db>?sslmode=require
+
+# 4. Rerun init with both URLs injected, then verify append-only safety and migrations.
+infisical run --env dev --path /<brain-secrets-path> -- roster brain init
+infisical run --env dev --path /<brain-secrets-path> -- roster brain doctor
 ```
 
-The **runtime** role (`ROSTER_BRAIN_URL`) is what agents use day-to-day — it can only SELECT and INSERT, never UPDATE/DELETE/DROP, so the brain is append-only at the database level. `roster brain init` uses the **admin** role (`ROSTER_BRAIN_ADMIN_URL`); keep that one for setup, migrations, and backups only.
+The **runtime** role (`ROSTER_BRAIN_URL`) is what agents use day-to-day — it can only SELECT and INSERT, never UPDATE/DELETE/DROP, so the brain is append-only at the database level. `roster brain init` uses the **admin** role (`ROSTER_BRAIN_ADMIN_URL`); keep that one for setup, migrations, and backups only. Roster validates the ambient runtime URL but never mints, prints, returns, or stores its password or connection string.
 
 **Semantic search** is off by default — keyword + graph search work with no API key, no paid calls. To enable vector search:
 

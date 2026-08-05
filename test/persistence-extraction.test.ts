@@ -5,7 +5,11 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type pg from 'pg';
-import { createBrainPool, resolveBrainUrl, withBrainClient } from '../src/lib/brain/connect.ts';
+import {
+  createBrainPool,
+  resolveBrainUrl,
+  withBrainClient,
+} from '../src/lib/brain/connect.ts';
 import {
   loadMigrations,
   pendingMigrations,
@@ -57,7 +61,7 @@ function clearBrainEnv(): Record<string, undefined> {
 
 // ---------- brain/connect.ts ----------
 
-test('connect: exported surface is resolveBrainUrl + createBrainPool + withBrainClient', () => {
+test('connect: legacy persistence helpers remain available during extraction', () => {
   assert.equal(typeof resolveBrainUrl, 'function');
   assert.equal(typeof createBrainPool, 'function');
   assert.equal(typeof withBrainClient, 'function');

@@ -4,6 +4,7 @@ import { ROSTER_ROOT } from '../paths.ts';
 import {
   loadMigrations as loadMigrationsFrom,
   pendingMigrations as pendingMigrationsCore,
+  runMigrationsOnClient as runMigrationsOnClientCore,
   runMigrations as runMigrationsCore,
   type MigrationFile,
   type MigrationResult,
@@ -12,7 +13,7 @@ import {
 
 export type { MigrationFile, MigrationResult };
 
-const BRAIN_TARGET: MigrationTarget = {
+export const BRAIN_TARGET: MigrationTarget = {
   schema: 'brain_meta',
   table: 'schema_migrations',
   advisoryLockKey: 8135135,
@@ -20,6 +21,13 @@ const BRAIN_TARGET: MigrationTarget = {
 
 export function schemaDir(): string {
   return join(ROSTER_ROOT, 'data', 'brain', 'schema');
+}
+
+export async function runMigrationsOnClient(
+  client: pg.PoolClient,
+  dir: string = schemaDir(),
+): Promise<MigrationResult> {
+  return await runMigrationsOnClientCore(client, dir, BRAIN_TARGET);
 }
 
 export function loadMigrations(dir: string = schemaDir()): MigrationFile[] {
