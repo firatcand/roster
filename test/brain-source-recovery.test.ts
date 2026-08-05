@@ -367,7 +367,7 @@ test('prepared missing objects require exact supplied bytes before create and pu
     { ...REQUEST, bytes: Buffer.from('wrong') },
   );
   assert.deepEqual(wrong, {
-    status: 'corrupt',
+    status: 'prepared',
     reason: 'supplied-bytes-mismatch',
     repairable: true,
     requiresBytes: true,
@@ -399,6 +399,19 @@ test('completed DB state with missing bytes recreates only the same content key'
     repairable: true,
     requiresBytes: true,
   });
+
+  const wrong = await repairBrainSourceIntent(
+    database.pool(),
+    store,
+    { ...REQUEST, bytes: Buffer.from('wrong') },
+  );
+  assert.deepEqual(wrong, {
+    status: 'missing',
+    reason: 'supplied-bytes-mismatch',
+    repairable: true,
+    requiresBytes: true,
+  });
+  assert.equal(store.createCalls, 0);
 
   events.length = 0;
   const repaired = await repairBrainSourceIntent(database.pool(), store, { ...REQUEST, bytes: BYTES });

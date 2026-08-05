@@ -229,7 +229,7 @@ export async function repairBrainSourceIntent(
     if (request.bytes === undefined) return inspected.report;
     if (request.bytes.byteLength !== intent.sizeBytes
       || digest(request.bytes) !== intent.objectSha256) {
-      return report('corrupt', 'supplied-bytes-mismatch', true, true);
+      return report(inspected.report.status, 'supplied-bytes-mismatch', true, true);
     }
     await objectStore.createOrVerify({
       sha256: intent.objectSha256,

@@ -148,7 +148,7 @@ export function brainObjectNamespaceFingerprint(config: BrainObjectStoreConfig):
 }
 
 function observationValue(value: string | undefined, field: string): string | null {
-  if (value === undefined) return null;
+  if (value === undefined || value.length === 0) return null;
   if (Buffer.byteLength(value, 'utf8') > 1_024 || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) {
     throw new BrainObjectStoreError('INVALID_S3_RESPONSE', `S3 returned an invalid ${field} observation`);
   }

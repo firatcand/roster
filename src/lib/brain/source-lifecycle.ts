@@ -1087,6 +1087,7 @@ export async function restoreBrainSource(
       || lockedTarget.rows[0].restored_at !== null) {
       throw lifecycleError('BRAIN_SOURCE_TOMBSTONE_CONFLICT', 'Only the exact active tombstone can restore the source.');
     }
+    const priorVersionId = lockedTarget.rows[0].prior_version_id;
     const sequenceResult = await client.query<{ sequence: string }>(
       `UPDATE brain.logical_sources SET next_sequence = next_sequence + 1
         WHERE source_id = $1 RETURNING next_sequence::text AS sequence`,
@@ -1112,7 +1113,7 @@ export async function restoreBrainSource(
               current_version_id = $3,
               active_tombstone_id = NULL
         WHERE source_id = $1 AND active_tombstone_id = $4`,
-      [target.source_id, sequence, target.prior_version_id, tombstoneId],
+      [target.source_id, sequence, priorVersionId, tombstoneId],
     );
     if ((restored.rowCount ?? 0) !== 1) {
       throw lifecycleError('BRAIN_SOURCE_TOMBSTONE_CONFLICT', 'The exact tombstone could not restore the source atomically.');
@@ -1121,7 +1122,7 @@ export async function restoreBrainSource(
       tombstoneId,
       sourceId: target.source_id,
       sequence,
-      restoredVersionId: target.prior_version_id,
+      restoredVersionId: priorVersionId,
     });
   });
 }

@@ -155,6 +155,21 @@ test('create-or-verify is create-only, converges races, and keeps ETag opaque', 
   assert.equal(transport.closed, true);
 });
 
+test('empty optional S3 observations normalize to absent metadata', async () => {
+  class EmptyObservationTransport extends FakeTransport {
+    override async putIfAbsent(input: { key: string; body: Buffer }): Promise<TransportObservation> {
+      await super.putIfAbsent(input);
+      return { etag: '', versionId: '' };
+    }
+  }
+  const bytes = Buffer.from('empty optional observations');
+  const sha256 = digest(bytes);
+  const store = new ContentAddressedBrainObjectStore(new EmptyObservationTransport(), STORE_CONFIG);
+  const created = await store.createOrVerify({ sha256, bytes, contentType: 'text/plain' });
+  assert.equal(created.etag, null);
+  assert.equal(created.versionId, null);
+});
+
 test('lost put response converges only after bounded HEAD and full digest verification', async () => {
   const bytes = Buffer.from('landed before timeout');
   const sha256 = digest(bytes);
