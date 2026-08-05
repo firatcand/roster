@@ -242,6 +242,7 @@ export async function isPristineBrainDatabase(client: AuthorityQueryable): Promi
               JOIN pg_catalog.pg_extension extension ON extension.oid = dependency.refobjid
              WHERE dependency.classid = 'pg_class'::regclass
                AND dependency.objid = relation.oid
+               AND dependency.refclassid = 'pg_extension'::regclass
                AND dependency.deptype = 'e'
           )
        UNION ALL
@@ -256,7 +257,22 @@ export async function isPristineBrainDatabase(client: AuthorityQueryable): Promi
               JOIN pg_catalog.pg_extension extension ON extension.oid = dependency.refobjid
              WHERE dependency.classid = 'pg_type'::regclass
                AND dependency.objid = type_row.oid
+               AND dependency.refclassid = 'pg_extension'::regclass
                AND dependency.deptype = 'e'
+          )
+          AND NOT EXISTS (
+            SELECT 1
+              FROM pg_catalog.pg_type element_type
+              JOIN pg_catalog.pg_depend dependency
+                ON dependency.classid = 'pg_type'::regclass
+               AND dependency.objid = element_type.oid
+               AND dependency.refclassid = 'pg_extension'::regclass
+               AND dependency.deptype = 'e'
+              JOIN pg_catalog.pg_extension extension
+                ON extension.oid = dependency.refobjid
+               AND extension.extname IN ('pg_trgm', 'vector')
+             WHERE type_row.typelem = element_type.oid
+               AND element_type.typarray = type_row.oid
           )
        UNION ALL
        SELECT 1
@@ -270,6 +286,7 @@ export async function isPristineBrainDatabase(client: AuthorityQueryable): Promi
               JOIN pg_catalog.pg_extension extension ON extension.oid = dependency.refobjid
              WHERE dependency.classid = 'pg_collation'::regclass
                AND dependency.objid = collation_row.oid
+               AND dependency.refclassid = 'pg_extension'::regclass
                AND dependency.deptype = 'e'
           )
        UNION ALL
@@ -284,6 +301,7 @@ export async function isPristineBrainDatabase(client: AuthorityQueryable): Promi
               JOIN pg_catalog.pg_extension extension ON extension.oid = dependency.refobjid
              WHERE dependency.classid = 'pg_operator'::regclass
                AND dependency.objid = operator_row.oid
+               AND dependency.refclassid = 'pg_extension'::regclass
                AND dependency.deptype = 'e'
           )
        UNION ALL
@@ -298,6 +316,7 @@ export async function isPristineBrainDatabase(client: AuthorityQueryable): Promi
               JOIN pg_catalog.pg_extension extension ON extension.oid = dependency.refobjid
              WHERE dependency.classid = 'pg_proc'::regclass
                AND dependency.objid = routine.oid
+               AND dependency.refclassid = 'pg_extension'::regclass
                AND dependency.deptype = 'e'
           )
      ) AS exists`,

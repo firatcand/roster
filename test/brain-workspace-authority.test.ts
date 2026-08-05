@@ -353,12 +353,14 @@ test('brain workspace authority: does not depend on the legacy persistence bindi
   assert.doesNotMatch(source, /persistence\/postgres\/binding/);
 });
 
-test('brain workspace authority: approved pg_trgm extension objects remain pristine', opts, async () => {
+test('brain workspace authority: approved pg_trgm generated types remain pristine but custom types do not', opts, async () => {
   const fresh = await createFreshDb();
   const pool = createBrainPool('admin', fresh.url);
   try {
     await pool.query(`CREATE EXTENSION IF NOT EXISTS pg_trgm`);
     assert.equal(await isPristineBrainDatabase(pool), true);
+    await pool.query(`CREATE DOMAIN public.custom_brain_domain AS public.gtrgm[]`);
+    assert.equal(await isPristineBrainDatabase(pool), false);
   } finally {
     await pool.end();
     await fresh.drop();
