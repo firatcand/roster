@@ -111,6 +111,26 @@ test('prepareSourceIdentity snapshots bytes and derives content-addressed identi
   assert.equal(prepared.normalized.sourceTimestamp, '2026-08-05T20:00:00.000Z');
 });
 
+test('omitted media type uses one canonical object-safe default', () => {
+  const omitted = prepareSourceIdentity(WORKSPACE, input({ mediaType: undefined }));
+  const explicitNull = prepareSourceIdentity(WORKSPACE, input({ mediaType: null }));
+  assert.equal(omitted.normalized.mediaType, 'application/octet-stream');
+  assert.equal(explicitNull.normalized.mediaType, 'application/octet-stream');
+  assert.equal(omitted.sourceVersionId, explicitNull.sourceVersionId);
+  assert.equal(omitted.requestFingerprint, explicitNull.requestFingerprint);
+});
+
+test('source timestamps reject calendar rollover and unsupported precision', () => {
+  for (const sourceTimestamp of [
+    '2026-02-30T20:00:00Z',
+    '2026-01-01T24:00:00Z',
+    '2026-01-01T20:00:00.0001Z',
+    '0000-01-01T00:00:00Z',
+  ]) {
+    sourceError(() => prepareSourceIdentity(WORKSPACE, input({ sourceTimestamp })), 'sourceTimestamp');
+  }
+});
+
 test('logical source identity is workspace-scoped, kind-separated, case-sensitive, and byte-independent', () => {
   const lower = prepareSourceIdentity(WORKSPACE, input());
   const changedBytes = prepareSourceIdentity(WORKSPACE, input({ bytes: Buffer.from('changed') }));

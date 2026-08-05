@@ -24,6 +24,7 @@ import {
   type DnsLookupAll,
   type S3HttpHandler,
 } from '../src/lib/brain/s3-network-policy.ts';
+import { parseWorkspaceRegistry } from '../src/lib/workspace-record.ts';
 
 function digest(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
@@ -271,10 +272,38 @@ test('standard and explicit endpoint configurations derive one exact signed orig
     endpoint: 'https://objects.example.test',
     forcePathStyle: true,
   }).hostname, 'objects.example.test');
+  assert.deepEqual(deriveS3Origin({
+    bucket: 'company-brain',
+    region: 'auto',
+    endpoint: 'https://93.184.216.34:8443',
+    forcePathStyle: false,
+  }), {
+    protocol: 'https:',
+    hostname: '93.184.216.34',
+    port: 8443,
+    authority: '93.184.216.34:8443',
+  });
+  assert.deepEqual(deriveS3Origin({
+    bucket: 'company-brain',
+    region: 'auto',
+    endpoint: 'https://[2606:4700:4700::1111]',
+    forcePathStyle: false,
+  }), {
+    protocol: 'https:',
+    hostname: '[2606:4700:4700::1111]',
+    port: 443,
+    authority: '[2606:4700:4700::1111]',
+  });
   for (const endpoint of [
     'http://objects.example.test',
     'https://localhost',
     'https://127.0.0.1',
+    'https://10.0.0.1',
+    'https://169.254.169.254',
+    'https://[::1]',
+    'https://[::ffff:127.0.0.1]',
+    'https://[fe80::1]',
+    'https://[2001:db8::1]',
     'https://objects.example.test/path',
   ]) {
     assert.throws(() => deriveS3Origin({
@@ -283,6 +312,38 @@ test('standard and explicit endpoint configurations derive one exact signed orig
       endpoint,
       forcePathStyle: true,
     }), S3NetworkPolicyError);
+  }
+});
+
+test('workspace-authored global literal endpoints flow into exact path-style origins', () => {
+  for (const endpoint of [
+    'https://93.184.216.34:8443',
+    'https://[2606:4700:4700::1111]',
+  ]) {
+    const registry = parseWorkspaceRegistry([
+      'schema_version: 2',
+      'workspace_id: literal-endpoint',
+      'brain:',
+      '  secrets_path: /literal-endpoint',
+      '  storage:',
+      '    bucket: company-brain',
+      '    region: auto',
+      `    endpoint: ${endpoint}`,
+      '    force_path_style: false',
+      'functions: {}',
+      'hosts: {}',
+      'tool_uses: []',
+      '',
+    ].join('\n'));
+    const storage = registry.brain!.storage;
+    const origin = deriveS3Origin({
+      bucket: storage.bucket,
+      region: storage.region,
+      endpoint: storage.endpoint,
+      forcePathStyle: storage.force_path_style,
+    });
+    assert.equal(origin.hostname.includes('company-brain.'), false);
+    assert.equal(origin.authority, new URL(endpoint).host);
   }
 });
 
@@ -330,6 +391,18 @@ test('actual standard and custom S3 commands are accepted only at their SDK-deri
       region: 'auto',
       endpoint: 'https://objects.example.test',
       forcePathStyle: true,
+    },
+    {
+      bucket: 'company-brain',
+      region: 'auto',
+      endpoint: 'https://93.184.216.34:8443',
+      forcePathStyle: false,
+    },
+    {
+      bucket: 'company-brain',
+      region: 'auto',
+      endpoint: 'https://[2606:4700:4700::1111]',
+      forcePathStyle: false,
     },
   ];
   for (const config of configs) {

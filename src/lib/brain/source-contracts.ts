@@ -60,7 +60,7 @@ const SHA256 = /^sha256:[a-f0-9]{64}$/u;
 const WINDOWS_DRIVE = /^[A-Za-z]:\//u;
 const WINDOWS_RESERVED = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
 const ROSTER_TEMPORARY = /^\..+\.roster-\d+-\d+-[a-f0-9]{12}(?:\.(?:recovery|rollback))?$/u;
-const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u;
+const RFC3339 = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?(?:Z|([+-])(\d{2}):(\d{2}))$/u;
 
 export type SourceJsonValue = JsonValue;
 export type SourceJsonObject = { readonly [key: string]: SourceJsonValue };
@@ -141,7 +141,7 @@ export type NormalizedSourceIngest = Readonly<{
   privacy: SourcePrivacyClass;
   trust: SourceTrustClass;
   actor: SourceActor;
-  mediaType: string | null;
+  mediaType: string;
   sourceTimestamp: string | null;
   provenance: SourceJsonObject;
 }>;
@@ -441,7 +441,30 @@ export function normalizeSourceActor(input: SourceActorInput): SourceActor {
 function normalizeTimestamp(value: string | null | undefined): string | null {
   if (value === undefined || value === null) return null;
   const raw = boundedString('sourceTimestamp', value, MAX_SOURCE_TIMESTAMP_BYTES);
-  if (!RFC3339.test(raw)) sourceFailure('sourceTimestamp', 'it must be an RFC 3339 timestamp');
+  const match = raw.match(RFC3339);
+  if (match === null) sourceFailure('sourceTimestamp', 'it must be an RFC 3339 timestamp with at most millisecond precision');
+  const year = Number(match![1]);
+  const month = Number(match![2]);
+  const day = Number(match![3]);
+  const hour = Number(match![4]);
+  const minute = Number(match![5]);
+  const second = Number(match![6]);
+  const offsetHour = match![8] === undefined ? 0 : Number(match![8]);
+  const offsetMinute = match![9] === undefined ? 0 : Number(match![9]);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (year === 0
+    || month < 1
+    || month > 12
+    || day < 1
+    || day > days[month - 1]!
+    || hour > 23
+    || minute > 59
+    || second > 59
+    || offsetHour > 23
+    || offsetMinute > 59) {
+    sourceFailure('sourceTimestamp', 'it is not a real calendar timestamp');
+  }
   const time = Date.parse(raw);
   if (!Number.isFinite(time)) sourceFailure('sourceTimestamp', 'it is not a real timestamp');
   return new Date(time).toISOString();
@@ -491,7 +514,7 @@ export function normalizeSourceIngest(workspaceId: string, input: SourceIngestIn
     sourceFailure('trust', 'legacy-unverified input must be system-derived migration evidence');
   }
   const mediaType = input.mediaType === undefined || input.mediaType === null
-    ? null
+    ? 'application/octet-stream'
     : boundedString('mediaType', input.mediaType, MAX_MEDIA_TYPE_BYTES, { pattern: MEDIA_TYPE });
   return Object.freeze({
     requestKey: boundedString('requestKey', input.requestKey, MAX_SOURCE_REQUEST_KEY_BYTES, { pattern: STABLE_KEY }),

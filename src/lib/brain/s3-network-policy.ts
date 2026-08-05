@@ -83,7 +83,6 @@ function canonicalEndpoint(endpoint: string): URL {
   const hostname = parsed.hostname.toLowerCase().replace(/\.$/u, '');
   if (hostname === 'localhost'
     || hostname.endsWith('.localhost')
-    || isIP(hostname.replace(/^\[|\]$/gu, '')) !== 0
     || isNonGlobalIpLiteral(hostname)) {
     throw new S3NetworkPolicyError('invalid-endpoint-host');
   }
@@ -103,7 +102,8 @@ export function deriveS3Origin(config: S3EndpointConfig): ExactS3Origin {
   const base = config.endpoint === undefined
     ? new URL(`https://s3.${config.region}.${awsDnsSuffix(config.region)}`)
     : canonicalEndpoint(config.endpoint);
-  const pathStyle = config.forcePathStyle || config.bucket.includes('.');
+  const literalEndpoint = isIP(base.hostname.replace(/^\[|\]$/gu, '')) !== 0;
+  const pathStyle = config.forcePathStyle || config.bucket.includes('.') || literalEndpoint;
   const hostname = pathStyle ? base.hostname : `${config.bucket}.${base.hostname}`;
   const port = base.port.length === 0 ? 443 : Number(base.port);
   const authority = port === 443 ? hostname : `${hostname}:${port}`;
