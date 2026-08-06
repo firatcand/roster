@@ -261,6 +261,17 @@ async function brainViewNames(client: pg.PoolClient): Promise<string[]> {
   return r.rows.map((row) => row.viewname);
 }
 
+async function runtimeProtectedBrainTables(client: pg.PoolClient): Promise<Set<string>> {
+  const registry = await client.query<{ t: string | null }>(
+    `SELECT to_regclass('brain_meta.runtime_protected_tables')::text AS t`,
+  );
+  if (!registry.rows[0]?.t) return new Set();
+  const protectedTables = await client.query<{ table_name: string }>(
+    `SELECT table_name FROM brain_meta.runtime_protected_tables ORDER BY table_name ASC`,
+  );
+  return new Set(protectedTables.rows.map((row) => ident(row.table_name)));
+}
+
 export async function applyGrants(
   client: pg.PoolClient,
   roleName: string = RUNTIME_ROLE,
@@ -343,6 +354,7 @@ export async function applyGrants(
     );
   }
 
+  const protectedTables = await runtimeProtectedBrainTables(client);
   for (const table of await brainTableNames(client)) {
     const t = qIdent(table);
     await client.query(`GRANT SELECT ON brain.${t} TO ${qrole}`);
@@ -350,7 +362,7 @@ export async function applyGrants(
     // brain.merge_entities() broker, so the runtime role gets SELECT but never
     // INSERT on them. canonical_id is a derived cache maintained by the broker;
     // it is excluded so the runtime role can never write it directly.
-    if (table === 'entity_merges' || table === 'entity_aliases') continue;
+    if (table === 'entity_merges' || table === 'entity_aliases' || protectedTables.has(table)) continue;
     // canonical_id is the protected derived cache only on entities; an
     // agent-created table may have a same-named user column and must keep
     // runtime INSERT on it (consistent with the entities-scoped doctor check).

@@ -6,11 +6,16 @@ import { EXIT_ERROR, RosterError } from '../errors.ts';
 import { loadMigrations } from './migrate.ts';
 import {
   BACKUP_FORMAT_VERSION,
+  BACKUP_DEFERRED_CONSTRAINTS,
   type BackupManifest,
   CORE_TABLES,
   checksumRows,
+  configureBackupSession,
+  identityRestartValue,
+  identitySequence,
   listAllBrainTables,
   orderTables,
+  qualDeferredConstraint,
   qualTable,
   quoteIdent,
   type Row,
@@ -39,6 +44,7 @@ type CollectedTable = {
   core: boolean;
   columns: { name: string; cast: string }[];
   createColumns: { name: string; type: string }[];
+  identitySequence: Awaited<ReturnType<typeof identitySequence>>;
   rows: Row[];
 };
 
@@ -48,8 +54,9 @@ async function collect(client: pg.PoolClient): Promise<{
 }> {
   // Consistent snapshot: parent/child rows from one moment, no concurrent appends.
   await client.query('BEGIN');
-  await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
   try {
+    await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
+    await configureBackupSession(client);
     const mig = await client.query<{ filename: string; sha256: string }>(
       `SELECT filename, sha256 FROM brain_meta.schema_migrations ORDER BY filename`,
     );
@@ -57,6 +64,9 @@ async function collect(client: pg.PoolClient): Promise<{
     const tables: CollectedTable[] = [];
     for (const name of names) {
       const { columns, createColumns, rows } = await snapshotTable(client, name);
+      const sequence = columns.some((column) => column.name === 'id')
+        ? await identitySequence(client, name)
+        : null;
       const core = CORE_TABLES.has(name);
       const finalCreate: { name: string; type: string }[] = [];
       if (!core) {
@@ -75,6 +85,7 @@ async function collect(client: pg.PoolClient): Promise<{
         core,
         columns: columns.map((c) => ({ name: c.name, cast: c.cast })),
         createColumns: finalCreate,
+        identitySequence: sequence,
         rows,
       });
     }
@@ -97,6 +108,9 @@ function renderSqlDump(
   // standard_conforming_strings=on (the default) makes backslashes literal, so
   // doubling single quotes is sufficient escaping for the literals below.
   out.push('SET standard_conforming_strings = on;');
+  out.push(`SET LOCAL TIME ZONE 'UTC';`);
+  out.push(`SET LOCAL DateStyle = 'ISO, YMD';`);
+  out.push('SET LOCAL extra_float_digits = 3;');
 
   // Recreate agent-created tables through the same broker that made them.
   for (const t of tables) {
@@ -104,6 +118,11 @@ function renderSqlDump(
     const colsJson = JSON.stringify(t.createColumns).replace(/'/g, "''");
     out.push(`SELECT brain.create_table('${t.name}', '${colsJson}'::jsonb);`);
   }
+
+  const deferredConstraints = BACKUP_DEFERRED_CONSTRAINTS
+    .map(qualDeferredConstraint)
+    .join(', ');
+  out.push(`SET CONSTRAINTS ${deferredConstraints} DEFERRED;`);
 
   for (const t of tables) {
     if (t.rows.length === 0) continue;
@@ -116,14 +135,41 @@ function renderSqlDump(
     out.push(valueLines.join(',\n') + ';');
   }
 
+  out.push(`SET CONSTRAINTS ${deferredConstraints} IMMEDIATE;`);
+
   // Sequence resets so subsequent live inserts don't collide with restored ids.
   for (const t of tables) {
-    const seq = `pg_get_serial_sequence('${qualTable(t.name)}', 'id')`;
-    if (t.rows.length === 0) {
-      out.push(`SELECT setval(${seq}, 1, false);`);
-    } else {
-      out.push(`SELECT setval(${seq}, (SELECT max(id) FROM ${qualTable(t.name)}), true);`);
+    if (t.identitySequence === null) continue;
+    const idIndex = t.columns.findIndex((column) => column.name === 'id');
+    if (idIndex === -1) throw new Error(`brain.${t.name}: identity sequence has no id column`);
+    let maximum: bigint | null = null;
+    for (const row of t.rows) {
+      const raw = row[idIndex];
+      if (raw === null || !/^-?\d+$/.test(raw)) {
+        throw new Error(`brain.${t.name}: identity value is not an integer`);
+      }
+      const value = BigInt(raw);
+      if (maximum === null || value > maximum) maximum = value;
     }
+    const restart = identityRestartValue(
+      t.identitySequence,
+      maximum === null ? null : maximum.toString(),
+    );
+    out.push('DO $roster_sequence$');
+    out.push('DECLARE sequence_schema text; sequence_name text;');
+    out.push('BEGIN');
+    out.push(
+      `  SELECT n.nspname, c.relname INTO STRICT sequence_schema, sequence_name` +
+        ` FROM pg_catalog.pg_class c` +
+        ` JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace` +
+        ` WHERE c.oid = pg_catalog.pg_get_serial_sequence('${qualTable(t.name)}', 'id')::pg_catalog.regclass` +
+        ` AND c.relkind = 'S';`,
+    );
+    out.push(
+      `  EXECUTE pg_catalog.format('ALTER SEQUENCE %I.%I RESTART WITH ${restart}', sequence_schema, sequence_name);`,
+    );
+    out.push('END;');
+    out.push('$roster_sequence$;');
   }
 
   return out.join('\n') + '\n';
