@@ -167,7 +167,6 @@ export function createGuardedLookup(
       }
     };
     const timer = setTimeout(() => finish(new S3NetworkPolicyError('dns-timeout')), timeoutMs);
-    timer.unref();
     const family = lookupOptions.family;
     const normalizedFamily = family === 'IPv4' ? 4 : family === 'IPv6' ? 6 : family;
     try {

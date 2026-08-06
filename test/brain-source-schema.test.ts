@@ -186,6 +186,25 @@ test('source lifecycle schema installs the six protected tables without RLS or t
       [[...PROTECTED_TABLES]],
     );
     assert.equal(tenancy.rowCount, 0);
+
+    const cyclicConstraints = [
+      'logical_sources_active_tombstone_fkey',
+      'logical_sources_current_version_fkey',
+      'source_tombstones_restored_intent_fkey',
+    ];
+    const deferred = await pool.query<{
+      conname: string;
+      condeferrable: boolean;
+      condeferred: boolean;
+    }>(
+      `SELECT conname, condeferrable, condeferred
+         FROM pg_constraint
+        WHERE conname = ANY($1::text[])
+        ORDER BY conname`,
+      [cyclicConstraints],
+    );
+    assert.deepEqual(deferred.rows.map((row) => row.conname), cyclicConstraints);
+    assert.equal(deferred.rows.every((row) => row.condeferrable && !row.condeferred), true);
   } finally {
     await teardown();
   }

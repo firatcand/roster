@@ -8,15 +8,21 @@ import { bundledMigrationSet } from './export.ts';
 import {
   assertCast,
   assertIdent,
+  BACKUP_DEFERRED_CONSTRAINTS,
   type BackupManifest,
   BROKER_TYPES,
   type Cell,
   checksumRows,
+  configureBackupSession,
   CORE_TABLES,
   IMPORT_ADVISORY_LOCK_KEY,
+  identityRestartValue,
+  identitySequence,
   listAllBrainTables,
   orderTables,
   qualTable,
+  qualDeferredConstraint,
+  qualSequence,
   quoteIdent,
   type Row,
   snapshotTable,
@@ -117,11 +123,18 @@ function validateManifest(manifest: BackupManifest): void {
     if (seen.has(t.name)) throw reject(`duplicate table ${t.name}`);
     seen.add(t.name);
     if (typeof t.core !== 'boolean') throw reject(`table ${t.name}: core must be boolean`);
-    if (!Array.isArray(t.columns) || t.columns.length < 2) {
-      throw reject(`table ${t.name}: columns missing id/recorded_at`);
+    if (t.core !== CORE_TABLES.has(t.name)) {
+      throw reject(`table ${t.name}: core classification does not match this schema`);
     }
-    if (t.columns[0]!.name !== 'id' || t.columns[1]!.name !== 'recorded_at') {
-      throw reject(`table ${t.name}: columns must begin with id, recorded_at`);
+    if (!Array.isArray(t.columns) || t.columns.length === 0) {
+      throw reject(`table ${t.name}: columns are missing`);
+    }
+    if (!t.core && (
+      t.columns.length < 2
+      || t.columns[0]!.name !== 'id'
+      || t.columns[1]!.name !== 'recorded_at'
+    )) {
+      throw reject(`agent table ${t.name}: columns must begin with id, recorded_at`);
     }
     for (const c of t.columns) {
       safe(() => assertIdent(c.name), `table ${t.name}: invalid column ${JSON.stringify(c?.name)}`);
@@ -203,14 +216,23 @@ async function loadRows(client: pg.PoolClient, table: TableManifestEntry, rows: 
   }
 }
 
-async function resetSequence(client: pg.PoolClient, name: string, hasRows: boolean): Promise<void> {
-  const seq = `pg_get_serial_sequence('${qualTable(name)}', 'id')`;
-  if (hasRows) {
-    await client.query(`SELECT setval(${seq}, (SELECT max(id) FROM ${qualTable(name)}), true)`);
-  } else {
-    await client.query(`SELECT setval(${seq}, 1, false)`);
-  }
+async function resetSequence(
+  client: pg.PoolClient,
+  table: TableManifestEntry,
+): Promise<void> {
+  if (!table.columns.some((column) => column.name === 'id')) return;
+  const sequence = await identitySequence(client, table.name);
+  if (sequence === null) return;
+  const maximum = await client.query<{ max_id: string | null }>(
+    `SELECT max(id)::text AS max_id FROM ${qualTable(table.name)}`,
+  );
+  const restart = identityRestartValue(sequence, maximum.rows[0]?.max_id ?? null);
+  await client.query(`ALTER SEQUENCE ${qualSequence(sequence)} RESTART WITH ${restart}`);
 }
+
+const DEFERRED_CONSTRAINT_LIST = BACKUP_DEFERRED_CONSTRAINTS
+  .map(qualDeferredConstraint)
+  .join(', ');
 
 // Reads + structurally validates a table's data file. Export writes one .jsonl
 // per manifest table (empty file for zero-row tables), so a missing file is a
@@ -310,15 +332,18 @@ export async function importBrain(pool: pg.Pool, dir: string): Promise<ImportRes
   try {
     await client.query('BEGIN');
     try {
+      await configureBackupSession(client);
       await client.query('SELECT pg_advisory_xact_lock($1)', [IMPORT_ADVISORY_LOCK_KEY]);
       await lockForImport(client);
       await assertEmptyTarget(client);
       await recreateAgentTables(client, ordered);
+      await client.query(`SET CONSTRAINTS ${DEFERRED_CONSTRAINT_LIST} DEFERRED`);
       for (const entry of ordered) {
         await loadRows(client, entry, parseJsonl(dir, entry));
       }
+      await client.query(`SET CONSTRAINTS ${DEFERRED_CONSTRAINT_LIST} IMMEDIATE`);
       for (const entry of ordered) {
-        await resetSequence(client, entry.name, entry.row_count > 0);
+        await resetSequence(client, entry);
       }
       await verify(client, manifest);
       await client.query('COMMIT');

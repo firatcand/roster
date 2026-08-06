@@ -18,6 +18,23 @@ import { HAS_DB, createFreshDb } from './brain-helpers.ts';
 
 const opts = { skip: HAS_DB ? false : 'ROSTER_BRAIN_ADMIN_URL not set' };
 
+const LIFECYCLE_OBJECT_HASH = 'a'.repeat(64);
+const LIFECYCLE_OBJECT_ID = `sha256:${LIFECYCLE_OBJECT_HASH}`;
+const LIFECYCLE_SOURCE_ID = `sha256:${'b'.repeat(64)}`;
+const LIFECYCLE_VERSION_ID = `sha256:${'c'.repeat(64)}`;
+const LIFECYCLE_VERSION_FINGERPRINT = `sha256:${'d'.repeat(64)}`;
+const LIFECYCLE_INTENT_ID = `sha256:${'e'.repeat(64)}`;
+const LIFECYCLE_REQUEST_FINGERPRINT = `sha256:${'f'.repeat(64)}`;
+const LIFECYCLE_ORIGIN_FINGERPRINT = `sha256:${'1'.repeat(64)}`;
+const LIFECYCLE_TABLES = [
+  'source_objects',
+  'logical_sources',
+  'source_versions',
+  'source_version_labels',
+  'source_tombstones',
+  'ingest_intents',
+] as const;
+
 function tmpDir(): string {
   return mkdtempSync(join(tmpdir(), 'brain-backup-'));
 }
@@ -106,6 +123,86 @@ async function populate(pool: pg.Pool): Promise<void> {
   }
 }
 
+async function populateLifecycle(pool: pg.Pool): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `INSERT INTO brain.source_objects
+         (object_id, sha256, object_key, size_bytes)
+       VALUES ($1, $2, $3, 5)`,
+      [
+        LIFECYCLE_OBJECT_ID,
+        LIFECYCLE_OBJECT_HASH,
+        `objects/${LIFECYCLE_OBJECT_HASH.slice(0, 2)}/${LIFECYCLE_OBJECT_HASH}`,
+      ],
+    );
+    await client.query(
+      `INSERT INTO brain.logical_sources
+         (source_id, source_kind, origin_fingerprint, origin, next_sequence)
+       VALUES ($1, 'inline-text', $2, $3::jsonb, 1)`,
+      [
+        LIFECYCLE_SOURCE_ID,
+        LIFECYCLE_ORIGIN_FINGERPRINT,
+        JSON.stringify({ kind: 'inline-text', stableKey: 'backup-lifecycle' }),
+      ],
+    );
+    await client.query(
+      `INSERT INTO brain.source_versions
+         (source_version_id, source_id, version_fingerprint, object_id,
+          first_prepared_sequence, media_type, privacy_class, trust_class,
+          actor_assurance, assurance_evidence, metadata, provenance, locators)
+       VALUES ($1, $2, $3, $4, 1, 'text/plain', 'internal', 'host-asserted',
+               'host-attested', '{}'::jsonb, '{}'::jsonb, '{}'::jsonb, '[]'::jsonb)`,
+      [
+        LIFECYCLE_VERSION_ID,
+        LIFECYCLE_SOURCE_ID,
+        LIFECYCLE_VERSION_FINGERPRINT,
+        LIFECYCLE_OBJECT_ID,
+      ],
+    );
+    await client.query(
+      `INSERT INTO brain.source_version_labels
+         (source_version_id, function_id, agent_id, plan_id)
+       VALUES ($1, NULL, NULL, NULL),
+              ($1, 'social-media', 'manager', NULL),
+              ($1, 'social-media', 'manager', 'discovery')`,
+      [LIFECYCLE_VERSION_ID],
+    );
+    await client.query(
+      `UPDATE brain.logical_sources
+          SET current_sequence = 1, current_version_id = $2
+        WHERE source_id = $1`,
+      [LIFECYCLE_SOURCE_ID, LIFECYCLE_VERSION_ID],
+    );
+    await client.query(
+      `INSERT INTO brain.ingest_intents
+         (intent_id, request_key, request_fingerprint, source_id, prepared_sequence,
+          source_version_id, version_fingerprint, object_id, object_sha256,
+          object_key, size_bytes, request_payload, state, published_version_id,
+          published_object_id, published_as_current, completed_at)
+       VALUES ($1, 'backup-lifecycle-v1', $2, $3, 1, $4, $5, $6, $7, $8,
+               5, '{}'::jsonb, 'complete', $4, $6, true, now())`,
+      [
+        LIFECYCLE_INTENT_ID,
+        LIFECYCLE_REQUEST_FINGERPRINT,
+        LIFECYCLE_SOURCE_ID,
+        LIFECYCLE_VERSION_ID,
+        LIFECYCLE_VERSION_FINGERPRINT,
+        LIFECYCLE_OBJECT_ID,
+        LIFECYCLE_OBJECT_HASH,
+        `objects/${LIFECYCLE_OBJECT_HASH.slice(0, 2)}/${LIFECYCLE_OBJECT_HASH}`,
+      ],
+    );
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function tableRows(pool: pg.Pool, name: string): Promise<(string | null)[][]> {
   const client = await pool.connect();
   try {
@@ -189,6 +286,142 @@ for (const format of ['jsonl', 'sql'] as const) {
     }
   });
 }
+
+test('brain backup is stable across source and target session formatting settings', opts, async () => {
+  const srcDb = await createFreshDb();
+  const dstDb = await createFreshDb();
+  const dir = tmpDir();
+  const srcInit = await initBrain(srcDb.url);
+  const dstInit = await initBrain(dstDb.url);
+  await srcInit.end();
+  await dstInit.end();
+  const src = new pg.Pool({ connectionString: srcDb.url, max: 1 });
+  const dst = new pg.Pool({ connectionString: dstDb.url, max: 1 });
+  try {
+    await src.query(`SET TIME ZONE 'Pacific/Honolulu'`);
+    await src.query(`SET DateStyle = 'SQL, DMY'`);
+    await src.query(`SET extra_float_digits = 0`);
+    await dst.query(`SET TIME ZONE 'Europe/Istanbul'`);
+    await dst.query(`SET DateStyle = 'German, DMY'`);
+    await dst.query(`SET extra_float_digits = 1`);
+    await populate(src);
+
+    await exportBrain(src, { outDir: dir, format: 'jsonl', exportedAt: '2026-06-26T00:00:00.000Z' });
+    await importBrain(dst, dir);
+    await src.query(`SET TIME ZONE 'UTC'; SET DateStyle = 'ISO, YMD'; SET extra_float_digits = 3`);
+    await dst.query(`SET TIME ZONE 'UTC'; SET DateStyle = 'ISO, YMD'; SET extra_float_digits = 3`);
+    await assertParity(src, dst);
+  } finally {
+    await src.end();
+    await dst.end();
+    rmSync(dir, { recursive: true, force: true });
+    await srcDb.drop();
+    await dstDb.drop();
+  }
+});
+
+test('brain backup round-trips lifecycle tables with semantic primary keys', opts, async () => {
+  const srcDb = await createFreshDb();
+  const dstDb = await createFreshDb();
+  const sqlDb = await createFreshDb();
+  const dir = tmpDir();
+  const src = await initBrain(srcDb.url);
+  const dst = await initBrain(dstDb.url);
+  const sqlDst = await initBrain(sqlDb.url);
+  try {
+    await populate(src);
+    await populateLifecycle(src);
+    const capture = await src.connect();
+    const statements: string[] = [];
+    try {
+      await snapshotTable({
+        query: async (text: string, values?: unknown[]) => {
+          statements.push(text);
+          return capture.query(text, values as never[]);
+        },
+      } as unknown as pg.PoolClient, 'source_version_labels');
+    } finally {
+      capture.release();
+    }
+    assert.match(
+      statements.find((statement) => statement.includes('FROM brain."source_version_labels" ORDER BY')) ?? '',
+      /ORDER BY "source_version_id" COLLATE pg_catalog\."C", "label_key" COLLATE pg_catalog\."C"$/u,
+    );
+
+    const exp = await exportBrain(src, {
+      outDir: dir,
+      format: 'sql',
+      exportedAt: '2026-08-06T00:00:00.000Z',
+    });
+    const counts = new Map(exp.tables.map((table) => [table.name, table.rowCount]));
+    assert.equal(counts.get('source_objects'), 1);
+    assert.equal(counts.get('logical_sources'), 1);
+    assert.equal(counts.get('source_versions'), 1);
+    assert.equal(counts.get('source_version_labels'), 3);
+    assert.equal(counts.get('source_tombstones'), 0);
+    assert.equal(counts.get('ingest_intents'), 1);
+
+    const sql = readFileSync(join(dir, 'dump.sql'), 'utf8');
+    assert.doesNotMatch(sql, /\bsetval\s*\(/iu);
+    assert.match(sql, /SET CONSTRAINTS .* DEFERRED;/u);
+    assert.match(sql, /SET CONSTRAINTS .* IMMEDIATE;/u);
+    assert.match(sql, /ALTER SEQUENCE %I\.%I RESTART WITH 3/u);
+    for (const name of LIFECYCLE_TABLES) {
+      assert.equal(
+        sql.includes(`pg_get_serial_sequence('brain."${name}"', 'id')`),
+        false,
+        `brain.${name} must not emit an id sequence reset`,
+      );
+    }
+
+    const sqlClient = await sqlDst.connect();
+    try {
+      await sqlClient.query('BEGIN');
+      await sqlClient.query(sql);
+      await assert.rejects(sqlClient.query('SELECT 1 / 0'), /division by zero/iu);
+      await sqlClient.query('ROLLBACK');
+      const identity = await sqlClient.query<{ last_value: string; is_called: boolean }>(
+        `SELECT last_value::text, is_called FROM brain.entities_id_seq`,
+      );
+      assert.deepEqual(identity.rows, [{ last_value: '1', is_called: false }]);
+      const rolledBack = await sqlClient.query(`SELECT count(*)::int AS count FROM brain.logical_sources`);
+      assert.equal(rolledBack.rows[0]!.count, 0);
+
+      await sqlClient.query('BEGIN');
+      await sqlClient.query(sql);
+      await sqlClient.query('COMMIT');
+    } catch (error) {
+      await sqlClient.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      sqlClient.release();
+    }
+
+    await importBrain(dst, dir);
+    for (const name of LIFECYCLE_TABLES) {
+      assert.deepEqual(await tableRows(dst, name), await tableRows(src, name), `table ${name} parity`);
+      assert.deepEqual(await tableRows(sqlDst, name), await tableRows(src, name), `dump table ${name} parity`);
+    }
+    const labels = await tableRows(dst, 'source_version_labels');
+    assert.deepEqual(
+      labels.map((row) => row.slice(1, 4)),
+      [
+        ['social-media', 'manager', null],
+        ['social-media', 'manager', 'discovery'],
+        [null, null, null],
+      ],
+      'compound generated primary key controls deterministic label order',
+    );
+  } finally {
+    await src.end();
+    await dst.end();
+    await sqlDst.end();
+    rmSync(dir, { recursive: true, force: true });
+    await srcDb.drop();
+    await dstDb.drop();
+    await sqlDb.drop();
+  }
+});
 
 test('brain import refuses a non-empty target', opts, async () => {
   const srcDb = await createFreshDb();
@@ -381,6 +614,35 @@ test('brain import rejects malformed JSONL rows', opts, async () => {
     // A row with the wrong arity.
     writeFileSync(join(dir, 'entities.jsonl'), '["1","2026-01-01T00:00:00Z"]\n');
     await assert.rejects(importBrain(dst, dir), /corrupt backup data/i);
+  } finally {
+    await src.end();
+    await dst.end();
+    rmSync(dir, { recursive: true, force: true });
+    await srcDb.drop();
+    await dstDb.drop();
+  }
+});
+
+test('rejected brain import rolls identity sequence restarts back atomically', opts, async () => {
+  const srcDb = await createFreshDb();
+  const dstDb = await createFreshDb();
+  const dir = tmpDir();
+  const src = await initBrain(srcDb.url);
+  const dst = await initBrain(dstDb.url);
+  try {
+    await populate(src);
+    await exportBrain(src, { outDir: dir, format: 'jsonl', exportedAt: '2026-06-26T00:00:00.000Z' });
+    const manifestPath = join(dir, 'manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    const files = manifest.tables.find((table: { name: string }) => table.name === 'files');
+    files.checksum = '0'.repeat(32);
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+
+    await assert.rejects(importBrain(dst, dir), /import verification failed/iu);
+    const next = await dst.query(
+      `INSERT INTO brain.entities (kind, slug) VALUES ('company', 'after-reject') RETURNING id::text AS id`,
+    );
+    assert.equal(next.rows[0]!.id, '1');
   } finally {
     await src.end();
     await dst.end();

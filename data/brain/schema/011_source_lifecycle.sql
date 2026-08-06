@@ -300,17 +300,20 @@ ALTER TABLE brain.source_tombstones
 ALTER TABLE brain.source_tombstones
   ADD CONSTRAINT source_tombstones_restored_intent_fkey
   FOREIGN KEY (source_id, restored_by_intent_id)
-  REFERENCES brain.ingest_intents(source_id, intent_id);
+  REFERENCES brain.ingest_intents(source_id, intent_id)
+  DEFERRABLE INITIALLY IMMEDIATE;
 
 ALTER TABLE brain.logical_sources
   ADD CONSTRAINT logical_sources_current_version_fkey
   FOREIGN KEY (source_id, current_version_id)
-  REFERENCES brain.source_versions(source_id, source_version_id);
+  REFERENCES brain.source_versions(source_id, source_version_id)
+  DEFERRABLE INITIALLY IMMEDIATE;
 
 ALTER TABLE brain.logical_sources
   ADD CONSTRAINT logical_sources_active_tombstone_fkey
   FOREIGN KEY (source_id, active_tombstone_id)
-  REFERENCES brain.source_tombstones(source_id, tombstone_id);
+  REFERENCES brain.source_tombstones(source_id, tombstone_id)
+  DEFERRABLE INITIALLY IMMEDIATE;
 
 CREATE OR REPLACE FUNCTION brain.reject_source_lifecycle_mutation()
 RETURNS trigger

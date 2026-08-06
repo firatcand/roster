@@ -6,6 +6,12 @@ export const BACKUP_FORMAT_VERSION = 1 as const;
 // Advisory lock for import — distinct from migrate (8135135) and merge (8135140).
 export const IMPORT_ADVISORY_LOCK_KEY = 8135141;
 
+export const BACKUP_DEFERRED_CONSTRAINTS: readonly string[] = [
+  'logical_sources_current_version_fkey',
+  'logical_sources_active_tombstone_fkey',
+  'source_tombstones_restored_intent_fkey',
+];
+
 // Core tables in FK-safe load order: parents before children.
 // `entities` before facts/events/edges/aliases/merges; `mounts` before documents
 // and `files` (both FK mounts). NOTE: this is the authoritative core set — do NOT
@@ -21,6 +27,12 @@ export const CORE_TABLE_ORDER: readonly string[] = [
   'files',
   'entity_aliases',
   'entity_merges',
+  'source_objects',
+  'logical_sources',
+  'source_versions',
+  'source_version_labels',
+  'source_tombstones',
+  'ingest_intents',
 ];
 
 export const CORE_TABLES: ReadonlySet<string> = new Set(CORE_TABLE_ORDER);
@@ -162,9 +174,82 @@ export function quoteIdent(name: string): string {
   return `"${assertIdent(name)}"`;
 }
 
+function quoteCatalogIdent(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
+}
+
+export function qualDeferredConstraint(name: string): string {
+  return `brain.${quoteIdent(name)}`;
+}
+
 type RawColumn = { name: string; type: string; generated: string };
+type RawPrimaryKeyColumn = { name: string; collatable: boolean };
+
+export type SequenceIdentity = {
+  schema: string;
+  name: string;
+  minValue: string;
+  maxValue: string;
+};
 
 export type RawCreateColumn = { name: string; brokerType: string | null; hasModifier: boolean };
+
+export function qualSequence(sequence: SequenceIdentity): string {
+  return `${quoteCatalogIdent(sequence.schema)}.${quoteCatalogIdent(sequence.name)}`;
+}
+
+export async function identitySequence(
+  client: pg.PoolClient | pg.Client,
+  table: string,
+): Promise<SequenceIdentity | null> {
+  const r = await client.query<{
+    schema_name: string;
+    sequence_name: string;
+    min_value: string;
+    max_value: string;
+  }>(
+    `SELECT n.nspname AS schema_name,
+            c.relname AS sequence_name,
+            s.seqmin::text AS min_value,
+            s.seqmax::text AS max_value
+       FROM pg_catalog.pg_class c
+       JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+       JOIN pg_catalog.pg_sequence s ON s.seqrelid = c.oid
+      WHERE c.oid = pg_catalog.pg_get_serial_sequence($1, 'id')::pg_catalog.regclass
+        AND c.relkind = 'S'`,
+    [qualTable(table)],
+  );
+  const row = r.rows[0];
+  return row === undefined
+    ? null
+    : {
+        schema: row.schema_name,
+        name: row.sequence_name,
+        minValue: row.min_value,
+        maxValue: row.max_value,
+      };
+}
+
+export function identityRestartValue(sequence: SequenceIdentity, maxId: string | null): string {
+  if (maxId !== null && !/^-?\d+$/.test(maxId)) {
+    throw new Error(`identity maximum is not an integer: ${JSON.stringify(maxId)}`);
+  }
+  const restart = maxId === null ? 1n : BigInt(maxId) + 1n;
+  if (restart < BigInt(sequence.minValue) || restart > BigInt(sequence.maxValue)) {
+    throw new Error(
+      `identity restart ${restart} is outside sequence bounds ${sequence.minValue}..${sequence.maxValue}`,
+    );
+  }
+  return restart.toString();
+}
+
+export async function configureBackupSession(
+  client: pg.PoolClient | pg.Client,
+): Promise<void> {
+  await client.query(`SET LOCAL TIME ZONE 'UTC'`);
+  await client.query(`SET LOCAL DateStyle = 'ISO, YMD'`);
+  await client.query(`SET LOCAL extra_float_digits = 3`);
+}
 
 export async function describeTable(
   client: pg.PoolClient | pg.Client,
@@ -205,15 +290,42 @@ export async function describeTable(
   return { columns, createColumns };
 }
 
-// Reads a table's full contents as text cells in id order, with its column
-// metadata. Used by both export (snapshot) and import (verify).
+async function primaryKeyColumns(
+  client: pg.PoolClient | pg.Client,
+  table: string,
+): Promise<RawPrimaryKeyColumn[]> {
+  const r = await client.query<RawPrimaryKeyColumn>(
+    `SELECT a.attname AS name, a.attcollation <> 0 AS collatable
+       FROM pg_catalog.pg_index i
+       CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, position)
+       JOIN pg_catalog.pg_attribute a
+         ON a.attrelid = i.indrelid
+        AND a.attnum = k.attnum
+      WHERE i.indrelid = ('brain.' || quote_ident($1))::regclass
+        AND i.indisprimary
+        AND i.indisvalid
+      ORDER BY k.position`,
+    [assertIdent(table)],
+  );
+  if (r.rows.length === 0) {
+    throw new Error(`brain.${table}: table has no valid primary key; deterministic backup is unsupported`);
+  }
+  return r.rows.map((row) => ({ name: assertIdent(row.name), collatable: row.collatable }));
+}
+
+// Reads a table's full contents as text cells in declared primary-key order,
+// with its column metadata. Used by both export (snapshot) and import (verify).
 export async function snapshotTable(
   client: pg.PoolClient | pg.Client,
   name: string,
 ): Promise<{ columns: ColumnMeta[]; createColumns: RawCreateColumn[]; rows: Row[] }> {
   const { columns, createColumns } = await describeTable(client, name);
+  const primaryKey = await primaryKeyColumns(client, name);
   const selectList = columns.map((c) => `${quoteIdent(c.name)}::text AS ${quoteIdent(c.name)}`).join(', ');
-  const res = await client.query(`SELECT ${selectList} FROM ${qualTable(name)} ORDER BY id`);
+  const orderBy = primaryKey
+    .map((column) => `${quoteIdent(column.name)}${column.collatable ? ' COLLATE pg_catalog."C"' : ''}`)
+    .join(', ');
+  const res = await client.query(`SELECT ${selectList} FROM ${qualTable(name)} ORDER BY ${orderBy}`);
   const rows: Row[] = res.rows.map((r) =>
     columns.map((c): Cell => (r[c.name] === null ? null : (r[c.name] as string))),
   );
@@ -241,7 +353,7 @@ export function orderTables<T extends { name: string; core: boolean }>(tables: T
   });
 }
 
-// Stable content hash over a table's rows (already ordered by id).
+// Stable content hash over a table's rows (already ordered by primary key).
 export function checksumRows(rows: Row[]): string {
   const h = createHash('md5');
   for (const row of rows) {
