@@ -50,6 +50,9 @@ node_modules/
 /bin/
 /dist/
 
+# Local opt-in host certification output; never commit generated attestations.
+/test/attestations/
+
 # Personal learning store — local-only. The framework supports the workflow
 # (users get their own docs/learnings/ when they scaffold), but our entries
 # are CLI-development specific and don't ship with the open-source repo.

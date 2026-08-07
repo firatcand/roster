@@ -1,8 +1,9 @@
 # Roster v2 — Technical SPEC
 
+<!-- forge:adr-section:architecture-summary -->
 ## Architecture summary
 
-Roster is a local, agent-facing CLI plus a remote company Brain. It wraps a working directory with versioned authoring structures and gives Claude Code or Codex bounded access to those structures, company knowledge, use-case-specific tool guidance, evidence, and learning state.
+Roster is a local, agent-facing CLI with an optional first-party remote company Brain. It wraps a working directory with versioned authoring structures and gives Claude Code or Codex bounded access to those structures, company knowledge, use-case-specific tool guidance, evidence, and learning state. Local initialization, scaffolding, discovery, validation, context resolution, and external-tool guidance require no remote infrastructure. When Brain is activated, the workspace must provide both compatible PostgreSQL and S3-compatible storage; embeddings remain optional.
 
 ```text
 Human
@@ -11,10 +12,10 @@ Claude Code or Codex                         ← workflow runtime
   ↓ discover / validate / context / brain / record / dream status
 Roster CLI                                  ← thin framework and context layer
   ├── Working Directory                     ← Git-canonical operating policy
-  ├── Company Brain / Postgres               ← knowledge, indexes, evidence, learning
-  └── Company Brain / S3                     ← raw media and large artifacts
+  ├── Company Brain / PostgreSQL             ← knowledge, indexes, evidence, learning
+  └── Company Brain / S3-compatible storage  ← raw media and large artifacts
 
-External vendor skills / CLIs / MCPs / APIs ← invoked by the host, not Roster
+External skills / CLIs / MCPs / APIs        ← invoked by the host, not Roster
 ```
 
 The core dynamic is:
@@ -30,7 +31,7 @@ Roster owns:
 - sparse scaffolding and deterministic file ownership;
 - schemas, static validation, reference resolution, indexing, discovery, and drift diagnostics;
 - bounded context selection and citations;
-- Brain storage, ingestion, extraction, indexing, retrieval, and graph-shaped company knowledge;
+- Brain PostgreSQL schema, migrations, roles, ingestion, extraction, indexing, retrieval, evidence, learning state, and immutable S3-compatible object operations;
 - tool-use definition schemas and external skill references;
 - completed-run, artifact, feedback, and human-decision evidence;
 - Dreamer readiness, candidates, decisions, and approved lesson materialization; and
@@ -40,15 +41,16 @@ Claude Code or Codex owns:
 
 - interpreting the whole selected plan;
 - choosing and carrying runtime step state;
-- reasoning, prompting, subagent delegation, nested work, retries, and conditions;
-- loading and invoking external vendor skills, CLIs, MCPs, APIs, connectors, and browsers;
-- provider failures and fallbacks;
+- reasoning, request-specific filters, prompting, subagent delegation, nested work, retries, and conditions;
+- loading and invoking external skills, CLIs, MCPs, APIs, connectors, and browsers;
+- provider installation, authentication, syntax, response handling, failures, and fallbacks;
 - presenting and enforcing human decisions;
 - native schedules, reminders, wake/resume, and session state; and
 - rendering results to the human.
 
-Roster must not implement a plan compiler/reducer, active-run cursor, current-step selector, provider router, general task/operations engine, scheduler, or approval authority.
-
+Roster must not implement a plan compiler/reducer, active-run cursor, current-step selector, external-provider executor or router, provider health/fallback layer, credential injector, provider response parser, general task/operations engine, scheduler, or approval authority. Roster Brain commands are the deliberate first-party storage exception, not a general integration framework.
+<!-- /forge:adr-section:architecture-summary -->
+<!-- forge:adr-section:stack -->
 ## Stack
 
 - TypeScript, ESM, strict mode.
@@ -56,11 +58,11 @@ Roster must not implement a plan compiler/reducer, active-run cursor, current-st
 - `tsdown` bundled executable.
 - Hand-rolled argv parsing and JSON-first output.
 - YAML for authored structured definitions with bounded parsing.
-- Neon/Postgres for Brain state.
+- Compatible PostgreSQL for Brain state; managed and self-hosted deployments are supported by documented capabilities rather than vendor identity.
 - S3-compatible storage for immutable bytes and large artifacts.
-- Optional OpenAI embeddings behind privacy and configuration policy.
-- Infisical-managed environment injection; no generated `.env` files.
-
+- Optional embedding providers behind privacy and configuration policy; structured and lexical Brain behavior does not require embeddings.
+- Host/operator, workload-identity, provider-chain, or secret-manager environment injection; no generated `.env` files and no required secret-management vendor.
+<!-- /forge:adr-section:stack -->
 <!-- forge:adr-section:canonical-identifiers -->
 ## Canonical identifiers
 
@@ -76,7 +78,7 @@ Identifiers are stable strings and never use absolute checkout paths as global i
 | `guideline_id` | Authored policy identity and scope |
 | `lesson_id` | Approved materialized lesson identity and scope |
 | `tool_use_id` | Workspace company-use definition for an external skill |
-| `skill_ref` | Canonical external vendor skill package/name identity |
+| `skill_ref` | Canonical external or workspace skill identity |
 | `logical_source_id` | Stable source identity across versions and workspace relocation |
 | `source_version_id` | Immutable content version with provenance |
 | `object_id` | Content-addressed S3 object identity |
@@ -140,29 +142,28 @@ All authored YAML is parsed with byte, alias, node, scalar, and nesting limits. 
 
 ```yaml
 schema_version: 2
-workspace_id: my-roster
+workspace_id: company-operations
 brain:
-  secrets_path: /my-roster
+  secrets_path: /company-operations
   storage:
-    bucket: my-roster-vault
-    region: eu-central-1
+    bucket: company-operations-brain
+    region: region-1
     root_prefix: brain
 functions:
-  gtm:
-    path: functions/gtm
+  operations:
+    path: functions/operations
 hosts:
   claude: enabled
   codex: enabled
 ```
 
-`brain` is optional at initialization. It contains only portable non-secret organization: the Infisical path/reference and the S3 bucket, region, optional endpoint/path-style settings, and optional root prefix that together form this workspace's storage namespace. Connection URLs and credentials remain ambient and Infisical-injected. The retired `brain.binding` shape is rejected with migration guidance rather than preserved as a compatibility shim.
+`brain` is optional at initialization. When present, it declares one complete Brain binding: a generic tracked secret-path reference for PostgreSQL credentials plus the S3-compatible bucket, region, optional endpoint/path-style settings, and optional root prefix that form the workspace object namespace. Connection URLs and credentials remain ambient and host-injected. The retired `brain.binding` shape is rejected with migration guidance rather than preserved as a compatibility shim.
 
-For first initialization, the host asks Roster for the deterministic non-secret runtime role name, stores a strong workspace-specific `ROSTER_BRAIN_URL` at the tracked Infisical path, and retries under ambient injection. Roster validates and uses that credential but never mints, stores, returns, or prints it.
+Brain activation validates PostgreSQL and S3-compatible configuration together. Missing either side is an incomplete, unusable Brain rather than a reduced operating mode. For first activation, the host asks Roster for the deterministic non-secret runtime role name, stores a strong workspace-specific `ROSTER_BRAIN_URL` through its chosen credential mechanism, and retries under ambient injection. Roster validates and uses that credential but never mints, stores, returns, or prints it.
 
-Each configured Brain database stores a protected `workspace_id` and the validated S3 namespace fingerprint. Roster first reads only that protected metadata, compares it with `roster.yaml`, and fails closed on a mismatch before reading company content, touching S3, or mutating Brain state. Any clone carrying the same authored `workspace_id` and authorized Infisical access reaches the same Brain; a different workspace ID must use a different database.
+Each configured Brain database stores a protected `workspace_id` and the validated object namespace fingerprint. Roster first reads only that protected metadata, compares it with `roster.yaml`, and fails closed on a mismatch before reading company content, touching object storage, or mutating Brain state. Any clone carrying the same authored `workspace_id` and authorized credentials reaches the same Brain; a different workspace ID must use a different database.
 
-Brain absence never causes local scaffold or validation commands to fail. For `roster context`, absence returns the complete local bundle, an empty `brain_evidence` array, exit status zero, and exactly one warning-severity `BRAIN_NOT_CONFIGURED` diagnostic. Brain-dependent commands retain the fatal `BRAIN_NOT_CONFIGURED` contract with setup guidance.
-
+Brain absence never causes local scaffold, discovery, validation, or external-tool guidance commands to fail. For `roster context`, absence returns the complete local bundle, an empty `brain_evidence` array, exit status zero, and exactly one warning-severity `BRAIN_NOT_CONFIGURED` diagnostic. A Brain-dependent command with no Brain configuration retains the fatal `BRAIN_NOT_CONFIGURED` contract with setup guidance. Partial Brain configuration makes `roster context` and Brain commands return a stable fatal `BRAIN_CONFIGURATION_INCOMPLETE` diagnostic with nonzero status and no context bundle, and never opens either service; local scaffold, discovery, and validation remain available.
 <!-- /forge:adr-section:workspace-registry -->
 ### Agent definition
 
@@ -255,26 +256,27 @@ Static validation checks:
 
 Array position is the only sequence; the schema has no output binding, dependency, transition, or current-step grammar. Input/output shapes, condition guidance, retries, caps, and approvals are inert instructions for the host, not transition gates. Roster returns the whole selected plan in context.
 
+<!-- forge:adr-section:workspace-tool-use-definition -->
 ### Workspace tool-use definition
 
 ```yaml
 schema_version: 2
-id: social-opportunity-research
+id: market-research
 scope: {}
-skill_ref: exa:search
-purpose: Find timely, credible posts that match our audience and positioning.
+skill_ref: research-provider:search
+purpose: Find timely, attributable material that matches company priorities.
 when:
-  - discovering reply opportunities
+  - researching external opportunities
 capabilities:
-  - web-search
+  - public-search
   - content-retrieval
 rules:
   - use attributable public sources
 output_expectations:
   required: [canonical_url, author, published_at, relevance_reason]
-  guidance: [reject profile and company-homepage URLs as candidate posts]
+  guidance: [reject non-content homepages from candidate results]
 brain:
-  read: [icp, messaging, previously-presented-opportunities]
+  read: [audience, positioning, previously-presented-opportunities]
   write: [discovered-opportunity, retrieval-provenance]
 effects:
   allowed: [external-read, brain-read, brain-write]
@@ -288,25 +290,25 @@ The plan can own a same-ID overlay at its registered plan tool path:
 
 ```yaml
 schema_version: 2
-id: social-opportunity-research
+id: market-research
 scope:
-  function: gtm
-  agent: social-manager
+  function: growth
+  agent: researcher
   plan: opportunity-discovery
-skill_ref: exa:search
-purpose: Rank timely opportunities for this discovery request.
+skill_ref: research-provider:search
+purpose: Rank timely opportunities for this request.
 how:
-  - search first-party and high-credibility sources for the requested lookback
-  - exclude previously presented URLs using Brain history
-  - rank by ICP relevance before engagement volume
+  - search credible sources within the requested lookback
+  - exclude previously presented items using Brain history when Brain is active
+  - rank company relevance before engagement volume
 filters:
-  - exclude URLs already presented according to Brain history
+  - exclude canonical URLs already presented according to Brain history
 approval:
   requirement: human
-  guidance: [wait for the human before any engagement]
+  guidance: [wait for the human before any external write]
 ```
 
-The definition may reference the relevant subset of a vendor skill but must not duplicate provider setup, credentials, syntax, or generic best practices. Raw secret material is forbidden. Effects and approval are policy guidance presented to the host, not Roster enforcement.
+`skill_ref` is the author-time provider and invocation-surface binding. It may identify a reviewed installed or workspace-local skill for an API, CLI, MCP, connector, browser, or other host-supported surface. The referenced skill owns installation, authentication, provider syntax, parsing, compatibility, and generic best practices. The workspace definition owns why and how that capability is used for this company. It must not duplicate credentials or provider setup. Effects and approval are policy guidance presented to the host, not Roster enforcement.
 
 Tool-use ancestry is resolved broad-to-narrow:
 
@@ -314,15 +316,8 @@ Tool-use ancestry is resolved broad-to-narrow:
 workspace → function → agent → plan
 ```
 
-Only `purpose` uses most-specific replacement. `skill_ref` must remain identical;
-`when`, `how`, capabilities, filters, rules, output guidance, approval guidance,
-and evidence accumulate with stable deduplication; Brain selectors are additive
-requested intent, never authorization. An explicit `effects.allowed` set may only
-narrow an inherited set, and approval may only become stricter from `none` to
-`human`. There is no override, clear, negation, or safety-relaxation syntax.
-The flat result retains contributor and field provenance, while expected output
-remains host guidance rather than a provider result gate.
-
+Only `purpose` uses most-specific replacement. `skill_ref` must remain identical; `when`, `how`, capabilities, filters, rules, output guidance, approval guidance, and evidence accumulate with stable deduplication; Brain selectors are additive requested intent, never authorization. An explicit `effects.allowed` set may only narrow an inherited set, and approval may only become stricter from `none` to `human`. There is no override, clear, negation, safety-relaxation, runtime provider selection, or fallback syntax. The flat result retains contributor and field provenance, while expected output remains host guidance rather than a provider-result gate.
+<!-- /forge:adr-section:workspace-tool-use-definition -->
 <!-- forge:adr-section:discovery-and-validation -->
 ## Discovery and validation
 
@@ -333,12 +328,13 @@ remains host guidance rather than a provider result gate.
 - bounded schema parsing;
 - qualified identity and path ownership checks;
 - static cross-reference and cycle checks;
-- tool-use and vendor skill-reference checks;
-- Brain configuration, database workspace identity, S3 namespace, and typed retrieval-scope checks when relevant;
+- tool-use and installed/workspace skill-reference checks without contacting the external provider;
+- complete Brain configuration, database workspace identity, S3-compatible namespace, and typed retrieval-scope checks when Brain is relevant;
 - generated adapter and manifest drift checks; and
 - secret-pattern and unsafe-content checks.
 
-Validation is read-only unless the user requests an explicit scaffold, update, or migration action.
+A workspace with no Brain configuration is a valid local-only workspace. Validation remains callable for a workspace that declares only PostgreSQL or only S3-compatible storage, reports its local structural results, and exits nonzero with `BRAIN_CONFIGURATION_INCOMPLETE`; doctor reports local subsystems independently, marks Brain invalid, and exits nonzero. External-provider authentication, availability, and response compatibility remain host/skill responsibilities rather than Roster validation. Validation is read-only unless the user requests an explicit scaffold, update, or migration action.
+<!-- /forge:adr-section:discovery-and-validation -->
 
 <!-- forge:adr-section:context-request-and-response -->
 ## Context request and response
@@ -399,8 +395,6 @@ The response cannot contain Roster run state, a Roster-selected current step, pr
 
 Mandatory content is never truncated. If its minimum is within the accepted host ceiling but exceeds the caller budget, return `CONTEXT_BUDGET_REQUIRED_OVERFLOW` with the exact accepted retry budget and no partial bundle. If the mandatory minimum exceeds the 128,000-token host ceiling, return `CONTEXT_MANDATORY_UNSERVABLE` with safe section/contributor counts rather than an impossible retry. Token counts use the fixed deterministic estimator and always include raw byte counts.
 <!-- /forge:adr-section:context-request-and-response -->
-
-<!-- /forge:adr-section:context-request-and-response -->
 ## CLI surface
 
 Canonical commands:
@@ -455,11 +449,11 @@ Every mutating command supports stable idempotency where remote state is involve
 
 ### Company Brain
 
-One logical Roster workspace owns one PostgreSQL Brain database and one configured S3 namespace. The database is the cross-workspace isolation boundary; distinct workspaces do not share Brain tables or credentials.
+Roster Brain is a first-party subsystem. One logical Roster workspace owns one PostgreSQL Brain database and one configured S3-compatible namespace. Both are required to activate Brain and together form the portable company-data authority; the database is the cross-workspace isolation boundary, while the object namespace holds immutable raw bytes and large artifacts. Distinct workspaces do not share Brain tables or credentials. Embeddings are an optional retrieval enhancement, not part of the activation requirement.
 
 ### Workspace identity and scope
 
-Protected `brain_meta.workspace_identity` metadata records the stable `workspace_id` and S3 namespace fingerprint. The runtime role may read this identity for the mandatory handshake but cannot alter it. A command that sees a mismatch stops before company-content reads, S3 access, or mutation; the database cannot be activated by another workspace ID.
+Protected `brain_meta.workspace_identity` metadata records the stable `workspace_id` and object namespace fingerprint. The runtime role may read this identity for the mandatory handshake but cannot alter it. A command that sees a mismatch stops before company-content reads, object-store access, or mutation; the database cannot be activated by another workspace ID.
 
 Workspace/function/agent/plan values on relevant rows are typed hierarchical retrieval labels. They guide selection, ranking, explanation, and exclusion inside one trusted workspace; they are not database authorization principals. Privacy class, trust class, actor assurance, and provenance remain explicit policy metadata.
 
@@ -523,7 +517,7 @@ Operational rows share the workspace Brain identity, object storage, typed retri
 
 ### Object layout
 
-S3 keys are relative to the workspace's validated bucket/root-prefix namespace and derive from hashes and bounded IDs, never raw user paths:
+S3-compatible keys are relative to the workspace's validated bucket/root-prefix namespace and derive from hashes and bounded IDs, never raw user paths:
 
 ```text
 objects/<sha256-prefix>/<sha256>
@@ -531,28 +525,28 @@ evidence/<run-id>/<artifact-id>
 exports/<export-id>
 ```
 
-Conditional writes, content hashes, object version IDs where supported, and database intent rows make cross-store operations recoverable. The database stores and verifies the configured namespace fingerprint before object access. S3 endpoint configuration requires HTTPS by default and explicit trust for non-standard endpoints; private/link-local targets are rejected unless explicitly authorized for a known deployment.
-
+Conditional writes, content hashes, object version IDs where supported, and database intent rows make cross-store operations recoverable. The database stores and verifies the configured namespace fingerprint before object access. Object-store endpoint configuration requires HTTPS by default and explicit trust for non-standard endpoints; private/link-local targets are rejected unless explicitly authorized for a known deployment.
 <!-- /forge:adr-section:data-model -->
 <!-- forge:adr-section:brain-ingestion -->
 ## Brain ingestion
 
-1. Resolve tracked Brain configuration, read only protected identity metadata, and verify the database `workspace_id` and S3 namespace fingerprint before company-content reads, S3 access, or mutation.
+Brain ingestion is available only after complete PostgreSQL and S3-compatible activation. It performs no synthetic per-command liveness probe beyond the service I/O needed by the operation.
+
+1. Resolve tracked Brain configuration, require both services, read only protected identity metadata, and verify the database `workspace_id` and object namespace fingerprint before company-content reads, object-store access, or mutation.
 2. Validate the typed retrieval scope, privacy, source kind/origin and identity contract (automatic for files and fetched media; a required host-supplied stable key for inline text, structured records, and produced artifacts), external-path grant, media type, and size.
 3. Normalize only identity metadata; do not mutate source bytes.
 4. Compute the content hash and canonical request fingerprint, then create or reuse a durable ingest intent.
-5. Conditionally store or verify the content-addressed object inside the validated workspace S3 namespace.
+5. Conditionally store or verify the content-addressed object inside the validated workspace namespace.
 6. Insert or reuse the immutable source version and update the logical source's current-version pointer transactionally.
 7. Record locators and provenance; extraction and lexical/optional embedding readiness continue through their versioned lifecycle.
 8. Mark the intent complete and emit stable source/version/object identity with sanitized recovery state.
 
 Retries converge. A host-requested `roster brain doctor --repair` reconciles pending intents, missing objects, verified intent-owned orphan objects, stuck extraction, and index drift. Missing source bytes are never fabricated. `brain ingest` is confined to workspace paths by default; any external read requires an explicit, target-specific human-approved path grant. Fetched-media provider execution belongs to the host/tool; Roster receives selected bytes plus origin metadata.
-
 <!-- /forge:adr-section:brain-ingestion -->
 <!-- forge:adr-section:brain-retrieval -->
 ## Brain retrieval
 
-The database connection establishes the workspace boundary before query. Roster first verifies the tracked/database `workspace_id` and S3 namespace, then combines:
+Retrieval requires a completely activated Brain, although a retrieval command ordinarily performs PostgreSQL work and reads S3-compatible objects only when the selected evidence requires their bytes. The database connection establishes the workspace boundary before query. Roster first verifies the tracked/database `workspace_id` and object namespace, then combines:
 
 - exact and structured filters;
 - typed workspace/function/agent/plan retrieval labels;
@@ -560,14 +554,15 @@ The database connection establishes the workspace boundary before query. Roster 
 - alias-aware identity resolution where enabled; and
 - optional embedding or bounded graph expansion only when configured and measured.
 
-Retrieval applies selector-compatible scope labels, privacy, trust, current-version, and tombstone filters before final ranking. Scope labels guide context selection and exclusion; they do not grant authority. Results contain exact source-version citations and deterministic retrieval reasons. A workspace identity or storage-namespace mismatch stops after the protected-metadata handshake and before company-content reads, S3 access, or mutation, and returns an actionable sanitized diagnostic.
+Retrieval applies selector-compatible scope labels, privacy, trust, current-version, and tombstone filters before final ranking. Scope labels guide context selection and exclusion; they do not grant authority. Results contain exact source-version citations and deterministic retrieval reasons. A workspace identity or storage-namespace mismatch stops after the protected-metadata handshake and before company-content reads, object-store access, or mutation, and returns an actionable sanitized diagnostic.
 
 Default retrieval excludes `legacy-unverified` evidence. A future explicit host request may include it, but every result retains that trust class and remains evidence only; it can never supply authority, policy, or instructions.
 
 Advanced retrieval remains evidence-gated:
 
-- trigram aliases activate only if the adopter gold set shows benefit;
-- embeddings are never default-on solely by assumption;
+- trigram aliases activate only if sanitized evaluation sets show benefit;
+- embeddings are optional and never default-on solely by assumption;
+- embedding vendors and models are interchangeable behind recorded capability and privacy policy; and
 - multi-hop graph expansion, automatic edge extraction, and hosted reranking remain optional until measured quality, latency, cost, privacy, and maintenance thresholds pass.
 <!-- /forge:adr-section:brain-retrieval -->
 ## Portable evidence
@@ -655,7 +650,7 @@ Host adapters are generated activation instructions and thin command mappings. E
 
 Adapters never embed a business-specific plan, provider secret, schedule, reducer, or alternate authoring source. Common host-neutral content is generated from one source; host-specific wrappers are minimal. Adapter metadata records generator version, protocol version, content hash, and supported assurance level.
 
-Gemini support is outside the initial v2 product boundary. Shared renderer interfaces may remain only if they do not impose shipping, test, or compatibility cost.
+Additional host support is outside the initial v2 product boundary. Shared renderer interfaces may remain only if they do not impose shipping, test, or compatibility cost.
 
 <!-- forge:adr-section:doctor -->
 ## Doctor
@@ -666,21 +661,21 @@ Gemini support is outside the initial v2 product boundary. Shared renderer inter
 - registry/path ownership and generated drift;
 - structured plan references and cycles;
 - context resolution and budget health;
-- tracked Brain configuration, Infisical reference availability, protected database `workspace_id`, least-privilege role/schema state, S3 namespace trust, ingest recovery, and retrieval citation health;
-- vendor skill installation and workspace tool-use references;
+- Brain activation state: local-only/not configured, invalid partial configuration, or complete PostgreSQL-plus-S3-compatible configuration;
+- tracked secret-reference availability, protected database `workspace_id`, least-privilege role/schema state, object namespace trust, ingest recovery, and retrieval citation health for a complete Brain;
+- installed/workspace skill and tool-use references, without external-provider authentication or health checks;
 - evidence write/read health and semantic-separation policy;
 - Dreamer policy, watermark, readiness, candidate state, and host activation instruction;
 - Claude Code and Codex adapter version/capability drift;
 - migration state and legacy surfaces; and
 - secret and unsafe-path findings.
 
-Doctor distinguishes missing configuration, unavailable credentials/services, wrong-database identity, misbound bucket/root prefix, role/schema drift, and source/object integrity failure with stable redacted diagnostics. It treats function/agent/plan scopes as retrieval-label correctness, never as an RLS authorization claim. Doctor never claims that Roster executed a plan. Fixtures verify activation behavior at the host boundary.
-
+Doctor distinguishes no Brain configuration, incomplete Brain configuration, unavailable injected credentials/services, wrong-database identity, misbound bucket/root prefix, role/schema drift, and source/object integrity failure with stable redacted diagnostics. A complete configuration is validated as one activation contract, but an individual diagnostic may test only the service relevant to that check. It treats function/agent/plan scopes as retrieval-label correctness, never as an RLS authorization claim. Doctor never claims that Roster executed a plan or validates the live behavior of an external provider. Fixtures verify activation behavior at the host boundary.
 <!-- /forge:adr-section:doctor -->
 <!-- forge:adr-section:migration -->
 ## Migration
 
-Migration is explicit, one-way, and dry-run first.
+Migration is explicit, one-way, and dry-run first. Local workspace migration works without Brain infrastructure. A Brain migration or cutover requires a complete PostgreSQL and S3-compatible target and never activates a partial Brain.
 
 ### Dry run
 
@@ -693,24 +688,24 @@ The report classifies every path and database/storage surface as:
 - remove generated legacy surface; or
 - require human decision.
 
-The report includes fingerprints, conflicts, possible secret locations, the intended stable `workspace_id`, tracked non-secret Brain configuration, protected database identity state, configured S3 namespace, external schedule blocks targeted for removal, and a backup plan. It never prints secret values.
+The report includes fingerprints, conflicts, possible secret-reference locations, the intended stable `workspace_id`, tracked non-secret Brain configuration, protected database identity state, configured object namespace, external schedule blocks targeted for removal, and a backup plan. It never prints secret values.
 
 ### Apply
 
 Apply creates a recoverable backup/fingerprint, acquires workspace and remote migration locks, revalidates the dry-run fingerprint, performs atomic local writes, records remote idempotency state, and emits a redacted final audit report.
 
-For a database with no protected identity, apply initializes only the explicitly approved logical workspace's `workspace_id` and S3 namespace fingerprint. A different existing identity, ambiguous legacy ownership, or unvalidated bucket/root prefix stops after the protected-metadata handshake and before company-content reads, S3 access, or mutation, and becomes an explicit human-decision item.
+For a database with no protected identity, apply initializes only the explicitly approved logical workspace's `workspace_id` and object namespace fingerprint. A different existing identity, ambiguous legacy ownership, incomplete target configuration, or unvalidated bucket/root prefix stops after the protected-metadata handshake and before company-content reads, object-store access, or mutation, and becomes an explicit human-decision item.
 
 Migration must:
 
 - preserve authored agents, plans, guidelines, useful lessons, and tool intent;
 - create or update tracked `roster.yaml` Brain organization without storing credentials;
-- upgrade each existing workspace Brain in place in its own database/S3 namespace, without a Brain-space wrapper;
-- convert legacy tool bindings into reviewed workspace tool-use definitions and external skill references;
+- upgrade each existing workspace Brain in place in its own database/object namespace, without a Brain-space wrapper;
+- convert legacy tool bindings into reviewed workspace tool-use definitions and external skill references without promoting a provider into the product contract;
 - convert absolute-path source identities into stable logical source identities while retaining paths as legacy locators;
-- preserve verifiable structured knowledge, graph history, S3 object versions, and source lineage;
+- preserve verifiable structured knowledge, graph history, object versions, and source lineage;
 - import useful logs, approvals, and candidates only as `legacy-unverified` evidence;
-- map secret key names to Infisical references without reading or persisting values;
+- map secret key names to generic tracked references without reading or persisting values;
 - remove Roster-managed schedule blocks only with exact targets and explicit consent;
 - leave host-native schedules untouched;
 - delete or archive general ops/HITL state after extracting minimal evidence; and
@@ -718,7 +713,7 @@ Migration must:
 
 During phase 2, the legacy Brain spellings `mount`, `table`, `sql`, `config`, `reindex`, `gc`, `export`, and `import` remain parser-recognized only to return protected-identity diagnostics or a stable fail-closed disabled-command error; they never perform legacy behavior. `brain query` remains recognized but reports not ready until extraction, indexing, and cited retrieval ship. Issue #363 performs the one-way cutover that removes these spellings.
 
-Existing tables and legacy S3 keys remain backed up and readable for verification until the one-way cutover completes. Frozen snapshots of `my-roster` and `roster-lobu` are mandatory migration fixtures. Phase-2 lifecycle and migration-foundation work does not delete S3 object bytes.
+Existing tables and legacy object keys remain backed up and readable for verification until the one-way cutover completes. Sanitized frozen representative snapshots are mandatory migration fixtures; private live workspaces are not repository dependencies. Phase-2 lifecycle and migration-foundation work does not delete object bytes.
 <!-- /forge:adr-section:migration -->
 ## Surplus and removal map
 
@@ -738,14 +733,17 @@ Existing tables and legacy S3 keys remain backed up and readable for verificatio
 - Canonical JSON, digests, idempotency conflicts, trust taxonomy, sanitization, Postgres migrations, conditional object writes, and content-addressed artifacts extracted into the smaller evidence core.
 - Role-based functions/agents, structured plans, guidelines, playbooks, lessons, Chief of Staff authoring role, and Dreamer product concepts.
 
+<!-- forge:adr-section:quarantine-or-measure -->
 ### Quarantine or measure
 
-- Notion task state machine as an optional external integration through a vendor skill/tool-use definition.
+- External task-system state machines as optional integrations through reviewed skills and company tool-use definitions, never core provider logic.
 - Second-opinion behavior as repository development tooling, not Roster product runtime.
 - Tripwire as an optional report-only host defense, never a trust boundary.
-- Gemini adapter until measured product demand.
-- Trigram aliases, multi-hop graph search, automatic edges, default embeddings, and hosted reranking until quality evaluation justifies activation.
+- Additional host adapters until measured product demand justifies their maintenance.
+- Trigram aliases, multi-hop graph search, automatic edges, optional embedding default posture, and hosted reranking until sanitized quality evaluation justifies activation.
 
+Capabilities are evaluated by quality, latency, cost, privacy, maintenance, demand, and activation evidence. Named providers may appear as non-normative examples, but neither prior use nor lack of use decides the product disposition.
+<!-- /forge:adr-section:quarantine-or-measure -->
 ## Security model
 
 ### Trust classes
@@ -777,12 +775,12 @@ Authored policy, vendor instructions, Brain evidence, and tool output remain str
 <!-- forge:adr-section:brain-isolation -->
 ### Brain isolation
 
-- Each logical `workspace_id` owns a different PostgreSQL database and one validated S3 bucket/root-prefix namespace; clones of that workspace may share them through authorized Infisical access.
-- Tracked `roster.yaml` identity and storage organization must match protected database metadata. A mismatch stops after the protected-metadata handshake and before company-content reads, S3 access, or mutation, and never becomes a guessed migration.
+- Each logical `workspace_id` owns a different PostgreSQL database and one validated S3-compatible bucket/root-prefix namespace; both are required for Brain activation, and authorized clones of that workspace may share them.
+- Tracked `roster.yaml` identity and storage organization must match protected database metadata. A mismatch stops after the protected-metadata handshake and before company-content reads, object-store access, or mutation, and never becomes a guessed migration.
 - The database is the cross-workspace boundary. Function/agent/plan scopes are typed retrieval labels, not authorization principals; v2 introduces no Brain-space tenancy, binding roles, cross-scope RLS, or per-agent credentials.
 - Runtime roles cannot change schema, create arbitrary tables, mutate protected workspace identity/provenance, or bypass the closed write surface.
+- Credentials may arrive through any supported host/operator injection, workload identity, provider chain, or secret manager and are never stored in authored files.
 - Privacy class controls Roster-managed storage, extraction, embedding, retrieval, and export behavior. Secret-class content is never embedded or emitted in context.
-
 <!-- /forge:adr-section:brain-isolation -->
 ### Network and storage
 
@@ -792,13 +790,16 @@ Authored policy, vendor instructions, Brain evidence, and tool output remain str
 - Postgres and S3 partial failures are detectable and repairable.
 - Export and deletion actions are scoped and audited.
 
+<!-- forge:adr-section:vendor-skill-supply-chain -->
 ### Vendor skill supply chain
 
 - Prefer immutable commit/digest pins over branches or mutable tags.
 - Record source, resolved revision, content hash, install time, and review state.
 - Source allowlists and human review precede activation where policy requires.
-- External skill secrets remain in Infisical/provider mechanisms and never enter authored Roster files or context output.
-
+- `skill_ref` is an opaque authored provider/surface binding; Roster resolves and validates the reviewed skill but does not infer, route, execute, authenticate, health-check, or parse its external provider.
+- External skill secrets remain in host/operator, workload-identity, provider-chain, or secret-manager mechanisms and never enter authored Roster files or context output.
+- A provider without a published skill may use a reviewed workspace-local skill under the same provenance and drift rules.
+<!-- /forge:adr-section:vendor-skill-supply-chain -->
 ### Human decisions
 
 Decision evidence never bypasses native host safety prompts. An old decision cannot be replayed as authority for a materially different action. Action digests include normalized target, effect, scope, and material parameters.
@@ -806,33 +807,31 @@ Decision evidence never bypasses native host safety prompts. An old decision can
 <!-- forge:adr-section:environment-variables -->
 ## Environment variables
 
-Roster configuration stores references and non-secret metadata only. Each workspace names its Infisical path/reference in `roster.yaml`; commands needing Brain secrets are invoked under `infisical run` or another explicitly supported ambient injection mechanism. Roster must not create `.env`, copy resolved values into generated files, print resolved secrets, or accept secret values inside tool-use definitions. Runtime/admin URLs are workspace-specific, and their database identity must match the tracked `workspace_id` before use.
+Roster configuration stores references and non-secret metadata only. A workspace names its generic secret path/reference in `roster.yaml`; commands needing Brain credentials run under the host/operator's ambient injection, workload identity, provider credential chain, or chosen secret manager. Roster must not create `.env`, copy resolved values into generated files, print resolved secrets, or accept secret values inside tool-use definitions. Runtime/admin URLs are workspace-specific, and their database identity must match the tracked `workspace_id` before use.
 
-| Variable | Required for | Secret handling |
+| Variable or credential source | Required for | Secret handling |
 |---|---|---|
-| `ROSTER_BRAIN_ADMIN_URL` | Explicit initialization/migration/repair for this workspace-owned Brain database | Infisical-injected through the tracked secret reference; never logged or stored in workspace files |
-| `ROSTER_BRAIN_URL` | First Brain initialization plus agent-facing reads/writes, context, evidence, and Dreamer state for this workspace-owned Brain database | Host-created and Infisical-injected least-privilege runtime URL; Roster validates its derived role, uses it for initial role creation and a fresh authority proof, never returns or prints it, and rejects a database `workspace_id` mismatch |
-| `OPENAI_API_KEY` | Optional privacy-permitted OpenAI embedding generation/reindex only | Infisical-injected; absence preserves lexical/structured behavior |
-| `AWS_ACCESS_KEY_ID` | S3-compatible Brain object access | Infisical-injected; never stored in Brain config |
-| `AWS_SECRET_ACCESS_KEY` | S3-compatible Brain object access | Infisical-injected; never stored in Brain config |
-| `AWS_SESSION_TOKEN` | Optional temporary S3 credentials | Infisical-injected and never persisted |
-| `AWS_REGION` | Optional S3 region fallback when Brain non-secret config omits it | Non-secret but supplied through the same command environment |
+| `ROSTER_BRAIN_ADMIN_URL` | Explicit Brain initialization/migration/repair for this workspace-owned PostgreSQL database | Ambiently injected; never logged or stored in workspace files |
+| `ROSTER_BRAIN_URL` | First Brain initialization plus agent-facing reads/writes, context, evidence, and Dreamer state | Host-created least-privilege URL; Roster validates its derived role, never returns or prints it, and rejects a database `workspace_id` mismatch |
+| S3-compatible SDK/provider credential chain | Required together with PostgreSQL to activate Brain object storage | Ambient credentials or workload identity; never stored in Brain config |
+| Embedding-provider credential | Optional privacy-permitted embedding generation/reindex only | Provider-specific ambient injection; absence preserves lexical/structured behavior |
 
-Bucket, region, endpoint, root prefix, path-style behavior, embedding enablement, provider/model metadata, retrieval constants, and retention policy are non-secret per-workspace Brain configuration. External vendor tool environment variables belong to their vendor skills and host sessions, not the Roster tool-use schema.
+The reference S3-compatible adapter may consume standard AWS SDK variables such as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, and `AWS_REGION`; compatible endpoints and workload-identity/provider chains remain valid and those names are not a universal product requirement. The reference embedding adapter may consume `OPENAI_API_KEY`; embeddings and that provider are optional.
 
-External vendor tool secrets and connection configuration are outside Roster's provider layer. The vendor skill and host own their use.
-
+Bucket, region, endpoint, root prefix, path-style behavior, embedding enablement, provider/model metadata, retrieval constants, and retention policy are non-secret per-workspace Brain configuration. Brain is considered configured only when its PostgreSQL credential reference and S3-compatible namespace/credential path are complete. External-tool environment variables belong to their referenced skills and host sessions, not the Roster tool-use schema or a Roster provider layer.
 <!-- /forge:adr-section:environment-variables -->
+<!-- forge:adr-section:performance-and-quality-targets -->
 ## Performance and quality targets
 
-- Local discovery and static validation p95 under 250 ms for representative adopters after warm index.
+- Local discovery and static validation p95 under 250 ms for sanitized representative workspaces after warm index.
 - Local mandatory context assembly p95 under 500 ms excluding remote Brain query.
 - Remote Brain query/context p95 under 2 seconds for representative gold tasks under configured result caps.
 - Deterministic equivalent context selection across Claude Code and Codex.
-- At least 60 percent fewer context tokens than the frozen eager-load `my-roster` baseline.
-- Required-context recall and citation completeness thresholds defined by the adopter gold set; no launch with silent required-context loss.
+- At least 60 percent fewer context tokens than a frozen sanitized eager-load baseline.
+- Required-context recall and citation completeness thresholds defined by distributable gold sets; no launch with silent required-context loss.
+- Hermetic external-tool fixtures cover multiple `skill_ref` providers and invocation surfaces, including a non-search/non-MCP shape.
 - No raw secret canary in any JSON, diagnostic, log, context, migration, or artifact metadata surface.
-
+<!-- /forge:adr-section:performance-and-quality-targets -->
 ## Observability
 
 Structured diagnostics use stable codes, command, workspace/Brain scope, duration, counts, versions, and redacted correlation IDs. They do not include secret values or raw sensitive context by default.
@@ -913,15 +912,19 @@ completed evidence/feedback
 - migration classification and fingerprinting.
 
 <!-- /forge:adr-section:unit-and-property-tests -->
+<!-- forge:adr-section:seeded-golden-flow -->
 ### Seeded golden flow
 
-Both host fixtures discover the same agent and plan, interpret the plan themselves, receive equivalent bounded context and tool-use definitions, simulate vendor execution, record evidence, observe Dreamer due, promote a candidate after simulated human approval, and receive the lesson in a later bundle. The fixture contains no Roster reducer, current step, schedule, provider router, or approval authority.
-
+Both host fixtures discover the same agent and plan, interpret the plan themselves, receive equivalent bounded context and provider-neutral tool-use definitions, simulate execution through different hermetic external-skill bindings, record evidence, observe Dreamer due, promote a candidate after simulated human approval, and receive the lesson in a later bundle. The fixture contains no Roster reducer, current step, schedule, external-provider router/executor/parser, credential injector, or approval authority. Local-only fixtures require no infrastructure; any Brain-backed fixture supplies both hermetic PostgreSQL and S3-compatible storage, with embeddings optional.
+<!-- /forge:adr-section:seeded-golden-flow -->
+<!-- forge:adr-section:real-adopter-flows -->
 ### Real adopter flows
 
-- `my-roster`: Social Media Manager discovery with real Brain retrieval and an authored Exa/Bright Data-style tool-use definition.
-- `roster-lobu`: a representative distinct workflow proving the model is not social-media-specific.
-
+- Committed proof uses at least two sanitized, distributable reference workflows with different company use cases and `skill_ref` provider/surface bindings, including one non-search or non-MCP shape. No private repository name, local path, Brain content, credential, or live snapshot is a public fixture or requirement.
+- Bounded test-only reference drivers consume both generated Claude Code and Codex projections, resolve the same Roster guidance, and invoke the referenced fictional fixture skills; optional live smokes separately exercise actual logged-in hosts. Roster performs no external-provider execution, routing, authentication, health check, fallback, or response parsing.
+- A reference workflow without Brain needs no remote infrastructure. Any Brain-backed workflow supplies complete PostgreSQL and S3-compatible test services; embeddings remain optional.
+- One explicitly configured, skip-by-default live smoke per host may exercise a workspace-selected installed public skill through the operator's currently logged-in host. It commits no personal configuration or provider response, uses no direct model/provider API-key harness, and makes no named live provider a CI dependency.
+<!-- /forge:adr-section:real-adopter-flows -->
 <!-- forge:adr-section:adversarial-tests -->
 ### Adversarial tests
 

@@ -9,3 +9,4 @@
 - 2026-08-04 — `one-brain-database-per-workspace`
 - 2026-08-05 — `phase-two-legacy-brain-cutover`
 - 2026-08-05 — `host-owned-brain-runtime-credentials`
+- 2026-08-07 — `provider-neutral-tools-native-brain`
