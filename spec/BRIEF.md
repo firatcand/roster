@@ -38,19 +38,21 @@ Plans are deterministic operating guides, not prompts and not programs. They def
 
 ### Brain
 
-Brain is a Roster-owned, remote company knowledge system backed by Postgres and S3-compatible object storage. It is broader than Roster product data and can hold company facts, people, customers, prospects, examples, documents, content, ideas, tasks, decisions, events, relationships, run observations, and feedback.
+Brain is an optional first-party Roster subsystem. A workspace can initialize, scaffold, discover, validate, and assemble local context without Brain infrastructure or credentials. Brain activates only when both a compatible PostgreSQL database and S3-compatible object-storage namespace are completely configured and validated. A database-only or object-store-only declaration never enables a reduced Brain mode.
 
-Postgres owns identity, scope, metadata, provenance, structured knowledge, indexes, retrieval state, and learning state. S3 owns raw media and large immutable artifacts. OpenAI embeddings are optional indexing infrastructure, not the only retrieval mode.
+Roster directly owns Brain initialization, identity checks, migrations, ingestion, retrieval, evidence, repair, and learning-state operations. PostgreSQL owns identity, scope, metadata, provenance, structured knowledge, indexes, retrieval state, and learning state. S3-compatible storage owns raw media and large immutable artifacts.
 
-Clones and machines of one logical workspace share its remote company Brain. Each distinct `workspace_id` owns a different PostgreSQL database and S3 namespace. External systems such as Notion remain authoritative until selected information is explicitly ingested with provenance.
+Lexical and structured retrieval work without embeddings. Embeddings are an optional, provider-neutral enhancement. Credentials are supplied ambiently by the user's chosen secret manager, workload identity, or provider credential mechanism; no storage, embedding, or secret-management vendor is part of the product contract.
+
+Clones and machines of one logical workspace may share its Brain. Each distinct `workspace_id` owns a different PostgreSQL database and S3-compatible namespace. External systems remain authoritative until selected information is explicitly ingested with provenance.
 
 ### Tools
 
-Roster does not replace vendor skills or connect, route, health-check, or execute external providers.
+Roster does not replace external or workspace skills or connect, route, health-check, or execute external providers.
 
-A vendor skill owns installation, authentication, syntax, version compatibility, output parsing, and provider-specific best practices. A Roster workspace tool-use definition owns how that skill is applied here: why and when to use it, which capabilities matter, business filters, query strategy, expected result, approval guidance, and what to read from or save into Brain. A plan references the tool-use definition.
+An external or workspace skill owns installation, authentication, syntax, version compatibility, output parsing, and provider-specific best practices. A Roster workspace tool-use definition owns how that skill is applied here: why and when to use it, which capabilities matter, business filters, query strategy, expected result, approval guidance, and what to read from or save into Brain. A plan references the tool-use definition.
 
-Brain's own Postgres, S3, extraction, embedding, and retrieval commands are the explicit built-in exception because Brain is a Roster subsystem.
+Claude Code or Codex invokes the external API, CLI, MCP server, browser, or connector. Brain storage and indexing are the explicit built-in exception: because Brain is a Roster subsystem, Roster directly performs its PostgreSQL, S3-compatible storage, extraction, optional embedding, and retrieval operations. That exception must not become a generic external-provider execution layer.
 
 ## v2 scope
 
@@ -68,11 +70,11 @@ Brain's own Postgres, S3, extraction, embedding, and retrieval commands are the 
 
 - A Roster-owned plan compiler, reducer, current-step cursor, transition engine, retry engine, or output-binding runtime.
 - Roster-owned scheduling, cron, daemons, wake/resume, polling, or session management.
-- A generic task queue, lease system, outbox, inbox, operations platform, or Slack-specific control plane.
+- A generic task queue, lease system, outbox, inbox, operations platform, or channel-specific control plane.
 - Roster-owned approval authority. The host waits for and enforces human decisions; Roster may store action-bound decision evidence for portability.
 - A generic provider connection, routing, fallback, secret-injection, or execution layer for external tools.
 - A hosted Roster agent, chat UI, or requirement that humans call Roster CLI themselves.
-- Automatic ingestion of everything from Notion, social networks, repositories, or other company systems.
+- Automatic ingestion of everything from task systems, social networks, repositories, or other company systems.
 
 ## Product principles
 
@@ -86,27 +88,34 @@ Brain's own Postgres, S3, extraction, embedding, and retrieval commands are the 
 
 ## Definition of done
 
-Roster v2 is complete when the Social Media Manager discovery plan in `my-roster` works through both Claude Code and Codex as follows:
+Roster v2 is complete when a synthetic, non-normative representative workflow succeeds through both Claude Code and Codex as follows:
 
-1. The human asks the host to discover social opportunities.
+1. The human asks the host to perform specialized work.
 2. The host discovers the relevant agent and reads its complete structured plan.
-3. Roster returns a bounded, cited context bundle containing applicable guidelines, approved lessons, Brain examples and company facts, tool-use definitions, and vendor skill references.
-4. The host derives the request-specific filters, invokes the appropriate vendor skill or CLI, interprets the result, and completes the plan without a Roster execution engine.
-5. Roster records the completed-run summary, source and tool provenance, artifacts, outcome, feedback, and any human decision evidence in Brain.
+3. Roster returns a bounded, cited bundle containing applicable guidelines, approved lessons, optional Brain evidence, tool-use definitions, and external skill references.
+4. The host derives request-specific filters, invokes the external tool through its native API, CLI, MCP, browser, or connector surface, and completes the plan without a Roster execution engine.
+5. With Brain active, Roster records the completed-run summary, provenance, artifacts, outcome, feedback, and any human-decision evidence.
 6. Dreamer becomes due from durable evidence, the host invokes the Dreamer skill, and a cited candidate is stored.
 7. After human approval, the lesson is materialized in the working directory and changes a later applicable context bundle.
 
-The representative bundle must use at least 60 percent fewer tokens than the frozen eager-load baseline while meeting required-context recall, irrelevant-context exclusion, citation completeness, deterministic selection, secret-safety, and scope-selection thresholds.
+The proof also shows that initialization and local context work with no infrastructure, while Brain remains inactive for no configuration, PostgreSQL-only configuration, and object-storage-only configuration and activates only when both stores pass compatibility and identity checks.
+
+External-tool validation uses multiple hermetic fixtures spanning materially different invocation surfaces and provider contracts. One configured live-provider smoke per host is optional. Fixture workflows, provider identities, and live providers are illustrative and non-normative.
+
+The representative bundle must use at least 60 percent fewer tokens than a frozen synthetic eager-load baseline while meeting required-context recall, irrelevant-context exclusion, citation completeness, deterministic selection, secret-safety, and scope-selection thresholds.
 
 ## Defaults and constraints
 
-- `roster init` may succeed without Brain credentials. Brain-dependent operations fail clearly until Brain is configured.
-- Neon/Postgres and S3 are remote so Brain and run evidence are portable across machines.
+- `roster init`, local scaffolding, discovery, validation, and local context assembly require no PostgreSQL, object storage, embedding provider, or secret manager.
+- Brain-dependent operations require both compatible PostgreSQL and S3-compatible storage. No configuration leaves Brain inactive and preserves successful local context with `BRAIN_NOT_CONFIGURED`. Partial configuration makes `roster context` and Brain commands fail nonzero with `BRAIN_CONFIGURATION_INCOMPLETE`, returns no context bundle, and touches neither store; local scaffolding, discovery, and validation remain available.
+- Any providers satisfying the documented PostgreSQL, S3-compatible storage, and optional embedding contracts may be used.
+- Credentials remain ambient and may be supplied by any secret manager, workload identity, or provider credential chain; Roster stores no resolved secrets.
+- Lexical and structured retrieval remain available without embeddings.
 - Markdown run logs are optional projections; Brain is canonical for portable run and learning evidence.
 - Operational evidence is stored separately from semantic company knowledge and is not embedded or retrieved as ordinary knowledge by default.
 - External `skill_ref` values use a canonical package/name identity; generated host adapters may map that identity to host-specific installation paths.
 - Plans and tool-use definitions may include approval guidance, but only the host can pause and enforce the decision.
-- No backwards-compatibility shim is permanent. Migration is explicit, one-way, and rehearsed against `my-roster` and `roster-lobu`.
+- No backwards-compatibility shim is permanent. Migration is explicit, one-way, and rehearsed against at least two sanitized fixtures representing distinct workflow domains.
 
 ## Open product-boundary questions
 

@@ -79,7 +79,7 @@ Through the host, the user can initialize a folder and create only the functions
 - A fresh repository contains only `roster.yaml`, a short host-neutral `ROSTER.md`, and generated host activation files when installed.
 - Functions, agents, plans, guidelines, tool-use definitions, and lesson directories appear on first use.
 - Two same-named agents in different functions resolve unambiguously by qualified identity.
-- Unknown fields, broken references, duplicate identities, path escapes, unsafe symlinks, stale generated files, literal machine-specific absolute paths, and partial Brain configuration produce actionable diagnostics.
+- Unknown fields, broken references, duplicate identities, path escapes, unsafe symlinks, stale generated files, and literal machine-specific absolute paths produce actionable diagnostics. Validation remains callable for a partially configured Brain, reports local structural results, and exits nonzero with `BRAIN_CONFIGURATION_INCOMPLETE`; doctor reports local subsystems independently, marks Brain invalid, and exits nonzero.
 - A workspace with no Brain configuration remains healthy for local-only behavior; a declared Brain requires complete PostgreSQL and S3-compatible configuration before Brain use.
 - Discovery returns compact metadata by default and full content only when requested or included in a context bundle.
 
@@ -153,7 +153,7 @@ The bundle never contains a Roster-selected current step, transition, next actio
 - Required function/agent/policy, complete selected-plan closure, and step-referenced effective tool/skill pairs are reserved before optional lessons or Brain evidence.
 - Required content is never truncated: a reachable budget shortfall reports an exact accepted retry, while a mandatory minimum above the host ceiling reports a distinct unservable error.
 - Missing Brain configuration exits successfully with the complete local bundle, empty Brain evidence, and one `BRAIN_NOT_CONFIGURED` warning diagnostic.
-- Partial Brain configuration fails before opening PostgreSQL or S3-compatible storage.
+- Partial Brain configuration makes `roster context` return no bundle, a fatal `BRAIN_CONFIGURATION_INCOMPLETE` diagnostic, and a nonzero exit before opening PostgreSQL or S3-compatible storage; local scaffolding, discovery, and validation remain available.
 - A configured database/object-namespace identity mismatch stops after the protected-metadata handshake and before company-content reads, object-store access, or mutation.
 - Optional retrieval failure, rejected candidates, or candidate diagnostic examples cannot corrupt or overflow a servable mandatory local bundle.
 - Equivalent inputs and equivalent source versions yield the same semantic bundle and inclusion explanation for Claude Code and Codex.
@@ -190,6 +190,7 @@ Roster Brain ships as a first-party product subsystem. Each logical workspace ow
 - Lexical and structured retrieval work without an embedding credential.
 - Optional embeddings and graph expansion are measured enhancements with recorded provider/model/version metadata.
 - Superseded, tombstoned, and default-excluded `legacy-unverified` content cannot silently become authority.
+- Preserved `legacy-unverified` history is absent from default retrieval, visible only through an explicit future host request, and never treated as authority, policy, or instructions.
 - Phase-2 lifecycle and migration-foundation work preserves object bytes; physical deletion requires a separately reviewed cutover policy.
 - Explicit promotion can turn selected evidence into a stronger fact, example, relationship, or lesson candidate while preserving source lineage.
 
@@ -198,7 +199,7 @@ Roster Brain ships as a first-party product subsystem. Each logical workspace ow
 - Retrying identical ingestion converges without duplicate current versions; changed content preserves history and becomes current.
 - Checkout relocation does not change logical workspace or source identity.
 - Partial Brain, wrong-database, object-namespace, runtime-role, or credential configuration stops before company-content reads, object-store access, or mutation and reports an actionable redacted error.
-- No Roster JSON, human output, generated file, diagnostic, or context contains credentials.
+- No Roster JSON, human output, generated file, diagnostic, or context contains any credential, including a runtime URL or password.
 - PostgreSQL/object-store partial failures resume or reconcile without orphaning authoritative state.
 - Every retrieval result resolves to the exact source version, object identity, extractor version, locator, typed retrieval scope, trust/privacy class, and retrieval reason.
 - Structured and document retrieval can be combined in one bounded context response without mandatory embeddings.
@@ -269,11 +270,11 @@ Roster does not provide external-provider routing, health checks, fallback execu
 
 ### Acceptance
 
-- Multiple hermetic fixtures use different provider/surface `skill_ref` values and company use cases through both hosts, including at least one non-search or non-MCP shape.
+- Multiple hermetic fixtures use different provider/surface `skill_ref` values and company use cases through both generated host projections via bounded test-only reference drivers, including at least one non-search or non-MCP shape; optional live smokes separately exercise actual logged-in hosts.
 - The referenced skill remains the single source for provider setup, authentication, syntax, parsing, and compatibility.
 - The same external skill can have different company uses in different agents or plans without duplicating the skill.
 - Missing skills, broken definitions, unsafe effect claims, raw secrets, ambiguous precedence, and unreviewed or drifted workspace skills fail validation or doctor checks.
-- One explicitly selected live skill may be smoke-tested through a currently logged-in host, but no named commercial provider, direct model API key, personal configuration, or live provider is required by CI.
+- One explicitly selected live skill per host may be smoke-tested through a currently logged-in host, but no named commercial provider, direct model API key, personal configuration, or live provider is required by CI.
 
 ### Flow and edge cases
 

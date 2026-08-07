@@ -7,10 +7,10 @@ gate_check_command: "pnpm typecheck && pnpm build && pnpm test && pnpm test:scaf
 source:
   tracker: "github"
   project_id: "340"
-  synced_at: "2026-08-05T08:44:51.407Z"
-  spec_revision: "64ee06389fcff2acdea838594b59a29f3cee9957"
+  synced_at: "2026-08-07T21:24:36.440Z"
+  spec_revision: "5b73c5cb6564cf5699d8981d3ef97dab8095b996"
   tracker_url: "https://github.com/firatcand/roster/issues/340"
-  tracker_revision: "github:2026-08-05T08:43:49Z"
+  tracker_revision: "github:2026-08-07T21:24:08Z"
 
 phases:
   - id: "phase-1"
@@ -136,14 +136,14 @@ phases:
     name: "Real Company Context and Learning"
     status: "blocked"
     blocked_by: "phase-1"
-    goal: "Both adopters complete real host-interpreted work with live company Brain context, declared external tools, portable evidence, and activated Dreamer learning."
+    goal: "Sanitized representative workflows complete host-interpreted work with first-party company Brain context where configured, provider-neutral external skills, portable evidence, and activated Dreamer learning."
     gate_criteria:
       - "A selected real file, fetched medium, text, structured record, or produced artifact converges into an authorized company Brain source/version and S3 object, then returns through bounded context with immutable citations."
-      - "A real external vendor skill is selected through authored workspace tool-use guidance and executed by each host with provenance; Roster never becomes the connection or execution layer."
+      - "Multiple hermetic provider/surface skill bindings prove both generated host projections can derive and execute through bounded test-only reference drivers with sanitized provenance; one configured live smoke per host may additionally exercise the actual logged-in host, and Roster never becomes the connection or execution layer."
       - "Completed runs, artifacts, feedback, and portable human-decision evidence have one Brain-backed authority separate from normal semantic knowledge."
       - "Evidence creates durable Dreamer readiness, both hosts invoke reflection without a Roster schedule, and a human-approved lesson changes a later context bundle."
-      - "Adopter retrieval and end-to-end context gold sets pass required recall, exclusion, citation, determinism, latency, privacy, and at least 60 percent token-reduction thresholds."
-      - "my-roster and roster-lobu each complete a representative real host-interpreted workflow and learning cycle."
+      - "Sanitized retrieval and end-to-end context gold sets pass required recall, exclusion, citation, determinism, latency, privacy, and at least 60 percent token-reduction thresholds."
+      - "Two distinct sanitized reference workflows complete a representative host-interpreted workflow and learning cycle."
       - "pnpm typecheck, pnpm build, pnpm test, pnpm test:scaffold-scripts, and pnpm smoke pass."
     tasks:
       - id: "P2-T01"
@@ -158,11 +158,13 @@ phases:
         acceptance:
           - Strict optional roster.yaml Brain configuration stores the stable workspace_id, a generic tracked secret path/reference, and normalized non-secret S3-compatible bucket/optional-root-prefix organization without credentials; retired brain.binding input fails with migration guidance.
           - No Brain configuration preserves healthy local scaffolding, discovery, validation, context, and external-tool guidance; declaring only PostgreSQL or only object storage fails closed as BRAIN_CONFIGURATION_INCOMPLETE before either service is opened.
-          - The host owns a strong workspace-specific ROSTER_BRAIN_URL through its chosen ambient credential mechanism. Init validates the derived role and credential, never mints, stores, returns, prints, or silently rotates it, and requires an available compatible object namespace in the same activation.
+          - The host owns a strong workspace-specific ROSTER_BRAIN_URL through its chosen ambient credential mechanism. Init uses it only for first role creation and a fresh runtime authority proof, validates the derived role and credential before database access, never mints, stores, returns, prints, or silently rotates it, and requires an available compatible object namespace in the same activation.
           - One transaction on one locked physical client creates migrations, protected identity, and grants for a truly uninitialized database; identical initialization is idempotent, while any nonempty unidentified Brain requires explicit reviewed adoption without mutation.
           - Every authority-managed admin or runtime connection performs only the protected-metadata handshake before exposing caller operations; missing, migrating, workspace-mismatch, and namespace-mismatch states fail closed with redacted diagnostics.
+          - Legacy brain import remains parser-recognized but returns BRAIN_LEGACY_COMMAND_DISABLED before workspace, credential, URL, pool, filesystem, or database access and cannot apply the authority migration; P2-T15 generalizes this fail-closed policy.
           - The runtime path can read but cannot mutate protected identity, and a checkout relocation carrying the same authored workspace ID reaches the same remote Brain.
           - S3-compatible endpoint and namespace validation is bounded, secret-free, capability-based, and fail-closed; this task never reads, writes, or deletes company object bytes.
+          - Context exposes brain_configured and preserves successful local-only BRAIN_NOT_CONFIGURED behavior; a partial Brain instead returns nonzero BRAIN_CONFIGURATION_INCOMPLETE without a context bundle or service access and adds no host approval gates, hooks, or runtime state machines.
 
       - id: "P2-T02"
         tracker_issue_id: "370"
@@ -198,7 +200,7 @@ phases:
 
       - id: "P2-T04"
         tracker_issue_id: "353"
-        title: "Evaluate adopter retrieval quality"
+        title: "Evaluate retrieval quality"
         description: "Build sanitized, distributable gold sets from representative company-context queries and measure current-version filtering, retrieval-label correctness, lexical retrieval, optional embeddings/graph expansion, citation completeness, latency, cost, privacy, and activation thresholds for advanced retrieval."
         type: "data"
         priority: "P0"
@@ -214,8 +216,8 @@ phases:
 
       - id: "P2-T05"
         tracker_issue_id: "354"
-        title: "Validate real host-executed tool use"
-        description: "Prove the provider-neutral host tool-use boundary with multiple small hermetic provider/surface skill bindings and company use cases. Claude Code and Codex derive request inputs, invoke the referenced skill, and report provenance while Roster only validates and resolves authored guidance. Add one skip-by-default smoke against an explicitly selected installed public skill through a currently logged-in host, without a named live-provider CI dependency."
+        title: "Validate provider-neutral host tool use"
+        description: "Prove the provider-neutral host tool-use boundary with multiple small hermetic provider/surface skill bindings and company use cases. Bounded test-only reference drivers exercise the real generated Claude Code and Codex projections by deriving request inputs, invoking the referenced fixture skill, and reporting sanitized provenance while Roster only validates and resolves authored guidance. Add at most one skip-by-default smoke per actual logged-in host against an explicitly selected installed public skill, without a named live-provider CI dependency."
         type: "integration"
         priority: "P0"
         depends_on: ["P1-T04", "P1-T06"]
@@ -225,9 +227,13 @@ phases:
           - Hermetic fixtures use multiple distinct skill_ref provider/surface bindings and use cases, including at least one non-search or non-MCP shape.
           - Each workspace definition captures purpose, scope, capabilities, company filters/rules, expected fields, optional Brain intent, effects, approval guidance, and evidence requirements without provider setup or secrets.
           - The referenced installed or workspace-local skill remains authoritative for installation, authentication, syntax, parsing, provider compatibility, and generic best practices.
-          - Both hosts resolve equivalent guidance, derive request-specific inputs, execute the fixture skill, and report sanitized provenance without a Roster executor, router, health/fallback layer, credential injector, response parser, or custom receipt system.
+          - Bounded test-only reference drivers consume the real generated Claude and Codex projections, resolve equivalent guidance, derive request-specific inputs, execute each reviewed fixture skill without shell or network, produce the same semantic result, and expose only sanitized transient provenance without a Roster executor, router, health/fallback layer, credential injector, response parser, or custom receipt system.
           - The optional live smoke uses normal logged-in host state, is skipped when not explicitly configured, commits no personal configuration or provider response, and requires no direct model/provider API key or named commercial provider in CI.
           - A fixture without Brain requires no infrastructure; any fixture using Brain supplies both PostgreSQL and S3-compatible storage.
+        write_globs:
+          - test/host-tool-proof.test.ts
+          - test/host-tool-proof-live.test.ts
+          - test/fixtures/host-tool-proof/**
 
       - id: "P2-T06"
         tracker_issue_id: "355"
@@ -240,6 +246,7 @@ phases:
         owner_type: "backend-dev"
         acceptance:
           - "The resolver applies scope, trust, privacy, freshness, precedence, deduplication, and hard budget rules deterministically."
+          - "No Brain configuration returns successful local context with BRAIN_NOT_CONFIGURED; partial PostgreSQL/object-store configuration returns nonzero BRAIN_CONFIGURATION_INCOMPLETE, no context bundle, and opens neither service."
           - "Required overflow, unavailable optional retrieval, stale/conflicting lessons, and hostile evidence have explicit non-corrupting behavior."
           - "Explain output accounts for every inclusion and exclusion with stable citation and budget metadata."
           - "The request is host supplied and no active-run, prior-output, current-step-selection, provider-route, or continuation semantics appear."
@@ -322,7 +329,7 @@ phases:
 
       - id: "P2-T12"
         tracker_issue_id: "360"
-        title: "Prove real host-interpreted adopter workflows"
+        title: "Prove representative host-interpreted workflows"
         description: "Run the complete v2 loop on two sanitized, distinct representative workflows through Claude Code and Codex, with host-interpreted plans, provider-neutral external skill bindings, portable evidence, Dreamer activation, human promotion, and later lesson selection. Brain-backed workflow steps use complete PostgreSQL and S3-compatible fixtures; local-only steps remain infrastructure-free."
         type: "integration"
         priority: "P0"
@@ -424,7 +431,7 @@ phases:
         owner_type: db-architect
         acceptance:
           - Backfill requires a complete PostgreSQL-plus-S3-compatible Brain, accepts only the exact approved inventory digest, acquires the remote migration lock, and resumes idempotently without rereading unapproved state.
-          - Existing entities, aliases, facts, events, edges, merges, documents, file history, IDs, timestamps, redirects, and verifiable object bytes remain intact with legacy-unverified source lineage.
+          - Existing entities, aliases, facts, events, edges, merges, mounts, documents, file history, IDs, timestamps, redirects, and verifiable object bytes remain intact with legacy-unverified source lineage.
           - Proven workspace-relative paths retain stable identity; absolute paths become non-authoritative legacy locators; temporary, foreign, ambiguous, drifted, and missing-byte inputs are never guessed.
           - Equal bytes may reuse one immutable object without merging logical sources; put, remove, and re-put history preserves tombstones; chunks never fabricate unavailable raw bytes.
           - Crash recovery and repeated repair converge without changing original rows or keys, deleting object bytes, or making legacy-unverified evidence eligible for default retrieval.
@@ -439,14 +446,14 @@ phases:
     name: "Breaking Simplification and Launch"
     status: "blocked"
     blocked_by: "phase-2"
-    goal: "Remove the accidental second runtime, migrate both adopters safely, harden the actual Roster boundaries, and release the smaller v2 product."
+    goal: "Remove the accidental second runtime, rehearse migration on sanitized reference workspaces, harden the actual Roster boundaries, and release the smaller v2 product."
     gate_criteria:
       - "Roster scheduler/cron/fire/state and general operations/HITL/queue/lease/outbox/wake-resume surfaces are absent after minimal evidence primitives are extracted."
-      - "The one-way migrator preserves authored policy and useful Brain/evidence history, removes only exact consented legacy targets, and passes frozen adopter rehearsals."
+      - "The one-way migrator preserves authored policy and useful Brain/evidence history, removes only exact consented legacy targets, and passes frozen sanitized reference rehearsals."
       - "Workspace paths, company Brain isolation, S3 endpoint trust, embedding privacy, vendor skill provenance, prompt trust separation, secret handling, and human-decision boundaries pass focused security tests."
       - "Generated adapters cannot silently drift and doctor proves the complete scaffold/context/Brain/tool/evidence/Dreamer activation path."
       - "Optional retrieval and non-core integrations have explicit measured keep/defer/remove decisions."
-      - "Both adopters complete post-migration host-led workflows and Dreamer learning through Claude Code and Codex."
+      - "Two distinct sanitized reference workspaces complete post-migration host-led workflows and Dreamer learning through Claude Code and Codex."
       - "All release commands, package inspection, secret scan, documentation, migration notes, and second-opinion review pass."
       - "pnpm typecheck, pnpm build, pnpm test, pnpm test:scaffold-scripts, and pnpm smoke pass."
     tasks:
@@ -544,6 +551,7 @@ phases:
           - Apply refuses Brain cutover until extraction/indexing and cited retrieval are complete and verified, so no migrated Brain becomes write-only.
           - A database with no protected identity initializes only the approved logical workspace; a different identity, ambiguous ownership, or unvalidated object namespace fails closed and becomes an explicit human-decision item.
           - Each Brain upgrades in place in its own database and object namespace, preserving verifiable structured knowledge, graph history, and object data without Brain spaces, cross-workspace RLS, permanent dual-write, or compatibility shims.
+          - Existing tables and object keys remain backed up and readable for verification until the one-way cutover completes.
           - Legacy evidence imports only as legacy-unverified; secret key names become generic references without values; authored tool intent becomes reviewed skill references without provider-specific runtime code.
           - The reviewed cutover removes legacy Brain spellings, and only exact Roster-managed schedule targets are removed with consent while host-native schedules and authored edits remain.
 
@@ -558,7 +566,7 @@ phases:
         owner_type: "qa-engineer"
         acceptance:
           - Doctor reports each subsystem independently with stable codes, actionable fixes, redacted detail, and JSON output.
-          - Doctor treats no Brain configuration as healthy local-only operation, partial PostgreSQL/S3-compatible configuration as invalid without opening either service, and complete configuration as eligible for native Brain diagnostics.
+          - Doctor treats no Brain configuration as healthy local-only operation; for partial PostgreSQL/S3-compatible configuration it reports local subsystem results, marks Brain invalid with BRAIN_CONFIGURATION_INCOMPLETE, exits nonzero, and opens neither service; complete configuration is eligible for native Brain diagnostics.
           - Brain diagnostics distinguish unavailable generic secret references, unavailable services, workspace/database identity mismatch, schema or role drift, untrusted or misbound object namespace, source/object integrity failure, and incomplete ingest recovery without exposing credentials.
           - Doctor detects broken plan/tool refs, required-context overflow, invalid retrieval-label scopes, privacy/trust/current-version/tombstone violations, citation loss, unsafe object/embedding configuration, semantic evidence leakage, stale adapters, and incomplete migration.
           - It distinguishes Dreamer files from the end-to-end readiness/invocation/candidate/decision path and describes scopes as selection labels, not authorization boundaries.
@@ -566,7 +574,7 @@ phases:
 
       - id: "P3-T08"
         tracker_issue_id: "367"
-        title: "Rehearse adopter v2 cutover"
+        title: "Rehearse v2 workspace cutover"
         description: "Run dry-run, backup, apply, doctor, and representative post-migration host-led workflows on sanitized frozen workspace snapshots; resolve every conflict and document the production cutover/rollback procedure without committing private live workspace data."
         type: "integration"
         priority: "P0"
@@ -592,6 +600,7 @@ phases:
         acceptance:
           - README, contributor docs, CLI help, schemas, examples, migration guide, security model, and package contents describe the same thin-layer product.
           - Documentation states that local scaffolding/context/tool guidance works offline; Brain is first-party and requires both compatible PostgreSQL and S3-compatible storage; embeddings are optional.
+          - The provider-neutral Brain compatibility matrix states the supported PostgreSQL floor and required extensions plus the required S3-compatible operations, conditional-write/concurrency guarantees, endpoint security, and versioning/tombstone posture; optional embedding capabilities are separate.
           - External tool examples are explicitly non-normative and docs require no named provider, secret manager, transport, or personal workspace.
           - No canonical docs or APIs mention plan compile/reduce/next/submit/approve, external-provider routing/execution/parsing, Roster scheduling, or general ops/HITL.
           - Full gates, focused hermetic integration/adversarial/migration tests, optional configured live smoke, secret scan, package smoke, and second-opinion review pass.

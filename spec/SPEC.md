@@ -63,6 +63,7 @@ Roster must not implement a plan compiler/reducer, active-run cursor, current-st
 - Optional embedding providers behind privacy and configuration policy; structured and lexical Brain behavior does not require embeddings.
 - Host/operator, workload-identity, provider-chain, or secret-manager environment injection; no generated `.env` files and no required secret-management vendor.
 <!-- /forge:adr-section:stack -->
+<!-- forge:adr-section:canonical-identifiers -->
 ## Canonical identifiers
 
 Identifiers are stable strings and never use absolute checkout paths as global identity.
@@ -77,7 +78,7 @@ Identifiers are stable strings and never use absolute checkout paths as global i
 | `guideline_id` | Authored policy identity and scope |
 | `lesson_id` | Approved materialized lesson identity and scope |
 | `tool_use_id` | Workspace company-use definition for an external skill |
-| `skill_ref` | Canonical external vendor skill package/name identity |
+| `skill_ref` | Canonical external or workspace skill identity |
 | `logical_source_id` | Stable source identity across versions and workspace relocation |
 | `source_version_id` | Immutable content version with provenance |
 | `object_id` | Content-addressed S3 object identity |
@@ -162,7 +163,7 @@ Brain activation validates PostgreSQL and S3-compatible configuration together. 
 
 Each configured Brain database stores a protected `workspace_id` and the validated object namespace fingerprint. Roster first reads only that protected metadata, compares it with `roster.yaml`, and fails closed on a mismatch before reading company content, touching object storage, or mutating Brain state. Any clone carrying the same authored `workspace_id` and authorized credentials reaches the same Brain; a different workspace ID must use a different database.
 
-Brain absence never causes local scaffold, discovery, validation, or external-tool guidance commands to fail. For `roster context`, absence returns the complete local bundle, an empty `brain_evidence` array, exit status zero, and exactly one warning-severity `BRAIN_NOT_CONFIGURED` diagnostic. Partial Brain configuration returns a stable fatal `BRAIN_CONFIGURATION_INCOMPLETE` diagnostic for Brain-dependent work and never opens either service.
+Brain absence never causes local scaffold, discovery, validation, or external-tool guidance commands to fail. For `roster context`, absence returns the complete local bundle, an empty `brain_evidence` array, exit status zero, and exactly one warning-severity `BRAIN_NOT_CONFIGURED` diagnostic. A Brain-dependent command with no Brain configuration retains the fatal `BRAIN_NOT_CONFIGURED` contract with setup guidance. Partial Brain configuration makes `roster context` and Brain commands return a stable fatal `BRAIN_CONFIGURATION_INCOMPLETE` diagnostic with nonzero status and no context bundle, and never opens either service; local scaffold, discovery, and validation remain available.
 <!-- /forge:adr-section:workspace-registry -->
 ### Agent definition
 
@@ -332,7 +333,7 @@ Only `purpose` uses most-specific replacement. `skill_ref` must remain identical
 - generated adapter and manifest drift checks; and
 - secret-pattern and unsafe-content checks.
 
-A workspace with no Brain configuration is a valid local-only workspace. A workspace that declares only PostgreSQL or only S3-compatible storage is invalid for Brain use. External-provider authentication, availability, and response compatibility remain host/skill responsibilities rather than Roster validation. Validation is read-only unless the user requests an explicit scaffold, update, or migration action.
+A workspace with no Brain configuration is a valid local-only workspace. Validation remains callable for a workspace that declares only PostgreSQL or only S3-compatible storage, reports its local structural results, and exits nonzero with `BRAIN_CONFIGURATION_INCOMPLETE`; doctor reports local subsystems independently, marks Brain invalid, and exits nonzero. External-provider authentication, availability, and response compatibility remain host/skill responsibilities rather than Roster validation. Validation is read-only unless the user requests an explicit scaffold, update, or migration action.
 <!-- /forge:adr-section:discovery-and-validation -->
 
 <!-- forge:adr-section:context-request-and-response -->
@@ -649,7 +650,7 @@ Host adapters are generated activation instructions and thin command mappings. E
 
 Adapters never embed a business-specific plan, provider secret, schedule, reducer, or alternate authoring source. Common host-neutral content is generated from one source; host-specific wrappers are minimal. Adapter metadata records generator version, protocol version, content hash, and supported assurance level.
 
-Gemini support is outside the initial v2 product boundary. Shared renderer interfaces may remain only if they do not impose shipping, test, or compatibility cost.
+Additional host support is outside the initial v2 product boundary. Shared renderer interfaces may remain only if they do not impose shipping, test, or compatibility cost.
 
 <!-- forge:adr-section:doctor -->
 ## Doctor
@@ -920,10 +921,11 @@ Both host fixtures discover the same agent and plan, interpret the plan themselv
 ### Real adopter flows
 
 - Committed proof uses at least two sanitized, distributable reference workflows with different company use cases and `skill_ref` provider/surface bindings, including one non-search or non-MCP shape. No private repository name, local path, Brain content, credential, or live snapshot is a public fixture or requirement.
-- Both Claude Code and Codex resolve the same Roster guidance and invoke the referenced fixture skills while Roster performs no external-provider execution, routing, authentication, health check, fallback, or response parsing.
+- Bounded test-only reference drivers consume both generated Claude Code and Codex projections, resolve the same Roster guidance, and invoke the referenced fictional fixture skills; optional live smokes separately exercise actual logged-in hosts. Roster performs no external-provider execution, routing, authentication, health check, fallback, or response parsing.
 - A reference workflow without Brain needs no remote infrastructure. Any Brain-backed workflow supplies complete PostgreSQL and S3-compatible test services; embeddings remain optional.
-- One explicitly configured, skip-by-default live smoke may exercise a workspace-selected installed public skill through the operator's currently logged-in host. It commits no personal configuration or provider response, uses no direct model/provider API-key harness, and makes no named live provider a CI dependency.
+- One explicitly configured, skip-by-default live smoke per host may exercise a workspace-selected installed public skill through the operator's currently logged-in host. It commits no personal configuration or provider response, uses no direct model/provider API-key harness, and makes no named live provider a CI dependency.
 <!-- /forge:adr-section:real-adopter-flows -->
+<!-- forge:adr-section:adversarial-tests -->
 ### Adversarial tests
 
 - hostile YAML, alias bombs, deep nesting, malformed references, path escapes, symlink swaps, unsafe external path grants;
