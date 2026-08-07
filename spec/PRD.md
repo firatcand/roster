@@ -37,21 +37,26 @@ When the human gives a specialized task to Claude Code or Codex, the host can di
 - Fresh workspaces and host prompts are sparse.
 - Learning candidates may be automatic; active policy requires human approval.
 
+<!-- forge:adr-section:authority-model -->
 ## Authority model
 
 | Information | Canonical authority |
 |---|---|
 | Functions, agents, plans, subagents, guidelines, tool-use definitions | Working-directory files in Git |
 | Approved active lessons | Working-directory playbook or lesson files in Git |
-| Company facts, entities, relationships, examples, ideas, documents, events | Brain/Postgres with source provenance |
-| Raw media and large immutable artifacts | Brain/S3-compatible object storage |
+| Company facts, entities, relationships, examples, ideas, documents, events | Roster Brain/PostgreSQL with source provenance |
+| Raw media and large immutable artifacts | Roster Brain/S3-compatible object storage |
 | Completed runs, feedback, Dreamer evidence and candidates, decision history | Brain operational/learning schemas |
 | Human conversation, pending UI, schedule, wake/resume state | Claude Code or Codex host |
 | External source-of-record data | Original system until explicitly ingested into Brain |
+| External tool installation, authentication, provider syntax, and execution | Referenced skill plus Claude Code or Codex host |
 | Markdown run logs | Optional local projection, never the portable authority |
 
+Brain is one first-party product subsystem backed by both PostgreSQL and S3-compatible storage whenever activated. External tools remain host/skill-owned regardless of API, CLI, MCP, connector, browser, or other invocation surface.
+<!-- /forge:adr-section:authority-model -->
 ## Per-feature breakdown
 
+<!-- forge:adr-section:feature-1-sparse-workspace-scaffolding-and-discovery -->
 ## Feature 1: Sparse workspace scaffolding and discovery
 
 ### User outcome
@@ -64,22 +69,24 @@ Through the host, the user can initialize a folder and create only the functions
 - `roster scaffold <kind>` creates a requested record at a deterministic, workspace-confined path.
 - Qualified identities prevent same-named agents or plans in different functions from colliding.
 - `roster discover` resolves definitions by kind, scope, identity, text query, and reference.
-- `roster validate` performs schema, ownership, reference, path, and drift checks.
+- `roster validate` performs schema, ownership, reference, path, skill-reference, and drift checks.
 - User-owned authoring files and generated host adapter files have explicit ownership markers.
 - A Chief of Staff or expert can create and revise structures through the host in a human-managed session.
+- Initialization, scaffolding, discovery, validation, and external-tool guidance work without PostgreSQL or object storage.
 
 ### Acceptance
 
 - A fresh repository contains only `roster.yaml`, a short host-neutral `ROSTER.md`, and generated host activation files when installed.
 - Functions, agents, plans, guidelines, tool-use definitions, and lesson directories appear on first use.
 - Two same-named agents in different functions resolve unambiguously by qualified identity.
-- Unknown fields, broken references, duplicate identities, path escapes, unsafe symlinks, stale generated files, and literal machine-specific absolute paths produce actionable diagnostics.
+- Unknown fields, broken references, duplicate identities, path escapes, unsafe symlinks, stale generated files, literal machine-specific absolute paths, and partial Brain configuration produce actionable diagnostics.
+- A workspace with no Brain configuration remains healthy for local-only behavior; a declared Brain requires complete PostgreSQL and S3-compatible configuration before Brain use.
 - Discovery returns compact metadata by default and full content only when requested or included in a context bundle.
 
 ### Flow and edge cases
 
-The human asks the host to initialize or create one structure; the host calls the exact scaffold verb, validates the result, and later discovers it by qualified identity. Name collisions require qualification, edited generated files block overwrite, and missing Brain credentials do not block local scaffolding.
-
+The human asks the host to initialize or create one structure; the host calls the exact scaffold verb, validates the result, and later discovers it by qualified identity. Name collisions require qualification, edited generated files block overwrite, and absent Brain configuration does not block local scaffolding. If the user activates Brain, the host supplies both compatible storage services and ambient credentials before retrying Brain initialization.
+<!-- /forge:adr-section:feature-1-sparse-workspace-scaffolding-and-discovery -->
 ## Feature 2: Structured plan authoring and validation
 
 ### User outcome
@@ -119,7 +126,7 @@ The host asks Roster for the context needed for one user request and receives on
 ### Required inputs
 
 - Workspace with target function and agent.
-- Optional per-workspace Brain configuration.
+- Optional completely configured workspace Brain; no Brain configuration is valid local-only operation.
 - Optional explicitly selected root plan; Roster never infers one.
 - Human request or task query.
 - Optional host-supplied step hint.
@@ -131,7 +138,7 @@ The host asks Roster for the context needed for one user request and receives on
 - The selected function/agent definitions.
 - When a plan is selected, its root definition plus the complete deduplicated transitive nested-plan definition closure from one validated snapshot.
 - Mandatory agent default guidelines and every guideline explicitly referenced by a closure plan.
-- For each actual closure `kind: tool` step, the mandatory effective workspace tool-use definition paired with its canonical vendor skill reference; membership catalogs select nothing.
+- For each actual closure `kind: tool` step, the mandatory effective workspace tool-use definition paired with its canonical external skill reference; membership catalogs select nothing.
 - Optional applicable approved lessons ranked ahead of optional untrusted Brain evidence.
 - Immutable workspace/source/version/object/extractor Brain citations when evidence is included.
 - Trust classification, provenance, inclusion reason, workspace and narrower scope labels, version/hash, and deterministic budget accounting for every included fragment.
@@ -139,22 +146,23 @@ The host asks Roster for the context needed for one user request and receives on
 
 ### Explicit boundary
 
-The bundle never contains a Roster-selected current step, transition, next action, provider route, runtime output binding, approval receipt, or Roster execution state. An optional step is only a host assertion used for relevance. Claude Code or Codex interprets and executes the returned definitions.
+The bundle never contains a Roster-selected current step, transition, next action, provider route, runtime output binding, approval receipt, external-provider response parser, or Roster execution state. An optional step is only a host assertion used for relevance. Claude Code or Codex interprets and executes the returned definitions and referenced skills.
 
 ### Acceptance
 
 - Required function/agent/policy, complete selected-plan closure, and step-referenced effective tool/skill pairs are reserved before optional lessons or Brain evidence.
 - Required content is never truncated: a reachable budget shortfall reports an exact accepted retry, while a mandatory minimum above the host ceiling reports a distinct unservable error.
 - Missing Brain configuration exits successfully with the complete local bundle, empty Brain evidence, and one `BRAIN_NOT_CONFIGURED` warning diagnostic.
-- A configured database/S3 namespace identity mismatch stops after the protected-metadata handshake and before company-content reads, S3 access, or mutation.
+- Partial Brain configuration fails before opening PostgreSQL or S3-compatible storage.
+- A configured database/object-namespace identity mismatch stops after the protected-metadata handshake and before company-content reads, object-store access, or mutation.
 - Optional retrieval failure, rejected candidates, or candidate diagnostic examples cannot corrupt or overflow a servable mandatory local bundle.
 - Equivalent inputs and equivalent source versions yield the same semantic bundle and inclusion explanation for Claude Code and Codex.
-- Authored policy, approved lessons, vendor instructions, Brain evidence, and tool output are visibly separated by trust.
-- The representative `my-roster` bundle reduces eager-load tokens by at least 60 percent while passing required-context recall and irrelevant-context exclusion thresholds.
+- Authored policy, approved lessons, external-skill instructions, Brain evidence, and tool output are visibly separated by trust.
+- Sanitized representative bundles reduce eager-load tokens by at least 60 percent while passing required-context recall and irrelevant-context exclusion thresholds.
 
 ### Flow and edge cases
 
-The host submits a target, task, optional selected plan and step hint, and budget. Roster resolves one validated local snapshot, returns the complete selected definition closure and mandatory policy/tool guidance, then ranks optional approved lessons and same-workspace Brain evidence using scope labels as retrieval selectors. Without Brain configuration it degrades to the complete local bundle. A wrong database or S3 namespace stops after the protected-metadata handshake and before company-content reads, S3 access, or mutation. Reachable mandatory overflow returns the exact retry; an oversized closure is reported as unservable; remote optional failure and hostile evidence never become policy or suppress local context.
+The host submits a target, task, optional selected plan and step hint, and budget. Roster resolves one validated local snapshot, returns the complete selected definition closure and mandatory policy/tool guidance, then ranks optional approved lessons and same-workspace Brain evidence using scope labels as retrieval selectors. Without Brain configuration it degrades to the complete local bundle. A partial Brain or wrong database/object namespace fails closed. Reachable mandatory overflow returns the exact retry; an oversized closure is reported as unservable; remote optional failure and hostile evidence never become policy or suppress local context.
 <!-- /forge:adr-section:feature-3-bounded-context-assembly -->
 <!-- forge:adr-section:feature-4-company-brain-knowledge-and-source-lifecycle -->
 ## Feature 4: Company Brain knowledge and source lifecycle
@@ -165,119 +173,112 @@ The user and their hosts can save, retrieve, relate, update, promote, and cite c
 
 ### Knowledge scope
 
-Each logical workspace owns a different PostgreSQL Brain database and configured S3 namespace. That Brain may contain workspace-wide company knowledge plus narrower function, agent, and plan retrieval labels. It may represent people, organizations, customers, prospects, products, projects, tasks, decisions, content, ideas, examples, documents, media, events, facts, claims, metrics, relationships, and provenance.
+Roster Brain ships as a first-party product subsystem. Each logical workspace owns a different PostgreSQL Brain database and configured S3-compatible namespace. Both services are required to activate Brain. That Brain may contain workspace-wide company knowledge plus narrower function, agent, and plan retrieval labels. It may represent people, organizations, customers, prospects, products, projects, tasks, decisions, content, ideas, examples, documents, media, events, facts, claims, metrics, relationships, and provenance.
 
 ### Required behavior
 
-- Tracked `roster.yaml` carries the stable `workspace_id`, Infisical path/reference, and non-secret S3 namespace organization; secrets remain ambient.
-- The host creates and stores the workspace-specific runtime URL in Infisical. Roster derives the expected role, validates and proves the ambient credential during initialization, and never mints, stores, returns, or prints the URL or password.
-- The Brain database stores protected matching workspace/storage identity. Every Brain command first performs the minimum identity handshake and rejects a mismatch before company-content reads, S3 access, or mutation.
-- A different workspace ID uses a different database. Clones of the same workspace may share its database and S3 namespace.
+- Tracked `roster.yaml` carries the stable `workspace_id`, a generic secret path/reference, and non-secret object namespace organization; secrets remain ambient.
+- Brain initialization validates compatible PostgreSQL and S3-compatible storage together. Missing either side is a fatal incomplete Brain, while a workspace declaring neither remains valid for local-only behavior.
+- The host creates and injects the workspace-specific runtime URL through its chosen credential mechanism. Roster derives the expected role, validates and proves the ambient credential during initialization, and never mints, stores, returns, or prints the URL or password.
+- The Brain database stores protected matching workspace/storage identity. Every Brain command first performs the minimum identity handshake and rejects a mismatch before company-content reads, object-store access, or mutation.
+- A different workspace ID uses a different database. Clones of the same workspace may share its database and object namespace.
 - Workspace/function/agent/plan scopes are typed context-selection labels, not database authorization principals.
 - File and fetched-media logical source identities derive automatically from workspace-relative path and canonical origin/upstream metadata respectively. Inline text, structured records, and produced artifacts require a host-supplied stable key. Every accepted ingest creates an immutable version independent of checkout paths.
-- Raw bytes and large artifacts are content-addressed inside the workspace S3 namespace; Postgres records intent, metadata, current state, provenance, privacy/trust/assurance, and recovery state.
+- Raw bytes and large artifacts are content-addressed inside the workspace object namespace; PostgreSQL records intent, metadata, current state, provenance, privacy/trust/assurance, and recovery state.
 - Admin and least-privilege runtime roles are separate; runtime cannot mutate schema, protected workspace identity/provenance, or bypass the closed write surface.
 - Extraction creates versioned text/chunks and structured candidates.
-- Lexical and structured retrieval work without an embedding key.
-- Optional OpenAI embeddings and graph expansion are measured enhancements with recorded model/version metadata.
-- Superseded or tombstoned content is excluded by default without destroying history.
-- `legacy-unverified` evidence is also excluded by default. A future explicit host request may include it with its trust class preserved, but it can never provide authority, policy, or instructions.
-- Phase-2 lifecycle and migration-foundation work preserves S3 object bytes; physical object deletion requires a separately reviewed cutover policy.
+- Lexical and structured retrieval work without an embedding credential.
+- Optional embeddings and graph expansion are measured enhancements with recorded provider/model/version metadata.
+- Superseded, tombstoned, and default-excluded `legacy-unverified` content cannot silently become authority.
+- Phase-2 lifecycle and migration-foundation work preserves object bytes; physical deletion requires a separately reviewed cutover policy.
 - Explicit promotion can turn selected evidence into a stronger fact, example, relationship, or lesson candidate while preserving source lineage.
 
 ### Acceptance
 
 - Retrying identical ingestion converges without duplicate current versions; changed content preserves history and becomes current.
 - Checkout relocation does not change logical workspace or source identity.
-- Wrong-database, S3 namespace, runtime-role, or runtime-credential configuration stops before company-content reads, S3 access, or mutation and reports an actionable redacted error.
-- No Roster JSON, human output, generated file, diagnostic, or context contains the runtime URL or password.
-- S3/Postgres partial failures resume or reconcile without orphaning authoritative state.
+- Partial Brain, wrong-database, object-namespace, runtime-role, or credential configuration stops before company-content reads, object-store access, or mutation and reports an actionable redacted error.
+- No Roster JSON, human output, generated file, diagnostic, or context contains credentials.
+- PostgreSQL/object-store partial failures resume or reconcile without orphaning authoritative state.
 - Every retrieval result resolves to the exact source version, object identity, extractor version, locator, typed retrieval scope, trust/privacy class, and retrieval reason.
-- Structured and document retrieval can be combined in one bounded context response.
+- Structured and document retrieval can be combined in one bounded context response without mandatory embeddings.
 - Existing workspace data upgrades in place without a Brain-space wrapper, cross-workspace RLS, or permanent compatibility shim.
-- Preserved `legacy-unverified` history is absent from default retrieval, visible only through an explicit future host request, and never treated as authority, policy, or instructions.
 - External systems are not bulk mirrored by default; every ingestion records origin and selection provenance.
 
 ### Flow and edge cases
 
-The host starts from tracked workspace Brain configuration and an Infisical-injected admin URL. If the runtime URL is missing, Roster returns only the expected derived role and tracked secret path; the host prepares the secret and retries. Roster initializes and verifies the database/storage identity and runtime credential, after which the host explicitly selects a source. Roster converges object and source-version state, extraction/indexing becomes ready, and later retrieval returns immutable citations. Identical retries deduplicate, changed bytes version, partial S3/Postgres failure repairs, keyless mode stays correct, tombstones hide content without erasing history, and configuration mismatch stops after the protected-metadata handshake and before company-content reads, S3 access, or mutation. Runtime credential rotation is explicit and never occurs as an init side effect.
-
+The host starts from tracked workspace Brain configuration and ambient admin credentials. Roster requires and verifies both services and the database/storage identity, then proves the least-privilege runtime credential. The host explicitly selects a source; Roster converges object and source-version state, extraction/indexing becomes ready, and later retrieval returns immutable citations. Identical retries deduplicate, changed bytes version, cross-store failure repairs, embedding-free mode stays correct, tombstones hide content without erasing history, and configuration mismatch fails closed. Runtime credential rotation is explicit and never occurs as an init side effect.
 <!-- /forge:adr-section:feature-4-company-brain-knowledge-and-source-lifecycle -->
+<!-- forge:adr-section:feature-5-workspace-tool-use-definitions -->
 ## Feature 5: Workspace tool-use definitions
 
 ### User outcome
 
-For a particular function, agent, or plan, the host knows not only which external skill to load but how and why the company wants that tool used.
+For a particular function, agent, or plan, the host knows not only which external skill to load but how and why the company wants that capability used. The same product contract works for APIs, CLIs, MCPs, connectors, browsers, and future host-supported surfaces.
 
 ### Three-layer contract
 
-1. **Vendor skill:** owns setup, authentication, syntax, provider capabilities, version compatibility, parsing, and provider-specific best practices.
-2. **Workspace tool-use definition:** owns purpose, scope, when to use the skill, relevant capability subset, query/filter strategy, company rules, expected result, approval guidance, Brain reads/writes, and evidence requirements.
+1. **External or workspace skill:** owns installation, authentication, provider syntax, capabilities, version compatibility, parsing, and provider-specific best practices.
+2. **Workspace tool-use definition:** owns purpose, scope, when to use the skill, relevant capability subset, request/filter strategy, company rules, expected result, approval guidance, Brain reads/writes, and evidence requirements.
 3. **Plan reference:** points to a tool-use definition for one step and adds only task-local instruction.
 
 ### Required behavior
 
 - Humans create or revise tool-use definitions through Claude Code or Codex.
 - Definitions may apply at workspace, function, agent, or plan scope and use deterministic precedence.
-- `skill_ref` is a canonical external identity that host adapters map to installed locations.
-- Roster statically validates references, effect/risk declarations, expected fields, and secret-free content.
-- The context bundle includes the definition and vendor skill reference; the host loads and invokes the vendor skill.
-- The host decides request-specific filters using its reasoning within the authored company rules.
+- `skill_ref` is the canonical author-time provider/surface binding that host adapters map to a reviewed installed or workspace-local skill.
+- Roster statically validates references, effect/risk declarations, expected fields, provenance, drift, and secret-free content.
+- The context bundle includes the definition and skill reference; the host loads and invokes the skill.
+- The host derives request-specific inputs and filters using its reasoning within authored company rules.
+- Switching provider or invocation surface is an authored `skill_ref` change or sibling tool-use definition, not runtime Roster routing.
 
 ### Example
 
 ```yaml
 schema_version: 2
-id: social-opportunity-research
+id: market-research
 scope:
-  function: gtm
-  agent: social-manager
+  function: growth
+  agent: researcher
   plan: opportunity-discovery
-skill_ref: exa:search
-purpose: Find timely posts that match our audience and positioning.
+skill_ref: research-provider:search
+purpose: Find timely material that matches company priorities.
 when:
-  - discovering reply opportunities
+  - discovering opportunities
 how:
-  - exclude URLs already presented according to Brain history
-  - rank ICP relevance before engagement volume
+  - exclude canonical URLs already presented according to Brain history when Brain is active
+  - rank company relevance before engagement volume
 output_expectations:
   required: [canonical_url, author, published_at, relevance_reason]
   guidance: [include citations for every candidate]
 brain:
-  read: [icp-and-messaging, previously-presented-opportunities]
+  read: [audience-and-positioning, previously-presented-opportunities]
   write: [discovered-opportunity, retrieval-provenance]
 effects:
   allowed: [external-read, brain-read, brain-write]
 approval:
   requirement: human
-  guidance: [wait for the human before any engagement]
+  guidance: [wait for the human before any external write]
 evidence:
   required: [canonical_url, retrieved_at]
 ```
 
 ### Explicit boundary
 
-Roster does not provide generic provider routing, health checks, fallback execution, credentials, child-process execution, MCP calling, browser control, or API transport for external tools. Brain commands are the built-in exception.
+Roster does not provide external-provider routing, health checks, fallback execution, credentials, child-process execution, MCP calling, browser control, API transport, provider response parsing, or provider-specific result certification. Brain commands are the built-in first-party storage exception and require complete PostgreSQL plus S3-compatible configuration.
 
 ### Acceptance
 
-- The Social Media Manager plan uses a real authored tool-use definition through both hosts.
-- The vendor skill remains the single source for provider syntax and authentication.
-- The same external skill can have different company uses in different agents or plans without duplicating the vendor skill.
-- Missing skills, broken definitions, unsafe effect claims, raw secrets, and ambiguous precedence fail validation or doctor checks.
+- Multiple hermetic fixtures use different provider/surface `skill_ref` values and company use cases through both hosts, including at least one non-search or non-MCP shape.
+- The referenced skill remains the single source for provider setup, authentication, syntax, parsing, and compatibility.
+- The same external skill can have different company uses in different agents or plans without duplicating the skill.
+- Missing skills, broken definitions, unsafe effect claims, raw secrets, ambiguous precedence, and unreviewed or drifted workspace skills fail validation or doctor checks.
+- One explicitly selected live skill may be smoke-tested through a currently logged-in host, but no named commercial provider, direct model API key, personal configuration, or live provider is required by CI.
 
 ### Flow and edge cases
 
-The host resolves the applicable ancestry into one flat definition: only
-`purpose` is replaced by the most-specific value, company guidance accumulates,
-effects may only narrow, approval may only become stricter, and Brain selectors
-remain requested intent rather than authorization. It then loads `skill_ref`,
-derives task-specific filters within company rules, invokes the vendor skill,
-and records provenance. Missing installs, ambiguous scope, unsafe effect changes,
-unreviewed or drifted project-skill provenance, and secret material block
-validation or doctor. Reviewed mutable refs remain visible as
-`revision_immutable: false`; they are never mislabeled as immutable.
-
+The host resolves the applicable ancestry into one flat definition: only `purpose` is replaced by the most-specific value, company guidance accumulates, effects may only narrow, approval may only become stricter, and Brain selectors remain requested intent rather than authorization. It then loads `skill_ref`, derives task-specific inputs within company rules, invokes the skill, and records provenance. Missing installs, ambiguous scope, unsafe effect changes, unreviewed or drifted project-skill provenance, and secret material block validation or doctor. Reviewed mutable refs remain visible as `revision_immutable: false`; they are never mislabeled as immutable.
+<!-- /forge:adr-section:feature-5-workspace-tool-use-definitions -->
 ## Feature 6: Portable run, feedback, artifact, and decision evidence
 
 ### User outcome
@@ -347,85 +348,94 @@ Evidence advances a durable watermark, status becomes due, the host invokes Drea
 
 ### User outcome
 
-Claude Code and Codex reliably activate the same Roster workflow without duplicated business logic, and existing adopter workspaces can move to v2 safely.
+Claude Code and Codex reliably activate the same Roster workflow without duplicated business logic, and existing workspaces can move to v2 safely.
 
 ### Required behavior
 
-- Generated adapters teach each host to discover targets, retrieve context, interpret the selected plan, load vendor skills, execute work, record evidence, check Dreamer readiness, and present human decisions.
-- Adapters contain host integration only; they do not contain business-agent logic or a plan interpreter.
+- Generated adapters teach each host to discover targets, retrieve context, interpret the selected plan, load referenced skills, execute work, record evidence, check Dreamer readiness, and present human decisions.
+- Adapters contain host integration only; they do not contain business-agent logic, provider logic, or a plan interpreter.
 - Generated files are versioned, reproducible, identifiable, and never canonical authoring sources.
 - `roster update` detects generated-file drift, duplicate shadows, stale versions, unsupported host capability, and unsafe overwrite.
-- `roster doctor` tests scaffold/discovery, plan references, context budgets, tracked Brain configuration, protected database workspace identity, least-privilege roles, S3 namespace trust, source/object/retrieval integrity, tool-use/skill references, evidence writes, Dreamer readiness/activation, host adapter versions, and migration state.
+- `roster doctor` tests scaffold/discovery, plan references, context budgets, Brain activation state, protected database workspace identity, least-privilege roles, S3-compatible namespace trust, source/object/retrieval integrity, tool-use/skill references, evidence writes, Dreamer readiness/activation, host adapter versions, and migration state. It does not test external-provider health.
+- Doctor treats no Brain configuration as healthy local-only operation, partial PostgreSQL/S3-compatible configuration as invalid, and complete configuration as eligible for native Brain checks.
 - A dry-run migrator reports every create/move/rewrite/archive/delete action and supports one explicit apply.
-- Migration upgrades each workspace-owned Brain database/S3 namespace in place, creates the tracked non-secret organization and protected workspace identity, preserves authored structured plans/guidelines/lessons and useful Brain/evidence data, and removes schedule/general-operations surfaces without shared-database tenancy or permanent compatibility code.
+- Local-only migration runs offline. Brain migration upgrades each workspace-owned PostgreSQL database/object namespace in place only when both services are configured, preserves authored structures and useful Brain/evidence data, and removes schedule/general-operations surfaces without shared-database tenancy or permanent compatibility code.
+- Secret references remain vendor-neutral and migration never reads or persists secret values.
 - Before the one-way #363 cutover, legacy Brain spellings remain parser-recognized only for protected-identity diagnostics or stable fail-closed disabled errors; no legacy operation executes, and `brain query` reports not ready until cited retrieval ships.
 
 ### Acceptance
 
 - Both adapters complete the same golden flow from a human-style request without a simulated human Roster command.
 - Doctor detects a missing Dreamer activation path even when all Dreamer files exist.
-- Migration rehearsals pass on the separate workspace-owned databases/storage namespaces represented by frozen `my-roster` and `roster-lobu` snapshots, including wrong-identity and legacy-path cases.
+- Migration rehearsals pass on sanitized frozen representative workspaces, including local-only, complete Brain, partial configuration, wrong identity, and legacy-path cases.
+- External-tool fixtures prove multiple skill/provider/surface bindings without a provider-specific Roster runtime or live-provider CI dependency.
 - No permanent compatibility path preserves the old scheduler, reducer proposal, general ops state machine, or provider router.
 - Issue #363 removes the temporarily recognized legacy Brain spellings; phase 2 never turns recognition into a compatibility implementation.
 
 ### Flow and edge cases
 
-Install generates adapters from one contract; `roster update` synchronizes generated adapters and manifests, while doctor verifies versions and activation; migration dry-runs, fingerprints, backs up, applies, and rechecks. Partial installs, edited generated files, duplicate shadows, unsupported host capabilities, source drift after dry-run, and legacy secrets/unverified claims produce explicit stops or classifications.
+Install generates adapters from one contract; `roster update` synchronizes generated adapters and manifests, while doctor verifies versions and activation. Migration dry-runs, fingerprints, backs up, applies, and rechecks. Partial installs, edited generated files, duplicate shadows, unsupported host capabilities, source drift after dry-run, partial Brain configuration, and legacy secrets/unverified claims produce explicit stops or classifications.
 <!-- /forge:adr-section:feature-8-thin-host-activation-migration-drift-control-and-doctor -->
+<!-- forge:adr-section:acceptance-criteria-overall-v2 -->
 ## Acceptance criteria (overall v2)
 
-- The product exposes the documented minimal CLI and no canonical schedule, runtime-transition, generic ops/HITL, or external provider-execution commands.
-- Both hosts complete the seeded golden loop and the real Social Media Manager discovery workflow.
-- A real example can be ingested, versioned in S3/Postgres, retrieved with immutable citations, and included within a bounded context budget.
-- A real external skill is selected through a workspace tool-use definition, executed by the host, and recorded with provenance.
+- The product exposes the documented minimal CLI and no canonical schedule, runtime-transition, generic ops/HITL, or external-provider execution/routing/parsing commands.
+- Both hosts complete the seeded golden loop and sanitized representative host-interpreted workflows.
+- Local initialization, scaffolding, validation, bounded context, and external-tool guidance work without infrastructure.
+- Activating Brain requires both compatible PostgreSQL and S3-compatible storage; a real example can then be ingested, versioned, retrieved with immutable citations, and included within a bounded context budget without mandatory embeddings.
+- Multiple external-skill provider/surface bindings are selected through workspace tool-use definitions and executed by the host with provenance; no named live provider is required by CI.
 - Portable completed-run and feedback evidence makes Dreamer due without a Roster schedule.
 - A human-approved Dreamer lesson changes later context selection.
-- Retrieval quality, context quality, security, migration, drift, and release thresholds pass.
+- Retrieval quality, context quality, security, migration, drift, and release thresholds pass on sanitized reproducible fixtures.
 - `pnpm typecheck`, `pnpm build`, `pnpm test`, `pnpm test:scaffold-scripts`, and `pnpm smoke` pass at every phase gate.
-
+<!-- /forge:adr-section:acceptance-criteria-overall-v2 -->
+<!-- forge:adr-section:explicit-non-goals -->
 ## Explicit non-goals
 
 - A Roster-owned plan compiler, reducer, current-step cursor, transition engine, retry engine, or output-binding runtime.
 - Roster-owned scheduling, cron, daemons, wake/resume, polling, or session management.
-- A generic task queue, lease system, outbox, inbox, operations platform, or Slack-specific control plane.
+- A generic task queue, lease system, outbox, inbox, operations platform, or channel-specific control plane.
 - Roster-owned approval authority. The host waits for and enforces human decisions; Roster may store action-bound decision evidence for portability.
-- A generic provider connection, routing, fallback, secret-injection, or execution layer for external tools.
+- A generic external-provider connection, routing, fallback, secret-injection, health, execution, or response-parsing layer.
 - A hosted Roster agent, chat UI, or requirement that humans call Roster CLI themselves.
-- Automatic ingestion of everything from Notion, social networks, repositories, or other company systems.
+- Automatic ingestion of everything from task systems, social networks, repositories, or other company systems.
 - Executing plans, subagents, or external tools inside Roster.
 - Selecting or persisting the current plan step.
 - General loop/goto/worker/queue semantics.
-- Hosting secrets for external tools or replacing Infisical/vendor authentication.
+- Hosting secrets for external tools or requiring one secret manager, provider, transport, or invocation surface.
 - Scheduling Dreamer or business work.
 - Owning the host conversation, task UI, approval UI, wake/resume, or reminders.
 - Automatically mirroring every external business system into Brain.
-- Making embeddings, graph traversal, edge extraction, or hosted reranking mandatory without adopter measurements.
-
+- A partially activated Brain: Brain deliberately requires both PostgreSQL and S3-compatible storage.
+- Making embeddings, graph traversal, edge extraction, or hosted reranking mandatory without measured evidence.
+<!-- /forge:adr-section:explicit-non-goals -->
+<!-- forge:adr-section:cross-feature-flows -->
 ## Cross-feature flows
 
 ### Create and run a purpose-built agent
 
-1. The human asks Claude Code or Codex to create a Social Media Manager and discovery plan.
-2. The host uses Roster scaffolding to create the function/agent/plan and a social opportunity tool-use definition.
-3. Static validation resolves references and doctor verifies activation.
-4. Later, the human asks for discovery work.
+1. The human asks Claude Code or Codex to create a role-based agent and structured plan.
+2. The host uses Roster scaffolding to create the function/agent/plan and a company-specific tool-use definition.
+3. Static validation resolves references and doctor verifies activation without contacting the external provider.
+4. Later, the human asks for work.
 5. The host discovers the agent, selects the plan, and requests bounded context.
-6. Roster returns the plan, company context, lessons, tool-use definition, and vendor skill reference.
-7. The host interprets the plan, derives filters, invokes the vendor skill, and renders the result.
+6. Roster returns the plan, local policy, optional company context and lessons, the tool-use definition, and external skill reference.
+7. The host interprets the plan, derives request-specific inputs, invokes the referenced skill through its available surface, and renders the result.
 8. The host records evidence and checks Dreamer readiness.
 
 ### Ingest and retrieve an example
 
-1. The human gives the host an example blog post or the host selects an artifact during a run.
-2. The host explicitly calls Brain ingestion with source provenance and scope.
-3. Roster stores or reuses immutable bytes in S3 and converges source/version state in Postgres.
-4. Extraction and indexes become ready; embeddings are optional.
-5. A later bounded query returns the relevant extract and immutable citation.
+1. The user first activates Brain with both compatible PostgreSQL and S3-compatible storage.
+2. The human gives the host an example document or the host selects an artifact during a run.
+3. The host explicitly calls Brain ingestion with source provenance and scope.
+4. Roster stores or reuses immutable bytes in the object namespace and converges source/version state in PostgreSQL.
+5. Extraction and lexical/structured indexes become ready; embeddings are optional.
+6. A later bounded query returns the relevant extract and immutable citation.
 
 ### Learn from feedback
 
 1. The human edits or evaluates an output in the host.
-2. The host records feedback against the completed run or artifact.
+2. The host records feedback against the completed run or artifact in the complete Brain.
 3. Roster reports Dreamer due when policy thresholds and a new-evidence watermark are met.
 4. The host invokes Dreamer, which stores a cited candidate.
 5. The human approves, revises, rejects, or retires it through the host.
@@ -437,3 +447,4 @@ Install generates adapters from one contract; `roster update` synchronizes gener
 2. The host uses its native conversation/task interface to present the normalized action and wait.
 3. After the human decides, the host may record action-digest-bound decision evidence in Brain.
 4. The host alone decides whether to execute or stop. Roster never authorizes, polls, or resumes the action.
+<!-- /forge:adr-section:cross-feature-flows -->
