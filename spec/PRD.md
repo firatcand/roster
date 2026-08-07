@@ -156,8 +156,6 @@ The bundle never contains a Roster-selected current step, transition, next actio
 
 The host submits a target, task, optional selected plan and step hint, and budget. Roster resolves one validated local snapshot, returns the complete selected definition closure and mandatory policy/tool guidance, then ranks optional approved lessons and same-workspace Brain evidence using scope labels as retrieval selectors. Without Brain configuration it degrades to the complete local bundle. A wrong database or S3 namespace stops after the protected-metadata handshake and before company-content reads, S3 access, or mutation. Reachable mandatory overflow returns the exact retry; an oversized closure is reported as unservable; remote optional failure and hostile evidence never become policy or suppress local context.
 <!-- /forge:adr-section:feature-3-bounded-context-assembly -->
-
-<!-- /forge:adr-section:feature-3-bounded-context-assembly -->
 <!-- forge:adr-section:feature-4-company-brain-knowledge-and-source-lifecycle -->
 ## Feature 4: Company Brain knowledge and source lifecycle
 

@@ -339,6 +339,7 @@ remains host guidance rather than a provider result gate.
 - secret-pattern and unsafe-content checks.
 
 Validation is read-only unless the user requests an explicit scaffold, update, or migration action.
+<!-- /forge:adr-section:discovery-and-validation -->
 
 <!-- forge:adr-section:context-request-and-response -->
 ## Context request and response
@@ -398,8 +399,6 @@ The response cannot contain Roster run state, a Roster-selected current step, pr
 8. Emit citations, trust separation, provenance, exact budget accounting, authoritative exclusion/scalar counts, and sanitized diagnostics. Reverify every contributing local source before returning.
 
 Mandatory content is never truncated. If its minimum is within the accepted host ceiling but exceeds the caller budget, return `CONTEXT_BUDGET_REQUIRED_OVERFLOW` with the exact accepted retry budget and no partial bundle. If the mandatory minimum exceeds the 128,000-token host ceiling, return `CONTEXT_MANDATORY_UNSERVABLE` with safe section/contributor counts rather than an impossible retry. Token counts use the fixed deterministic estimator and always include raw byte counts.
-<!-- /forge:adr-section:context-request-and-response -->
-
 <!-- /forge:adr-section:context-request-and-response -->
 ## CLI surface
 
