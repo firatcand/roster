@@ -2,15 +2,29 @@ import chalk from 'chalk';
 import {
   createBrainPool,
   initializeCleanBrain,
+  openVerifiedRuntimePool,
   resolveBrainDoctorRoleName,
   resolveBrainUrl,
   withBrainClient,
 } from '../lib/brain/connect.ts';
+import { readWorkspaceFile } from '../lib/workspace-io.ts';
+import type {
+  CompletedRunInput,
+  FeedbackInput,
+  HumanDecisionInput,
+  RunArtifactInput,
+} from '../lib/brain/evidence-contracts.ts';
+import {
+  recordCompletedRun,
+  recordFeedback,
+  recordHumanDecision,
+  recordRunArtifact,
+} from '../lib/brain/evidence-store.ts';
 import { pendingMigrations } from '../lib/brain/migrate.ts';
 import { RUNTIME_ROLE } from '../lib/brain/roles.ts';
 import { runDoctor } from '../lib/brain/doctor.ts';
 import { saveEntity } from '../lib/brain/save.ts';
-import type { FactPair } from '../lib/brain-args.ts';
+import type { EvidenceRecordVerb, FactPair } from '../lib/brain-args.ts';
 import { appendEvent } from '../lib/brain/event.ts';
 import { createLink } from '../lib/brain/link.ts';
 import { mergeEntities } from '../lib/brain/merge.ts';
@@ -655,6 +669,68 @@ export async function executeBrainExport(opts: BrainExportOptions): Promise<numb
     } else {
       console.log(
         `${chalk.green('✓')} exported ${result.totalRows} row(s) across ${result.tables.length} table(s) → ${result.outDir} (${result.format})`,
+      );
+    }
+    return EXIT_OK;
+  } finally {
+    await pool.end();
+  }
+}
+
+export type BrainRecordOptions = {
+  cwd: string;
+  json: boolean;
+  recordKind: EvidenceRecordVerb;
+  payload?: string;
+  file?: string;
+};
+
+const MAX_RECORD_PAYLOAD_BYTES = 262_144;
+
+function recordPayloadInvalid(reason: string): RosterError {
+  return new RosterError({
+    header: 'Invalid Brain evidence payload',
+    body: `The evidence payload is invalid: ${reason}.`,
+    remedy: 'Supply one bounded JSON object that follows the documented Brain evidence contract.',
+    exitCode: EXIT_ERROR,
+    code: 'BRAIN_EVIDENCE_INPUT_INVALID',
+    details: { reason },
+  });
+}
+
+// The payload is never echoed back: durable evidence can carry internal or
+// secret-class business text, and a CLI transcript is not a durable store.
+export async function executeBrainRecord(opts: BrainRecordOptions): Promise<number> {
+  const raw = opts.file === undefined
+    ? opts.payload!
+    : readWorkspaceFile(opts.cwd, opts.file, { maxBytes: MAX_RECORD_PAYLOAD_BYTES }).toString('utf8');
+  if (Buffer.byteLength(raw, 'utf8') > MAX_RECORD_PAYLOAD_BYTES) {
+    throw recordPayloadInvalid(`it exceeds ${MAX_RECORD_PAYLOAD_BYTES} UTF-8 bytes`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw recordPayloadInvalid('it is not valid JSON');
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw recordPayloadInvalid('it must be a JSON object');
+  }
+
+  const pool = openVerifiedRuntimePool(opts.cwd);
+  try {
+    const result = opts.recordKind === 'run'
+      ? await recordCompletedRun(pool, parsed as CompletedRunInput)
+      : opts.recordKind === 'artifact'
+        ? await recordRunArtifact(pool, parsed as RunArtifactInput)
+        : opts.recordKind === 'feedback'
+          ? await recordFeedback(pool, parsed as FeedbackInput)
+          : await recordHumanDecision(pool, parsed as HumanDecisionInput);
+    if (opts.json) {
+      console.log(JSON.stringify({ ok: true, kind: opts.recordKind, ...result }, null, 2));
+    } else {
+      console.log(
+        `${chalk.green('✓')} ${opts.recordKind} evidence ${result.status}: ${result.id} (${result.recordFingerprint})`,
       );
     }
     return EXIT_OK;

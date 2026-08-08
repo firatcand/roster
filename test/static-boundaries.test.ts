@@ -1022,3 +1022,99 @@ test('generated adapter rendering stays isolated from runtime, Brain, scheduler,
     .filter((module) => forbidden.some((pattern) => pattern.test(module)));
   assert.deepEqual(violations, []);
 });
+
+test('brain evidence DML stays in the evidence store and never reaches the record path object store', () => {
+  const dml = /\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM|FROM)\s+brain_evidence\./iu;
+  // Only the evidence store performs brain_evidence DML or content SELECT.
+  // roles.ts and doctor.ts may name the schema in grant and audit statements.
+  const allowed = new Map([
+    ['src/lib/brain/evidence-store.ts', 'dml'],
+    ['src/lib/brain/roles.ts', 'schema-name-only'],
+    ['src/lib/brain/doctor.ts', 'schema-name-only'],
+    // Names the SQL twin of its credential scan in a comment; issues no SQL.
+    ['src/lib/brain/evidence-contracts.ts', 'schema-name-only'],
+  ]);
+  // The SQL SCHEMA reference, not the bare token: 'brain_evidence' is also a
+  // context-bundle field name and a tripwire trust-source label.
+  const schemaReference = /brain_evidence\.|SCHEMA brain_evidence/u;
+  const offenders: string[] = [];
+  for (const path of typescriptFiles('src')) {
+    const relative = repositoryPath(path);
+    const text = readFileSync(path, 'utf8');
+    if (!schemaReference.test(text)) continue;
+    const role = allowed.get(relative);
+    if (role === undefined) {
+      offenders.push(relative);
+      continue;
+    }
+    if (role === 'schema-name-only') {
+      assert.equal(dml.test(text), false, `${relative} must not perform brain_evidence DML`);
+    }
+  }
+  assert.deepEqual(offenders, []);
+
+  const storePath = join(PROJECT_ROOT, 'src/lib/brain/evidence-store.ts');
+  const store = readFileSync(storePath, 'utf8');
+  assert.equal(dml.test(store), true);
+
+  // The record verbs are pure Postgres: no object-store parameter anywhere on
+  // the record path. Promotion is the only operation that ingests bytes.
+  for (const verb of ['recordCompletedRun', 'recordRunArtifact', 'recordFeedback', 'recordHumanDecision']) {
+    const start = store.indexOf(`export async function ${verb}(`);
+    assert.notEqual(start, -1, verb);
+    const signature = store.slice(start, store.indexOf('): Promise', start));
+    assert.equal(/objectStore|BrainObjectStore/u.test(signature), false, verb);
+  }
+  assert.equal(/objectStore/u.test(store.slice(0, store.indexOf('export type PromoteEvidenceDeps'))), false);
+
+  // Evidence modules never import the ops persistence tree (#362 deletes it).
+  for (const module of [
+    'src/lib/brain/evidence-contracts.ts',
+    'src/lib/brain/evidence-identity.ts',
+    'src/lib/brain/evidence-store.ts',
+  ]) {
+    const imported = moduleEdges(join(PROJECT_ROOT, module))
+      .map((edge) => edge.module)
+      .filter((specifier) => /(?:^|\/)persistence(?:\/|$)/u.test(specifier));
+    assert.deepEqual(imported, [], module);
+  }
+
+  // Promotion is admin-path library-only: no CLI verb, no runtime broker.
+  const brainArgs = readFileSync(join(PROJECT_ROOT, 'src/lib/brain-args.ts'), 'utf8');
+  assert.equal(/promote/iu.test(brainArgs), false);
+  const migration = readFileSync(join(PROJECT_ROOT, 'data/brain/schema/013_evidence_core.sql'), 'utf8');
+  assert.equal(/CREATE FUNCTION brain_evidence\.(?:record_)?promote/iu.test(migration), false);
+
+  // promoteEvidence is the ONLY evidence->semantic path: it alone calls the
+  // source lifecycle, and it alone stamps promoted_from provenance. Asserted at
+  // the call site, not by text search, so a quoted or dynamic reference cannot
+  // slip an ingest past the boundary.
+  // src/lib/brain/extraction.ts is #370's ingest-then-extract helper: a
+  // separate subsystem that ingests ordinary company sources, never evidence.
+  // It is allowlisted by name so a NEW unexpected importer still fails here.
+  const NON_EVIDENCE_INGEST_CALLERS = ['src/lib/brain/extraction.ts'];
+  const sourceFiles = [...typescriptFiles('src'), ...typescriptFiles('test')];
+  const ingestImporters = importers(sourceFiles, 'source-lifecycle', 'ingestBrainSource')
+    .filter((entry) => entry.file.startsWith('src/'));
+  assert.deepEqual(
+    ingestImporters.filter((entry) => !NON_EVIDENCE_INGEST_CALLERS.includes(entry.file)),
+    [{ file: 'src/lib/brain/evidence-store.ts', local: 'ingestBrainSource' }],
+  );
+  const ingestCallSites = importedCallSites(sourceFiles, 'source-lifecycle', 'ingestBrainSource')
+    .filter((entry) => entry.file.startsWith('src/'));
+  assert.deepEqual(
+    ingestCallSites.filter((entry) => !NON_EVIDENCE_INGEST_CALLERS.includes(entry.file)),
+    [{ file: 'src/lib/brain/evidence-store.ts', calls: 1 }],
+  );
+
+  const promotionAt = store.indexOf('export async function promoteEvidence');
+  assert.notEqual(promotionAt, -1);
+  const ingestAt = store.indexOf('await ingestBrainSource(');
+  assert.ok(ingestAt > promotionAt, 'ingestBrainSource is called outside promoteEvidence');
+  const promotedFromSites = sourceFiles
+    .filter((path) => repositoryPath(path).startsWith('src/'))
+    .filter((path) => readFileSync(path, 'utf8').includes('promoted_from'))
+    .map((path) => repositoryPath(path));
+  assert.deepEqual(promotedFromSites, ['src/lib/brain/evidence-store.ts']);
+  assert.ok(store.indexOf('promoted_from') > promotionAt, 'promoted_from is stamped outside promoteEvidence');
+});

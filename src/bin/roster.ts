@@ -77,6 +77,7 @@ import {
   executeBrainReindex,
   executeBrainGc,
   executeBrainFs,
+  executeBrainRecord,
 } from '../commands/brain.ts';
 import {
   EXIT_OK,
@@ -173,6 +174,7 @@ function printHelp(version: string): void {
     `  roster brain init            ${chalk.dim('Bind a configured workspace Brain using ambient admin/runtime credentials')}`,
     `  roster brain doctor          ${chalk.dim('Audit brain append-only safety + report pending migrations')}`,
     `  roster brain save/get/event/link/merge/table/sql  ${chalk.dim('Append-only write/read verbs (runtime role)')}`,
+    `  roster brain record run|artifact|feedback|decision  ${chalk.dim('Append portable work evidence (--payload <json> | --file <workspace path>)')}`,
     `  roster brain mount <file>    ${chalk.dim('Ingest a file as append-only document chunks + keyword index (runtime role)')}`,
     `  roster brain fs put|get|ls|rm  ${chalk.dim('S3-backed file store keyed by --kind/--slug; text is chunk-indexed for query (runtime role)')}`,
     `  roster brain export          ${chalk.dim('Dump all brain tables to a portable backup dir (--out, --format jsonl|sql; admin URL)')}`,
@@ -930,6 +932,15 @@ async function runBrain(args: readonly string[]): Promise<number> {
   }
   if (parsed.subcommand === 'get') {
     return await executeBrainGet({ json: parsed.json, kind: parsed.entKind, slug: parsed.slug });
+  }
+  if (parsed.subcommand === 'record') {
+    return await executeBrainRecord({
+      cwd: process.cwd(),
+      json: parsed.json,
+      recordKind: parsed.recordKind,
+      payload: parsed.payload,
+      file: parsed.file,
+    });
   }
   if (parsed.subcommand === 'mount') {
     return await executeBrainMount({ json: parsed.json, file: parsed.file });

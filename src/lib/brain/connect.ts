@@ -117,6 +117,21 @@ export function resolveBrainDoctorRoleName(cwd: string, roleBase: string = RUNTI
   }
 }
 
+// #356: the runtime seam every Brain runtime verb should open. Authority is
+// derived from the tracked workspace record, so complete Brain configuration
+// (including the S3 namespace the fingerprint covers) is structurally required
+// before a single evidence row can be written. Callers close it in `finally`.
+export function openVerifiedRuntimePool(
+  cwd: string,
+  roleBase: string = RUNTIME_ROLE,
+): VerifiedBrainPool {
+  const workspace = requireBrainConfig(cwd);
+  const authority = deriveBrainWorkspaceAuthority(workspace.workspaceId, workspace.brain);
+  const expectedRole = deriveWorkspaceRuntimeRoleName(workspace.workspaceId, roleBase);
+  const credential = resolveRuntimeCredential(expectedRole, workspace.secretsPath);
+  return createVerifiedBrainPool('runtime', authority, credential.connectionString);
+}
+
 type InitializeCleanBrainOptions = {
   cwd: string;
   adminUrl?: string;
