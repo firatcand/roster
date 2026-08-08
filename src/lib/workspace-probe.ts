@@ -87,24 +87,37 @@ function rootEntry(path: string): { kind: string; stat?: Stats } {
   }
 }
 
+// Reads the innermost OS cause, never the human-readable diagnostic string
+// (which embeds attacker-influenceable directory names). A workspace failure
+// carries the original errno under details.cause however deeply it is wrapped;
+// a raw errno carries it on .code.
+function isPermissionDeniedFailure(error: unknown): boolean {
+  const cause = isWorkspaceFailure(error)
+    ? error.details['cause']
+    : (error as NodeJS.ErrnoException).code;
+  return cause === 'EACCES' || cause === 'EPERM';
+}
+
 function inspectPath(
   root: string,
   relativePath: string,
   expected: 'file' | 'directory',
   failureSignals: string[],
   diagnosticPath = relativePath,
+  ioAmbiguousSignals?: string[],
 ): PathInspection {
   let kind;
   try {
     kind = inspectWorkspaceEntry(root, relativePath);
   } catch (error) {
     if (isWorkspaceFailure(error) && error.code === 'PARENT_NOT_FOUND') return 'absent';
-    if (isWorkspaceFailure(error)) {
-      failureSignals.push(`${diagnosticPath}:${error.code.toLocaleLowerCase('en-US')}`);
-      return 'unsafe';
+    const signal = isWorkspaceFailure(error)
+      ? `${diagnosticPath}:${error.code.toLocaleLowerCase('en-US')}`
+      : `${diagnosticPath}:unreadable:${(error as NodeJS.ErrnoException).code ?? 'unknown'}`;
+    failureSignals.push(signal);
+    if (ioAmbiguousSignals !== undefined && isPermissionDeniedFailure(error)) {
+      ioAmbiguousSignals.push(signal);
     }
-    const code = (error as NodeJS.ErrnoException).code ?? 'unknown';
-    failureSignals.push(`${diagnosticPath}:unreadable:${code}`);
     return 'unsafe';
   }
   if (kind === 'absent') return 'absent';
@@ -120,6 +133,7 @@ function boundedEntries(
   relativePath: string,
   diagnosticPath: string,
   inconclusiveSignals: string[],
+  ioAmbiguousSignals: string[],
   budget: { remaining: number },
   beforeInspect?: (relativePath: string) => void,
 ): WorkspaceDirectoryInspectionEntry[] {
@@ -144,7 +158,9 @@ function boundedEntries(
     const code = isWorkspaceFailure(error)
       ? error.code.toLocaleLowerCase('en-US')
       : ((error as NodeJS.ErrnoException).code ?? 'unknown');
-    inconclusiveSignals.push(`${diagnosticPath}:unreadable:${code}`);
+    const signal = `${diagnosticPath}:unreadable:${code}`;
+    inconclusiveSignals.push(signal);
+    if (isPermissionDeniedFailure(error)) ioAmbiguousSignals.push(signal);
     return [];
   }
 }
@@ -154,6 +170,7 @@ function inspectCandidateDirectory(
   entry: WorkspaceDirectoryInspectionEntry,
   relativePath: string,
   inconclusiveSignals: string[],
+  ioAmbiguousSignals: string[],
   candidates: WorkspaceDirectoryIdentityToken[],
   operation: (anchoredRoot: '.') => void,
   beforeInspect?: (relativePath: string) => void,
@@ -171,19 +188,31 @@ function inspectCandidateDirectory(
     const code = isWorkspaceFailure(error)
       ? error.code.toLocaleLowerCase('en-US')
       : ((error as NodeJS.ErrnoException).code ?? 'unknown');
-    inconclusiveSignals.push(`${relativePath}:unreadable:${code}`);
+    const signal = `${relativePath}:unreadable:${code}`;
+    inconclusiveSignals.push(signal);
+    if (isPermissionDeniedFailure(error)) ioAmbiguousSignals.push(signal);
   }
 }
 
 function detectV04Signals(
   root: string,
   inconclusiveSignals: string[],
+  ioAmbiguousSignals: string[],
   candidates: WorkspaceDirectoryIdentityToken[],
   beforeInspect?: (relativePath: string) => void,
 ): string[] {
   const signals: string[] = [];
   const budget = { remaining: MAX_PROBE_TOTAL_ENTRIES };
-  if (inspectPath(root, 'projects', 'directory', inconclusiveSignals) === 'present') {
+  if (
+    inspectPath(
+      root,
+      'projects',
+      'directory',
+      inconclusiveSignals,
+      'projects',
+      ioAmbiguousSignals,
+    ) === 'present'
+  ) {
     signals.push('projects/');
   }
 
@@ -192,6 +221,7 @@ function detectV04Signals(
     '.',
     '.',
     inconclusiveSignals,
+    ioAmbiguousSignals,
     budget,
     beforeInspect,
   )) {
@@ -204,6 +234,7 @@ function detectV04Signals(
       top,
       top.name,
       inconclusiveSignals,
+      ioAmbiguousSignals,
       candidates,
       (topRoot) => {
         const topProjects = `${top.name}/projects`;
@@ -214,6 +245,7 @@ function detectV04Signals(
             'directory',
             inconclusiveSignals,
             topProjects,
+            ioAmbiguousSignals,
           ) === 'present'
         ) {
           signals.push(`${topProjects}/`);
@@ -224,6 +256,7 @@ function detectV04Signals(
           '.',
           top.name,
           inconclusiveSignals,
+          ioAmbiguousSignals,
           budget,
         )) {
           if (child.kind !== 'directory' || child.name.startsWith('.')) continue;
@@ -233,6 +266,7 @@ function detectV04Signals(
             child,
             childPath,
             inconclusiveSignals,
+            ioAmbiguousSignals,
             candidates,
             (childRoot) => {
               const childProjects = `${childPath}/projects`;
@@ -243,6 +277,7 @@ function detectV04Signals(
                   'directory',
                   inconclusiveSignals,
                   childProjects,
+                  ioAmbiguousSignals,
                 ) === 'present'
               ) {
                 signals.push(`${childProjects}/`);
@@ -264,8 +299,16 @@ function regularFileEquals(
   relativePath: string,
   expected: Buffer,
   inconclusiveSignals: string[],
+  ioAmbiguousSignals: string[],
 ): boolean {
-  const inspection = inspectPath(root, relativePath, 'file', inconclusiveSignals);
+  const inspection = inspectPath(
+    root,
+    relativePath,
+    'file',
+    inconclusiveSignals,
+    relativePath,
+    ioAmbiguousSignals,
+  );
   if (inspection !== 'present') return false;
 
   try {
@@ -276,16 +319,24 @@ function regularFileEquals(
     const code = isWorkspaceFailure(error)
       ? error.code.toLocaleLowerCase('en-US')
       : ((error as NodeJS.ErrnoException).code ?? 'unknown');
-    inconclusiveSignals.push(`${relativePath}:unreadable:${code}`);
+    const signal = `${relativePath}:unreadable:${code}`;
+    inconclusiveSignals.push(signal);
+    if (isPermissionDeniedFailure(error)) ioAmbiguousSignals.push(signal);
     return false;
   }
 }
 
-function legacySignatureSignals(root: string, inconclusiveSignals: string[]): string[] {
+function legacySignatureSignals(
+  root: string,
+  inconclusiveSignals: string[],
+  ioAmbiguousSignals: string[],
+): string[] {
   const hits: string[] = [];
   for (const relativePath of LEGACY_SIGNATURE_FILES) {
     const template = readFileSync(join(ROSTER_ROOT, 'templates', 'scaffold', relativePath));
-    if (regularFileEquals(root, relativePath, template, inconclusiveSignals)) {
+    if (
+      regularFileEquals(root, relativePath, template, inconclusiveSignals, ioAmbiguousSignals)
+    ) {
       hits.push(relativePath);
     }
   }
@@ -302,6 +353,7 @@ export function probeWorkspace(cwd: string, options: WorkspaceProbeOptions = {})
   const legacySignals: string[] = [];
   const unsafeSignals: string[] = [];
   const inconclusiveSignals: string[] = [];
+  const ioAmbiguousSignals: string[] = [];
   const candidates: WorkspaceDirectoryIdentityToken[] = [];
 
   const rootInspection = rootEntry(root);
@@ -357,10 +409,15 @@ export function probeWorkspace(cwd: string, options: WorkspaceProbeOptions = {})
       legacySignals.push(...detectV04Signals(
         anchoredRoot,
         inconclusiveSignals,
+        ioAmbiguousSignals,
         candidates,
         options.beforeDirectoryInspect,
       ));
-      legacySignals.push(...legacySignatureSignals(anchoredRoot, inconclusiveSignals));
+      legacySignals.push(...legacySignatureSignals(
+        anchoredRoot,
+        inconclusiveSignals,
+        ioAmbiguousSignals,
+      ));
     });
   } catch (error) {
     if (isWorkspaceDirectoryIdentityFailure(error)) {
@@ -377,9 +434,42 @@ export function probeWorkspace(cwd: string, options: WorkspaceProbeOptions = {})
   const legacy = sortedUnique(legacySignals);
   const unsafe = sortedUnique(unsafeSignals);
   const inconclusive = sortedUnique(inconclusiveSignals);
-  const blockingUnsafe = v2.length === 0
-    ? sortedUnique([...unsafe, ...inconclusive])
-    : unsafe;
+  const ioAmbiguous = new Set(ioAmbiguousSignals);
+  // Only genuinely ambiguous permission failures (EACCES/EPERM) on a path
+  // Roster never confirmed as workspace-relevant are exempt from blocking.
+  // Wrong-type mismatches, directory-identity races, and traversal-budget
+  // exhaustion recorded here are positive evidence of tampering or
+  // incompleteness, not mere unreadability, so they are never treated as
+  // io-ambiguous. This filter only feeds the branch below, though: with no
+  // v2 sentinel (roster.yaml), any remaining (non-io-ambiguous) entry still
+  // forces 'unsafe'. With a v2 sentinel present, the kind ternary resolves to
+  // 'v2'/'mixed' before this filtered list is ever consulted -- structural
+  // inconclusive signals are recorded (still visible via
+  // probe.inconclusiveSignals) but non-blocking there. That precedence is
+  // pre-existing (see the 'v2'/'mixed' branches below) and unchanged by this
+  // fix; see test/init.test.ts's 'a regular v2 sentinel keeps incidental
+  // legacy-scan uncertainty non-blocking'.
+  //
+  // Threat model (#386): an actor who can chmod a directory inside the tree
+  // `roster init`/`install`/`doctor --fix` is about to run in already has
+  // local write access to that tree, and could equally delete/rename/replace
+  // the legacy markers directly -- hiding them behind a permission wall is
+  // not a materially stronger attack than the many other ways such an actor
+  // could already evade this heuristic. Verified against all 11 production
+  // callers of probeWorkspace: only init, install's implicit user-scope
+  // default, and doctor --fix can turn a downgrade into a write, and in all
+  // three cases the write is either non-destructive/self-correcting (init:
+  // fresh roster.yaml/ROSTER.md beside an undetected legacy dir), confined to
+  // the tool install roots and independent of cwd (install: ~/.claude et al.
+  // via assertWithinRoot -- those roots may themselves be descendants of cwd
+  // when ROSTER_*_HOME points inside it, but nothing is resolved relative to
+  // cwd on that path; see install.ts's user-scope branch), or a no-op /
+  // identical to doctor --fix's pre-existing behavior on any other
+  // non-workspace directory (see doctor.ts's fixer gates). That is strictly
+  // better than the status quo, which fails EVERY command -- including
+  // read-only ones like `discover`/`doctor --json` -- with a tampered-marker
+  // error on any innocent unreadable sibling directory.
+  const blockingInconclusive = inconclusive.filter((signal) => !ioAmbiguous.has(signal));
   const kind: WorkspaceKind =
     unsafe.length > 0
       ? 'unsafe'
@@ -387,11 +477,14 @@ export function probeWorkspace(cwd: string, options: WorkspaceProbeOptions = {})
         ? 'mixed'
         : v2.length > 0
           ? 'v2'
-          : inconclusive.length > 0
+          : blockingInconclusive.length > 0
             ? 'unsafe'
-          : legacy.length > 0
-            ? 'legacy'
-            : 'none';
+            : legacy.length > 0
+              ? 'legacy'
+              : 'none';
+  const blockingUnsafe = v2.length === 0 && kind === 'unsafe'
+    ? sortedUnique([...unsafe, ...inconclusive])
+    : unsafe;
 
   return {
     kind,

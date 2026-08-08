@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, cpSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, cpSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -490,6 +490,45 @@ test('doctor with 0666 agent .env → exit 1; doctor --fix → exit 0 + agent .e
       rmSync(ws, { recursive: true, force: true });
     }
   } finally {
+    h.cleanup();
+  }
+});
+
+// #386 pinning test. An unreadable sibling used to classify the directory as
+// `unsafe`, so doctor refused before auditing anything. It now classifies as
+// `none`, reaching the same v1 audit path every other non-workspace directory
+// already reached. This pins that the newly-reachable --fix grants no new
+// mutation capability: every fixer is gated on a pre-existing artifact, so the
+// only change here is the mode of the .env the caller placed themselves.
+test('doctor --fix in a non-workspace dir with an unreadable sibling only chmods a pre-existing loose .env (#386)', () => {
+  if (process.platform === 'win32') return;
+  if (process.getuid && process.getuid() === 0) return;
+  const h = makeHomes(['claude']);
+  const ws = mkdtempSync(join(tmpdir(), 'roster-doctor-fix-386-'));
+  const candidate = join(ws, 'private-cache');
+  try {
+    runCli(['install', '--all', '--silent'], envFor(h));
+    const envPath = join(ws, '.env');
+    writeFileSync(envPath, 'API_KEY=secret\n');
+    chmodSync(envPath, 0o644);
+    mkdirSync(candidate);
+    chmodSync(candidate, 0o000);
+
+    const before = runCliInCwd(['doctor'], envFor(h), ws);
+    assert.equal(
+      before.status,
+      1,
+      `expected fail (loose .env), not UNSAFE_WORKSPACE_MARKER: ${before.stdout}\n${before.stderr}`,
+    );
+    assert.doesNotMatch(before.stderr, /UNSAFE_WORKSPACE_MARKER/);
+
+    const fix = runCliInCwd(['doctor', '--fix'], envFor(h), ws);
+    assert.equal(fix.status, 0, `expected ok after fix: ${fix.stdout}`);
+    assert.equal((statSync(envPath).mode & 0o777).toString(8), '600');
+    assert.deepEqual(readdirSync(ws).sort(), ['.env', 'private-cache']);
+  } finally {
+    chmodSync(candidate, 0o755);
+    rmSync(ws, { recursive: true, force: true });
     h.cleanup();
   }
 });
