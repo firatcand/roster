@@ -38,6 +38,11 @@ export type BrainObjectInspection =
   | { status: 'missing'; key: string }
   | { status: 'corrupt'; key: string; reason: 'size' | 'digest' | 'body' };
 
+export type BrainObjectRead =
+  | ({ status: 'verified'; bytes: Buffer } & BrainObjectObservation)
+  | { status: 'missing'; key: string }
+  | { status: 'corrupt'; key: string; reason: 'size' | 'digest' | 'body' };
+
 export interface BrainObjectStore {
   readonly namespaceFingerprint: string;
   createOrVerify(input: {
@@ -51,6 +56,18 @@ export interface BrainObjectStore {
     versionId?: string | null;
   }): Promise<BrainObjectInspection>;
   close(): void;
+}
+
+// Additive read surface for callers that must consume the exact immutable bytes
+// (extraction, #370). Deliberately separate from BrainObjectStore so existing
+// implementors keep their signature.
+export interface BrainObjectReader {
+  readonly namespaceFingerprint: string;
+  readVerified(input: {
+    sha256: string;
+    byteLength: number;
+    versionId?: string | null;
+  }): Promise<BrainObjectRead>;
 }
 
 type TransportPutInput = {
@@ -182,11 +199,16 @@ function destroyBody(body: unknown): void {
   }
 }
 
-async function hashBody(body: unknown, maximum: number): Promise<{ digest: string; byteLength: number }> {
+async function hashBody(
+  body: unknown,
+  maximum: number,
+  collect = false,
+): Promise<{ digest: string; byteLength: number; bytes: Buffer | null }> {
   if (body === null || typeof body !== 'object' || !(Symbol.asyncIterator in body)) {
     throw new BrainObjectStoreError('INVALID_S3_RESPONSE', 'S3 returned a non-streaming object body');
   }
   const hash = createHash('sha256');
+  const collected: Uint8Array[] = [];
   let byteLength = 0;
   try {
     for await (const rawChunk of body as AsyncIterable<unknown>) {
@@ -198,12 +220,17 @@ async function hashBody(body: unknown, maximum: number): Promise<{ digest: strin
         throw new BrainObjectStoreError('OBJECT_BODY_LIMIT', 'S3 object exceeded its expected byte length');
       }
       hash.update(rawChunk);
+      if (collect) collected.push(rawChunk);
     }
   } catch (error) {
     destroyBody(body);
     throw error;
   }
-  return { digest: hash.digest('hex'), byteLength };
+  return {
+    digest: hash.digest('hex'),
+    byteLength,
+    bytes: collect ? Buffer.concat(collected, byteLength) : null,
+  };
 }
 
 function toObservation(
@@ -221,7 +248,7 @@ function toObservation(
   };
 }
 
-export class ContentAddressedBrainObjectStore implements BrainObjectStore {
+export class ContentAddressedBrainObjectStore implements BrainObjectStore, BrainObjectReader {
   readonly namespaceFingerprint: string;
   private readonly transport: BrainObjectTransport;
   private readonly bucket: string;
@@ -296,6 +323,31 @@ export class ContentAddressedBrainObjectStore implements BrainObjectStore {
     byteLength: number;
     versionId?: string | null;
   }): Promise<BrainObjectInspection> {
+    const read = await this.load(input, false);
+    if (read.status !== 'verified') return read;
+    return {
+      status: 'verified',
+      key: read.key,
+      sha256: read.sha256,
+      byteLength: read.byteLength,
+      etag: read.etag,
+      versionId: read.versionId,
+    };
+  }
+
+  async readVerified(input: {
+    sha256: string;
+    byteLength: number;
+    versionId?: string | null;
+  }): Promise<BrainObjectRead> {
+    return await this.load(input, true);
+  }
+
+  private async load(input: {
+    sha256: string;
+    byteLength: number;
+    versionId?: string | null;
+  }, collect: boolean): Promise<BrainObjectRead> {
     assertDigest(input.sha256);
     assertByteLength(input.byteLength);
     const objectKey = brainObjectKey(undefined, input.sha256);
@@ -318,9 +370,9 @@ export class ContentAddressedBrainObjectStore implements BrainObjectStore {
       destroyBody(object.body);
       return { status: 'corrupt', key: objectKey, reason: 'size' };
     }
-    let hashed: { digest: string; byteLength: number };
+    let hashed: { digest: string; byteLength: number; bytes: Buffer | null };
     try {
-      hashed = await hashBody(object.body, input.byteLength);
+      hashed = await hashBody(object.body, input.byteLength, collect);
     } catch (error) {
       if (error instanceof BrainObjectStoreError && error.code === 'OBJECT_BODY_LIMIT') {
         return { status: 'corrupt', key: objectKey, reason: 'size' };
@@ -334,6 +386,7 @@ export class ContentAddressedBrainObjectStore implements BrainObjectStore {
     if (hashed.digest !== input.sha256) return { status: 'corrupt', key: objectKey, reason: 'digest' };
     return {
       status: 'verified',
+      bytes: hashed.bytes ?? Buffer.alloc(0),
       ...toObservation(objectKey, input.sha256, input.byteLength, {
         etag: object.etag ?? head.etag,
         versionId: object.versionId ?? head.versionId,

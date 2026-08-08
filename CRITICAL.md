@@ -51,6 +51,14 @@ src/lib/network-address.ts
 src/lib/brain/roles.ts
 data/brain/schema/**
 
+# Brain extraction and indexing (#370) — admin-path write authority, byte-verified
+# extraction, and privacy-gated embedding state over immutable source versions
+src/lib/brain/activation.ts
+src/lib/brain/extraction.ts
+src/lib/brain/extractors.ts
+src/lib/brain/embedding-index.ts
+src/lib/brain/embedding-provider.ts
+
 # Run + artifact ledger (#323) — trust taxonomy, sealed provenance, sanitized
 # index projections, and the admin-only version-id repair (mutates users' ops DB)
 src/commands/run.ts
