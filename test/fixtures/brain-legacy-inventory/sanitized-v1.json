@@ -1,0 +1,494 @@
+{
+  "expected": {
+    "workspace_id": "fixture-workspace",
+    "fingerprint_format_version": 1,
+    "namespace_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "identity_rows": [
+    {
+      "workspace_id": "fixture-workspace",
+      "fingerprint_format_version": "1",
+      "namespace_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "migration_state": "ready"
+    }
+  ],
+  "s3": { "bucket": "fixture-legacy-bucket", "prefix": "brain" },
+  "database": {
+    "owner": "fixture_admin",
+    "acl": [
+      { "grantor": "fixture_admin", "grantee": "roster_brain_rw", "privilege": "CONNECT", "grantable": false }
+    ]
+  },
+  "schemas": [
+    { "name": "brain", "owner": "fixture_admin", "acl": [] },
+    { "name": "brain_meta", "owner": "fixture_admin", "acl": [] },
+    {
+      "name": "public",
+      "owner": "fixture_admin",
+      "acl": [{ "grantor": "fixture_admin", "grantee": null, "privilege": "USAGE", "grantable": false }]
+    },
+    { "name": "analytics", "owner": "CANARY_ROLE_NAME", "acl": [] }
+  ],
+  "memberships": [{ "role": "roster_brain_rw", "member": "CANARY_ROLE_NAME" }],
+  "default_acls": [
+    {
+      "owner": "fixture_admin",
+      "schema": "brain",
+      "object_type": "r",
+      "grantor": "fixture_admin",
+      "grantee": "roster_brain_rw",
+      "privilege": "SELECT",
+      "grantable": false
+    }
+  ],
+  "runtime_roles": ["roster_brain_rw"],
+  "relations": [
+    {
+      "schema": "brain_meta",
+      "name": "schema_migrations",
+      "kind": "r",
+      "owner": "fixture_admin",
+      "columns": [
+        { "name": "filename", "type": "text", "base": "text", "not_null": true },
+        { "name": "sha256", "type": "text", "base": "text", "not_null": true },
+        { "name": "applied_at", "type": "timestamp with time zone", "base": "timestamptz", "not_null": true, "has_default": true }
+      ],
+      "primary_key": ["filename"],
+      "rows": [
+        { "filename": "001_init.sql", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "applied_at": "2025-05-01 09:00:00+00" },
+        { "filename": "004_documents_mount.sql", "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "applied_at": "2025-05-02 09:00:00+00" },
+        { "filename": "CANARY_MIGRATION bad name.sql", "sha256": "not-a-real-digest", "applied_at": "2025-05-03 09:00:00+00" }
+      ]
+    },
+    {
+      "schema": "brain_meta",
+      "name": "workspace_identity",
+      "kind": "r",
+      "owner": "fixture_admin",
+      "columns": [
+        { "name": "singleton", "type": "boolean", "base": "bool", "not_null": true },
+        { "name": "workspace_id", "type": "text", "base": "text", "not_null": true },
+        { "name": "fingerprint_format_version", "type": "smallint", "base": "int2", "not_null": true },
+        { "name": "namespace_fingerprint", "type": "text", "base": "text", "not_null": true },
+        { "name": "database_authority_id", "type": "uuid", "base": "uuid", "not_null": true },
+        { "name": "initialized_at", "type": "timestamp with time zone", "base": "timestamptz", "not_null": true, "has_default": true },
+        { "name": "migration_state", "type": "text", "base": "text", "not_null": true }
+      ],
+      "primary_key": ["singleton"],
+      "rows": [
+        {
+          "singleton": "true",
+          "workspace_id": "fixture-workspace",
+          "fingerprint_format_version": "1",
+          "namespace_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "database_authority_id": "9c5f27aa-1111-4222-8333-abcdefabcdef",
+          "initialized_at": "2025-05-01 08:00:00+00",
+          "migration_state": "ready"
+        }
+      ]
+    },
+    {
+      "schema": "brain_meta",
+      "name": "runtime_roles",
+      "kind": "r",
+      "owner": "fixture_admin",
+      "columns": [
+        { "name": "rolname", "type": "text", "base": "text", "not_null": true },
+        { "name": "registered_at", "type": "timestamp with time zone", "base": "timestamptz", "not_null": true, "has_default": true }
+      ],
+      "primary_key": ["rolname"],
+      "rows": [{ "rolname": "roster_brain_rw", "registered_at": "2025-05-01 09:30:00+00" }]
+    },
+    {
+      "schema": "brain",
+      "name": "entities",
+      "kind": "r",
+      "owner": "fixture_admin",
+      "acl": [
+        { "grantor": "fixture_admin", "grantee": "roster_brain_rw", "privilege": "SELECT", "grantable": false },
+        { "grantor": "fixture_admin", "grantee": "roster_brain_rw", "privilege": "INSERT", "grantable": false }
+      ],
+      "columns": [
+        { "name": "id", "type": "bigint", "base": "int8", "not_null": true, "identity": "a" },
+        { "name": "recorded_at", "type": "timestamp with time zone", "base": "timestamptz", "not_null": true, "has_default": true },
+        { "name": "kind", "type": "text", "base": "text", "not_null": true },
+        { "name": "slug", "type": "text", "base": "text", "not_null": true },
+        { "name": "title", "type": "text", "base": "text", "not_null": false },
+        { "name": "body", "type": "jsonb", "base": "jsonb", "not_null": false },
+        { "name": "canonical_id", "type": "bigint", "base": "int8", "not_null": true }
+      ],
+      "primary_key": ["id"],
+      "defaults": [{ "column": "recorded_at", "expression": "now()" }],
+      "constraints": [{ "name": "entities_pkey", "kind": "p", "definition": "PRIMARY KEY (id)" }],
+      "indexes": [{ "name": "entities_slug_idx", "definition": "CREATE INDEX entities_slug_idx ON brain.entities (slug)" }],
+      "rows": [
+        { "id": "1", "recorded_at": "2025-06-01 10:00:00+00", "kind": "competitor", "slug": "canary-entity-slug", "title": "CANARY_ENTITY_TITLE", "body": "{\"note\": \"CANARY_ENTITY_BODY\"}", "canonical_id": "1" },
+        { "id": "2", "recorded_at": "2025-06-01 10:05:00+00", "kind": "competitor", "slug": "canary-entity-slug-b", "title": "CANARY_ENTITY_TITLE", "body": "{\"note\": \"CANARY_ENTITY_BODY\"}", "canonical_id": "1" },
+        { "id": "9007199254740993", "recorded_at": "2025-06-01 10:10:00+00", "kind": "competitor", "slug": "canary-entity-slug-c", "title": "CANARY_ENTITY_TITLE", "body": "{\"note\": \"CANARY_ENTITY_BODY\"}", "canonical_id": "9007199254740993" }
+      ]
+    },
+    {
+      "schema": "brain",
+      "name": "facts",
+      "kind": "r",
+      "owner": "fixture_admin",
+      "columns": [
+        { "name": "id", "type": "bigint", "base": "int8", "not_null": true, "identity": "a" },
+        { "name": "recorded_at", "type": "timestamp with time zone", "base": "timestamptz", "not_null": true, "has_default": true },
+        { "name": "entity_id", "type": "bigint", "base": "int8", "not_null": true },
+        { "name": "key", "type": "text", "base": "text", "not_null": true },
+        { "name": "value", "type": "jsonb", "base": "jsonb", "not_null": false },
+        { "name": "source", "type": "text", "base": "text", "not_null": false },
+        { "name": "confidence", "type": "real", "base": "float4", "not_null": false },
+        { "name": "actor", "type": "text", "base": "text", "not_null": false }
+      ],
+      "primary_key": ["id"],
+      "rows": [
+        { "id": "1", "recorded_at": "2025-06-02 09:00:00+00", "entity_id": "1", "key": "employee-count", "value": "\"CANARY_FACT_VALUE\"", "source": "https://user:CANARY_PASSWORD_9@example.com/profile", "confidence": "0.9", "actor": "actor-sdr-canary" },
+        { "id": "2", "recorded_at": "2025-06-02 09:05:00+00", "entity_id": "2", "key": "employee-count", "value": "\"CANARY_FACT_VALUE\"", "source": "bad\u0007locator", "confidence": null, "actor": null }
+      ]
+    },
+    {
+      "schema": "brain",
+      "name": "events",
+      "kind": "r",
+      "owner": "fixture_admin",
+      "columns": [
+        { "name": "id", "type": "bigint", "base": "int8", "not_null": true, "identity": "a" },
+        { "name": "recorded_at", "type": "timestamp with time zone", "base": "timestamptz", "not_null": true, "has_default": true },
+        { "name": "entity_id", "type": "bigint", "base": "int8", "not_null": false },
+        { "name": "kind", "type": "text", "base": "text", "not_null": true },
+        { "name": "payload", "type": "jsonb", "base": "jsonb", "not_null": false },
+        { "name": "actor", "type": "text", "base": "text", "not_null": false }
+      ],
+      "primary_key": ["id"],
+      "rows": [
+        { "id": "1", "recorded_at": "2025-06-03 11:00:00+00", "entity_id": "1", "kind": "post-published", "payload": "{\"body\": \"CANARY_EVENT_PAYLOAD\"}", "actor": "actor-sdr-canary" }
+      ]
+    },
+    {
+      "schema": "brain",
+      "name": "edges",
+      "kind": "r",
+      "owner": "fixture_admin",
+      "columns": [
+        { "name": "id", "type": "bigint", "base": "int8", "not_null": true, "identity": "a" },
+        { "name": "recorded_at", "type": "timestamp with time zone", "base": "timestamptz", "not_null": true, "has_default": true },
+        { "name": "src_id", "type": "bigint", "base": "int8", "not_null": true },
+        { "name": "dst_id", "type": "bigint", "base": "int8", "not_null": true },
+        { "name": "rel", "type": "text", "base": "text", "not_null": true },
+        { "name": "props", "type": "jsonb", "base": "jsonb", "not_null": false },
+        { "name": "actor", "type": "text", "base": "text", "not_null": false }
+      ],
+      "primary_key": ["id"],
+      "rows": [
+        { "id": "1", "recorded_at": "2025-06-03 12:00:00+00", "src_id": "1", "dst_id": "2", "rel": "competes-with", "props": "{\"note\": \"CANARY_EDGE_PROPS\"}", "actor": null }
+      ]
+    },
+    {
+      "schema": "brain",
+      "name": "documents",
+      "kind": "r",
+      "owner": "fixture_admin",
+      "columns": [
+        { "name": "id", "type": "bigint", "base": "int8", "not_null": true, "identity": "a" },
+        { "name": "recorded_at", "type": "timestamp with time zone", "base": "timestamptz", "not_null": true, "has_default": true },
+        { "name": "source_path", "type": "text", "base": "text", "not_null": true },
+        { "name": "chunk_index", "type": "integer", "base": "int4", "not_null": true },
+        { "name": "body", "type": "text", "base": "text", "not_null": false },
+        { "name": "meta", "type": "jsonb", "base": "jsonb", "not_null": false },
+        { "name": "mount_id", "type": "bigint", "base": "int8", "not_null": false },
+        { "name": "embedding", "type": "vector(1536)", "base": "vector", "type_schema": "public", "not_null": false },
+        { "name": "embedding_model", "type": "text", "base": "text", "not_null": false }
+      ],
+      "primary_key": ["id"],
+      "rows": [
+        { "id": "1", "recorded_at": "2025-06-04 08:00:00+00", "source_path": "s3://fixture-legacy-bucket/brain/media/post-1.png", "chunk_index": "0", "body": "CANARY_DOC_BODY", "meta": "{\"front\": \"CANARY_DOC_META\"}", "mount_id": "1", "embedding": null, "embedding_model": "canary-embed-model" },
+        { "id": "2", "recorded_at": "2025-06-04 08:05:00+00", "source_path": "/Users/canary-user/exports/report.md", "chunk_index": "1", "body": "CANARY_DOC_BODY", "meta": null, "mount_id": null, "embedding": null, "embedding_model": null }
+      ]
+    },
+    {
+      "schema": "brain",
+      "name": "mounts",
+      "kind": "r",
+      "owner": "fixture_admin",
+      "columns": [
+        { "name": "id", "type": "bigint", "base": "int8", "not_null": true, "identity": "a" },
+        { "name": "recorded_at", "type": "timestamp with time zone", "base": "timestamptz", "not_null": true, "has_default": true },
+        { "name": "source_path", "type": "text", "base": "text", "not_null": true },
+        { "name": "file_hash", "type": "text", "base": "text", "not_null": true }
+      ],
+      "primary_key": ["id"],
+      "rows": [
+        { "id": "1", "recorded_at": "2025-06-04 07:00:00+00", "source_path": "/private/tmp/canary-tmp/file.md", "file_hash": "beef000000000000000000000000000000000000000000000000000000000000" }
+      ]
+    },
+    {
+      "schema": "brain",
+      "name": "entity_aliases",
+      "kind": "r",
+      "owner": "fixture_admin",
+      "columns": [
+        { "name": "id", "type": "bigint", "base": "int8", "not_null": true, "identity": "a" },
+        { "name": "recorded_at", "type": "timestamp with time zone", "base": "timestamptz", "not_null": true, "has_default": true },
+        { "name": "entity_id", "type": "bigint", "base": "int8", "not_null": true },
+        { "name": "alias", "type": "text", "base": "text", "not_null": true },
+        { "name": "source", "type": "text", "base": "text", "not_null": false },
+        { "name": "actor", "type": "text", "base": "text", "not_null": false }
+      ],
+      "primary_key": ["id"],
+      "rows": [
+        { "id": "1", "recorded_at": "2025-06-05 09:00:00+00", "entity_id": "1", "alias": "CANARY_ALIAS", "source": "file:///canary/foreign", "actor": null }
+      ]
+    },
+    {
+      "schema": "brain",
+      "name": "entity_merges",
+      "kind": "r",
+      "owner": "fixture_admin",
+      "columns": [
+        { "name": "id", "type": "bigint", "base": "int8", "not_null": true, "identity": "a" },
+        { "name": "recorded_at", "type": "timestamp with time zone", "base": "timestamptz", "not_null": true, "has_default": true },
+        { "name": "from_id", "type": "bigint", "base": "int8", "not_null": true },
+        { "name": "into_id", "type": "bigint", "base": "int8", "not_null": true },
+        { "name": "actor", "type": "text", "base": "text", "not_null": false }
+      ],
+      "primary_key": ["id"],
+      "rows": [
+        { "id": "1", "recorded_at": "2025-06-05 10:00:00+00", "from_id": "2", "into_id": "1", "actor": "actor-sdr-canary" }
+      ]
+    },
+    {
+      "schema": "brain",
+      "name": "files",
+      "kind": "r",
+      "owner": "fixture_admin",
+      "columns": [
+        { "name": "id", "type": "bigint", "base": "int8", "not_null": true, "identity": "a" },
+        { "name": "recorded_at", "type": "timestamp with time zone", "base": "timestamptz", "not_null": true, "has_default": true },
+        { "name": "kind", "type": "text", "base": "text", "not_null": true },
+        { "name": "slug", "type": "text", "base": "text", "not_null": true },
+        { "name": "filename", "type": "text", "base": "text", "not_null": true },
+        { "name": "op", "type": "text", "base": "text", "not_null": true },
+        { "name": "source_path", "type": "text", "base": "text", "not_null": true },
+        { "name": "bucket", "type": "text", "base": "text", "not_null": true },
+        { "name": "s3_key", "type": "text", "base": "text", "not_null": true },
+        { "name": "size_bytes", "type": "bigint", "base": "int8", "not_null": false },
+        { "name": "content_hash", "type": "text", "base": "text", "not_null": false },
+        { "name": "etag", "type": "text", "base": "text", "not_null": false },
+        { "name": "content_type", "type": "text", "base": "text", "not_null": false },
+        { "name": "mount_id", "type": "bigint", "base": "int8", "not_null": false },
+        { "name": "actor", "type": "text", "base": "text", "not_null": false }
+      ],
+      "primary_key": ["id"],
+      "rows": [
+        { "id": "1", "recorded_at": "2025-06-06 09:00:00+00", "kind": "media", "slug": "post-1", "filename": "post-1.png", "op": "put", "source_path": "s3://fixture-legacy-bucket/brain/media/post-1.png", "bucket": "fixture-legacy-bucket", "s3_key": "brain/media/post-1.png", "size_bytes": "2048", "content_hash": "c0ffeeaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "etag": "\"etagA\"", "content_type": "image/png", "mount_id": "1", "actor": "actor-sdr-canary" },
+        { "id": "2", "recorded_at": "2025-06-06 09:10:00+00", "kind": "media", "slug": "post-1", "filename": "post-1.png", "op": "put", "source_path": "s3://fixture-legacy-bucket/brain/media/post-1.png", "bucket": "fixture-legacy-bucket", "s3_key": "brain/media/post-1.png", "size_bytes": "2048", "content_hash": "c0ffeeaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "etag": "\"etagA\"", "content_type": "image/png", "mount_id": "1", "actor": "actor-sdr-canary" },
+        { "id": "3", "recorded_at": "2025-06-06 09:20:00+00", "kind": "media", "slug": "gone", "filename": "gone.bin", "op": "put", "source_path": "s3://fixture-legacy-bucket/brain/media/gone.bin", "bucket": "fixture-legacy-bucket", "s3_key": "brain/media/gone.bin", "size_bytes": "100", "content_hash": "d1000000000000000000000000000000000000000000000000000000000000aa", "etag": "\"etagB\"", "content_type": "application/octet-stream", "mount_id": null, "actor": null },
+        { "id": "4", "recorded_at": "2025-06-06 09:30:00+00", "kind": "media", "slug": "dup", "filename": "dup.bin", "op": "put", "source_path": "s3://fixture-legacy-bucket/brain/media/dup.bin", "bucket": "fixture-legacy-bucket", "s3_key": "brain/media/dup.bin", "size_bytes": "7", "content_hash": "d2000000000000000000000000000000000000000000000000000000000000bb", "etag": "\"etagC\"", "content_type": "application/octet-stream", "mount_id": null, "actor": null },
+        { "id": "5", "recorded_at": "2025-06-06 09:40:00+00", "kind": "media", "slug": "post-1-copy", "filename": "post-1-copy.png", "op": "put", "source_path": "s3://fixture-legacy-bucket/brain/media/post-1-copy.png", "bucket": "fixture-legacy-bucket", "s3_key": "brain/media/post-1-copy.png", "size_bytes": "2048", "content_hash": "c0ffeeaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "etag": "\"etagD\"", "content_type": "image/png", "mount_id": null, "actor": null },
+        { "id": "6", "recorded_at": "2025-06-06 09:50:00+00", "kind": "media", "slug": "elsewhere", "filename": "thing.bin", "op": "put", "source_path": "s3://other-bucket/elsewhere/thing.bin", "bucket": "other-bucket", "s3_key": "elsewhere/thing.bin", "size_bytes": "55", "content_hash": "d3000000000000000000000000000000000000000000000000000000000000cc", "etag": "\"etagF\"", "content_type": "application/octet-stream", "mount_id": null, "actor": null },
+        { "id": "7", "recorded_at": "2025-06-06 10:00:00+00", "kind": "media", "slug": "gone", "filename": "gone.bin", "op": "rm", "source_path": "s3://fixture-legacy-bucket/brain/media/gone.bin", "bucket": "fixture-legacy-bucket", "s3_key": "brain/media/gone.bin", "size_bytes": null, "content_hash": null, "etag": null, "content_type": null, "mount_id": null, "actor": null }
+      ]
+    },
+    {
+      "schema": "brain",
+      "name": "source_objects",
+      "kind": "r",
+      "owner": "fixture_admin",
+      "columns": [
+        { "name": "object_id", "type": "text", "base": "text", "not_null": true },
+        { "name": "sha256", "type": "text", "base": "text", "not_null": true },
+        { "name": "object_key", "type": "text", "base": "text", "not_null": true },
+        { "name": "size_bytes", "type": "bigint", "base": "int8", "not_null": true },
+        { "name": "etag", "type": "text", "base": "text", "not_null": false },
+        { "name": "s3_version_id", "type": "text", "base": "text", "not_null": false },
+        { "name": "created_at", "type": "timestamp with time zone", "base": "timestamptz", "not_null": true, "has_default": true }
+      ],
+      "primary_key": ["object_id"],
+      "rows": [
+        { "object_id": "sha256:ab00000000000000000000000000000000000000000000000000000000000000", "sha256": "ab00000000000000000000000000000000000000000000000000000000000000", "object_key": "objects/ab/ab00000000000000000000000000000000000000000000000000000000000000", "size_bytes": "10", "etag": "\"etagL1\"", "s3_version_id": "v-lc-1", "created_at": "2025-06-07 09:00:00+00" },
+        { "object_id": "sha256:cd00000000000000000000000000000000000000000000000000000000000000", "sha256": "cd00000000000000000000000000000000000000000000000000000000000000", "object_key": "objects/cd/cd00000000000000000000000000000000000000000000000000000000000000", "size_bytes": "11", "etag": "\"etagX\"", "s3_version_id": "v-lc-2", "created_at": "2025-06-07 09:05:00+00" },
+        { "object_id": "sha256:a900000000000000000000000000000000000000000000000000000000000000", "sha256": "a900000000000000000000000000000000000000000000000000000000000000", "object_key": "objects/a9/a900000000000000000000000000000000000000000000000000000000000000", "size_bytes": "16", "etag": "\"etagL3\"", "s3_version_id": "v-lc-3", "created_at": "2025-06-07 09:10:00+00" },
+        { "object_id": "sha256:ff00000000000000000000000000000000000000000000000000000000000000", "sha256": "ff00000000000000000000000000000000000000000000000000000000000000", "object_key": "objects/ff/ff00000000000000000000000000000000000000000000000000000000000000", "size_bytes": "15", "etag": "\"etagL4\"", "s3_version_id": null, "created_at": "2025-06-07 09:15:00+00" },
+        { "object_id": "sha256:ee00000000000000000000000000000000000000000000000000000000000000", "sha256": "ee00000000000000000000000000000000000000000000000000000000000000", "object_key": "objects/ee/ee00000000000000000000000000000000000000000000000000000000000000", "size_bytes": "13", "etag": "\"etagM1\"", "s3_version_id": "v-mut-1", "created_at": "2025-06-07 09:20:00+00" }
+      ]
+    },
+    {
+      "schema": "brain",
+      "name": "logical_sources",
+      "kind": "r",
+      "owner": "fixture_admin",
+      "columns": [
+        { "name": "source_id", "type": "text", "base": "text", "not_null": true },
+        { "name": "source_kind", "type": "text", "base": "text", "not_null": true },
+        { "name": "origin_fingerprint", "type": "text", "base": "text", "not_null": true },
+        { "name": "origin", "type": "jsonb", "base": "jsonb", "not_null": true },
+        { "name": "created_at", "type": "timestamp with time zone", "base": "timestamptz", "not_null": true, "has_default": true }
+      ],
+      "primary_key": ["source_id"],
+      "rows": [
+        { "source_id": "sha256:1200000000000000000000000000000000000000000000000000000000000000", "source_kind": "workspace-file", "origin_fingerprint": "sha256:3400000000000000000000000000000000000000000000000000000000000000", "origin": "{\"workspace_path\": \"CANARY_ORIGIN/secret note.md\"}", "created_at": "2025-06-07 10:00:00+00" }
+      ]
+    },
+    {
+      "schema": "brain",
+      "name": "current_facts",
+      "kind": "v",
+      "owner": "fixture_admin",
+      "columns": [
+        { "name": "id", "type": "bigint", "base": "int8", "not_null": false },
+        { "name": "entity_id", "type": "bigint", "base": "int8", "not_null": false },
+        { "name": "key", "type": "text", "base": "text", "not_null": false }
+      ],
+      "view_definition": "SELECT DISTINCT ON (entity_id, key) id, recorded_at, entity_id, key, value FROM brain.facts ORDER BY entity_id, key, id DESC"
+    },
+    {
+      "schema": "brain",
+      "name": "custom_summary",
+      "kind": "v",
+      "owner": "fixture_admin",
+      "columns": [{ "name": "total", "type": "bigint", "base": "int8", "not_null": false }],
+      "view_definition": "SELECT count(*) AS total FROM brain.facts WHERE value::text <> 'CANARY_VIEW_DEF'"
+    },
+    {
+      "schema": "brain",
+      "name": "ZebraQuoted \"Canary\" Table",
+      "kind": "r",
+      "owner": "fixture_admin",
+      "columns": [
+        { "name": "id", "type": "uuid", "base": "uuid", "not_null": true },
+        { "name": "notes", "type": "text", "base": "text", "not_null": false },
+        { "name": "created", "type": "timestamp with time zone", "base": "timestamptz", "not_null": true, "has_default": true }
+      ],
+      "primary_key": ["id"],
+      "constraints": [{ "name": "zebra_check", "kind": "c", "definition": "CHECK (notes <> 'CANARY_CHECK_EXPR')" }],
+      "rows": [
+        { "id": "0f0e0d0c-1111-4222-8333-444455556666", "notes": "CANARY_NOTES_TEXT", "created": "2025-06-08 09:00:00+00" },
+        { "id": "1a1b1c1d-2222-4333-8444-555566667777", "notes": "CANARY_NOTES_TEXT", "created": "2025-06-08 09:05:00+00" }
+      ]
+    },
+    {
+      "schema": "brain",
+      "name": "custom_notes",
+      "kind": "r",
+      "owner": "fixture_admin",
+      "columns": [
+        { "name": "label", "type": "text", "base": "text", "not_null": true },
+        { "name": "seq", "type": "integer", "base": "int4", "not_null": true },
+        { "name": "body", "type": "text", "base": "text", "not_null": false }
+      ],
+      "primary_key": ["label", "seq"],
+      "rows": [
+        { "label": "canary-text-pk-value", "seq": "1", "body": "CANARY_NOTES_TEXT" },
+        { "label": "note-b", "seq": "2", "body": "AKIA_CANARY_SECRET" }
+      ]
+    },
+    {
+      "schema": "analytics",
+      "name": "custom_metrics",
+      "kind": "r",
+      "owner": "CANARY_ROLE_NAME",
+      "columns": [
+        { "name": "id", "type": "bigint", "base": "int8", "not_null": true, "identity": "a" },
+        { "name": "metric", "type": "text", "base": "text", "not_null": false }
+      ],
+      "primary_key": ["id"],
+      "rows": [{ "id": "424242424242", "metric": "CANARY_METRIC" }]
+    }
+  ],
+  "history": [
+    { "kind": "version", "key": "brain/media/post-1.png", "version_id": "v-file-1", "is_latest": true, "etag": "\"etagA\"", "size_bytes": "2048" },
+    { "kind": "version", "key": "brain/media/post-1-copy.png", "version_id": "v-file-2", "is_latest": true, "etag": "\"etagD\"", "size_bytes": "2048" },
+    { "kind": "version", "key": "brain/media/dup.bin", "version_id": "v-dup-1", "is_latest": true, "etag": "\"etagC\"", "size_bytes": "7" },
+    { "kind": "version", "key": "brain/media/dup.bin", "version_id": "v-dup-2", "is_latest": false, "etag": "\"etagC\"", "size_bytes": "7" },
+    { "kind": "version", "key": "brain/media/gone-old.txt", "version_id": "v-old-1", "is_latest": false, "etag": "\"etagE\"", "size_bytes": "12" },
+    { "kind": "delete-marker", "key": "brain/media/gone-old.txt", "version_id": "v-old-dm", "is_latest": true, "etag": null, "size_bytes": null },
+    { "kind": "version", "key": "brain/objects/ab/ab00000000000000000000000000000000000000000000000000000000000000", "version_id": "v-lc-1", "is_latest": true, "etag": "\"etagL1\"", "size_bytes": "10" },
+    { "kind": "version", "key": "brain/objects/cd/cd00000000000000000000000000000000000000000000000000000000000000", "version_id": "v-lc-2", "is_latest": true, "etag": "\"etagW\"", "size_bytes": "11" },
+    { "kind": "version", "key": "brain/objects/ee/ee00000000000000000000000000000000000000000000000000000000000000", "version_id": "v-mut-1", "is_latest": true, "etag": "\"etagM1\"", "size_bytes": "13" },
+    { "kind": "version", "key": "brain/objects/ee/ee00000000000000000000000000000000000000000000000000000000000000", "version_id": "v-mut-2", "is_latest": false, "etag": "\"etagM2\"", "size_bytes": "14" },
+    { "kind": "version", "key": "brain/objects/ff/ff00000000000000000000000000000000000000000000000000000000000000", "version_id": "null", "is_latest": true, "etag": "\"etagL4\"", "size_bytes": "15" }
+  ],
+  "heads": [
+    { "key": "brain/objects/ab/ab00000000000000000000000000000000000000000000000000000000000000", "version_id": "v-lc-1", "etag": "\"etagL1\"", "size_bytes": "10" },
+    { "key": "brain/objects/cd/cd00000000000000000000000000000000000000000000000000000000000000", "version_id": "v-lc-2", "etag": "\"etagX\"", "size_bytes": "11" },
+    { "key": "brain/objects/a9/a900000000000000000000000000000000000000000000000000000000000000", "version_id": "v-lc-3", "etag": "\"etagL3\"", "size_bytes": "16" },
+    { "key": "brain/objects/ee/ee00000000000000000000000000000000000000000000000000000000000000", "version_id": "v-mut-1", "etag": "\"etagM1\"", "size_bytes": "13" }
+  ],
+  "canaries": [
+    "CANARY_ENTITY_BODY",
+    "CANARY_ENTITY_TITLE",
+    "canary-entity-slug",
+    "CANARY_FACT_VALUE",
+    "CANARY_EVENT_PAYLOAD",
+    "CANARY_EDGE_PROPS",
+    "CANARY_DOC_BODY",
+    "CANARY_DOC_META",
+    "CANARY_ALIAS",
+    "CANARY_NOTES_TEXT",
+    "CANARY_METRIC",
+    "CANARY_PASSWORD_9",
+    "canary-user",
+    "canary-tmp",
+    "canary-text-pk-value",
+    "canary-embed-model",
+    "canary/foreign",
+    "CANARY_ORIGIN",
+    "CANARY_VIEW_DEF",
+    "CANARY_CHECK_EXPR",
+    "CANARY_ROLE_NAME",
+    "CANARY_MIGRATION",
+    "CANARY_SCRATCH",
+    "AKIA_CANARY_SECRET",
+    "actor-sdr-canary",
+    "ZebraQuoted",
+    "analytics",
+    "competitor",
+    "competes-with",
+    "employee-count",
+    "post-published",
+    "post-1",
+    "gone.bin",
+    "dup.bin",
+    "elsewhere/thing.bin",
+    "other-bucket",
+    "fixture-legacy-bucket",
+    "image/png",
+    "roster_brain_rw",
+    "fixture_admin",
+    "custom_notes",
+    "custom_metrics",
+    "secret note.md",
+    "0f0e0d0c-1111-4222-8333-444455556666",
+    "1a1b1c1d-2222-4333-8444-555566667777",
+    "424242424242"
+  ],
+  "variants": {
+    "mismatched_identity_rows": [
+      {
+        "workspace_id": "other-workspace",
+        "fingerprint_format_version": "1",
+        "namespace_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "migration_state": "ready"
+      }
+    ],
+    "no_primary_key_relation": {
+      "schema": "brain",
+      "name": "scratch_notes",
+      "kind": "r",
+      "owner": "fixture_admin",
+      "columns": [{ "name": "note", "type": "text", "base": "text", "not_null": false }],
+      "rows": [{ "note": "CANARY_SCRATCH" }]
+    },
+    "unsafe_primary_key_relation": {
+      "schema": "analytics",
+      "name": "moods",
+      "kind": "r",
+      "owner": "CANARY_ROLE_NAME",
+      "columns": [{ "name": "id", "type": "mood", "base": "mood", "type_schema": "analytics", "not_null": true }],
+      "primary_key": ["id"],
+      "rows": []
+    }
+  }
+}
