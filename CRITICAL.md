@@ -59,6 +59,14 @@ src/lib/brain/extractors.ts
 src/lib/brain/embedding-index.ts
 src/lib/brain/embedding-provider.ts
 
+# Portable work evidence (#356) — append-only durable runs, artifacts, feedback,
+# and action-digest-bound human decisions, plus the single evidence -> semantic
+# promotion path. A bug here forges a decision record or leaks operational
+# evidence into company knowledge.
+src/lib/brain/evidence-contracts.ts
+src/lib/brain/evidence-identity.ts
+src/lib/brain/evidence-store.ts
+
 # Run + artifact ledger (#323) — trust taxonomy, sealed provenance, sanitized
 # index projections, and the admin-only version-id repair (mutates users' ops DB)
 src/commands/run.ts

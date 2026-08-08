@@ -118,19 +118,19 @@ async function checksForRole(client: pg.PoolClient, roleName: string): Promise<D
           AND (
             EXISTS (
               SELECT 1 FROM pg_namespace n
-               WHERE n.nspname IN ('brain', 'brain_meta') AND n.nspowner <> m.oid
+               WHERE n.nspname IN ('brain', 'brain_meta', 'brain_evidence') AND n.nspowner <> m.oid
             )
             OR EXISTS (
               SELECT 1 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
-               WHERE n.nspname IN ('brain', 'brain_meta')
+               WHERE n.nspname IN ('brain', 'brain_meta', 'brain_evidence')
                  AND c.relkind IN ('r', 'p', 'v', 'm')
                  AND c.relowner <> m.oid
             )
             OR EXISTS (
               SELECT 1 FROM pg_proc p
                 JOIN pg_namespace n ON n.oid = p.pronamespace
-               WHERE n.nspname IN ('brain', 'brain_meta') AND p.proowner <> m.oid
+               WHERE n.nspname IN ('brain', 'brain_meta', 'brain_evidence') AND p.proowner <> m.oid
             )
           )`,
       [roleName],
@@ -147,18 +147,18 @@ async function checksForRole(client: pg.PoolClient, roleName: string): Promise<D
          FROM pg_class c
          JOIN pg_namespace n ON n.oid = c.relnamespace
          JOIN pg_roles o ON o.oid = c.relowner
-        WHERE n.nspname IN ('brain', 'brain_meta') AND o.rolname = $1
+        WHERE n.nspname IN ('brain', 'brain_meta', 'brain_evidence') AND o.rolname = $1
        UNION ALL
        SELECT 'schema ' || s.nspname AS obj
          FROM pg_namespace s
          JOIN pg_roles o ON o.oid = s.nspowner
-        WHERE s.nspname IN ('brain', 'brain_meta') AND o.rolname = $1
+        WHERE s.nspname IN ('brain', 'brain_meta', 'brain_evidence') AND o.rolname = $1
        UNION ALL
        SELECT 'function ' || n.nspname || '.' || p.proname AS obj
          FROM pg_proc p
          JOIN pg_namespace n ON n.oid = p.pronamespace
          JOIN pg_roles o ON o.oid = p.proowner
-        WHERE n.nspname IN ('brain', 'brain_meta') AND o.rolname = $1`,
+        WHERE n.nspname IN ('brain', 'brain_meta', 'brain_evidence') AND o.rolname = $1`,
       [roleName],
     ),
   );
@@ -170,11 +170,85 @@ async function checksForRole(client: pg.PoolClient, roleName: string): Promise<D
       'runtime role has no CREATE on brain or public',
       'runtime role has CREATE on schema',
       `SELECT s.nspname FROM pg_namespace s
-        WHERE s.nspname IN ('brain', 'public', 'brain_meta')
+        WHERE s.nspname IN ('brain', 'public', 'brain_meta', 'brain_evidence')
           AND has_schema_privilege($1, s.nspname, 'CREATE')`,
       [roleName],
     ),
   );
+
+  // #356: portable evidence is broker-append. The runtime role's brain_evidence
+  // privileges must be EXACTLY schema USAGE + table SELECT + EXECUTE on the four
+  // record brokers: no direct DML at any granularity, and no EXECUTE on the
+  // promotion-adjacent helpers (validation, lock framing, workspace identity).
+  // The broker comparison is by full SIGNATURE, not name: an added overload such
+  // as record_completed_run(jsonb) is an unapproved executable surface, and a
+  // MISSING expected broker must read as a finding rather than a cast error.
+  const hasEvidenceSchema = await client.query<{ one: number }>(
+    `SELECT 1 AS one FROM pg_namespace WHERE nspname = 'brain_evidence'`,
+  );
+  if ((hasEvidenceSchema.rowCount ?? 0) > 0) {
+    checks.push(
+      await check(
+        client,
+        'brain-evidence-append-only',
+        'runtime role brain_evidence access is exactly USAGE + SELECT + the four record brokers',
+        'runtime role brain_evidence privileges are wrong',
+        `SELECT 'missing USAGE on brain_evidence'
+          WHERE NOT has_schema_privilege($1, 'brain_evidence', 'USAGE')
+          UNION ALL
+         SELECT 'CREATE on brain_evidence'
+          WHERE has_schema_privilege($1, 'brain_evidence', 'CREATE')
+          UNION ALL
+         SELECT 'missing SELECT on brain_evidence.' || c.relname
+           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'brain_evidence' AND c.relkind = 'r'
+            AND NOT has_table_privilege($1, c.oid, 'SELECT')
+          UNION ALL
+         SELECT 'brain_evidence.' || c.relname || ' ' || p.priv
+           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+           CROSS JOIN (VALUES ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')) AS p(priv)
+          WHERE n.nspname = 'brain_evidence' AND c.relkind = 'r'
+            AND has_table_privilege($1, c.oid, p.priv)
+          UNION ALL
+         SELECT 'brain_evidence.' || c.relname || '.' || a.attname || ' ' || p.priv
+           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+           JOIN pg_attribute a ON a.attrelid = c.oid
+           CROSS JOIN (VALUES ('INSERT'), ('UPDATE'), ('REFERENCES')) AS p(priv)
+          WHERE n.nspname = 'brain_evidence' AND c.relkind = 'r'
+            AND a.attnum > 0 AND NOT a.attisdropped
+            AND has_column_privilege($1, c.oid, a.attnum, p.priv)
+          UNION ALL
+         SELECT 'missing EXECUTE on ' || expected.signature
+           FROM (VALUES
+             ('brain_evidence.record_completed_run(text)'),
+             ('brain_evidence.record_run_artifact(text)'),
+             ('brain_evidence.record_feedback(text)'),
+             ('brain_evidence.record_human_decision(text)')
+           ) AS expected(signature)
+          WHERE NOT EXISTS (
+            SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+             WHERE n.nspname = 'brain_evidence'
+               AND n.nspname || '.' || p.proname
+                   || '(' || pg_catalog.oidvectortypes(p.proargtypes) || ')' = expected.signature
+               AND has_function_privilege($1, p.oid, 'EXECUTE')
+          )
+          UNION ALL
+         SELECT 'unexpected EXECUTE on ' || n.nspname || '.' || p.proname
+                || '(' || pg_catalog.oidvectortypes(p.proargtypes) || ')'
+           FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'brain_evidence'
+            AND has_function_privilege($1, p.oid, 'EXECUTE')
+            AND n.nspname || '.' || p.proname
+                || '(' || pg_catalog.oidvectortypes(p.proargtypes) || ')' <> ALL (ARRAY[
+                  'brain_evidence.record_completed_run(text)',
+                  'brain_evidence.record_run_artifact(text)',
+                  'brain_evidence.record_feedback(text)',
+                  'brain_evidence.record_human_decision(text)'
+                ])`,
+        [roleName],
+      ),
+    );
+  }
 
   // brain_meta access is limited to read-only runtime configuration plus the
   // protected workspace-authority handshake columns. Everything else remains

@@ -10,7 +10,15 @@ import { parseBrainArgs } from '../src/lib/brain-args.ts';
 import { resolveBrainDoctorRoleName } from '../src/lib/brain/connect.ts';
 import { RosterError } from '../src/lib/errors.ts';
 import { deriveWorkspaceRuntimeRoleName, RUNTIME_ROLE } from '../src/lib/brain/roles.ts';
+import { loadMigrations, schemaDir } from '../src/lib/brain/migrate.ts';
 import { ADMIN_URL, HAS_DB, createFreshDb } from './brain-helpers.ts';
+
+// Derived, never hardcoded: `brain init` applies (then skips) exactly the
+// migration set on disk, in ledger order. A new numbered migration must not
+// require an edit here.
+function migrationFilenames(): string[] {
+  return loadMigrations(schemaDir()).map((file) => file.filename);
+}
 
 const BIN = resolve(process.cwd(), 'bin/roster.js');
 const dbOpts = { skip: HAS_DB ? false : 'ROSTER_BRAIN_ADMIN_URL not set' };
@@ -288,7 +296,7 @@ test('cli: brain init JSON returns non-secret credential metadata and explicit r
     assert.equal(first.stdout.includes(RUNTIME_PASSWORD_A), false);
     assert.equal(first.stdout.includes(encodedRuntimeUrl), false);
     assert.doesNotMatch(first.stdout, /password|runtimeUrl/iu);
-    assert.deepEqual(p1.applied, ['001_init.sql', '002_roles.sql', '003_attribution.sql', '004_documents_mount.sql', '005_dedup_merge.sql', '006_create_table_import_lock.sql', '007_search_embeddings.sql', '008_canonical_id_and_merge.sql', '009_files.sql', '010_workspace_authority.sql', '011_source_lifecycle.sql', '012_extraction_indexing.sql']);
+    assert.deepEqual(p1.applied, migrationFilenames());
 
     const doctor = runBin(['brain', 'doctor', '--json', '--role', fresh.role], env, workspace.cwd);
     assert.equal(doctor.status, 0, doctor.stderr);
@@ -305,7 +313,7 @@ test('cli: brain init JSON returns non-secret credential metadata and explicit r
     assert.doesNotMatch(second.stdout, /postgres(?:ql)?:\/\/|password|runtimeUrl/iu);
     assert.doesNotMatch(second.stdout, /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/iu);
     assert.deepEqual(p2.applied, []);
-    assert.deepEqual(p2.skipped, ['001_init.sql', '002_roles.sql', '003_attribution.sql', '004_documents_mount.sql', '005_dedup_merge.sql', '006_create_table_import_lock.sql', '007_search_embeddings.sql', '008_canonical_id_and_merge.sql', '009_files.sql', '010_workspace_authority.sql', '011_source_lifecycle.sql', '012_extraction_indexing.sql']);
+    assert.deepEqual(p2.skipped, migrationFilenames());
 
     const human = runBin(['brain', 'init', '--role', fresh.role], env, workspace.cwd);
     assert.equal(human.status, 0, human.stderr);

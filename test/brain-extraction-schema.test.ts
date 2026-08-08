@@ -537,7 +537,12 @@ test('an 011 brain upgrades through 012 exactly once and keeps runtime denial', 
       runtimePassword: provisioned.runtimePassword,
     });
     assert.equal(upgraded.outcome, 'upgraded');
-    assert.deepEqual(upgraded.migrations.applied, ['012_extraction_indexing.sql']);
+    // Membership, not exact equality: later tickets add their own migrations
+    // above 011, and this test owns only the 012 leg of the upgrade.
+    assert.ok(
+      upgraded.migrations.applied.includes('012_extraction_indexing.sql'),
+      `expected 012 in the upgrade set, got ${upgraded.migrations.applied.join(', ')}`,
+    );
 
     const replay = await bootstrapBrainWorkspaceAuthority(pool, authority, {
       runtimeRole: provisioned.fresh.role,

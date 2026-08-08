@@ -123,27 +123,27 @@ async function existingWorkspaceRuntimeRoleIsUnsafe(
      UNION ALL
      SELECT 'schema-create'
        FROM pg_namespace namespace_row
-      WHERE namespace_row.nspname IN ('public', 'brain', 'brain_meta')
+      WHERE namespace_row.nspname IN ('public', 'brain', 'brain_meta', 'brain_evidence')
         AND has_schema_privilege($1, namespace_row.oid, 'CREATE')
      UNION ALL
      SELECT 'owned-relation'
        FROM pg_class relation
        JOIN pg_namespace namespace_row ON namespace_row.oid = relation.relnamespace
        JOIN pg_roles owner_role ON owner_role.oid = relation.relowner
-      WHERE namespace_row.nspname IN ('brain', 'brain_meta')
+      WHERE namespace_row.nspname IN ('brain', 'brain_meta', 'brain_evidence')
         AND owner_role.rolname = $1
      UNION ALL
      SELECT 'owned-schema'
        FROM pg_namespace namespace_row
        JOIN pg_roles owner_role ON owner_role.oid = namespace_row.nspowner
-      WHERE namespace_row.nspname IN ('brain', 'brain_meta')
+      WHERE namespace_row.nspname IN ('brain', 'brain_meta', 'brain_evidence')
         AND owner_role.rolname = $1
      UNION ALL
      SELECT 'owned-routine'
        FROM pg_proc routine
        JOIN pg_namespace namespace_row ON namespace_row.oid = routine.pronamespace
        JOIN pg_roles owner_role ON owner_role.oid = routine.proowner
-      WHERE namespace_row.nspname IN ('brain', 'brain_meta')
+      WHERE namespace_row.nspname IN ('brain', 'brain_meta', 'brain_evidence')
         AND owner_role.rolname = $1
      LIMIT 1`,
     [role],
@@ -385,6 +385,38 @@ export async function applyGrants(
   for (const view of await brainViewNames(client)) {
     const v = qIdent(view);
     await client.query(`GRANT SELECT ON brain.${v} TO ${qrole}`);
+  }
+
+  await applyEvidenceGrants(client, qrole);
+}
+
+const EVIDENCE_RECORD_BROKERS = [
+  'record_completed_run',
+  'record_run_artifact',
+  'record_feedback',
+  'record_human_decision',
+] as const;
+
+// #356: portable evidence is broker-append, not runtime-writable. The runtime
+// role gets USAGE + table SELECT + EXECUTE on exactly the four record brokers
+// and zero direct DML; promotion has no broker at all (admin path only), and the
+// validation/lock helpers stay internal to the SECURITY DEFINER context.
+// Existence-guarded so pre-013 brains keep zero brain_evidence access.
+async function applyEvidenceGrants(client: pg.PoolClient, qrole: string): Promise<void> {
+  const hasEvidence = await client.query<{ one: number }>(
+    `SELECT 1 AS one FROM pg_namespace WHERE nspname = 'brain_evidence'`,
+  );
+  if ((hasEvidence.rowCount ?? 0) === 0) return;
+
+  await client.query(`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA brain_evidence FROM ${qrole}`);
+  await client.query(`REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA brain_evidence FROM ${qrole}`);
+  await client.query(`REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA brain_evidence FROM ${qrole}`);
+  await client.query(`REVOKE ALL PRIVILEGES ON SCHEMA brain_evidence FROM ${qrole}`);
+
+  await client.query(`GRANT USAGE ON SCHEMA brain_evidence TO ${qrole}`);
+  await client.query(`GRANT SELECT ON ALL TABLES IN SCHEMA brain_evidence TO ${qrole}`);
+  for (const broker of EVIDENCE_RECORD_BROKERS) {
+    await client.query(`GRANT EXECUTE ON FUNCTION brain_evidence.${ident(broker)}(text) TO ${qrole}`);
   }
 }
 

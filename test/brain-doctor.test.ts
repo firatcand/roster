@@ -37,13 +37,13 @@ async function provision(): Promise<Setup> {
 // system objects). `role` is a test-controlled identifier.
 function giveAllBrainObjectsTo(role: string): string {
   return `DO $do$ DECLARE o record; BEGIN
-    FOR o IN SELECT nspname FROM pg_namespace WHERE nspname IN ('brain','brain_meta') LOOP
+    FOR o IN SELECT nspname FROM pg_namespace WHERE nspname IN ('brain','brain_meta','brain_evidence') LOOP
       EXECUTE format('ALTER SCHEMA %I OWNER TO %I', o.nspname, '${role}'); END LOOP;
     FOR o IN SELECT n.nspname AS s, c.relname AS r FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-             WHERE n.nspname IN ('brain','brain_meta') AND c.relkind IN ('r','p','v','m') LOOP
+             WHERE n.nspname IN ('brain','brain_meta','brain_evidence') AND c.relkind IN ('r','p','v','m') LOOP
       EXECUTE format('ALTER TABLE %I.%I OWNER TO %I', o.s, o.r, '${role}'); END LOOP;
     FOR o IN SELECT p.oid::regprocedure::text AS f FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
-             WHERE n.nspname IN ('brain','brain_meta') LOOP
+             WHERE n.nspname IN ('brain','brain_meta','brain_evidence') LOOP
       EXECUTE format('ALTER FUNCTION %s OWNER TO %I', o.f, '${role}'); END LOOP;
   END $do$;`;
 }

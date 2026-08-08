@@ -17,7 +17,8 @@ type BrainSubcommand =
   | 'config'
   | 'reindex'
   | 'gc'
-  | 'fs';
+  | 'fs'
+  | 'record';
 
 const BRAIN_SUBCOMMANDS: ReadonlySet<BrainSubcommand> = new Set<BrainSubcommand>([
   'init',
@@ -37,11 +38,15 @@ const BRAIN_SUBCOMMANDS: ReadonlySet<BrainSubcommand> = new Set<BrainSubcommand>
   'reindex',
   'gc',
   'fs',
+  'record',
 ]);
 
 const SUBCOMMAND_LIST = Array.from(BRAIN_SUBCOMMANDS).join(' | ');
 
 export type FactPair = { key: string; value: unknown };
+
+export const EVIDENCE_RECORD_VERBS = ['run', 'artifact', 'feedback', 'decision'] as const;
+export type EvidenceRecordVerb = (typeof EVIDENCE_RECORD_VERBS)[number];
 
 export type ParsedBrainArgs =
   | { kind: 'ok'; subcommand: 'init'; json: boolean; silent: boolean; embeddings: boolean; role: string }
@@ -104,6 +109,14 @@ export type ParsedBrainArgs =
   | { kind: 'ok'; subcommand: 'fs'; op: 'get'; json: boolean; entKind: string; slug: string; filename: string; out?: string }
   | { kind: 'ok'; subcommand: 'fs'; op: 'ls'; json: boolean; entKind?: string; slug?: string }
   | { kind: 'ok'; subcommand: 'fs'; op: 'rm'; json: boolean; entKind: string; slug: string; filename: string; actor?: string }
+  | {
+      kind: 'ok';
+      subcommand: 'record';
+      json: boolean;
+      recordKind: EvidenceRecordVerb;
+      payload?: string;
+      file?: string;
+    }
   | { kind: 'err'; message: string };
 
 function isBrainSubcommand(value: string): value is BrainSubcommand {
@@ -170,7 +183,37 @@ export function parseBrainArgs(args: readonly string[]): ParsedBrainArgs {
   if (first === 'reindex') return parseReindex(rest);
   if (first === 'gc') return parseGc(rest);
   if (first === 'fs') return parseFs(rest);
+  if (first === 'record') return parseRecord(rest);
   return parseSql(rest);
+}
+
+function parseRecord(rest: readonly string[]): ParsedBrainArgs {
+  const [op, ...tail] = rest;
+  const verbs = EVIDENCE_RECORD_VERBS.join(' | ');
+  if (op === undefined || !(EVIDENCE_RECORD_VERBS as readonly string[]).includes(op)) {
+    return err(`'brain record' requires a kind: ${verbs}`);
+  }
+  const recordKind = op as EvidenceRecordVerb;
+  let json = false;
+  let payload: string | undefined;
+  let file: string | undefined;
+  for (let i = 0; i < tail.length; i++) {
+    const arg = tail[i]!;
+    if (arg === '--json') json = true;
+    else if (arg === '--payload') {
+      const v = readValue(tail, i, `record ${recordKind}`, '--payload'); if ('kind' in v) return v; payload = v.value; i = v.next;
+    } else if (arg === '--file') {
+      const v = readValue(tail, i, `record ${recordKind}`, '--file'); if ('kind' in v) return v; file = v.value; i = v.next;
+    } else if (arg.startsWith('-')) {
+      return err(`unknown flag for 'brain record ${recordKind}': ${arg}`);
+    } else {
+      return err(`'brain record ${recordKind}': unexpected positional argument '${arg}'`);
+    }
+  }
+  if ((payload === undefined) === (file === undefined)) {
+    return err(`'brain record ${recordKind}' requires exactly one of --payload or --file`);
+  }
+  return { kind: 'ok', subcommand: 'record', json, recordKind, payload, file };
 }
 
 function parseFs(rest: readonly string[]): ParsedBrainArgs {
