@@ -33,6 +33,10 @@ export const CORE_TABLE_ORDER: readonly string[] = [
   'source_version_labels',
   'source_tombstones',
   'ingest_intents',
+  'source_extractions',
+  'source_chunks',
+  'embedding_indexes',
+  'chunk_embeddings',
 ];
 
 export const CORE_TABLES: ReadonlySet<string> = new Set(CORE_TABLE_ORDER);

@@ -158,7 +158,9 @@ test('source lifecycle schema installs the six protected tables without RLS or t
   const { pool, teardown } = await provision();
   try {
     const registered = await pool.query<{ table_name: string }>(
-      `SELECT table_name FROM brain_meta.runtime_protected_tables ORDER BY table_name`,
+      `SELECT table_name FROM brain_meta.runtime_protected_tables
+        WHERE table_name = ANY($1::text[]) ORDER BY table_name`,
+      [[...PROTECTED_TABLES]],
     );
     assert.deepEqual(registered.rows.map((row) => row.table_name), [...PROTECTED_TABLES]);
 
