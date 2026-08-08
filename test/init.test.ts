@@ -52,12 +52,19 @@ function copyLegacyManagedFile(root: string, relativePath: string): void {
   writeFileSync(target, readFileSync(source));
 }
 
-function failUnrelatedDirectoryInspection(relativePath: string): void {
-  if (relativePath !== 'unrelated') return;
-  const error = new Error('injected unreadable directory') as NodeJS.ErrnoException;
-  error.code = 'EACCES';
-  throw error;
+function injectDirectoryInspectionError(
+  path: string,
+  code?: string,
+): (relativePath: string) => void {
+  return (relativePath) => {
+    if (relativePath !== path) return;
+    const error = new Error('injected unreadable directory') as NodeJS.ErrnoException;
+    if (code !== undefined) error.code = code;
+    throw error;
+  };
 }
+
+const failUnrelatedDirectoryInspection = injectDirectoryInspectionError('unrelated', 'EACCES');
 
 test('executeInit creates exactly roster.yaml and ROSTER.md', async () => {
   const { root, cleanup } = workspace();
@@ -817,21 +824,195 @@ test('init discloses exact preserved tokens when transactional removal is incomp
   }
 });
 
-test('unreadable scanned candidate roots are unsafe and init writes nothing', async () => {
+test('an unreadable, unrelated sibling directory does not block a plain init (#386)', async () => {
+  if (process.getuid && process.getuid() === 0) return;
   const { root, cleanup } = workspace();
   const candidate = join(root, 'company');
   try {
     mkdirSync(candidate);
     chmodSync(candidate, 0o000);
     const probe = probeWorkspace(root);
+    assert.equal(probe.kind, 'none');
+    assert.deepEqual(probe.unsafeSignals, []);
+    assert.ok(probe.inconclusiveSignals.some((signal) => signal.startsWith('company:unreadable:')));
+
+    const result = await executeInit({ cwd: root, name: 'acme', silent: true });
+    assert.deepEqual(result.filesWritten.sort(), ['ROSTER.md', 'roster.yaml']);
+  } finally {
+    chmodSync(candidate, 0o755);
+    cleanup();
+  }
+});
+
+test('a non-permission error on a scanned candidate root stays unsafe (#386 negative control)', () => {
+  const { root, cleanup } = workspace();
+  try {
+    mkdirSync(join(root, 'company'));
+    const probe = probeWorkspace(root, {
+      beforeDirectoryInspect: injectDirectoryInspectionError('company', 'EIO'),
+    });
     assert.equal(probe.kind, 'unsafe');
-    assert.ok(probe.unsafeSignals.some((signal) => signal.startsWith('company:unreadable:')));
-    await expectRosterError(
-      () => executeInit({ cwd: root, name: 'acme', silent: true }),
-      'UNSAFE_WORKSPACE_MARKER',
+    assert.ok(probe.unsafeSignals.includes('company:unreadable:EIO'));
+  } finally {
+    cleanup();
+  }
+});
+
+test('EPERM on an unrelated candidate is treated the same as EACCES (#386)', () => {
+  const { root, cleanup } = workspace();
+  try {
+    mkdirSync(join(root, 'unrelated'));
+    const probe = probeWorkspace(root, {
+      beforeDirectoryInspect: injectDirectoryInspectionError('unrelated', 'EPERM'),
+    });
+    assert.equal(probe.kind, 'none');
+    assert.deepEqual(probe.unsafeSignals, []);
+    assert.deepEqual(probe.inconclusiveSignals, ['unrelated:unreadable:EPERM']);
+  } finally {
+    cleanup();
+  }
+});
+
+test('EIO on an unrelated candidate stays fail closed (#386)', () => {
+  const { root, cleanup } = workspace();
+  try {
+    mkdirSync(join(root, 'unrelated'));
+    const probe = probeWorkspace(root, {
+      beforeDirectoryInspect: injectDirectoryInspectionError('unrelated', 'EIO'),
+    });
+    assert.equal(probe.kind, 'unsafe');
+    assert.deepEqual(probe.unsafeSignals, ['unrelated:unreadable:EIO']);
+    assert.deepEqual(probe.inconclusiveSignals, ['unrelated:unreadable:EIO']);
+  } finally {
+    cleanup();
+  }
+});
+
+test('an error with no code stays fail closed as unknown (#386)', () => {
+  const { root, cleanup } = workspace();
+  try {
+    mkdirSync(join(root, 'unrelated'));
+    const probe = probeWorkspace(root, {
+      beforeDirectoryInspect: injectDirectoryInspectionError('unrelated'),
+    });
+    assert.equal(probe.kind, 'unsafe');
+    assert.deepEqual(probe.unsafeSignals, ['unrelated:unreadable:unknown']);
+    assert.deepEqual(probe.inconclusiveSignals, ['unrelated:unreadable:unknown']);
+  } finally {
+    cleanup();
+  }
+});
+
+test('an unreadable legacy-signature file alone does not block (#386)', () => {
+  if (process.getuid && process.getuid() === 0) return;
+  const { root, cleanup } = workspace();
+  const signature = join(root, 'dreamer', 'agent.md');
+  try {
+    mkdirSync(join(root, 'dreamer'));
+    writeFileSync(signature, 'unreadable legacy signature\n');
+    chmodSync(signature, 0o000);
+
+    const probe = probeWorkspace(root);
+    assert.equal(probe.kind, 'none');
+    assert.deepEqual(probe.legacySignals, []);
+    assert.deepEqual(probe.unsafeSignals, []);
+    assert.ok(
+      probe.inconclusiveSignals.some((signal) => signal.startsWith('dreamer/agent.md:')),
     );
-    assert.equal(existsSync(join(root, 'roster.yaml')), false);
-    assert.equal(existsSync(join(root, 'ROSTER.md')), false);
+  } finally {
+    chmodSync(signature, 0o644);
+    cleanup();
+  }
+});
+
+test('an unreadable legacy-signature file does not block a genuine legacy signal elsewhere (#386)', () => {
+  if (process.getuid && process.getuid() === 0) return;
+  const { root, cleanup } = workspace();
+  const signature = join(root, 'dreamer', 'agent.md');
+  try {
+    mkdirSync(join(root, 'projects'));
+    mkdirSync(join(root, 'dreamer'));
+    writeFileSync(signature, 'unreadable legacy signature\n');
+    chmodSync(signature, 0o000);
+
+    const probe = probeWorkspace(root);
+    assert.equal(probe.kind, 'legacy');
+    assert.deepEqual(probe.legacySignals, ['projects/']);
+    assert.deepEqual(probe.unsafeSignals, []);
+    assert.ok(
+      probe.inconclusiveSignals.some((signal) => signal.startsWith('dreamer/agent.md:')),
+    );
+  } finally {
+    chmodSync(signature, 0o644);
+    cleanup();
+  }
+});
+
+test('an unreadable parent of a legacy-signature file does not block a genuine legacy signal elsewhere (#386)', () => {
+  if (process.getuid && process.getuid() === 0) return;
+  const { root, cleanup } = workspace();
+  const parent = join(root, 'dreamer');
+  try {
+    mkdirSync(join(root, 'projects'));
+    mkdirSync(parent);
+    writeFileSync(join(parent, 'agent.md'), 'unreadable legacy signature\n');
+    chmodSync(parent, 0o000);
+
+    const probe = probeWorkspace(root);
+    assert.equal(probe.kind, 'legacy');
+    assert.deepEqual(probe.legacySignals, ['projects/']);
+    assert.deepEqual(probe.unsafeSignals, []);
+    // The unreadable directory itself, plus inspectPath's early workspace-failure
+    // branch for the signature file whose parent cannot be traversed.
+    assert.deepEqual(probe.inconclusiveSignals, [
+      'dreamer/agent.md:write_conflict',
+      'dreamer:unreadable:write_conflict',
+    ]);
+  } finally {
+    chmodSync(parent, 0o755);
+    cleanup();
+  }
+});
+
+test('a structural inconclusive signal keeps a legacy workspace fail closed (#386)', () => {
+  const { root, cleanup } = workspace();
+  try {
+    copyLegacyManagedFile(root, 'chief-of-staff/agent.md');
+    copyLegacyManagedFile(root, 'dreamer/agent.md');
+    mkdirSync(join(root, 'company'));
+    writeFileSync(join(root, 'company', 'projects'), 'not a legacy projects directory\n');
+
+    const probe = probeWorkspace(root);
+    assert.equal(probe.kind, 'unsafe');
+    assert.deepEqual(probe.legacySignals, [
+      'managed-v1:chief-of-staff/agent.md',
+      'managed-v1:dreamer/agent.md',
+    ]);
+    assert.deepEqual(probe.unsafeSignals, ['company/projects:file']);
+    assert.deepEqual(probe.inconclusiveSignals, ['company/projects:file']);
+  } finally {
+    cleanup();
+  }
+});
+
+test('an io-ambiguous signal leaves a legacy workspace classified legacy (#386)', () => {
+  if (process.getuid && process.getuid() === 0) return;
+  const { root, cleanup } = workspace();
+  const candidate = join(root, 'company');
+  try {
+    copyLegacyManagedFile(root, 'chief-of-staff/agent.md');
+    copyLegacyManagedFile(root, 'dreamer/agent.md');
+    mkdirSync(candidate);
+    chmodSync(candidate, 0o000);
+
+    const probe = probeWorkspace(root);
+    assert.equal(probe.kind, 'legacy');
+    assert.deepEqual(probe.legacySignals, [
+      'managed-v1:chief-of-staff/agent.md',
+      'managed-v1:dreamer/agent.md',
+    ]);
+    assert.deepEqual(probe.unsafeSignals, []);
+    assert.ok(probe.inconclusiveSignals.some((signal) => signal.startsWith('company:unreadable:')));
   } finally {
     chmodSync(candidate, 0o755);
     cleanup();

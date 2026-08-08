@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, existsSync, lstatSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, existsSync, lstatSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -443,6 +443,43 @@ test('v2 project install --json works without a user host home and reports assur
     assert.equal(payload.hosts[0]?.activation.assurance, 'advisory-manual');
     assert.equal(payload.hosts[0]?.activation.registryUpdated, true);
   } finally {
+    h.cleanup();
+  }
+});
+
+// #386 pinning test. Before the io-ambiguous fix, an unreadable sibling of the
+// cwd classified the directory as `unsafe` and `install` refused outright. Now
+// it classifies as `none`, so an implicit (no --scope) non-interactive install
+// falls through to the user-scope default. This pins where those writes land:
+// exclusively under the configured tool install root, resolved from
+// ROSTER_*_HOME and never from cwd. That root CAN be a descendant of cwd (it is
+// here: ROSTER_CLAUDE_HOME is <cwd>/claude), so the guarantee is not "outside
+// this tree" but "nothing is resolved relative to cwd" — cwd's own entry list
+// is therefore unchanged, and the unreadable sibling is never written through.
+test('install --yes outside a workspace with an unreadable sibling writes only under the configured install root (#386)', () => {
+  if (process.getuid && process.getuid() === 0) return;
+  const h = makeHomes(['claude']);
+  const candidate = join(h.root, 'private-cache');
+  try {
+    mkdirSync(candidate);
+    chmodSync(candidate, 0o000);
+    const before = readdirSync(h.root).sort();
+
+    const r = runCli(
+      ['install', '--tool', 'claude', '--yes', '--silent'],
+      {
+        ROSTER_CLAUDE_HOME: h.claude,
+        ROSTER_CODEX_HOME: h.codex,
+        ROSTER_GEMINI_HOME: h.gemini,
+      },
+      h.root,
+    );
+
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.ok(existsSync(join(h.claude, 'skills')), 'home-dir install proceeded under --yes default');
+    assert.deepEqual(readdirSync(h.root).sort(), before, 'no new entry written into the probed cwd');
+  } finally {
+    chmodSync(candidate, 0o755);
     h.cleanup();
   }
 });
