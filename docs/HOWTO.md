@@ -394,94 +394,74 @@ infisical run --env dev --path /<brain-secrets-path> -- roster brain doctor
 
 The **runtime** role (`ROSTER_BRAIN_URL`) is what agents use day-to-day — it can only SELECT and INSERT, never UPDATE/DELETE/DROP, so the brain is append-only at the database level. `roster brain init` uses the **admin** role (`ROSTER_BRAIN_ADMIN_URL`); keep that one for setup, migrations, and backups only. Roster validates the ambient runtime URL but never mints, prints, returns, or stores its password or connection string.
 
-**Semantic search** is off by default — keyword + graph search work with no API key, no paid calls. To enable vector search:
+**Object storage is not optional.** The brain is indivisible: `brain.storage` (bucket + region, plus optional endpoint/prefix) is tracked in `roster.yaml` alongside `brain.secrets_path`, and a workspace that declares only one half fails closed with `BRAIN_CONFIGURATION_INCOMPLETE` without contacting either store. Object-storage credentials (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, optionally `AWS_SESSION_TOKEN`) stay ambient.
+
+**Bringing company knowledge in.** `roster brain ingest` is the admin-path verb that mints an immutable source version for a document or record:
 
 ```bash
-infisical run --env dev --path /<repo> -- roster brain config set embeddings.enabled true
-# requires OPENAI_API_KEY in the injected environment (text-embedding-3-small)
+infisical run --env dev --path /<brain-secrets-path> -- \
+  roster brain ingest --manifest-file ./ingest/acme-brief.json --bytes-file ./ingest/acme-brief.md --json
 ```
+
+The manifest is one bounded JSON object shaped like the source-ingest contract minus `bytes`; `--bytes-file` may be omitted only when `source.kind` is `workspace-file`, in which case the bytes are read from `source.workspacePath`. The output carries content-addressed identities only — never the manifest, the bytes, or an object key.
 
 Day-to-day use is the `/brain` skill and the `roster brain` verbs (full reference in [API.md](API.md) §Brain). Where each piece of knowledge goes is governed by `brain/RESOLVER.md` in your workspace.
 
-The brain is append-only, so replaced fact versions and re-mounted file chunks accumulate. `roster brain gc` (admin URL, like `init`) prunes superseded **versions** once both the version and its replacement are older than the retention window — 2 years by default (`--older-than 18mo` per run, or persist with `roster brain config set gc.retention 18mo`). The current version of everything always survives, whatever its age, and events/edges (visible history) are never touched. It previews counts and only deletes with `--yes` — append-only enforcement for agents is unaffected; gc is the one sanctioned deleter and never runs as the runtime role.
+**Retrieval is not wired yet.** `roster brain query` is recognized but fails closed with `BRAIN_RETRIEVAL_NOT_READY` until cited retrieval ships (#352); use `roster context <function>/<agent> --query "…"` for cited evidence. The legacy `mount`, `table`, `sql`, `config`, `reindex`, `gc`, `export`, and `import` spellings are likewise recognized-but-refused (`BRAIN_LEGACY_COMMAND_DISABLED`) because they predate workspace-verified Brain authority; removal is tracked in #363.
 
-### File storage (S3)
+### File storage
 
-`roster brain fs` attaches files to entities and keeps the bytes in an S3 bucket you own, while an append-only `brain.files` ledger in Postgres records every put/get/rm. Text and markdown are chunk-indexed on upload so `brain query` finds them; binaries are pointer-only. Bucket settings are non-secret (they live in the brain); credentials are supplied through the environment and never stored:
+`roster brain fs` attaches files to entities and keeps the bytes in the object-storage namespace tracked in `roster.yaml`, while an append-only `brain.files` ledger in Postgres records every put/get/rm. The namespace is non-secret tracked configuration; credentials are supplied through the environment and never stored:
+
+```yaml
+# roster.yaml
+brain:
+  secrets_path: /my-workspace
+  storage:
+    bucket: my-roster-brain
+    region: us-east-1
+    # optional: root_prefix scopes keys under a path inside the bucket
+    # optional: endpoint (exact public HTTPS origin) + force_path_style for
+    #           S3-compatible providers such as Cloudflare R2 or MinIO
+```
 
 ```bash
-# Non-secret S3 config — stored in the brain:
-roster brain config set files.bucket my-roster-brain
-roster brain config set files.region us-east-1
-# optional: files.prefix scopes keys under a path inside the bucket.
-
-# Credentials — environment only, never in the brain (inject via Infisical):
-#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, optional AWS_SESSION_TOKEN,
-#   and AWS_REGION (or files.region).
+# Credentials — environment only, never tracked (inject via Infisical):
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, optional AWS_SESSION_TOKEN.
 infisical run --env dev --path /<repo> -- roster brain fs put --kind account --slug acme ./brief.pdf
 infisical run --env dev --path /<repo> -- roster brain fs ls --kind account --slug acme
 ```
 
-Files are addressed by entity: `fs put --kind <k> --slug <s> <file>` lands at the S3 key `<prefix>files/<kind>/<slug>/<filename>` (rename with `--filename`). `fs get` verifies the stored hash on download; `fs rm` writes a tombstone row **and** deletes the S3 object, so the ledger keeps the history even though the bytes are gone.
+Files are addressed by entity: `fs put --kind <k> --slug <s> <file>` lands at the key `<root_prefix>/files/<kind>/<slug>/<filename>` (rename with `--filename`). `fs get` verifies the stored hash on download and refuses (`BRAIN_FS_FOREIGN_BUCKET`) a ledger row recorded under a namespace the workspace no longer declares; `fs rm` writes a tombstone row **and** deletes the object, so the ledger keeps the history even though the bytes are gone. `fs ls` is ledger-only and needs no object-storage credentials.
 
-**S3-compatible providers.** Set `files.endpoint` (and, for MinIO, `files.force_path_style`):
+Changing `brain.storage` changes the workspace namespace fingerprint, which the protected database identity pins — so a namespace change is a deliberate, verified operation, not a silent repoint.
 
-```bash
-# Cloudflare R2
-roster brain config set files.endpoint https://<account-id>.r2.cloudflarestorage.com
-roster brain config set files.region auto
-
-# MinIO (self-hosted)
-roster brain config set files.endpoint https://minio.example.com
-roster brain config set files.force_path_style true
-```
-
-Backblaze B2 works the same way through its S3-compatible endpoint. **Byte-level durability is the bucket's job:** a brain backup carries file *pointers*, not the objects (see §12), so enable **S3 bucket versioning** on the bucket if you want recoverable bytes — that's operator-run hardening, not a `roster` command.
+**Byte-level durability is the bucket's job:** enable bucket versioning if you want recoverable bytes — that is operator-run hardening, not a `roster` command.
 
 ---
 
 ## 12. Back up the brain
 
-The Postgres brain (`roster brain`) is durable team memory. If the Neon project is lost, there's no recovery path unless you keep portable backups.
+The Postgres brain (`roster brain`) is durable team memory. If the database is lost, there is no recovery path unless you keep portable backups.
 
-**Files are pointers, not bytes.** `roster brain export`/`import` round-trip the `brain.files` ledger — S3 keys, hashes, and event history — but not the S3 objects themselves. A restored brain points back at the same bucket, so the bucket must still exist. For byte-level durability, enable S3 bucket versioning (or cross-region replication) on the bucket — that's independent of `roster brain export`.
-
-```bash
-# Dump every brain table (core + agent-created) to a portable directory.
-# Reads brain_meta, so it needs the admin URL (the same one `roster brain init` uses).
-infisical run --env dev --path /<repo> -- roster brain export --out ./backups/brain-$(date +%F)
-
-# JSONL data files (one per table + manifest.json) are always written — they are
-# what `roster brain import` restores from. --format sql ADDITIONALLY drops a
-# standalone dump.sql you can replay with psql (see below):
-roster brain export --out ./backups/brain-sql --format sql
-```
-
-Restore into a **fresh, empty brain** (import preserves row ids, so it refuses a brain that already holds data):
+The `roster brain export` / `roster brain import` spellings predate workspace-verified Brain authority and **fail closed** today (`BRAIN_LEGACY_COMMAND_DISABLED`) — a legacy restore cannot prove that the target Brain belongs to this workspace. Until the reviewed workspace-migration path ships (#363), back the brain up with your provider's own controls:
 
 ```bash
-roster brain init                       # provision schema + runtime role on the target
-roster brain import ./backups/brain-2026-06-26
+# Provider-native logical dump, admin credential injected per command.
+infisical run --env dev --path /<repo> -- \
+  sh -c 'pg_dump "$ROSTER_BRAIN_ADMIN_URL" -Fc -f "backups/brain-$(date +%F).dump"'
 ```
 
-Import runs the schema migrations, recreates agent-created tables through the brain's table broker, reloads every row with its original id (in one transaction, verified against the manifest's row counts + content checksums), and resets the identity sequences. The backup's schema version must match the installed `roster` exactly — restore with the same roster version that produced the dump.
-
-A `--format sql` backup also contains a standalone `dump.sql`. `roster brain import` never executes it (it always restores from the verified JSONL); to replay it directly instead, run it against a freshly `roster brain init`-ed brain atomically:
-
-```bash
-psql "$ROSTER_BRAIN_ADMIN_URL" --single-transaction -f ./backups/brain-sql/dump.sql
-```
+**Files are pointers, not bytes.** A database dump carries the `brain.files` ledger — keys, hashes, and event history — but not the objects themselves. A restored brain points back at the same namespace, so the bucket must still exist. For byte-level durability, enable bucket versioning (or cross-region replication) independently of the database dump.
 
 ### Periodic backups (cron)
 
 ```cron
-# Daily 03:00 brain backup, keeping one directory per day. env -i scrubs the
-# environment; Infisical injects ROSTER_BRAIN_ADMIN_URL (never a .env file).
+# Daily 03:00 brain backup, keeping one file per day. Infisical injects
+# ROSTER_BRAIN_ADMIN_URL (never a .env file).
 0 3 * * *  cd /path/to/workspace && infisical run --env dev --path /<repo> -- \
-  roster brain export --out "backups/brain-$(date +\%F)" >> logs/brain-backup.log 2>&1
+  sh -c 'pg_dump "$ROSTER_BRAIN_ADMIN_URL" -Fc -f "backups/brain-$(date +\%F).dump"' >> logs/brain-backup.log 2>&1
 ```
-
-Or hand the same command to a managed schedule via `roster schedule` so failures surface in the HITL inbox.
 
 ---
 

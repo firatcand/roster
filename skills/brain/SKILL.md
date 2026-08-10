@@ -1,11 +1,11 @@
 ---
 name: brain
-description: "Front door to the roster brain — the workspace's shared, append-only Postgres memory. Use when the user asks to remember/record/look up team knowledge (competitors, posts, metrics, accounts, people), to search the brain, or to set up/configure it. Routes to `roster brain <verb>` (save/get/event/link/merge/query/table/mount/fs/config/export) and follows the brain-first protocol. Triggers on /brain or when a request is about persistent team knowledge in a roster workspace."
+description: "Front door to the roster brain — the workspace's shared, append-only Postgres + object-storage memory. Use when the user asks to remember/record/look up team knowledge (competitors, posts, metrics, accounts, people) or to set up the brain. Routes to `roster brain <verb>` (init/doctor/ingest/save/get/event/link/merge/fs/record) and follows the brain-first protocol. Triggers on /brain or when a request is about persistent team knowledge in a roster workspace."
 version: "1.0.0"
 trigger_conditions:
   - "User invokes /brain"
   - "User asks to remember, record, correct, or look up persistent team knowledge (competitors, posts, metrics, accounts, people, strategy)"
-  - "User asks to search/query the brain or to set up / configure / back up the brain"
+  - "User asks to look up team knowledge, ingest a source, or set up the brain"
 ---
 
 # brain
@@ -30,16 +30,18 @@ it to detect a runtime brain.)
 The brain is the team's source of truth. When a request is about persistent knowledge:
 
 1. **Consult before answering.** For questions about competitors, posts, metrics,
-   accounts, people, or strategy, run `roster brain query "<question>"` first — the
-   team may already know. Blend brain hits with your own reasoning; cite what came
+   accounts, people, or strategy, read the entity first —
+   `roster brain get --kind <k> --slug <s>` — before answering from memory or the open
+   web. Cited retrieval across the whole brain is `roster context <function>/<agent>
+   --query "…"`; `roster brain query` fails closed until #352 ships. Cite what came
    from the brain.
 2. **Write back what you learn.** When you discover a durable fact, record it
    (`save`/`event`/`link`) so the next session benefits. Read `brain/RESOLVER.md` to
    decide where it goes.
 3. **Correct immediately.** If you find the brain is wrong, write the correction now —
    a new write supersedes; nothing is deleted.
-4. **Check before creating a table.** Run `roster brain table list` and re-read
-   `brain/RESOLVER.md` before `brain table create` — prefer entities + facts.
+4. **Entities and facts, never new tables.** The custom-table broker is disabled;
+   `brain/RESOLVER.md` maps every shape onto entities, facts, events, and edges.
 
 ## Organize, don't just dump
 
@@ -51,8 +53,8 @@ taxonomy, tags-as-edges convention, dedup discipline, when-to-link branch); foll
 **Inline (a fact or two learned mid-session):**
 
 1. **Extract** the noun and map it to a `kind` from `RESOLVER.md`.
-2. **Dedup before create** — `roster brain query "<name>"` (or `get --kind <k> --slug <s>`)
-   first. When `save` warns "possible duplicate of: …", evaluate it and
+2. **Dedup before create** — `roster brain get --kind <k> --slug <s>` first. When
+   `save` warns "possible duplicate of: …", evaluate it and
    `roster brain merge <from> <into>` if it is the same thing. Never leave a near-duplicate.
 3. **Save with provenance** — `roster brain save --kind <k> --slug <s> --field key=value
    --source "<where it came from>"`. Every fact carries a `--source`.
@@ -73,23 +75,23 @@ Everything stays on the host subscription and the `roster brain` verbs.
 | Goal | Command |
 |------|---------|
 | Provision / inspect | `roster brain init` · `roster brain doctor` |
+| Mint an immutable source version | `roster brain ingest --manifest-file <ws path> [--bytes-file <ws path>]` |
 | Save an entity + facts | `roster brain save --kind <k> --slug <s> --field key=value` |
 | Read an entity (truth + timeline) | `roster brain get --kind <k> --slug <s>` |
 | Record something that happened | `roster brain event --kind <event-kind> [--slug <entity-slug>] --data '{…}'` |
 | Link two entities | `roster brain link <src> <rel> <dst>` |
 | Merge a duplicate | `roster brain merge <from> <into>` |
-| Hybrid search (meaning + keyword + graph) | `roster brain query "<text>" [--kind k] [--limit n]` |
-| Custom table | `roster brain table list` · `roster brain table create <name> --col name:type` |
-| Read-only SQL | `roster brain sql "SELECT …"` |
-| Ingest a file | `roster brain mount <file>` |
-| Store a file (S3-backed) | `roster brain fs put --kind <k> --slug <s> <file>` |
+| Cited retrieval | `roster context <function>/<agent> --query "<text>"` |
+| Record portable work evidence | `roster brain record run\|artifact\|feedback\|decision --payload '{…}'` |
+| Store a file | `roster brain fs put --kind <k> --slug <s> <file>` |
 | Fetch a stored file | `roster brain fs get --kind <k> --slug <s> <filename> [--out <path>]` |
 | List stored files | `roster brain fs ls [--kind <k> [--slug <s>]]` |
 | Remove a stored file (tombstone) | `roster brain fs rm --kind <k> --slug <s> <filename>` |
-| Settings | `roster brain config get` · `roster brain config set <key> <value>` |
-| Backup | `roster brain export [--out <dir>]` |
 
-Add `--json` to any verb for machine-readable output.
+Add `--json` to any verb for machine-readable output. The legacy `mount`, `table`,
+`sql`, `config`, `reindex`, `gc`, `export`, and `import` spellings are recognized but
+refuse with `BRAIN_LEGACY_COMMAND_DISABLED`; `query` refuses with
+`BRAIN_RETRIEVAL_NOT_READY`. Never route a user to them.
 
 ## Setup
 
@@ -100,18 +102,21 @@ and tracked Infisical path, then stops before database access. The host must gen
 43-128 character unpadded base64url password (at least 32 random bytes), build the full
 workspace-specific URL with that reported role, and store it at that Infisical path as
 `ROSTER_BRAIN_URL`. Rerun init under ambient injection to provision the database.
-Roster never mints, prints, returns, or stores the runtime password or URL. Semantic
-search embeddings are **off** by default (no paid API calls) — enable with
-`roster brain config set embeddings.enabled true` (needs `OPENAI_API_KEY`). Full
-walkthrough: the **Set up the brain** section of the Roster HOWTO.
+Roster never mints, prints, returns, or stores the runtime password or URL. The brain
+is indivisible: `roster.yaml` must declare both `brain.secrets_path` and
+`brain.storage` (bucket + region), or every Brain verb fails closed with
+`BRAIN_CONFIGURATION_INCOMPLETE` without contacting either store. Full walkthrough:
+the **Set up the brain** section of the Roster HOWTO.
 
 ## Safety
 
 - Append-only: you can never UPDATE or DELETE through the runtime role — corrections
-  supersede. Don't try to work around it. Files are append-only too: the Neon ledger
-  never erases history, so `roster brain fs rm` writes a tombstone row and deletes the
-  S3 object rather than rewriting the past. S3 file *bytes* are mutable, but only
-  through the `roster brain fs` verbs.
-- Never put secrets (API keys, tokens) into the brain; config stores non-secret
-  settings only. S3 credentials (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`) are
-  environment-only — never stored in the brain.
+  supersede. Don't try to work around it. Files are append-only too: the ledger never
+  erases history, so `roster brain fs rm` writes a tombstone row and deletes the object
+  rather than rewriting the past. File *bytes* are mutable, but only through the
+  `roster brain fs` verbs.
+- Never put secrets (API keys, tokens) into the brain. The object-storage namespace is
+  tracked non-secret configuration in `roster.yaml` under `brain.storage`; the
+  credentials (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`) are ambient-only and
+  never stored in the brain. Roster never prints a bucket, endpoint, object key, or
+  `s3://` URI.

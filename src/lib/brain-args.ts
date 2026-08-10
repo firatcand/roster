@@ -3,6 +3,7 @@ import { RUNTIME_ROLE } from './brain/roles.ts';
 type BrainSubcommand =
   | 'init'
   | 'doctor'
+  | 'ingest'
   | 'save'
   | 'event'
   | 'link'
@@ -23,6 +24,7 @@ type BrainSubcommand =
 const BRAIN_SUBCOMMANDS: ReadonlySet<BrainSubcommand> = new Set<BrainSubcommand>([
   'init',
   'doctor',
+  'ingest',
   'save',
   'event',
   'link',
@@ -51,6 +53,14 @@ export type EvidenceRecordVerb = (typeof EVIDENCE_RECORD_VERBS)[number];
 export type ParsedBrainArgs =
   | { kind: 'ok'; subcommand: 'init'; json: boolean; silent: boolean; embeddings: boolean; role: string }
   | { kind: 'ok'; subcommand: 'doctor'; json: boolean; silent: boolean; role: string }
+  | {
+      kind: 'ok';
+      subcommand: 'ingest';
+      json: boolean;
+      manifest?: string;
+      manifestFile?: string;
+      bytesFile?: string;
+    }
   | {
       kind: 'ok';
       subcommand: 'save';
@@ -169,6 +179,7 @@ export function parseBrainArgs(args: readonly string[]): ParsedBrainArgs {
   }
 
   if (first === 'init' || first === 'doctor') return parseInitDoctor(first, rest);
+  if (first === 'ingest') return parseIngest(rest);
   if (first === 'save') return parseSave(rest);
   if (first === 'event') return parseEvent(rest);
   if (first === 'link') return parseLink(rest);
@@ -185,6 +196,35 @@ export function parseBrainArgs(args: readonly string[]): ParsedBrainArgs {
   if (first === 'fs') return parseFs(rest);
   if (first === 'record') return parseRecord(rest);
   return parseSql(rest);
+}
+
+// The manifest envelope mirrors `brain record`'s --payload/--file XOR: the
+// ingest input is an 11-field contract with two discriminated unions, so a
+// flag-per-field grammar would fork the exhaustive normalizer it feeds.
+function parseIngest(rest: readonly string[]): ParsedBrainArgs {
+  let json = false;
+  let manifest: string | undefined;
+  let manifestFile: string | undefined;
+  let bytesFile: string | undefined;
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i]!;
+    if (arg === '--json') json = true;
+    else if (arg === '--manifest') {
+      const v = readValue(rest, i, 'ingest', '--manifest'); if ('kind' in v) return v; manifest = v.value; i = v.next;
+    } else if (arg === '--manifest-file') {
+      const v = readValue(rest, i, 'ingest', '--manifest-file'); if ('kind' in v) return v; manifestFile = v.value; i = v.next;
+    } else if (arg === '--bytes-file') {
+      const v = readValue(rest, i, 'ingest', '--bytes-file'); if ('kind' in v) return v; bytesFile = v.value; i = v.next;
+    } else if (arg.startsWith('-')) {
+      return err(`unknown flag for 'brain ingest': ${arg}`);
+    } else {
+      return err(`'brain ingest': unexpected positional argument '${arg}'`);
+    }
+  }
+  if ((manifest === undefined) === (manifestFile === undefined)) {
+    return err(`'brain ingest' requires exactly one of --manifest or --manifest-file`);
+  }
+  return { kind: 'ok', subcommand: 'ingest', json, manifest, manifestFile, bytesFile };
 }
 
 function parseRecord(rest: readonly string[]): ParsedBrainArgs {

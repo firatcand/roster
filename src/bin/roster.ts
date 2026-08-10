@@ -62,22 +62,15 @@ import { parseBrainArgs } from '../lib/brain-args.ts';
 import {
   executeBrainInit,
   executeBrainDoctor,
+  executeBrainIngest,
   executeBrainSave,
   executeBrainEvent,
   executeBrainLink,
   executeBrainMerge,
   executeBrainGet,
-  executeBrainTable,
-  executeBrainSql,
-  executeBrainMount,
-  executeBrainExport,
-  executeBrainImport,
-  executeBrainQuery,
-  executeBrainConfig,
-  executeBrainReindex,
-  executeBrainGc,
   executeBrainFs,
   executeBrainRecord,
+  redactBrainProviderFailure,
 } from '../commands/brain.ts';
 import {
   EXIT_OK,
@@ -172,17 +165,13 @@ function printHelp(version: string): void {
     `  roster task claim <sel>      ${chalk.dim('Claim a task: self-assign + advance (start/submit/done/revise/block/unblock/cancel)')}`,
     `  roster hooks install         ${chalk.dim('Install SessionStart banner hooks for Claude + Codex')}`,
     `  roster brain init            ${chalk.dim('Bind a configured workspace Brain using ambient admin/runtime credentials')}`,
-    `  roster brain doctor          ${chalk.dim('Audit brain append-only safety + report pending migrations')}`,
-    `  roster brain save/get/event/link/merge/table/sql  ${chalk.dim('Append-only write/read verbs (runtime role)')}`,
+    `  roster brain doctor          ${chalk.dim('Audit brain append-only safety + report pending migrations (metadata only)')}`,
+    `  roster brain ingest          ${chalk.dim('Mint an immutable source version + extraction (--manifest <json> | --manifest-file <ws path>, --bytes-file <ws path>; admin URL)')}`,
+    `  roster brain save/get/event/link/merge  ${chalk.dim('Append-only write/read verbs (runtime role)')}`,
     `  roster brain record run|artifact|feedback|decision  ${chalk.dim('Append portable work evidence (--payload <json> | --file <workspace path>)')}`,
-    `  roster brain mount <file>    ${chalk.dim('Ingest a file as append-only document chunks + keyword index (runtime role)')}`,
-    `  roster brain fs put|get|ls|rm  ${chalk.dim('S3-backed file store keyed by --kind/--slug; text is chunk-indexed for query (runtime role)')}`,
-    `  roster brain export          ${chalk.dim('Dump all brain tables to a portable backup dir (--out, --format jsonl|sql; admin URL)')}`,
-    `  roster brain import <dir>    ${chalk.dim('Legacy restore spelling; fails closed pending reviewed adoption')}`,
-    `  roster brain query "<text>"  ${chalk.dim('Hybrid semantic + keyword + graph search (--kind, --limit, --json)')}`,
-    `  roster brain config get|set  ${chalk.dim('Read/set brain settings (embeddings.enabled, provider, model, search knobs)')}`,
-    `  roster brain reindex [--yes]  ${chalk.dim('Backfill embeddings for active chunks missing/stale vectors (--since, --model; admin URL)')}`,
-    `  roster brain gc [--yes]      ${chalk.dim('Prune superseded fact/chunk versions older than retention (default 2y; --older-than; admin URL)')}`,
+    `  roster brain fs put|get|ls|rm  ${chalk.dim('Object-storage file store keyed by --kind/--slug, in the tracked brain.storage namespace (runtime role)')}`,
+    `  roster brain query "<text>"  ${chalk.dim('Fails closed until cited retrieval ships (#352) — use roster context for cited evidence')}`,
+    `  roster brain mount|table|sql|config|reindex|gc|export|import  ${chalk.dim('Legacy spellings; recognized but fail closed until removal in #363')}`,
     `  roster ops setup             ${chalk.dim('Configure the workspace operations backend: --backend local|postgres-s3 (--database, --bucket, --new-identity, --json, --yes)')}`,
     `  roster run <verb>            ${chalk.dim('Run + artifact ledger: start|end|event|report|declare-artifact|show|list|doctor|repair (--run, --json, --allow-partial)')}`,
     `  roster migrate from-agent-team <dir>  ${chalk.dim('Migrate a legacy agent-team workspace into roster')}`,
@@ -861,7 +850,52 @@ async function runHooks(args: readonly string[]): Promise<number> {
   });
 }
 
+const DISABLED_BRAIN_COMMANDS: ReadonlySet<string> = new Set([
+  'mount',
+  'table',
+  'sql',
+  'config',
+  'reindex',
+  'gc',
+  'export',
+  'import',
+]);
+
+// AC-4: the legacy spellings stay RECOGNIZED (their parsers are untouched) and
+// fail closed. The refusal is raised before the workspace record, the ambient
+// environment, any pool, and any filesystem path named on the command line are
+// read.
+function legacyBrainCommandDisabled(command: string): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} legacy Brain command '${command}' is disabled`,
+    body: '  This spelling predates workspace-verified Brain authority and cannot prove that the target Brain belongs to this workspace.',
+    remedy: '  Use the canonical surface: roster brain init|doctor|ingest|save|get|event|link|merge|fs|record.',
+    exitCode: EXIT_ERROR,
+    code: 'BRAIN_LEGACY_COMMAND_DISABLED',
+    details: { command: `brain ${command}` },
+  });
+}
+
+function brainRetrievalNotReady(): RosterError {
+  return new RosterError({
+    header: `${chalk.red.bold('roster:')} Brain retrieval is not ready`,
+    body: '  Cited company retrieval is not wired to the extraction and citation pipeline yet.',
+    remedy: '  Use `roster context <function>/<agent> --query "…"` for cited evidence once #352 ships.',
+    exitCode: EXIT_ERROR,
+    code: 'BRAIN_RETRIEVAL_NOT_READY',
+    details: { command: 'brain query', blocked_by: ['352'] },
+  });
+}
+
 async function runBrain(args: readonly string[]): Promise<number> {
+  try {
+    return await dispatchBrain(args);
+  } catch (error) {
+    throw redactBrainProviderFailure(error);
+  }
+}
+
+async function dispatchBrain(args: readonly string[]): Promise<number> {
   const parsed = parseBrainArgs(args);
   if (parsed.kind === 'err') {
     throw new RosterError({
@@ -871,9 +905,15 @@ async function runBrain(args: readonly string[]): Promise<number> {
       exitCode: EXIT_ERROR,
     });
   }
+  if (DISABLED_BRAIN_COMMANDS.has(parsed.subcommand)) {
+    throw legacyBrainCommandDisabled(parsed.subcommand);
+  }
+  if (parsed.subcommand === 'query') throw brainRetrievalNotReady();
+
+  const cwd = process.cwd();
   if (parsed.subcommand === 'init') {
     return await executeBrainInit({
-      cwd: process.cwd(),
+      cwd,
       json: parsed.json,
       silent: parsed.silent,
       embeddings: parsed.embeddings,
@@ -882,14 +922,24 @@ async function runBrain(args: readonly string[]): Promise<number> {
   }
   if (parsed.subcommand === 'doctor') {
     return await executeBrainDoctor({
-      cwd: process.cwd(),
+      cwd,
       json: parsed.json,
       silent: parsed.silent,
       role: parsed.role,
     });
   }
+  if (parsed.subcommand === 'ingest') {
+    return await executeBrainIngest({
+      cwd,
+      json: parsed.json,
+      manifest: parsed.manifest,
+      manifestFile: parsed.manifestFile,
+      bytesFile: parsed.bytesFile,
+    });
+  }
   if (parsed.subcommand === 'save') {
     return await executeBrainSave({
+      cwd,
       json: parsed.json,
       kind: parsed.entKind,
       slug: parsed.slug,
@@ -902,6 +952,7 @@ async function runBrain(args: readonly string[]): Promise<number> {
   }
   if (parsed.subcommand === 'event') {
     return await executeBrainEvent({
+      cwd,
       json: parsed.json,
       kind: parsed.entKind,
       slug: parsed.slug,
@@ -911,6 +962,7 @@ async function runBrain(args: readonly string[]): Promise<number> {
   }
   if (parsed.subcommand === 'link') {
     return await executeBrainLink({
+      cwd,
       json: parsed.json,
       srcSlug: parsed.srcSlug,
       rel: parsed.rel,
@@ -923,6 +975,7 @@ async function runBrain(args: readonly string[]): Promise<number> {
   }
   if (parsed.subcommand === 'merge') {
     return await executeBrainMerge({
+      cwd,
       json: parsed.json,
       fromSlug: parsed.fromSlug,
       intoSlug: parsed.intoSlug,
@@ -931,69 +984,39 @@ async function runBrain(args: readonly string[]): Promise<number> {
     });
   }
   if (parsed.subcommand === 'get') {
-    return await executeBrainGet({ json: parsed.json, kind: parsed.entKind, slug: parsed.slug });
+    return await executeBrainGet({ cwd, json: parsed.json, kind: parsed.entKind, slug: parsed.slug });
   }
   if (parsed.subcommand === 'record') {
     return await executeBrainRecord({
-      cwd: process.cwd(),
+      cwd,
       json: parsed.json,
       recordKind: parsed.recordKind,
       payload: parsed.payload,
       file: parsed.file,
     });
   }
-  if (parsed.subcommand === 'mount') {
-    return await executeBrainMount({ json: parsed.json, file: parsed.file });
-  }
-  if (parsed.subcommand === 'export') {
-    return await executeBrainExport({ json: parsed.json, outDir: parsed.outDir, format: parsed.format });
-  }
-  if (parsed.subcommand === 'import') {
-    return await executeBrainImport({ json: parsed.json, dir: parsed.dir });
-  }
-  if (parsed.subcommand === 'query') {
-    return await executeBrainQuery({ json: parsed.json, text: parsed.text, kind: parsed.entKind, limit: parsed.limit });
-  }
-  if (parsed.subcommand === 'config') {
-    if (parsed.op === 'set') {
-      return await executeBrainConfig({ json: parsed.json, op: 'set', key: parsed.key, value: parsed.value });
-    }
-    return await executeBrainConfig({ json: parsed.json, op: 'get', key: parsed.key });
-  }
-  if (parsed.subcommand === 'reindex') {
-    return await executeBrainReindex({ json: parsed.json, since: parsed.since, model: parsed.model, yes: parsed.yes });
-  }
-  if (parsed.subcommand === 'gc') {
-    return await executeBrainGc({ json: parsed.json, olderThan: parsed.olderThan, yes: parsed.yes });
-  }
-  if (parsed.subcommand === 'table') {
-    if (parsed.op === 'create') {
-      return await executeBrainTable({ json: parsed.json, op: 'create', name: parsed.name, columns: parsed.columns });
-    }
-    return await executeBrainTable({ json: parsed.json, op: 'list' });
-  }
   if (parsed.subcommand === 'fs') {
     if (parsed.op === 'put') {
       return await executeBrainFs({
-        json: parsed.json, op: 'put', kind: parsed.entKind, slug: parsed.slug,
+        cwd, json: parsed.json, op: 'put', kind: parsed.entKind, slug: parsed.slug,
         file: parsed.file, filename: parsed.filename, actor: parsed.actor,
       });
     }
     if (parsed.op === 'get') {
       return await executeBrainFs({
-        json: parsed.json, op: 'get', kind: parsed.entKind, slug: parsed.slug,
+        cwd, json: parsed.json, op: 'get', kind: parsed.entKind, slug: parsed.slug,
         filename: parsed.filename, out: parsed.out,
       });
     }
     if (parsed.op === 'rm') {
       return await executeBrainFs({
-        json: parsed.json, op: 'rm', kind: parsed.entKind, slug: parsed.slug,
+        cwd, json: parsed.json, op: 'rm', kind: parsed.entKind, slug: parsed.slug,
         filename: parsed.filename, actor: parsed.actor,
       });
     }
-    return await executeBrainFs({ json: parsed.json, op: 'ls', kind: parsed.entKind, slug: parsed.slug });
+    return await executeBrainFs({ cwd, json: parsed.json, op: 'ls', kind: parsed.entKind, slug: parsed.slug });
   }
-  return await executeBrainSql({ json: parsed.json, query: parsed.query });
+  throw legacyBrainCommandDisabled(parsed.subcommand);
 }
 
 function opsUsageError(): RosterError {

@@ -248,8 +248,14 @@ export async function runMigrations(
   }
 }
 
+// Only `connect()` is needed, so a verified/diagnostic authority pool satisfies
+// this without handing out a raw pg.Pool.
+export type MigrationConnectable = {
+  connect(): Promise<pg.PoolClient>;
+};
+
 export async function pendingMigrations(
-  pool: pg.Pool,
+  pool: MigrationConnectable,
   dir: string,
   target: MigrationTarget,
 ): Promise<string[]> {

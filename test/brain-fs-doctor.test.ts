@@ -8,7 +8,7 @@ import { runMigrations } from '../src/lib/brain/migrate.ts';
 import { ensureRuntimeRole } from '../src/lib/brain/roles.ts';
 import { setConfig } from '../src/lib/brain/config.ts';
 import { MemoryFileStore } from '../src/lib/brain/s3.ts';
-import { checkFileDrift } from '../src/lib/brain/doctor.ts';
+import { checkFileDrift } from '../src/lib/brain/doctor-file-drift.ts';
 import { putFile } from '../src/lib/brain/fs.ts';
 import { HAS_DB, createFreshDb, runtimeClient, type FreshDb } from './brain-helpers.ts';
 
@@ -19,6 +19,7 @@ type Setup = { fresh: FreshDb; password: string; teardown: () => Promise<void> }
 async function provision(withBucket: boolean): Promise<Setup> {
   const fresh = await createFreshDb();
   const pool = createBrainPool('admin', fresh.url);
+  let provisioned = false;
   try {
     await runMigrations(pool);
     const role = await withBrainClient(pool, async (c) => {
@@ -28,12 +29,15 @@ async function provision(withBucket: boolean): Promise<Setup> {
       }
       return ensureRuntimeRole(c, fresh.role);
     });
+    provisioned = true;
     return { fresh, password: role.password!, teardown: async () => { await fresh.drop(); } };
-  } catch (err) {
-    await fresh.drop();
-    throw err;
   } finally {
+    // pg rejects a second end(), so the pool is closed on exactly one
+    // path — and always BEFORE the drop, whose pg_terminate_backend cuts
+    // every backend still attached to the database. An idle pooled client
+    // cut that way reports on the Pool, not to any caller (#383).
     await pool.end();
+    if (!provisioned) await fresh.drop();
   }
 }
 

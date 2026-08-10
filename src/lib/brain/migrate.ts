@@ -6,12 +6,13 @@ import {
   pendingMigrations as pendingMigrationsCore,
   runMigrationsOnClient as runMigrationsOnClientCore,
   runMigrations as runMigrationsCore,
+  type MigrationConnectable,
   type MigrationFile,
   type MigrationResult,
   type MigrationTarget,
 } from '../persistence/migrate-core.ts';
 
-export type { MigrationFile, MigrationResult };
+export type { MigrationConnectable, MigrationFile, MigrationResult };
 
 export const BRAIN_TARGET: MigrationTarget = {
   schema: 'brain_meta',
@@ -41,6 +42,9 @@ export async function runMigrations(
   return runMigrationsCore(pool, dir, BRAIN_TARGET);
 }
 
-export async function pendingMigrations(pool: pg.Pool, dir: string = schemaDir()): Promise<string[]> {
+export async function pendingMigrations(
+  pool: MigrationConnectable,
+  dir: string = schemaDir(),
+): Promise<string[]> {
   return pendingMigrationsCore(pool, dir, BRAIN_TARGET);
 }

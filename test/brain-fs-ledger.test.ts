@@ -13,9 +13,11 @@ type Setup = { fresh: FreshDb; password: string; teardown: () => Promise<void> }
 async function provision(): Promise<Setup> {
   const fresh = await createFreshDb();
   const pool = createBrainPool('admin', fresh.url);
+  let provisioned = false;
   try {
     await runMigrations(pool);
     const role = await withBrainClient(pool, (c) => ensureRuntimeRole(c, fresh.role));
+    provisioned = true;
     return {
       fresh,
       password: role.password!,
@@ -23,11 +25,13 @@ async function provision(): Promise<Setup> {
         await fresh.drop();
       },
     };
-  } catch (err) {
-    await fresh.drop();
-    throw err;
   } finally {
+    // pg rejects a second end(), so the pool is closed on exactly one
+    // path — and always BEFORE the drop, whose pg_terminate_backend cuts
+    // every backend still attached to the database. An idle pooled client
+    // cut that way reports on the Pool, not to any caller (#383).
     await pool.end();
+    if (!provisioned) await fresh.drop();
   }
 }
 
@@ -206,7 +210,11 @@ test('tombstone: an rm ledger row hides that file chunks from current_documents 
   }
 });
 
-test('tombstone: re-put after rm resurrects chunks without a new mount', opts, async () => {
+// #383: `fs put` writes ledger + object only, so this exercises the LEGACY
+// mount pairing directly — the ledger rows are hand-written here, exactly as a
+// pre-#383 put composed them. mountBytesTx and brain.files.mount_id are retired
+// together in #363.
+test('tombstone: a re-mounted source restores its chunks without a new mount', opts, async () => {
   const { fresh, password, teardown } = await provision();
   const rt = await runtimeClient(fresh.url, password, fresh.role);
   const uri = 's3://bkt/files/concept/rrf/post.md';
@@ -233,8 +241,8 @@ test('tombstone: re-put after rm resurrects chunks without a new mount', opts, a
     );
     assert.equal(hidden.rows[0]!.c, 0, 'hidden after rm');
 
-    // Re-put the same bytes: mountBytesTx no-ops (unchanged), reuses the mount;
-    // a fresh op='put' ledger row supersedes the tombstone.
+    // Re-mount the same bytes: mountBytesTx no-ops (unchanged) and reuses the
+    // mount; a fresh op='put' ledger row supersedes the tombstone.
     await rt.query('BEGIN');
     const m2 = await mountBytesTx(rt, uri, bytes, null);
     await rt.query(

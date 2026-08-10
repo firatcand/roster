@@ -144,13 +144,17 @@ export function chunkFile(
   return { chunks, frontmatter };
 }
 
-// Index bytes under an arbitrary source_path (a local absolute path from
-// `mountFile`, or an `s3://…` URI from `brain fs put`). Runs INSIDE the caller's
+// Index bytes under an arbitrary source_path. Runs INSIDE the caller's
 // transaction — no BEGIN/COMMIT here — but takes the per-source_path advisory
 // lock itself so concurrent mounts of one path can never interleave. On an
 // unchanged hash it returns the EXISTING latest mount id (zero paid embedding
-// calls, no new rows), which is what lets a `fs put` after an `fs rm` resurrect
+// calls, no new rows), so a re-mount of identical bytes restores the current
 // chunks without re-embedding.
+//
+// #383: `brain fs put` no longer calls this — a put writes the brain.files
+// ledger row and the object, nothing else, and extraction/indexing belongs to
+// `roster brain ingest` (the 012 pipeline). This module is legacy and is
+// retired with the other orphaned Brain modules in #363.
 export async function mountBytesTx(
   client: pg.PoolClient | pg.Client,
   sourcePath: string,

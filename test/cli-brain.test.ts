@@ -106,6 +106,74 @@ test('parseBrainArgs: doctor rejects --embeddings', () => {
   assert.equal(r.kind, 'err');
 });
 
+test('parseBrainArgs: the canonical subcommand set is exactly the shipped spellings', () => {
+  const canonical = ['init', 'doctor', 'ingest', 'save', 'get', 'event', 'link', 'merge', 'fs', 'record'];
+  const legacy = ['mount', 'table', 'sql', 'config', 'reindex', 'gc', 'export', 'import', 'query'];
+  const argv: Record<string, string[]> = {
+    init: ['init'],
+    doctor: ['doctor'],
+    ingest: ['ingest', '--manifest', '{}'],
+    save: ['save', '--kind', 'k', '--slug', 's'],
+    get: ['get', '--kind', 'k', '--slug', 's'],
+    event: ['event', '--kind', 'note'],
+    link: ['link', 'a', 'rel', 'b'],
+    merge: ['merge', 'a', 'b'],
+    fs: ['fs', 'ls'],
+    record: ['record', 'run', '--payload', '{}'],
+    mount: ['mount', 'f.md'],
+    table: ['table', 'list'],
+    sql: ['sql', 'SELECT 1'],
+    config: ['config', 'get'],
+    reindex: ['reindex'],
+    gc: ['gc'],
+    export: ['export'],
+    import: ['import', 'dir'],
+    query: ['query', 'text'],
+  };
+  for (const verb of [...canonical, ...legacy]) {
+    const parsed = parseBrainArgs(argv[verb]!);
+    assert.equal(parsed.kind, 'ok', verb);
+    assert.equal(parsed.kind === 'ok' && parsed.subcommand, verb);
+  }
+  assert.equal(parseBrainArgs(['promote']).kind, 'err');
+});
+
+test('parseBrainArgs: brain ingest envelope grammar', () => {
+  const ok = parseBrainArgs(['ingest', '--manifest', '{"a":1}', '--bytes-file', 'src/x.md', '--json']);
+  assert.deepEqual(ok, {
+    kind: 'ok',
+    subcommand: 'ingest',
+    json: true,
+    manifest: '{"a":1}',
+    manifestFile: undefined,
+    bytesFile: 'src/x.md',
+  });
+  const viaFile = parseBrainArgs(['ingest', '--manifest-file', 'ingest/a.json']);
+  assert.deepEqual(viaFile, {
+    kind: 'ok',
+    subcommand: 'ingest',
+    json: false,
+    manifest: undefined,
+    manifestFile: 'ingest/a.json',
+    bytesFile: undefined,
+  });
+
+  const rejections: Array<[string[], string]> = [
+    [['ingest'], `'brain ingest' requires exactly one of --manifest or --manifest-file`],
+    [['ingest', '--manifest', '{}', '--manifest-file', 'a.json'], `'brain ingest' requires exactly one of --manifest or --manifest-file`],
+    [['ingest', '--manifest'], `'brain ingest': --manifest requires a value`],
+    [['ingest', '--manifest-file'], `'brain ingest': --manifest-file requires a value`],
+    [['ingest', '--manifest', '{}', '--bytes-file'], `'brain ingest': --bytes-file requires a value`],
+    [['ingest', '--manifest', '{}', 'stray'], `'brain ingest': unexpected positional argument 'stray'`],
+    [['ingest', '--manifest', '{}', '--nope'], `unknown flag for 'brain ingest': --nope`],
+  ];
+  for (const [args, message] of rejections) {
+    const parsed = parseBrainArgs(args);
+    assert.equal(parsed.kind, 'err', args.join(' '));
+    assert.equal(parsed.kind === 'err' && parsed.message, message);
+  }
+});
+
 test('cli: brain import reports the stable disabled-command error without Brain credentials', () => {
   const env = { ...process.env };
   delete env['ROSTER_BRAIN_ADMIN_URL'];

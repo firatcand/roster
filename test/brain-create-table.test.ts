@@ -4,7 +4,7 @@ import { createBrainPool, withBrainClient } from '../src/lib/brain/connect.ts';
 import { runMigrations } from '../src/lib/brain/migrate.ts';
 import { ensureRuntimeRole } from '../src/lib/brain/roles.ts';
 import { runDoctor } from '../src/lib/brain/doctor.ts';
-import { HAS_DB, createFreshDb, runtimeClient, type FreshDb } from './brain-helpers.ts';
+import { HAS_DB, createFreshDb, runtimeClient, seedWorkspaceIdentity, type FreshDb } from './brain-helpers.ts';
 
 const opts = { skip: HAS_DB ? false : 'ROSTER_BRAIN_ADMIN_URL not set' };
 
@@ -13,9 +13,12 @@ type Setup = { fresh: FreshDb; password: string; teardown: () => Promise<void> }
 async function provision(): Promise<Setup> {
   const fresh = await createFreshDb();
   const pool = createBrainPool('admin', fresh.url);
+  let provisioned = false;
   try {
     await runMigrations(pool);
+    await seedWorkspaceIdentity(pool);
     const role = await withBrainClient(pool, (c) => ensureRuntimeRole(c, fresh.role));
+    provisioned = true;
     return {
       fresh,
       password: role.password!,
@@ -23,19 +26,68 @@ async function provision(): Promise<Setup> {
         await fresh.drop();
       },
     };
-  } catch (err) {
-    await fresh.drop();
-    throw err;
   } finally {
+    // pg rejects a second end(), so the pool is closed on exactly one
+    // path — and always BEFORE the drop, whose pg_terminate_backend cuts
+    // every backend still attached to the database. An idle pooled client
+    // cut that way reports on the Pool, not to any caller (#383).
     await pool.end();
+    if (!provisioned) await fresh.drop();
   }
 }
 
-test('brokered create_table yields admin-owned INSERT/SELECT-only table (case 3)', opts, async () => {
+// #383 (AC-2): the DDL broker is no longer reachable by the runtime role — it
+// CREATEs a table and reassigns its owner, which is schema authority. The broker
+// itself is unchanged, so every assertion below now drives it from the admin
+// connection that owns it.
+test('the runtime role holds no EXECUTE on the DDL broker (case 3)', opts, async () => {
   const { fresh, password, teardown } = await provision();
+  const pool = createBrainPool('admin', fresh.url);
   const rt = await runtimeClient(fresh.url, password, fresh.role);
   try {
-    await rt.query(`SELECT brain.create_table('notes', '[{"name":"text_body","type":"text"},{"name":"score","type":"int"}]'::jsonb)`);
+    const granted = await pool.query<{ p: boolean }>(
+      `SELECT has_function_privilege($1, 'brain.create_table(text, jsonb)', 'EXECUTE') AS p`,
+      [fresh.role],
+    );
+    assert.equal(granted.rows[0]!.p, false, 'runtime role must not EXECUTE the DDL broker');
+    await assert.rejects(
+      rt.query(`SELECT brain.create_table('sneaky', '[{"name":"body","type":"text"}]'::jsonb)`),
+      /permission denied/i,
+    );
+    // Re-init self-heals a pre-#383 Brain. Seed the REAL drift first — the grant
+    // exactly as roles.ts issued it before #383 — so the revoke is proven against
+    // a dirty state rather than an already-clean one.
+    await pool.query(`GRANT EXECUTE ON FUNCTION brain.create_table(text, jsonb) TO "${fresh.role}"`);
+    const drifted = await pool.query<{ p: boolean }>(
+      `SELECT has_function_privilege($1, 'brain.create_table(text, jsonb)', 'EXECUTE') AS p`,
+      [fresh.role],
+    );
+    assert.equal(drifted.rows[0]!.p, true, 'pre-#383 grant seeded');
+    await rt.query(`SELECT brain.create_table('drifted', '[{"name":"body","type":"text"}]'::jsonb)`);
+
+    await withBrainClient(pool, (c) => ensureRuntimeRole(c, fresh.role));
+    const after = await pool.query<{ p: boolean }>(
+      `SELECT has_function_privilege($1, 'brain.create_table(text, jsonb)', 'EXECUTE') AS p`,
+      [fresh.role],
+    );
+    assert.equal(after.rows[0]!.p, false, 're-init revoked the drifted grant');
+    await assert.rejects(
+      rt.query(`SELECT brain.create_table('after_heal', '[{"name":"body","type":"text"}]'::jsonb)`),
+      /permission denied/i,
+    );
+  } finally {
+    await rt.end();
+    await pool.end();
+    await teardown();
+  }
+});
+
+test('brokered create_table yields admin-owned INSERT/SELECT-only table (case 3)', opts, async () => {
+  const { fresh, password, teardown } = await provision();
+  const pool = createBrainPool('admin', fresh.url);
+  const rt = await runtimeClient(fresh.url, password, fresh.role);
+  try {
+    await pool.query(`SELECT brain.create_table('notes', '[{"name":"text_body","type":"text"},{"name":"score","type":"int"}]'::jsonb)`);
 
     const owner = await rt.query(
       `SELECT o.rolname FROM pg_class c
@@ -57,6 +109,7 @@ test('brokered create_table yields admin-owned INSERT/SELECT-only table (case 3)
     );
   } finally {
     await rt.end();
+    await pool.end();
     await teardown();
   }
 });
@@ -69,7 +122,7 @@ test('agent table may define a canonical_id column: runtime keeps INSERT, doctor
   const rt = await runtimeClient(fresh.url, password, fresh.role);
   const pool = createBrainPool('admin', fresh.url);
   try {
-    await rt.query(
+    await pool.query(
       `SELECT brain.create_table('widgets', '[{"name":"canonical_id","type":"bigint"},{"name":"label","type":"text"}]'::jsonb)`,
     );
     await rt.query(`INSERT INTO brain.widgets (canonical_id, label) VALUES (7, 'w')`);
@@ -87,44 +140,43 @@ test('agent table may define a canonical_id column: runtime keeps INSERT, doctor
 });
 
 test('create_table rejects injection / schema-qualified name / non-whitelisted type (case 4)', opts, async () => {
-  const { fresh, password, teardown } = await provision();
-  const rt = await runtimeClient(fresh.url, password, fresh.role);
+  const { fresh, teardown } = await provision();
+  const pool = createBrainPool('admin', fresh.url);
   try {
     await assert.rejects(
-      rt.query(`SELECT brain.create_table('foo; DROP TABLE brain.entities;--', '[]'::jsonb)`),
+      pool.query(`SELECT brain.create_table('foo; DROP TABLE brain.entities;--', '[]'::jsonb)`),
       /invalid table name/i,
     );
     await assert.rejects(
-      rt.query(`SELECT brain.create_table('public.evil', '[]'::jsonb)`),
+      pool.query(`SELECT brain.create_table('public.evil', '[]'::jsonb)`),
       /invalid table name/i,
     );
     await assert.rejects(
-      rt.query(`SELECT brain.create_table('badtype', '[{"name":"x","type":"money"}]'::jsonb)`),
+      pool.query(`SELECT brain.create_table('badtype', '[{"name":"x","type":"money"}]'::jsonb)`),
       /disallowed column type/i,
     );
     await assert.rejects(
-      rt.query(`SELECT brain.create_table('badcol', '[{"name":"x; DROP","type":"text"}]'::jsonb)`),
+      pool.query(`SELECT brain.create_table('badcol', '[{"name":"x; DROP","type":"text"}]'::jsonb)`),
       /invalid column name/i,
     );
-    const stillThere = await rt.query(`SELECT count(*) FROM brain.entities`);
+    const stillThere = await pool.query(`SELECT count(*) FROM brain.entities`);
     assert.ok(stillThere.rowCount === 1);
   } finally {
-    await rt.end();
+    await pool.end();
     await teardown();
   }
 });
 
 test('create_table does not grant to a registered role that has dangerous attrs (case 4)', opts, async () => {
-  const { fresh, password, teardown } = await provision();
+  const { fresh, teardown } = await provision();
   const pool = createBrainPool('admin', fresh.url);
   const evil = `${fresh.role}_evil`;
-  const rt = await runtimeClient(fresh.url, password, fresh.role);
   try {
     // Poisoned/stale registry row: a login role registered but with CREATEROLE.
     await pool.query(`CREATE ROLE ${evil} LOGIN CREATEROLE`);
     await pool.query(`INSERT INTO brain_meta.runtime_roles (rolname) VALUES ($1) ON CONFLICT DO NOTHING`, [evil]);
 
-    await rt.query(`SELECT brain.create_table('poisoned', '[{"name":"body","type":"text"}]'::jsonb)`);
+    await pool.query(`SELECT brain.create_table('poisoned', '[{"name":"body","type":"text"}]'::jsonb)`);
 
     const sel = await pool.query<{ p: boolean }>(
       `SELECT has_table_privilege($1, 'brain.poisoned', 'SELECT') AS p`,
@@ -137,7 +189,6 @@ test('create_table does not grant to a registered role that has dangerous attrs 
     );
     assert.equal(ins.rows[0]!.p, false, 'dangerous registered role must not receive INSERT on a new brain table');
   } finally {
-    await rt.end();
     await pool.query(`DROP ROLE IF EXISTS ${evil}`).catch(() => {});
     await pool.end();
     await teardown();
@@ -150,7 +201,7 @@ test('reserved-word table/column names are safely quoted in create_table and app
   const rt = await runtimeClient(fresh.url, password, fresh.role);
   try {
     // "select" is a SQL keyword; passes the identifier regex but must be quoted.
-    await rt.query(`SELECT brain.create_table('select', '[{"name":"order","type":"int"},{"name":"body","type":"text"}]'::jsonb)`);
+    await pool.query(`SELECT brain.create_table('select', '[{"name":"order","type":"int"},{"name":"body","type":"text"}]'::jsonb)`);
     await rt.query(`INSERT INTO brain."select" ("order", body) VALUES (1, 'k')`);
     const sel = await rt.query(`SELECT "order", body FROM brain."select"`);
     assert.equal(sel.rows[0]!.body, 'k');

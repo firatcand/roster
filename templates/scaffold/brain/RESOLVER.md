@@ -2,7 +2,7 @@
 
 The **brain** is this workspace's shared, append-only memory (a Postgres database
 reached via `roster brain …`). Read this file before you write to it, so the team's
-knowledge stays consistent instead of fragmenting into duplicates and ad-hoc tables.
+knowledge stays consistent instead of fragmenting into duplicates and ad-hoc shapes.
 
 > No brain configured? If the runtime connection `ROSTER_BRAIN_URL` is not set in the
 > environment, this workspace has no brain yet — skip the brain and use normal files.
@@ -16,7 +16,7 @@ knowledge stays consistent instead of fragmenting into duplicates and ad-hoc tab
 - **facts** — current attributes of an entity (append-only; latest write wins per key).
 - **events** — things that happened over time (metric snapshots, notes, corrections).
 - **edges** — typed relationships between two entities ("acme competes_with globex").
-- **documents** — chunks of mounted files, searchable by keyword + meaning.
+- **documents** — chunks of ingested sources, each citing its immutable source version.
 
 ## Kind taxonomy (use these before inventing new ones)
 
@@ -47,10 +47,8 @@ thing genuinely doesn't model as any of the above.
    → write the correction immediately (a new `save`/`event` supersedes — nothing is
    deleted; history stays).
 5. **Do you genuinely need a new shape that entities/facts/events/edges can't hold?**
-   → **STOP.** Run `roster brain table list` and re-read this file. Only if nothing fits,
-   `roster brain table create <name> --col name:type …` (allowed types: text, int,
-   bigint, numeric, boolean, timestamptz, jsonb, uuid). Prefer entities+facts over new
-   tables — tables are for genuinely tabular, high-volume data.
+   → **STOP.** Custom tables are not available: model the shape as an entity with facts,
+   an event stream, or edges. Re-read this file and pick the closest existing kind.
 
 ## Organizing a corpus — extract → dedup → link → tag
 
@@ -66,19 +64,21 @@ asserted about each:
   the closest existing kind before inventing one.
 - Each attribute ("HQ is Berlin", "MRR is 40k") → a fact on that entity, with provenance.
 - Each "X relates to Y" statement → an edge (see *When to link*).
-- Long source text → `roster brain mount <file>`; don't paste it into a fact.
+- Long source text → `roster brain ingest --manifest-file <path> --bytes-file <path>`
+  (admin path; mints the immutable source version); don't paste it into a fact.
 
 ### 2. Dedup before you create
 
 The brain fragments the moment two entities describe the same thing. So **before every
 create**:
 
-- Run `roster brain query "<name>"` (and/or `roster brain get --kind <k> --slug <s>`).
+- Run `roster brain get --kind <k> --slug <s>` (and `roster context <function>/<agent>
+  --query "<name>"` for cited retrieval across the brain).
 - `save` self-checks too: when it warns `possible duplicate of: …`, evaluate it. If it is
   the same real thing, `roster brain merge <from-slug> <into-slug>` instead of leaving two.
 - Prefer a stable, predictable slug so the same thing always lands on the same entity.
 
-Never skip the check to avoid friction — a near-duplicate costs more later than the query now.
+Never skip the check to avoid friction — a near-duplicate costs more later than the lookup now.
 
 ### 3. When to link
 
@@ -105,7 +105,7 @@ roster brain save --kind tag --slug competitor
 roster brain link acme tagged competitor --kind-src company --kind-dst tag
 ```
 
-Tags are then queryable through the normal graph (`get` / `query`, 1-hop). Corpus-tag
+Tags are then reachable through the normal graph (`roster brain get`, 1-hop). Corpus-tag
 taxonomy — reuse these before coining new tags:
 
 | tag | apply to | meaning |
@@ -129,7 +129,7 @@ Coin a new tag only when nothing above fits; keep it kebab-case and reusable acr
   filename, or `user, <date>`. If you can't cite it, don't write it.
 - **Dedup before create.** Consult the brain before every `save`; heed the dup-warning.
 - **Tags are edges.** Reach for the `tag` kind + `tagged` edge, never a new table or column.
-- **Mount, don't paste.** Long source docs → `roster brain mount <file>` (chunked +
-  searchable), not pasted into a fact.
-- **Search before you ask.** `roster brain query "<question>"` before answering from
-  memory or the open web — the team may already know.
+- **Ingest, don't paste.** Long source docs → `roster brain ingest` (immutable source
+  version + extraction), not pasted into a fact.
+- **Search before you ask.** `roster context <function>/<agent> --query "<question>"`
+  before answering from memory or the open web — the team may already know.

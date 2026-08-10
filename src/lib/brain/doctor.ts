@@ -1,8 +1,6 @@
 import type pg from 'pg';
 import { RUNTIME_ROLE } from './roles.ts';
 import { pendingMigrations } from './migrate.ts';
-import { loadConfig } from './config.ts';
-import { filesConfig, createS3FileStore, type FileStore } from './s3.ts';
 
 export type DoctorCheck = {
   name: string;
@@ -10,11 +8,11 @@ export type DoctorCheck = {
   detail: string;
 };
 
-// Injection seam: tests supply a MemoryFileStore so the drift check runs against
-// a fake object store instead of real S3.
-export type DoctorDeps = {
-  fileStore?: () => Promise<FileStore>;
-};
+// #383 (AC-3): diagnostics may inspect protected metadata before identity is
+// ready, but may never read company content or touch object storage. Both are
+// structural here — doctor imports no S3 client and selects no company table —
+// and both are asserted in the report so a regression is machine-detectable.
+export type DoctorIdentityState = 'uninitialized' | 'migrating' | 'ready';
 
 export type DoctorReport = {
   ok: boolean;
@@ -23,6 +21,15 @@ export type DoctorReport = {
   checks: DoctorCheck[];
   pending: string[];
   tables: string[];
+  identity_state: DoctorIdentityState;
+  object_storage_contacted: false;
+  company_content_read: false;
+};
+
+// Only `connect()` is used, so the verified/diagnostic authority pools satisfy
+// this without exposing a raw pg.Pool to callers.
+export type DoctorConnectable = {
+  connect(): Promise<pg.PoolClient>;
 };
 
 async function check(
@@ -39,6 +46,21 @@ async function check(
     return { name, ok: true, detail: okWhenEmpty };
   }
   return { name, ok: false, detail: `${failPrefix}: ${violations.join(', ')}` };
+}
+
+// Protected metadata only, and readable before identity is ready — which is
+// exactly the authority AC-3 grants diagnostics. Derived here so the whole
+// three-field AC-3 contract lives in the library report, not in a CLI patch.
+async function readIdentityState(client: pg.PoolClient): Promise<DoctorIdentityState> {
+  const relation = await client.query<{ relation: string | null }>(
+    `SELECT to_regclass('brain_meta.workspace_identity')::text AS relation`,
+  );
+  if (relation.rows[0]?.relation !== 'brain_meta.workspace_identity') return 'uninitialized';
+  const row = await client.query<{ migration_state: string }>(
+    `SELECT migration_state FROM brain_meta.workspace_identity`,
+  );
+  if (row.rows.length !== 1) return 'uninitialized';
+  return row.rows[0]!.migration_state === 'ready' ? 'ready' : 'migrating';
 }
 
 async function registeredRoles(client: pg.PoolClient, requested: string): Promise<string[]> {
@@ -425,102 +447,9 @@ async function checksForRole(client: pg.PoolClient, roleName: string): Promise<D
   return checks.map((c) => ({ ...c, name: `${c.name} [${roleName}]` }));
 }
 
-// Reconcile the brain.files ledger against the S3 object store (ROS-160). Unlike
-// every other doctor check this is async + network-bound, so it is appended
-// after the SQL checks. It NEVER fails an unconfigured brain: absent ledger, no
-// files.bucket, or no credentials all return ok:true with a "skipped" detail.
-// Only a CONFIGURED-but-inconsistent brain fails — missing object, etag drift,
-// or an object left behind after an rm. A configured-but-unreachable store is a
-// real failure (ok:false), distinct from the unconfigured skip.
-export async function checkFileDrift(
-  client: pg.PoolClient | pg.Client,
-  deps: DoctorDeps = {},
-  opts: { maxHeads?: number } = {},
-): Promise<DoctorCheck> {
-  const name = 's3-file-drift';
-  const maxHeads = opts.maxHeads ?? 200;
-
-  const hasFiles = await client.query<{ t: string | null }>(`SELECT to_regclass('brain.files')::text AS t`);
-  if (!hasFiles.rows[0]?.t) {
-    return { name, ok: true, detail: 'skipped — no file ledger (pre-009 brain)' };
-  }
-
-  const cfg = await loadConfig(client);
-  if (!cfg.filesBucket) {
-    return { name, ok: true, detail: 'skipped — files.bucket not configured' };
-  }
-
-  let store: FileStore;
-  if (deps.fileStore) {
-    store = await deps.fileStore();
-  } else {
-    const fc = filesConfig(cfg);
-    if (fc === null) {
-      return { name, ok: true, detail: 'skipped — AWS credentials not configured' };
-    }
-    store = await createS3FileStore(fc);
-  }
-
-  // Only objects in the CURRENTLY-configured bucket are reconcilable — the store
-  // can't HEAD an object under a bucket the config has since moved away from, so
-  // both scans filter on it (else a still-valid object under an old bucket would
-  // false-positive as "missing").
-  const bucket = cfg.filesBucket;
-  const violations: string[] = [];
-  let truncated = false;
-  try {
-    // Current files: the object must exist and its etag must match what the put
-    // recorded (an out-of-band edit changes the etag).
-    const current = await client.query<{ kind: string; slug: string; filename: string; s3_key: string; etag: string | null }>(
-      `SELECT kind, slug, filename, s3_key, etag FROM brain.current_files
-        WHERE bucket = $2 ORDER BY kind, slug, filename LIMIT $1`,
-      [maxHeads, bucket],
-    );
-    if (current.rowCount === maxHeads) truncated = true;
-    for (const row of current.rows) {
-      const head = await store.head(row.s3_key);
-      const addr = `${row.kind}/${row.slug}/${row.filename}`;
-      if (head === null) {
-        violations.push(`missing: ${addr} (${row.s3_key})`);
-      } else if (row.etag !== null && head.etag !== row.etag) {
-        violations.push(`etag drift: ${addr} (${row.s3_key})`);
-      }
-    }
-
-    // Orphans: any OBJECT whose latest ledger event is a tombstone should be gone
-    // from S3. Keyed per source_path (the object identity), NOT per address — a
-    // bucket/prefix change tombstones the old URI and re-puts the address at a new
-    // one, so the abandoned old object's ADDRESS-latest is a 'put' even though the
-    // object itself was tombstoned.
-    const tombstoned = await client.query<{ source_path: string; s3_key: string }>(
-      `SELECT source_path, s3_key FROM (
-         SELECT DISTINCT ON (source_path) source_path, s3_key, bucket, op
-         FROM brain.files ORDER BY source_path, id DESC
-       ) h WHERE h.op = 'rm' AND h.bucket = $2 ORDER BY source_path LIMIT $1`,
-      [maxHeads, bucket],
-    );
-    if (tombstoned.rowCount === maxHeads) truncated = true;
-    for (const row of tombstoned.rows) {
-      const head = await store.head(row.s3_key);
-      if (head !== null) {
-        violations.push(`orphaned after rm: ${row.source_path} (${row.s3_key})`);
-      }
-    }
-  } catch (err) {
-    return { name, ok: false, detail: `S3 store unreachable: ${(err as Error).message}` };
-  }
-
-  const scope = truncated ? ` (scan truncated at ${maxHeads} objects/scan — re-run after addressing these)` : '';
-  if (violations.length === 0) {
-    return { name, ok: true, detail: `bucket ${bucket}: ledger and S3 reconciled${scope}` };
-  }
-  return { name, ok: false, detail: `drift: ${violations.join(', ')}${scope}` };
-}
-
 export async function runDoctor(
-  pool: pg.Pool,
+  pool: DoctorConnectable,
   roleName: string = RUNTIME_ROLE,
-  deps: DoctorDeps = {},
 ): Promise<DoctorReport> {
   const client = await pool.connect();
   try {
@@ -533,6 +462,29 @@ export async function runDoctor(
     const tables = tablesRow.rows.map((r) => r.tablename);
 
     const pending = await pendingMigrations(pool);
+    const identityState = await readIdentityState(client);
+
+    // AC-3's tolerance is structural, not cosmetic: with no protected identity the
+    // brain/brain_meta relations every check below reads may not exist at all, and
+    // a cluster-wide role of the same name is NOT evidence that they do. Report
+    // the state and stop before the first relation-dependent query.
+    if (identityState === 'uninitialized') {
+      return {
+        ok: false,
+        roleExists,
+        roles: [],
+        checks: [{
+          name: 'workspace-identity-initialized',
+          ok: false,
+          detail: 'this database has no protected workspace identity — run roster brain init',
+        }],
+        pending,
+        tables,
+        identity_state: identityState,
+        object_storage_contacted: false,
+        company_content_read: false,
+      };
+    }
 
     if (!roleExists) {
       return {
@@ -542,6 +494,9 @@ export async function runDoctor(
         checks: [{ name: 'runtime-role-exists', ok: false, detail: `${roleName} not found` }],
         pending,
         tables,
+        identity_state: identityState,
+        object_storage_contacted: false,
+        company_content_read: false,
       };
     }
 
@@ -551,33 +506,18 @@ export async function runDoctor(
       checks.push(...(await checksForRole(client, role)));
     }
 
-    // ROS-146: the materialized canonical_id cache (008) must match the merge
-    // map. Drift is real corruption (a missed refresh), so it fails the report.
-    // Guarded for pre-008 brains that have no canonical_id column.
-    const hasCanonical = await client.query(
-      `SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'brain' AND table_name = 'entities'
-          AND column_name = 'canonical_id'`,
-    );
-    if ((hasCanonical.rowCount ?? 0) > 0) {
-      checks.push(
-        await check(
-          client,
-          'canonical-id-no-drift',
-          'entities.canonical_id matches the merge map for every entity',
-          'canonical_id drift on entity ids',
-          `SELECT id FROM brain.entities
-            WHERE canonical_id IS DISTINCT FROM brain.canonical_id(id) LIMIT 20`,
-        ),
-      );
-    }
-
-    // ROS-160: reconcile the file ledger against S3. Async + skip-safe (an
-    // unconfigured brain never fails here).
-    checks.push(await checkFileDrift(client, deps));
-
     const ok = checks.every((c) => c.ok);
-    return { ok, roleExists: true, roles, checks, pending, tables };
+    return {
+      ok,
+      roleExists: true,
+      roles,
+      checks,
+      pending,
+      tables,
+      identity_state: identityState,
+      object_storage_contacted: false,
+      company_content_read: false,
+    };
   } finally {
     client.release();
   }

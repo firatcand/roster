@@ -354,12 +354,9 @@ test('legacy Brain access stays behind the finite pre-#383 production boundary',
       && (rawBrainHelpers.has(edge.imported) || edge.imported === '*')
     )).map(({ file, imported, local }) => ({ file, imported, local })),
     [
-      { file: 'src/commands/brain.ts', imported: 'createBrainPool', local: 'createBrainPool' },
-      { file: 'src/commands/brain.ts', imported: 'resolveBrainUrl', local: 'resolveBrainUrl' },
-      { file: 'src/commands/brain.ts', imported: 'withBrainClient', local: 'withBrainClient' },
       { file: 'src/lib/brain/reindex.ts', imported: 'withBrainClient', local: 'withBrainClient' },
     ],
-    'ticket #383 owns replacing the finite legacy raw Brain helper callers; no new production caller may bypass workspace authority',
+    'reindex.ts is orphaned on disk until #363 removes it; no production caller may bypass workspace authority',
   );
 
   const authorityBoundaryFiles = new Set([
@@ -372,6 +369,39 @@ test('legacy Brain access stays behind the finite pre-#383 production boundary',
       .map(({ file, module, imported }) => ({ file, module, imported })),
     [],
     'the workspace authority path must consume host credentials, never mint or reconstruct them',
+  );
+
+  // #383 kept both helpers on disk (22 test files use them as fixtures) but made
+  // them provably unreachable from production, which is strictly stronger than
+  // deleting them by hand. Removal is #363's.
+  assert.deepEqual(
+    edges.filter((edge) => new Set(['buildRuntimeUrl', 'ensureRuntimeRole']).has(edge.imported))
+      .map(({ file, imported }) => ({ file, imported })),
+    [],
+    'buildRuntimeUrl and ensureRuntimeRole are test fixtures; no src/** module may import them',
+  );
+
+  // AC-3: doctor may inspect protected metadata but must never touch object
+  // storage. Asserted structurally so the report fields cannot drift from truth.
+  assert.deepEqual(
+    moduleEdges(join(PROJECT_ROOT, 'src/lib/brain/doctor.ts'))
+      .filter((edge) => edge.module.startsWith('@aws-sdk/') || moduleMatches(edge.module, 'brain/s3'))
+      .map(({ module }) => module),
+    [],
+    'brain doctor must construct no object-storage client',
+  );
+
+  // #355 reuses this predicate for `roster context`, so it must stay free of
+  // every client the context boundary classifier forbids.
+  assert.deepEqual(
+    moduleEdges(join(PROJECT_ROOT, 'src/lib/brain-activation-config.ts'))
+      .filter((edge) => edge.module === 'pg'
+        || edge.module.startsWith('@aws-sdk/')
+        || moduleMatches(edge.module, 'persistence/pool')
+        || normalizedModule(edge.module).split('/').includes('brain'))
+      .map(({ module }) => module),
+    [],
+    'the shared Brain activation predicate must import no database, object-storage, or src/lib/brain module',
   );
 });
 
