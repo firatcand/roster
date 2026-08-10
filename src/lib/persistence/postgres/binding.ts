@@ -6,6 +6,7 @@ import {
   WorkspaceMismatchError,
 } from '../contracts.ts';
 import { isUuidV4 } from '../config-schema.ts';
+import { attachPoolIdleErrorHandler } from '../pool.ts';
 
 // Strict 1:1 workspace↔database binding (#318 section E, owner decision 5).
 // Setup stamps both schemas' meta rows `pending` in ONE transaction — together
@@ -360,7 +361,7 @@ export class BoundPool {
         this.verified.add(client);
       };
     }
-    this.pool = new pg.Pool(config);
+    this.pool = attachPoolIdleErrorHandler(new pg.Pool(config));
   }
 
   async connect(): Promise<pg.PoolClient> {

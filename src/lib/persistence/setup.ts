@@ -13,6 +13,7 @@ import {
   type PersistenceConfig,
 } from './config-schema.ts';
 import { sha256Hex } from './contracts.ts';
+import { attachPoolIdleErrorHandler } from './pool.ts';
 import { describeEvidenceFailure, readEvidenceFileSync } from '../evidence-read.ts';
 import { LocalLedger, atomicWriteFileSync, pidAlive, readLedgerMeta, tryReclaimStaleLock } from './local/ledger.ts';
 import { ensureLocalHitlV2 } from './hitl-local-migrate.ts';
@@ -651,7 +652,7 @@ async function upgradeExistingPostgres(
   if (typeof runtimeUrl !== 'string' || runtimeUrl.length === 0) missing.push(binding.runtime);
   if (missing.length > 0) throw missingEnvError(missing);
 
-  const adminPool = new pg.Pool({ connectionString: adminUrl!, max: 2 });
+  const adminPool = attachPoolIdleErrorHandler(new pg.Pool({ connectionString: adminUrl!, max: 2 }));
   try {
     // Verify the DB behind the admin URL actually belongs to the CONFIGURED
     // workspace BEFORE any mutation (finding: a swapped admin URL ran migrations
@@ -883,7 +884,7 @@ export async function runSetup(opts: SetupOptions): Promise<SetupResult> {
         forcePathStyle: params.objects!.force_path_style,
         markerSha256: params.objects!.markerSha256,
       };
-      const adminPool = new pg.Pool({ connectionString: urls!.adminUrl, max: 2 });
+      const adminPool = attachPoolIdleErrorHandler(new pg.Pool({ connectionString: urls!.adminUrl, max: 2 }));
       try {
         boundary('db-stamped-pending', 'begin');
         // Preflight the existing stamp BEFORE any migration (finding: the fresh

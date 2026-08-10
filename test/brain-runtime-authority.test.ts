@@ -242,3 +242,58 @@ test('doctor inspects protected metadata before identity is ready', opts, async 
     await dropRole(deriveWorkspaceRuntimeRoleName(workspaceId, RUNTIME_ROLE));
   }
 });
+
+// #383 CI regression: `createFreshDb().drop()` issues pg_terminate_backend for
+// every backend on the database. A pooled client that is IDLE at that moment has
+// no caller to reject, so node-postgres reports the cut on the Pool — and an
+// EventEmitter 'error' with no listener is rethrown as a process-level
+// uncaughtException, attributed to whichever test happens to be running. Every
+// Pool this codebase constructs must therefore carry the idle-error handler.
+test('a terminated idle pooled client never becomes an uncaught exception', opts, async () => {
+  const fresh = await createFreshDb();
+  const pool = createBrainPool('admin', fresh.url);
+  const uncaught: Error[] = [];
+  const capture = (error: Error): void => { uncaught.push(error); };
+  process.on('uncaughtException', capture);
+  try {
+    const client = await pool.connect();
+    await client.query('SELECT 1');
+    client.release();
+
+    const root = new pg.Client({ connectionString: ADMIN_URL });
+    await root.connect();
+    try {
+      const database = new URL(fresh.url).pathname.slice(1);
+      await root.query(
+        `SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+          WHERE datname = $1 AND pid <> pg_backend_pid()`,
+        [database],
+      );
+    } finally {
+      await root.end();
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.deepEqual(uncaught.map((error) => error.message), []);
+
+    // The pool evicted the broken client and still serves a fresh one.
+    const revived = await pool.query<{ ok: number }>('SELECT 1 AS ok');
+    assert.equal(revived.rows[0]!.ok, 1);
+  } finally {
+    process.off('uncaughtException', capture);
+    await pool.end();
+    await fresh.drop();
+  }
+});
+
+test('pg rejects a second end(), so every pool must be closed on exactly one path', opts, async () => {
+  const fresh = await createFreshDb();
+  const pool = createBrainPool('admin', fresh.url);
+  try {
+    await pool.query('SELECT 1');
+    await pool.end();
+    await assert.rejects(pool.end(), /more than once/u);
+  } finally {
+    await fresh.drop();
+  }
+});

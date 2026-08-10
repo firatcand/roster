@@ -13,9 +13,11 @@ type Setup = { fresh: FreshDb; password: string; teardown: () => Promise<void> }
 async function provision(): Promise<Setup> {
   const fresh = await createFreshDb();
   const pool = createBrainPool('admin', fresh.url);
+  let provisioned = false;
   try {
     await runMigrations(pool);
     const role = await withBrainClient(pool, (c) => ensureRuntimeRole(c, fresh.role));
+    provisioned = true;
     return {
       fresh,
       password: role.password!,
@@ -23,11 +25,13 @@ async function provision(): Promise<Setup> {
         await fresh.drop();
       },
     };
-  } catch (err) {
-    await fresh.drop();
-    throw err;
   } finally {
+    // pg rejects a second end(), so the pool is closed on exactly one
+    // path — and always BEFORE the drop, whose pg_terminate_backend cuts
+    // every backend still attached to the database. An idle pooled client
+    // cut that way reports on the Pool, not to any caller (#383).
     await pool.end();
+    if (!provisioned) await fresh.drop();
   }
 }
 

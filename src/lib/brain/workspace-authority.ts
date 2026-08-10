@@ -5,6 +5,7 @@ import {
   fingerprintBrainNamespace,
   type WorkspaceBrainConfig,
 } from '../workspace-record.ts';
+import { attachPoolIdleErrorHandler } from '../persistence/pool.ts';
 import { BRAIN_TARGET, runMigrationsOnClient, schemaDir, type MigrationResult } from './migrate.ts';
 import { ensureWorkspaceRuntimeRole, type EnsureWorkspaceRuntimeRoleResult } from './roles.ts';
 
@@ -206,10 +207,10 @@ export class VerifiedBrainPool {
 }
 
 export function createVerifiedBrainPool(options: VerifiedBrainPoolOptions): VerifiedBrainPool {
-  const pool = new pg.Pool({
+  const pool = attachPoolIdleErrorHandler(new pg.Pool({
     connectionString: options.connectionString,
     max: 4,
-  });
+  }));
   return new VerifiedBrainPool(pool, options.authority, options.databaseAuthorityId);
 }
 
@@ -283,10 +284,10 @@ export class DiagnosticBrainPool {
 export function createDiagnosticBrainPool(
   options: { connectionString: string; authority: BrainWorkspaceAuthority },
 ): DiagnosticBrainPool {
-  const pool = new pg.Pool({
+  const pool = attachPoolIdleErrorHandler(new pg.Pool({
     connectionString: options.connectionString,
     max: 4,
-  });
+  }));
   return new DiagnosticBrainPool(pool, options.authority);
 }
 
