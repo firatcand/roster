@@ -1059,6 +1059,10 @@ test('brain evidence DML stays in the evidence store and never reaches the recor
   // roles.ts and doctor.ts may name the schema in grant and audit statements.
   const allowed = new Map([
     ['src/lib/brain/evidence-store.ts', 'dml'],
+    // #357: the Dreamer readiness read. It selects from brain_evidence and calls
+    // the two admin-only dream state writers; the block below pins that it
+    // performs no DML of its own and touches no #356 record broker.
+    ['src/lib/brain/dream-readiness.ts', 'dml'],
     ['src/lib/brain/roles.ts', 'schema-name-only'],
     ['src/lib/brain/doctor.ts', 'schema-name-only'],
     // Names the SQL twin of its credential scan in a comment; issues no SQL.
@@ -1147,4 +1151,132 @@ test('brain evidence DML stays in the evidence store and never reaches the recor
     .map((path) => repositoryPath(path));
   assert.deepEqual(promotedFromSites, ['src/lib/brain/evidence-store.ts']);
   assert.ok(store.indexOf('promoted_from') > promotionAt, 'promoted_from is stamped outside promoteEvidence');
+});
+
+test('the dream readiness surface is a pure read with a deferred, deadlock-free observer', () => {
+  const migrationPath = join(PROJECT_ROOT, 'data/brain/schema/014_dream_readiness.sql');
+  const migration = readFileSync(migrationPath, 'utf8');
+  // These modules deliberately DOCUMENT in prose what they refuse to build, so
+  // every vocabulary assertion below runs against code with comments stripped.
+  const withoutComments = (text: string): string =>
+    text.replace(/\/\*[\s\S]*?\*\//gu, ' ').replace(/(?:\/\/|--)[^\n]*/gu, ' ');
+  const migrationCode = withoutComments(migration);
+  const dreamModules = [
+    'src/lib/brain/dream-contracts.ts',
+    'src/lib/brain/dream-readiness.ts',
+    'src/lib/dream-args.ts',
+    'src/commands/dream.ts',
+  ];
+
+  // #356 allowlists evidence-store.ts for brain_evidence DML; dream-readiness.ts
+  // joins the allowlist for READS ONLY plus the two admin-only state writers.
+  const readinessPath = join(PROJECT_ROOT, 'src/lib/brain/dream-readiness.ts');
+  const readiness = readFileSync(readinessPath, 'utf8');
+  const namedRelations = [...readiness.matchAll(/brain_evidence\.([a-z_]+)/gu)].map((m) => m[1]!);
+  assert.deepEqual([...new Set(namedRelations)].sort(), [
+    'advance_dream_watermark',
+    'completed_runs',
+    'dream_policies',
+    'dream_watermarks',
+    'evidence_observations',
+    'feedback',
+    'register_dream_policy',
+  ]);
+  // No DML against ANY #356 evidence table: readiness reads, it never records.
+  assert.equal(
+    /\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+brain_evidence\./iu.test(readiness),
+    false,
+    'dream-readiness.ts must issue no brain_evidence DML',
+  );
+  for (const broker of ['record_completed_run', 'record_run_artifact', 'record_feedback', 'record_human_decision']) {
+    assert.equal(readiness.includes(broker), false, broker);
+  }
+
+  // ONE statement, ONE snapshot. The only permitted alternative is an explicit
+  // REPEATABLE READ wrapper, so a silently multi-statement read cannot slip in.
+  const computeAt = readiness.indexOf('export async function computeDreamReadiness');
+  assert.notEqual(computeAt, -1);
+  const computeBody = readiness.slice(computeAt, readiness.indexOf('\n}\n', computeAt));
+  assert.equal(computeBody.length > 200, true, 'computeDreamReadiness body was not isolated');
+  const queryCalls = [...computeBody.matchAll(/pool\.query\s*(?:<[^>]*>)?\(/gu)].length;
+  const repeatableRead = /ISOLATION LEVEL REPEATABLE READ/u.test(computeBody);
+  assert.equal(queryCalls === 1 || repeatableRead, true, `computeDreamReadiness issues ${queryCalls} queries`);
+  assert.equal(/pool\.connect\(/u.test(computeBody), false);
+
+  // No scheduler, daemon, poller, or model invocation anywhere on the surface.
+  for (const module of dreamModules) {
+    const text = readFileSync(join(PROJECT_ROOT, module), 'utf8');
+    assert.equal(
+      /\b(?:cron|setInterval|setTimeout|setImmediate|daemon|polling|scheduler)\b/iu.test(text),
+      false,
+      `${module} names a scheduling primitive`,
+    );
+    const specifiers = moduleEdges(join(PROJECT_ROOT, module)).map((edge) => edge.module);
+    for (const forbidden of [/child_process/u, /node:http/u, /node:net/u, /(?:^|\/)persistence(?:\/|$)/u]) {
+      assert.equal(specifiers.some((specifier) => forbidden.test(specifier)), false, `${module} ${forbidden}`);
+    }
+  }
+
+  // B5-corrected: `candidate` already appears throughout src/ (pending items,
+  // task context, hitl sweep), so the "#358 was not pre-built" assertion is
+  // scoped to the new Dreamer modules and 014 alone.
+  for (const text of [...dreamModules.map((m) => readFileSync(join(PROJECT_ROOT, m), 'utf8')), migration]) {
+    const code = withoutComments(text);
+    assert.equal(/dream_candidates|dream_candidate_evidence|lesson_decisions/u.test(code), false);
+    assert.equal(/candidate/iu.test(code), false);
+    assert.equal(/promote|reject|retire/iu.test(code.replace(/reject_evidence_(?:input|mutation)/gu, '')), false);
+  }
+
+  // B2: the deferral is a single keyword and the whole no-deadlock argument
+  // rests on it. Both triggers are pinned by their exact declaration.
+  for (const [name, table, argument] of [
+    ['completed_runs_observed', 'completed_runs', "'completed-run', 'run_id'"],
+    ['feedback_observed', 'feedback', "'feedback', 'feedback_id'"],
+  ] as const) {
+    const declaration = new RegExp(
+      `CREATE CONSTRAINT TRIGGER ${name}\\s+AFTER INSERT ON brain_evidence\\.${table}\\s+`
+        + `DEFERRABLE INITIALLY DEFERRED\\s+FOR EACH ROW EXECUTE FUNCTION `
+        + `brain_evidence\\.observe_evidence\\(${argument.replace(/'/gu, "'")}\\)`,
+      'u',
+    );
+    assert.match(migration, declaration);
+  }
+  // The commit barrier itself: the ordinal is drawn under the global
+  // transaction-scoped advisory lock inside observe_evidence, never elsewhere.
+  const observerAt = migration.indexOf('CREATE FUNCTION brain_evidence.observe_evidence()');
+  assert.notEqual(observerAt, -1);
+  const observerBody = migration.slice(observerAt, migration.indexOf('CREATE CONSTRAINT TRIGGER', observerAt));
+  assert.match(observerBody, /pg_advisory_xact_lock\(\s*brain_evidence\.lock_key\('roster\.brain\.evidence\.lock\.observation\.v1'/u);
+  assert.match(observerBody, /nextval\('brain_evidence\.evidence_observation_ordinal_seq'\)/u);
+  assert.equal([...migrationCode.matchAll(/nextval\(/gu)].length, 1, 'only observe_evidence draws an ordinal');
+
+  // 014 declares exactly one SECURITY DEFINER function, names it, and grants
+  // EXECUTE to no role at all.
+  const definers = [...migration.matchAll(/CREATE FUNCTION brain_evidence\.([a-z_]+)\([^)]*\)[\s\S]*?(?=\nAS \$fn\$|\n#variable_conflict|\nDECLARE|\nBEGIN)/gu)]
+    .filter((match) => /SECURITY DEFINER/u.test(match[0]!))
+    .map((match) => match[1]!);
+  assert.deepEqual(definers, ['observe_evidence']);
+  assert.match(migration, /REVOKE EXECUTE ON FUNCTION brain_evidence\.observe_evidence\(\) FROM PUBLIC/u);
+  assert.equal(/\bGRANT\b/iu.test(migrationCode), false, '014 grants nothing to any role');
+  assert.match(
+    migration,
+    /REVOKE ALL PRIVILEGES ON SEQUENCE brain_evidence\.evidence_observation_ordinal_seq FROM PUBLIC/u,
+  );
+
+  // B2's retry contract rests on Roster never batching: one broker call per
+  // autocommit transaction means one rank-1 lock per transaction.
+  const storeText = readFileSync(join(PROJECT_ROOT, 'src/lib/brain/evidence-store.ts'), 'utf8');
+  assert.equal(/'BEGIN'|"BEGIN"|`BEGIN`|'COMMIT'|"COMMIT"|`COMMIT`/u.test(storeText), false);
+  const brokerAt = storeText.indexOf('async function callBroker(');
+  assert.notEqual(brokerAt, -1);
+  assert.match(storeText.slice(brokerAt, storeText.indexOf('\n}', brokerAt)), /await pool\.query</u);
+
+  // The B3 doctor clause: sequences in brain_evidence are audited by the
+  // exact-privilege check, whose generic sibling is scoped to nspname = 'brain'.
+  const doctorText = readFileSync(join(PROJECT_ROOT, 'src/lib/brain/doctor.ts'), 'utf8');
+  const evidenceCheckAt = doctorText.indexOf("'brain-evidence-append-only'");
+  assert.notEqual(evidenceCheckAt, -1);
+  const evidenceCheck = doctorText.slice(evidenceCheckAt, doctorText.indexOf('[roleName],', evidenceCheckAt));
+  assert.match(evidenceCheck, /has_sequence_privilege\(\$1, c\.oid, p\.priv\)/u);
+  assert.match(evidenceCheck, /n\.nspname = 'brain_evidence' AND c\.relkind = 'S'/u);
 });

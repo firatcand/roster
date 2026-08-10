@@ -67,6 +67,22 @@ src/lib/brain/evidence-contracts.ts
 src/lib/brain/evidence-identity.ts
 src/lib/brain/evidence-store.ts
 
+# Durable Dreamer readiness (#357) — the commit-ordered observation accumulator,
+# the promotion-only watermark, and the admin-only policy that decides when the
+# learning loop fires. Two invariants are single keywords and carry the whole
+# design: (a) the ordinal is drawn from one sequence under ONE global
+# transaction-scoped advisory lock held to commit, so ordinal order IS commit
+# order and no observation can ever be buried; (b) both observation triggers are
+# CONSTRAINT TRIGGER ... DEFERRABLE INITIALLY DEFERRED, which is what makes that
+# global lock the maximum of the acquisition order on Roster's own path and the
+# wait-for cycle structurally impossible. A 40P01 from any brain_evidence call is
+# retryable — every broker is idempotent and Roster never batches — and an
+# aborted transaction leaves only a harmless, never-interpreted sequence gap.
+src/lib/brain/dream-contracts.ts
+src/lib/brain/dream-readiness.ts
+src/lib/dream-args.ts
+src/commands/dream.ts
+
 # Run + artifact ledger (#323) — trust taxonomy, sealed provenance, sanitized
 # index projections, and the admin-only version-id repair (mutates users' ops DB)
 src/commands/run.ts
