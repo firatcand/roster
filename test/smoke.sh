@@ -449,6 +449,15 @@ else
 fi
 assert "! -e '$PROVIDER_MARKER'" "static tool guidance never invokes the Exa provider"
 
+# #357: a local-only workspace must answer dream readiness without a Brain, at
+# exit 0, so #359's per-interaction host check never errors on every turn.
+DREAM_JSON=$("$ROSTER_BIN" dream status --json)
+if node -e 'const x=JSON.parse(process.argv[1]); if(!x.ok || x.status!=="not_due" || x.reasons.length!==1 || x.reasons[0].code!=="BRAIN_NOT_CONFIGURED" || x.frontier.ordinal!==0 || x.watermark.state!=="genesis") process.exit(1)' "$DREAM_JSON"; then
+  pass "dream status answers not_due locally with no Brain configuration"
+else
+  fail "dream status answers not_due locally with no Brain configuration"
+fi
+
 # 5b. Explicit v2 project activation works without user-level host homes.
 echo ""
 echo "===> 5b. generated project activation"

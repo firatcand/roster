@@ -72,6 +72,8 @@ import {
   executeBrainRecord,
   redactBrainProviderFailure,
 } from '../commands/brain.ts';
+import { parseDreamArgs } from '../lib/dream-args.ts';
+import { executeDreamStatus } from '../commands/dream.ts';
 import {
   EXIT_OK,
   EXIT_ERROR,
@@ -91,7 +93,7 @@ import {
   type JsonValue,
 } from '../lib/errors.ts';
 
-type Subcommand = 'install' | 'init' | 'scaffold' | 'discover' | 'validate' | 'context' | 'doctor' | 'schedule' | 'review' | 'second-opinion' | 'hooks' | 'migrate' | 'pending' | 'skills' | 'upgrade' | 'update' | 'brain' | 'task' | 'ops' | 'run';
+type Subcommand = 'install' | 'init' | 'scaffold' | 'discover' | 'validate' | 'context' | 'doctor' | 'schedule' | 'review' | 'second-opinion' | 'hooks' | 'migrate' | 'pending' | 'skills' | 'upgrade' | 'update' | 'brain' | 'dream' | 'task' | 'ops' | 'run';
 const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'install',
   'init',
@@ -110,6 +112,7 @@ const SUBCOMMANDS: ReadonlySet<string> = new Set<Subcommand>([
   'pending',
   'skills',
   'brain',
+  'dream',
   'task',
   'ops',
   'run',
@@ -172,6 +175,7 @@ function printHelp(version: string): void {
     `  roster brain fs put|get|ls|rm  ${chalk.dim('Object-storage file store keyed by --kind/--slug, in the tracked brain.storage namespace (runtime role)')}`,
     `  roster brain query "<text>"  ${chalk.dim('Fails closed until cited retrieval ships (#352) — use roster context for cited evidence')}`,
     `  roster brain mount|table|sql|config|reindex|gc|export|import  ${chalk.dim('Legacy spellings; recognized but fail closed until removal in #363')}`,
+    `  roster dream status          ${chalk.dim('Read durable Dreamer readiness: due|not_due over observed evidence (--scope/--function/--agent, --json)')}`,
     `  roster ops setup             ${chalk.dim('Configure the workspace operations backend: --backend local|postgres-s3 (--database, --bucket, --new-identity, --json, --yes)')}`,
     `  roster run <verb>            ${chalk.dim('Run + artifact ledger: start|end|event|report|declare-artifact|show|list|doctor|repair (--run, --json, --allow-partial)')}`,
     `  roster migrate from-agent-team <dir>  ${chalk.dim('Migrate a legacy agent-team workspace into roster')}`,
@@ -1019,6 +1023,31 @@ async function dispatchBrain(args: readonly string[]): Promise<number> {
   throw legacyBrainCommandDisabled(parsed.subcommand);
 }
 
+// #357 ships `dream status` alone. The candidate lifecycle is #358's, so any
+// other verb is a usage error naming only `status`.
+async function runDream(args: readonly string[]): Promise<number> {
+  const parsed = parseDreamArgs(args);
+  if (parsed.kind === 'err') {
+    throw new RosterError({
+      header: `${chalk.red.bold('roster:')} ${parsed.message}`,
+      body: '',
+      remedy: `  Run ${chalk.bold('roster --help')} for usage.`,
+      exitCode: EXIT_ERROR,
+    });
+  }
+  try {
+    return await executeDreamStatus({
+      cwd: process.cwd(),
+      json: parsed.json,
+      ...(parsed.scope !== undefined ? { scope: parsed.scope } : {}),
+      ...(parsed.functionId !== undefined ? { functionId: parsed.functionId } : {}),
+      ...(parsed.agent !== undefined ? { agent: parsed.agent } : {}),
+    });
+  } catch (error) {
+    throw redactBrainProviderFailure(error);
+  }
+}
+
 function opsUsageError(): RosterError {
   return new RosterError({
     header: `${chalk.red.bold('roster:')} usage: roster ops setup [flags]`,
@@ -1172,6 +1201,7 @@ async function main(): Promise<number> {
     if (first === 'migrate') return runMigrate(rest);
     if (first === 'pending') return await runPending(rest);
     if (first === 'brain') return await runBrain(rest);
+    if (first === 'dream') return await runDream(rest);
     if (first === 'task') return await runTask(rest);
     if (first === 'ops') return await runOps(rest);
     if (first === 'run') return await runRun(rest);

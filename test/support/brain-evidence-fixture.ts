@@ -14,6 +14,13 @@ import type {
   BrainObjectStore,
 } from '../../src/lib/brain/object-store.ts';
 import type { WorkspaceBrainConfig } from '../../src/lib/workspace-record.ts';
+import {
+  normalizeCompletedRun,
+  normalizeFeedback,
+  type CompletedRunInput,
+  type FeedbackInput,
+} from '../../src/lib/brain/evidence-contracts.ts';
+import { recordCompletedRun, recordFeedback } from '../../src/lib/brain/evidence-store.ts';
 import { createFreshDb } from '../brain-helpers.ts';
 
 export function brainConfig(workspaceId: string): WorkspaceBrainConfig {
@@ -155,5 +162,90 @@ export async function createEvidenceFixture(
     await fresh.drop().catch(() => {});
     if (runtimeRole !== undefined) await dropRole(runtimeRole).catch(() => {});
     throw error;
+  }
+}
+
+// #357: additive seeding helpers shared by the Dreamer suites. They exist so a
+// readiness test can express "five succeeded runs for gtm/manager" in one line
+// without forking #356's canonical record shape.
+export const SEED_ACTOR = Object.freeze({
+  actorId: 'codex-session',
+  assurance: 'host-attested',
+  host: 'codex',
+  sessionId: 'dream-seed',
+} as const);
+
+export function seedRunInput(
+  runId: string,
+  overrides: Partial<CompletedRunInput> = {},
+): CompletedRunInput {
+  return {
+    runId,
+    functionId: 'social-media',
+    agentId: 'manager',
+    planId: 'discovery',
+    host: 'codex',
+    hostVersion: '0.51.0',
+    requestSummary: `seeded run ${runId}`,
+    requestHash: `sha256:${'a'.repeat(64)}`,
+    startedAt: '2026-08-08T10:00:00.000Z',
+    completedAt: '2026-08-08T10:04:30.000Z',
+    outcome: 'succeeded',
+    privacy: 'internal',
+    trust: 'host-asserted',
+    sources: [],
+    tools: [],
+    actor: SEED_ACTOR,
+    provenance: { fixture: 'brain-dream' },
+    ...overrides,
+  } as CompletedRunInput;
+}
+
+export function seedFeedbackInput(
+  feedbackId: string,
+  runId: string,
+  overrides: Partial<FeedbackInput> = {},
+): FeedbackInput {
+  return {
+    feedbackId,
+    runId,
+    signal: 'positive',
+    summary: `seeded feedback ${feedbackId}`,
+    privacy: 'internal',
+    trust: 'host-asserted',
+    actor: SEED_ACTOR,
+    provenance: { fixture: 'brain-dream' },
+    ...overrides,
+  } as FeedbackInput;
+}
+
+export function seedRunCanonical(runId: string, overrides: Partial<CompletedRunInput> = {}): string {
+  return normalizeCompletedRun(seedRunInput(runId, overrides)).canonical;
+}
+
+export function seedFeedbackCanonical(
+  feedbackId: string,
+  runId: string,
+  overrides: Partial<FeedbackInput> = {},
+): string {
+  return normalizeFeedback(seedFeedbackInput(feedbackId, runId, overrides)).canonical;
+}
+
+export async function seedRuns(
+  pool: VerifiedBrainPool,
+  runIds: readonly string[],
+  overrides: Partial<CompletedRunInput> = {},
+): Promise<void> {
+  for (const runId of runIds) {
+    await recordCompletedRun(pool, seedRunInput(runId, overrides));
+  }
+}
+
+export async function seedFeedback(
+  pool: VerifiedBrainPool,
+  entries: readonly { feedbackId: string; runId: string; overrides?: Partial<FeedbackInput> }[],
+): Promise<void> {
+  for (const entry of entries) {
+    await recordFeedback(pool, seedFeedbackInput(entry.feedbackId, entry.runId, entry.overrides ?? {}));
   }
 }

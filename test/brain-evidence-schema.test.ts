@@ -97,7 +97,11 @@ test('brain evidence schema installs append-only tables the runtime role can onl
       const tables = await fixture.admin.query<{ tablename: string }>(
         `SELECT tablename FROM pg_tables WHERE schemaname = 'brain_evidence' ORDER BY tablename`,
       );
-      assert.deepEqual(tables.rows.map((row) => row.tablename), [...EVIDENCE_TABLES].sort());
+      // #357 adds three more relations to the same schema, so 013's seven are
+      // asserted as a SUBSET: the invariant is that 013 installs all of them,
+      // not that no later migration may extend brain_evidence.
+      const installed = new Set(tables.rows.map((row) => row.tablename));
+      assert.deepEqual([...EVIDENCE_TABLES].filter((table) => !installed.has(table)), []);
     });
 
     await t.test('pins per-kind partial unique promotion indexes without raising the PostgreSQL floor', async () => {

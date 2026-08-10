@@ -205,6 +205,13 @@ async function checksForRole(client: pg.PoolClient, roleName: string): Promise<D
   // The broker comparison is by full SIGNATURE, not name: an added overload such
   // as record_completed_run(jsonb) is an unapproved executable surface, and a
   // MISSING expected broker must read as a finding rather than a cast error.
+  // #357: the generic `no-sequence-privs` audit below is scoped to nspname =
+  // 'brain', so a grant on brain_evidence's commit-ordering sequence would have
+  // been invisible here while this check's description still promised "exactly
+  // USAGE + SELECT + the four record brokers". The last clause closes that hole.
+  // SELECT is refused alongside USAGE/UPDATE because `last_value` is an
+  // evidence-volume side channel; the `missing SELECT` clause above stays
+  // relkind = 'r', so a sequence is never REQUIRED to be readable.
   const hasEvidenceSchema = await client.query<{ one: number }>(
     `SELECT 1 AS one FROM pg_namespace WHERE nspname = 'brain_evidence'`,
   );
@@ -266,7 +273,13 @@ async function checksForRole(client: pg.PoolClient, roleName: string): Promise<D
                   'brain_evidence.record_run_artifact(text)',
                   'brain_evidence.record_feedback(text)',
                   'brain_evidence.record_human_decision(text)'
-                ])`,
+                ])
+          UNION ALL
+         SELECT 'brain_evidence.' || c.relname || ' ' || p.priv
+           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+           CROSS JOIN (VALUES ('USAGE'), ('SELECT'), ('UPDATE')) AS p(priv)
+          WHERE n.nspname = 'brain_evidence' AND c.relkind = 'S'
+            AND has_sequence_privilege($1, c.oid, p.priv)`,
         [roleName],
       ),
     );
