@@ -353,18 +353,17 @@ multiple machines. Missing Brain credentials never block local init, scaffold,
 discover, structural validation, or the mandatory local portion of task
 context.
 
-The existing Brain CLI is opt-in:
+The Brain CLI is opt-in:
 
 ```bash
-roster brain init
-roster brain doctor
-roster brain save --help
-roster brain query --help
-roster brain fs --help
+roster brain init|doctor|ingest|save|get|query|event|link|merge|fs
+roster brain record run|feedback|artifact|decision
 ```
 
-Use Infisical to inject database, S3, and embedding credentials per command.
-Roster configuration stores references and non-secret metadata only.
+`roster brain ingest` mints an immutable source version for company knowledge.
+Use Infisical (or any ambient credential mechanism) to inject
+database and object-storage credentials per command. Roster configuration stores
+references and non-secret metadata only.
 
 ## Tool-use definitions
 

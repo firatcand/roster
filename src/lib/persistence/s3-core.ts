@@ -52,6 +52,17 @@ export interface FileStore {
 
 // A conditional put (ifNoneMatch / ifMatch) lost the race — the object already
 // exists, or its live etag no longer matches. The caller re-reads and retries.
+// #383: an object KEY is a private namespace locator (it embeds the tracked
+// root prefix), so this failure carries a stable name and NO key — it escapes
+// the store uncaught, unlike ConditionalWriteFailed which every caller maps to
+// its own caller-supplied address.
+export class ConditionalWriteUnsupported extends Error {
+  constructor() {
+    super('the object-storage endpoint does not support conditional writes (If-None-Match/If-Match)');
+    this.name = 'ConditionalWriteUnsupported';
+  }
+}
+
 export class ConditionalWriteFailed extends Error {
   readonly key: string;
   constructor(key: string) {
@@ -211,9 +222,7 @@ class S3FileStore implements FileStore {
       // provider that can't enforce the header that would overwrite an existing
       // object (ifNoneMatch) or clobber a stale-CAS target (ifMatch). Fail loud.
       if (conditional && isNotImplemented(err)) {
-        throw new Error(
-          `S3 endpoint does not support conditional writes (If-None-Match/If-Match); cannot safely put '${key}'`,
-        );
+        throw new ConditionalWriteUnsupported();
       }
       throw err;
     }
@@ -308,15 +317,35 @@ export type S3StoreConfig = {
 // caller (brain fs's deriveKey persists the full key verbatim as
 // brain.files.s3_key). Applying a prefix dynamically in the store would orphan
 // every existing object the moment the configured prefix changed.
+// #383: a caller that dials a TRACKED namespace supplies an exact-origin request
+// handler so the same DNS/redirect/userinfo boundary the content-addressed Brain
+// object store enforces applies here too. Legacy callers pass nothing and keep
+// the pre-existing client.
+export type S3StoreBoundary = {
+  requestHandler: NonNullable<ConstructorParameters<S3Deps['S3Client']>[0]>['requestHandler'];
+};
+
 export async function createS3FileStore(
   fc: S3StoreConfig,
   env: NodeJS.ProcessEnv = process.env,
+  boundary?: S3StoreBoundary,
 ): Promise<FileStore> {
   const sdk = await loadS3();
   const client = new sdk.S3Client({
     region: fc.region ?? 'us-east-1',
     ...(fc.endpoint ? { endpoint: fc.endpoint } : {}),
     forcePathStyle: fc.forcePathStyle,
+    ...(boundary === undefined ? {} : {
+      requestHandler: boundary.requestHandler,
+      followRegionRedirects: false,
+      useAccelerateEndpoint: false,
+      useDualstackEndpoint: false,
+      useFipsEndpoint: false,
+      useGlobalEndpoint: false,
+      useArnRegion: false,
+      disableMultiregionAccessPoints: true,
+      maxAttempts: 3,
+    }),
     credentials: {
       accessKeyId: env.AWS_ACCESS_KEY_ID!,
       secretAccessKey: env.AWS_SECRET_ACCESS_KEY!,

@@ -344,6 +344,32 @@ function parseBrainConfig(value: unknown, path: string): WorkspaceBrainConfig {
   };
 }
 
+export type BrainDeclaration =
+  | { status: 'absent' }
+  | { status: 'partial'; missing: readonly ('postgresql' | 'object-storage')[] }
+  | { status: 'declared' };
+
+// Structural probe run BEFORE the strict parse: a half-declared brain block is
+// an incomplete ACTIVATION, not a schema error, and only the Brain activation
+// resolver consumes this. A present-but-invalid value stays `declared` so
+// parseWorkspaceRegistry keeps raising YAML_INVALID for every other command.
+export function classifyBrainDeclaration(text: string, path = 'roster.yaml'): BrainDeclaration {
+  const brain = parseYaml(text, path).value['brain'];
+  if (brain === undefined) return { status: 'absent' };
+  if (brain === null || typeof brain !== 'object' || Array.isArray(brain)) return { status: 'declared' };
+  const block = brain as Record<string, unknown>;
+  const missing: ('postgresql' | 'object-storage')[] = [];
+  if (!Object.hasOwn(block, 'secrets_path')) missing.push('postgresql');
+  const storage = block['storage'];
+  if (storage === undefined) {
+    missing.push('object-storage');
+  } else if (storage !== null && typeof storage === 'object' && !Array.isArray(storage)
+    && (!Object.hasOwn(storage, 'bucket') || !Object.hasOwn(storage, 'region'))) {
+    missing.push('object-storage');
+  }
+  return missing.length === 0 ? { status: 'declared' } : { status: 'partial', missing };
+}
+
 export function canonicalBrainNamespace(config: WorkspaceBrainConfig): string {
   return JSON.stringify({
     domain: 'roster.brain.s3-namespace.v1',

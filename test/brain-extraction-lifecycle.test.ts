@@ -4,6 +4,10 @@ import test from 'node:test';
 import { requireBrainActivation, type BrainActivation } from '../src/lib/brain/activation.ts';
 import { createBrainPool } from '../src/lib/brain/connect.ts';
 import {
+  brainObjectStoreConfigFromRegistry,
+  createBrainObjectStore,
+} from '../src/lib/brain/object-store.ts';
+import {
   extractBrainSourceVersion,
   ingestAndExtractBrainSource,
   reindexBrainExtractions,
@@ -26,6 +30,26 @@ import { RosterError } from '../src/lib/errors.ts';
 import type { WorkspaceBrainConfig } from '../src/lib/workspace-record.ts';
 import { createFreshDb, HAS_DB } from './brain-helpers.ts';
 import { MemoryBrainObjectStore, digestOf } from './support/brain-memory-object-store.ts';
+
+// #383: requireBrainActivation needs BrainObjectStore & BrainObjectReader, and
+// createBrainObjectStore is declared to return exactly that — so a real store is
+// activation-shaped with no call-site cast. Compile-time proof plus a runtime
+// shape assertion; no network, no credentials resolved beyond construction.
+test('a real Brain object store satisfies the activation contract without a cast', () => {
+  const store = createBrainObjectStore(
+    brainObjectStoreConfigFromRegistry(config()),
+    { AWS_ACCESS_KEY_ID: 'AKIAACTIVATIONSHAPE0', AWS_SECRET_ACCESS_KEY: 'activation-shape-secret' },
+  );
+  try {
+    const activationShaped: Parameters<typeof requireBrainActivation>[0]['objectStore'] = store;
+    assert.equal(typeof activationShaped.readVerified, 'function');
+    assert.equal(typeof activationShaped.createOrVerify, 'function');
+    assert.equal(typeof activationShaped.inspect, 'function');
+    assert.equal(activationShaped.namespaceFingerprint.startsWith('sha256:'), true);
+  } finally {
+    store.close();
+  }
+});
 
 const WORKSPACE_ID = 'extraction-lifecycle-test';
 const options = { skip: HAS_DB ? false : 'ROSTER_BRAIN_ADMIN_URL not set', timeout: 180_000 };

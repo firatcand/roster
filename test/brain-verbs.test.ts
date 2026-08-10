@@ -397,11 +397,14 @@ test('sql rejects a multi-statement COMMIT-injection (single-statement extended 
 
 // ---------- table ----------
 
+// #383: table.ts is orphaned on disk until #363 removes it, and the DDL broker
+// is admin-only now — so the library is exercised through an admin client.
 test('table create yields a brokered admin-owned table; table list shows it', opts, async () => {
   const { fresh, password, teardown } = await provision();
+  const pool = createBrainPool('admin', fresh.url);
   const rt = await runtimeClient(fresh.url, password, fresh.role);
   try {
-    await createTable(rt, 'memos', [{ name: 'body', type: 'text' }, { name: 'score', type: 'int' }]);
+    await withBrainClient(pool, (c) => createTable(c, 'memos', [{ name: 'body', type: 'text' }, { name: 'score', type: 'int' }]));
 
     const owner = await rt.query(
       `SELECT o.rolname FROM pg_class c
@@ -423,6 +426,7 @@ test('table create yields a brokered admin-owned table; table list shows it', op
     await assert.rejects(rt.query(`UPDATE brain.memos SET score = 9`), /permission denied/i);
   } finally {
     await rt.end();
+    await pool.end();
     await teardown();
   }
 });

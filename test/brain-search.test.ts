@@ -16,7 +16,7 @@ import { FakeEmbedder } from '../src/lib/brain/embed.ts';
 import { runDoctor } from '../src/lib/brain/doctor.ts';
 import { exportBrain } from '../src/lib/brain/export.ts';
 import { importBrain } from '../src/lib/brain/import.ts';
-import { HAS_DB, createFreshDb, runtimeClient } from './brain-helpers.ts';
+import { HAS_DB, createFreshDb, runtimeClient, seedWorkspaceIdentity } from './brain-helpers.ts';
 
 const opts = { skip: HAS_DB ? false : 'ROSTER_BRAIN_ADMIN_URL not set' };
 
@@ -27,6 +27,7 @@ function tmpDir(): string {
 async function initBrain(url: string): Promise<pg.Pool> {
   const pool = createBrainPool('admin', url);
   await runMigrations(pool);
+  await seedWorkspaceIdentity(pool);
   return pool;
 }
 

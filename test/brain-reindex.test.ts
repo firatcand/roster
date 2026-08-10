@@ -12,8 +12,6 @@ import { loadConfig } from '../src/lib/brain/config.ts';
 import { FakeEmbedder, type Embedder } from '../src/lib/brain/embed.ts';
 import { reindexBrain, countReindexTargets } from '../src/lib/brain/reindex.ts';
 import { parseBrainArgs } from '../src/lib/brain-args.ts';
-import { setConfig } from '../src/lib/brain/config.ts';
-import { executeBrainReindex } from '../src/commands/brain.ts';
 import { HAS_DB, createFreshDb } from './brain-helpers.ts';
 
 const opts = { skip: HAS_DB ? false : 'ROSTER_BRAIN_ADMIN_URL not set' };
@@ -174,48 +172,6 @@ test('reindex skips empty/whitespace-content chunks (no infinite loop)', opts, a
     );
     assert.equal(blank.rows[0]!.has, false, 'whitespace chunk left un-embedded (excluded from targets)');
   } finally {
-    await pool.end();
-    rmSync(dir, { recursive: true, force: true });
-    await db.drop();
-  }
-});
-
-test('executeBrainReindex: refuses when embeddings disabled; rejects bad --model', opts, async () => {
-  const db = await createFreshDb();
-  const pool = await initBrain(db.url);
-  try {
-    await assert.rejects(
-      executeBrainReindex({ json: true, yes: true, adminUrl: db.url }),
-      /embeddings are not enabled/i,
-    );
-    await assert.rejects(
-      executeBrainReindex({ json: true, yes: true, model: 'text-embedding-3-large', adminUrl: db.url }),
-      /unsupported --model/i,
-    );
-  } finally {
-    await pool.end();
-    await db.drop();
-  }
-});
-
-test('executeBrainReindex preview (no --yes) makes zero paid calls', opts, async () => {
-  const db = await createFreshDb();
-  const dir = tmpDir();
-  const pool = await initBrain(db.url);
-  const prevKey = process.env.OPENAI_API_KEY;
-  try {
-    await mountText(pool, dir, 'a.md', 'content awaiting embedding');
-    await pool.connect().then(async (c) => { try { await setConfig(c, 'embeddings.enabled', 'true'); } finally { c.release(); } });
-    process.env.OPENAI_API_KEY = 'sk-dummy-not-called'; // resolveEmbedder → OpenAIEmbedder, but preview won't call it
-
-    const code = await executeBrainReindex({ json: true, yes: false, adminUrl: db.url });
-    assert.equal(code, 0);
-    // No spend: embeddings still NULL (OpenAI was never hit; a real call with the dummy key would have errored).
-    const n = await pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM brain.current_documents WHERE embedding IS NOT NULL`);
-    assert.equal(n.rows[0]!.n, 0, 'preview did not embed anything');
-  } finally {
-    if (prevKey === undefined) delete process.env.OPENAI_API_KEY;
-    else process.env.OPENAI_API_KEY = prevKey;
     await pool.end();
     rmSync(dir, { recursive: true, force: true });
     await db.drop();

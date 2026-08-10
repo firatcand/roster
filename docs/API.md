@@ -424,40 +424,46 @@ Tool-specific (uncomment what you need): `APOLLO_API_KEY`, `HEYREACH_API_KEY`, `
 
 ## Brain (`roster brain <verb>`)
 
-The brain is a workspace-scoped, append-only Postgres knowledge store (bring-your-own
-Neon; connection in Infisical, never `.env`). All verbs accept `--json`.
+The brain is a workspace-scoped, append-only Postgres + object-storage knowledge
+store (bring-your-own). Both halves are indivisible: a workspace that declares only
+one fails closed with `BRAIN_CONFIGURATION_INCOMPLETE` and contacts neither store.
+Every verb runs through verified workspace authority. All verbs accept `--json`.
 
 | Verb | Purpose |
 |------|---------|
-| `brain init` | Provision schema + restricted runtime role (admin URL); prints the runtime connection string once. |
-| `brain doctor` | Audit append-only safety + report pending migrations. |
+| `brain init` | Provision schema + the derived restricted runtime role (admin URL). Prints the non-secret role name and the tracked secret path — never a connection string. |
+| `brain doctor` | Audit append-only safety + report pending migrations. Reads protected metadata only: it never reads company content and never contacts object storage. |
+| `brain ingest (--manifest <json> \| --manifest-file <ws path>) [--bytes-file <ws path>]` | Mint an immutable source version + its extraction (admin URL, object storage live). The manifest is a JSON object shaped like the source-ingest contract minus `bytes`; `--bytes-file` may be omitted only when `source.kind` is `workspace-file`. |
 | `brain save --kind <k> --slug <s> [--title t] [--field key=value …] [--data '{json}']` | Upsert an entity + append facts. |
 | `brain get --kind <k> --slug <s>` | Entity truth (latest facts) + timeline (events, edges). |
 | `brain event --kind <event-kind> [--slug <entity-slug>] --data '{json}'` | Append an event (metric snapshot, note, correction); `--slug` optionally attaches it to an entity. |
-| `brain link <src-slug> <rel> <dst-slug>` | Create a typed edge between two entities. |
+| `brain link <src-slug> <rel> <dst-slug>` | Create a typed edge between two entities. Recorded **uncited** — edge citation ships in #397, and every output says so (`"cited": false`). |
 | `brain merge <from-slug> <into-slug>` | Resolve a duplicate (append-only merge; from-slug becomes an alias). |
-| `brain query "<text>" [--kind k] [--limit n]` | Hybrid search: vector (pgvector) + keyword (tsvector) + 1-hop graph, RRF-fused. |
-| `brain table list` · `brain table create <name> --col name:type …` | List / create a custom table via the brokered DDL path (types: text, int, bigint, numeric, boolean, timestamptz, jsonb, uuid). |
-| `brain sql "SELECT …"` | Read-only SQL (SELECT only; rejects mutations). |
-| `brain mount <file>` | Ingest a file as append-only, searchable document chunks. |
-| `brain fs put --kind <k> --slug <s> [--filename <name>] [--actor <a>] <file>` | Upload a file to S3 + append a ledger row. Text/markdown is chunk-indexed for `query`; binaries are pointer-only. |
-| `brain fs get --kind <k> --slug <s> <filename> [--out <path>]` | Download the file bytes (verifies the stored hash); writes to `--out`, else `./<filename>` in the current directory. |
-| `brain fs ls [--kind <k> [--slug <s>]]` | List current (non-tombstoned) files; `--slug` requires `--kind`. |
-| `brain fs rm --kind <k> --slug <s> <filename>` | Tombstone the file in the ledger + delete the S3 object; history is retained. |
-| `brain config get [key]` · `brain config set <key> <value>` | Read/write non-secret settings (`embeddings.enabled\|provider\|model`, `search.rrf_k\|graph_hops`, `gc.retention`, `files.bucket\|region\|endpoint\|prefix\|force_path_style`). |
-| `brain reindex [--all\|--since <ts>] [--model m] [--yes]` | Backfill embeddings for active chunks with missing/stale vectors (admin; previews the count and requires `--yes` to spend; batched + resumable). |
-| `brain export [--out <dir>] [--format jsonl\|sql]` · `brain import <dir>` | Portable backup / restore into a fresh brain. |
-| `brain gc [--older-than <N>d\|<N>mo\|<N>y] [--yes]` | Prune superseded fact/chunk **versions** once both the version and its replacement are older than the retention window (default `730d`; precedence `--older-than` > `gc.retention` config > default). Admin-only — refuses a runtime URL; previews per-table counts and requires `--yes` to delete; batched + resumable. Never touches current versions, events, edges, or the merge-map. |
+| `brain fs put --kind <k> --slug <s> [--filename <name>] [--actor <a>] <file>` | Upload a file into the tracked `brain.storage` namespace + append a ledger row. |
+| `brain fs get --kind <k> --slug <s> <filename> [--out <path>]` | Download the file bytes (verifies the stored hash). A ledger row under a namespace the workspace no longer declares is refused with `BRAIN_FS_FOREIGN_BUCKET`. |
+| `brain fs ls [--kind <k> [--slug <s>]]` | List current (non-tombstoned) files; `--slug` requires `--kind`. Ledger only — no object-storage access. |
+| `brain fs rm --kind <k> --slug <s> <filename>` | Tombstone the file in the ledger + delete the object; history is retained. |
+| `brain record run\|artifact\|feedback\|decision (--payload <json> \| --file <ws path>)` | Append portable work evidence. |
+| `brain query "<text>"` | **Fails closed** with `BRAIN_RETRIEVAL_NOT_READY` until cited retrieval ships (#352). Use `roster context <function>/<agent> --query "…"` for cited evidence. |
+| `brain mount` · `table` · `sql` · `config` · `reindex` · `gc` · `export` · `import` | **Recognized but fail closed** with `BRAIN_LEGACY_COMMAND_DISABLED`. These spellings predate workspace-verified Brain authority; removal is #363's. |
 
-Semantic-search embeddings are **off** by default (no paid API calls); enable with
-`roster brain config set embeddings.enabled true` (requires `OPENAI_API_KEY`). Exit
+Object-storage bucket, region, endpoint, and prefix are tracked non-secret
+configuration in `roster.yaml` under `brain.storage`; only credentials are
+ambient. Roster never prints a bucket name, endpoint, object key, or `s3://` URI —
+the namespace fingerprint is the addressable identity. Exit
 codes: `0` ok, `1` error. See [HOWTO.md](HOWTO.md) §11 to set one up.
 
-File bytes for `brain fs` live in S3 (or any S3-compatible store — R2, B2, MinIO — via
-`files.endpoint`/`files.force_path_style`); credentials are **env-only**
-(`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`), never in the brain. `brain export` /
-`brain import` round-trip the file ledger rows but not the S3 objects, so a restore needs
-the bucket to still exist.
+File bytes for `brain fs` and every ingested source live in the object-storage
+namespace declared by `roster.yaml` `brain.storage` (`bucket`, `region`, optional
+`endpoint` + `force_path_style` for R2, B2, or MinIO, optional `root_prefix`).
+Credentials are **ambient-only** (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`),
+never tracked and never stored in the brain. Every dial of that namespace goes
+through the same exact-origin network boundary: HTTPS only, no userinfo, no
+region redirects, and a guarded DNS lookup that refuses a non-global or rebinding
+answer. Changing `brain.storage` changes the workspace namespace fingerprint that
+the protected database identity pins, so a repoint is a verified operation rather
+than a silent one. Portable backup is a provider-native dump until the reviewed
+workspace-migration path ships (#363) — see [HOWTO.md](HOWTO.md) §12.
 
 ## Tasks (`roster task <verb>`)
 

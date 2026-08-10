@@ -62,3 +62,27 @@ export async function runtimeClient(adminUrl: string, password: string, roleName
   await c.connect();
   return c;
 }
+
+// #383: `runDoctor` reports a Brain with schema but no protected workspace
+// identity as uninitialized and stops before every relation-dependent check —
+// a state real workspaces cannot reach, because bootstrapBrainWorkspaceAuthority
+// installs the identity in the SAME transaction as the migrations. Legacy
+// fixtures that call runMigrations directly seed the equivalent handshake here.
+// Retired with the legacy fixtures in #363.
+export async function seedWorkspaceIdentity(
+  pool: pg.Pool,
+  workspaceId = 'brain-fixture-workspace',
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO brain_meta.workspace_identity (
+       singleton, workspace_id, fingerprint_format_version, namespace_fingerprint,
+       database_authority_id, migration_state
+     ) VALUES (true, $1, 1, $2, gen_random_uuid(), 'migrating')
+     ON CONFLICT (singleton) DO NOTHING`,
+    [workspaceId, `sha256:${'0'.repeat(64)}`],
+  );
+  await pool.query(
+    `UPDATE brain_meta.workspace_identity SET migration_state = 'ready'
+      WHERE singleton AND migration_state <> 'ready'`,
+  );
+}

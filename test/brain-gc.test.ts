@@ -1,4 +1,4 @@
-import { test, type TestContext } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import pg from 'pg';
 import { createBrainPool, withBrainClient } from '../src/lib/brain/connect.ts';
@@ -14,8 +14,6 @@ import {
 } from '../src/lib/brain/gc.ts';
 import { parseConfigValue, setConfig } from '../src/lib/brain/config.ts';
 import { parseBrainArgs } from '../src/lib/brain-args.ts';
-import { executeBrainGc } from '../src/commands/brain.ts';
-import { RosterError } from '../src/lib/errors.ts';
 import { ADMIN_URL, HAS_DB, createFreshDb } from './brain-helpers.ts';
 
 const opts = { skip: HAS_DB ? false : 'ROSTER_BRAIN_ADMIN_URL not set' };
@@ -403,60 +401,46 @@ test('retention precedence: flag > gc.retention config > 730d default', opts, as
   }
 });
 
-// --- CLI surface ----------------------------------------------------------------
+// --- gc engine (the CLI surface is disabled by #383; removal is #363's) --------
 
-function captureLogs(t: TestContext): string[] {
-  const lines: string[] = [];
-  t.mock.method(console, 'log', (...args: unknown[]) => {
-    lines.push(args.map(String).join(' '));
-  });
-  return lines;
-}
-
-test('executeBrainGc: preview by default writes nothing; --yes deletes; re-run no-ops', opts, async (t) => {
+test('runGc: counting is non-destructive; delete prunes the superseded version; re-run no-ops', opts, async () => {
   const fx = await provision();
   try {
     const e = await insertEntity(fx.pool, 'cli');
     await insertFact(fx.pool, e, 'k', 'old', '4 years');
     await insertFact(fx.pool, e, 'k', 'new', '3 years');
 
-    const lines = captureLogs(t);
-    assert.equal(await executeBrainGc({ json: true, yes: false, adminUrl: fx.url }), 0);
-    const preview = JSON.parse(lines.at(-1)!);
-    assert.equal(preview.mode, 'preview');
-    assert.equal(preview.retention, DEFAULT_RETENTION);
-    assert.equal(preview.eligible.facts, 1);
-    assert.equal((await factIds(fx.pool)).length, 2, 'preview must not delete');
+    const retention = await withBrainClient(fx.pool, (c) => resolveRetention(c));
+    assert.equal(retention.raw, DEFAULT_RETENTION);
+    const eligible = await withBrainClient(fx.pool, (c) => countEligible(c, retention.interval));
+    assert.equal(eligible.facts, 1);
+    assert.equal((await factIds(fx.pool)).length, 2, 'counting must not delete');
 
-    assert.equal(await executeBrainGc({ json: true, yes: true, adminUrl: fx.url }), 0);
-    const ran = JSON.parse(lines.at(-1)!);
-    assert.equal(ran.mode, 'delete');
-    assert.equal(ran.deleted.facts, 1);
+    const deleted = await runGc(fx.pool, { interval: retention.interval });
+    assert.equal(deleted.facts, 1);
     assert.equal((await factIds(fx.pool)).length, 1);
 
-    assert.equal(await executeBrainGc({ json: true, yes: true, adminUrl: fx.url }), 0);
-    const rerun = JSON.parse(lines.at(-1)!);
-    assert.equal(rerun.mode, 'preview');
-    assert.equal(rerun.eligible.facts, 0);
+    const rerun = await runGc(fx.pool, { interval: retention.interval });
+    assert.equal(rerun.facts, 0);
   } finally {
     await fx.drop();
   }
 });
 
-test('executeBrainGc: refuses a runtime-role URL with a clear message', opts, async () => {
+test('preflightGc: a runtime-role connection is refused as the wrong URL', opts, async () => {
   const fx = await provision();
   try {
     const role = await withBrainClient(fx.pool, (c) => ensureRuntimeRole(c, fx.role));
     assert.ok(role.password);
-    const runtimeUrl = buildRuntimeUrl(fx.url, role.password!, fx.role);
-    await assert.rejects(
-      () => executeBrainGc({ json: false, yes: true, adminUrl: runtimeUrl }),
-      (err: unknown) => {
-        assert.ok(err instanceof RosterError);
-        assert.match(err.header, /brain gc refused/);
-        return true;
-      },
-    );
+    const client = new pg.Client({ connectionString: buildRuntimeUrl(fx.url, role.password!, fx.role) });
+    await client.connect();
+    try {
+      const pre = await preflightGc(client);
+      assert.equal(pre.ok, false);
+      assert.equal(pre.ok === false && pre.reason, 'runtime-url');
+    } finally {
+      await client.end();
+    }
   } finally {
     await fx.drop();
   }

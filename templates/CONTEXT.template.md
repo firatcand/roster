@@ -59,7 +59,8 @@ knowledge: competitors, posts, metrics, accounts, people, and strategy. This is 
 optional — **route knowledge through the brain, not scattered files or your own memory**:
 
 - **Consult it first.** Before answering from memory or the open web on those topics, run
-  `roster brain query "<question>"`. The team may already know.
+  `roster context <function>/<agent> --query "<question>"` (or read the entity directly
+  with `roster brain get --kind <k> --slug <s>`). The team may already know.
 - **Write back, organized.** When you learn a durable fact, record it — and organize as you
   write: **extract → dedup-before-create → link → tag**, per `brain/RESOLVER.md`. Query
   before you `save` (heed the dup-warning; `merge` real duplicates), give every fact a
@@ -69,8 +70,8 @@ optional — **route knowledge through the brain, not scattered files or your ow
   native subagent primitive) to run that pipeline over the whole batch, append-only.
 - **Correct** the brain the moment you find it wrong — a new write supersedes; the brain is
   append-only and nothing is deleted.
-- **Check `roster brain table list` + `brain/RESOLVER.md`** before creating a new table;
-  prefer entities + facts + edges.
+- **Model every shape as entities + facts + edges** — see `brain/RESOLVER.md`. Custom
+  tables are not available.
 
 The `brain` skill (`/brain`) is the front door. If no brain is configured, ignore this
 section and use normal files.

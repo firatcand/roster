@@ -5,11 +5,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createBrainPool, withBrainClient } from '../src/lib/brain/connect.ts';
 import { runMigrations } from '../src/lib/brain/migrate.ts';
-import { ensureRuntimeRole, buildRuntimeUrl } from '../src/lib/brain/roles.ts';
-import { setConfig } from '../src/lib/brain/config.ts';
+import { ensureRuntimeRole } from '../src/lib/brain/roles.ts';
 import { MemoryFileStore, type FileStore, type PutOpts } from '../src/lib/brain/s3.ts';
-import { executeBrainFs } from '../src/commands/brain.ts';
+import { mountBytesTx } from '../src/lib/brain/mount.ts';
+import { RosterError } from '../src/lib/errors.ts';
 import {
+  S3NetworkPolicyError,
+  createGuardedLookup,
+  type DnsLookupAll,
+} from '../src/lib/brain/s3-network-policy.ts';
+import {
+  brainFilesTarget,
+  createBrainFilesStore,
   deriveKey,
   sourceUri,
   assertSafeSegment,
@@ -28,6 +35,22 @@ const opts = { skip: HAS_DB ? false : 'ROSTER_BRAIN_ADMIN_URL not set' };
 test('deriveKey: builds files/<kind>/<slug>/<filename> under the prefix', () => {
   assert.equal(deriveKey('', { kind: 'concept', slug: 'rrf', filename: 'post.md' }), 'files/concept/rrf/post.md');
   assert.equal(deriveKey('team/', { kind: 'company', slug: 'acme', filename: 'deck.pdf' }), 'team/files/company/acme/deck.pdf');
+});
+
+test('brainFilesTarget: derives bucket + slash-terminated prefix from the tracked namespace', () => {
+  assert.deepEqual(
+    brainFilesTarget({ bucket: 'ws-vault', region: 'eu-central-1', forcePathStyle: false }),
+    { bucket: 'ws-vault', prefix: '' },
+  );
+  assert.deepEqual(
+    brainFilesTarget({ bucket: 'ws-vault', region: 'eu-central-1', forcePathStyle: false, rootPrefix: 'team/a' }),
+    { bucket: 'ws-vault', prefix: 'team/a/' },
+  );
+  assert.equal(
+    deriveKey(brainFilesTarget({ bucket: 'b', region: 'r', forcePathStyle: false, rootPrefix: 'team' }).prefix,
+      { kind: 'concept', slug: 'rrf', filename: 'post.md' }),
+    'team/files/concept/rrf/post.md',
+  );
 });
 
 test('sourceUri: builds an s3:// URI', () => {
@@ -62,12 +85,9 @@ async function provision(): Promise<Setup> {
   const pool = createBrainPool('admin', fresh.url);
   try {
     await runMigrations(pool);
-    const role = await withBrainClient(pool, async (c) => {
-      // Configure the file store (non-secret) so loadConfig resolves a bucket.
-      await setConfig(c, 'files.bucket', 'test-brain-files');
-      await setConfig(c, 'files.prefix', 'ws');
-      return ensureRuntimeRole(c, fresh.role);
-    });
+    // #383: the namespace comes from the tracked registry, never brain_meta.config;
+    // every call below passes its FilesTarget explicitly.
+    const role = await withBrainClient(pool, (c) => ensureRuntimeRole(c, fresh.role));
     return { fresh, password: role.password!, teardown: async () => { await fresh.drop(); } };
   } catch (err) {
     await fresh.drop();
@@ -86,7 +106,11 @@ function tmpFile(name: string, contents: string | Buffer): string {
 
 // ---------- putFile ----------
 
-test('fs put: text file lands in S3, records a ledger row, and is keyword-searchable', opts, async () => {
+// #383 §7.4: `fs put` is a LEDGER + object write and nothing else. Extraction
+// and indexing moved to `roster brain ingest` (the 012 pipeline), which cites an
+// immutable source version, so a put must create no brain.mounts and no
+// brain.documents rows.
+test('fs put: text file lands in the object store and records a ledger row, with no indexing', opts, async () => {
   const { fresh, password, teardown } = await provision();
   const rt = await runtimeClient(fresh.url, password, fresh.role);
   const store = new MemoryFileStore();
@@ -96,7 +120,6 @@ test('fs put: text file lands in S3, records a ledger row, and is keyword-search
       kind: 'concept', slug: 'rrf', file, actor: 'sdr',
     });
     assert.equal(res.op, 'put');
-    assert.equal(res.indexed, true, 'text file indexed');
     assert.equal(res.s3Key, 'ws/files/concept/rrf/post.md');
     assert.equal(res.sourcePath, 's3://test-brain-files/ws/files/concept/rrf/post.md');
 
@@ -110,12 +133,21 @@ test('fs put: text file lands in S3, records a ledger row, and is keyword-search
     );
     assert.equal(cf.rows[0]!.c, 1);
 
-    // Searchable via current_documents (the s3 URI is the source_path).
-    const hit = await rt.query<{ c: number }>(
-      `SELECT count(*)::int AS c FROM brain.current_documents WHERE tsv @@ plainto_tsquery('english', $1)`,
-      ['reciprocal fusion'],
+    // No indexing side effects: no mount, no chunks, and a NULL mount_id.
+    const mounts = await rt.query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM brain.mounts WHERE source_path = $1`,
+      [res.sourcePath],
     );
-    assert.ok(hit.rows[0]!.c > 0);
+    assert.equal(mounts.rows[0]!.c, 0, 'fs put creates no brain.mounts row');
+    const docs = await rt.query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM brain.documents WHERE source_path = $1`,
+      [res.sourcePath],
+    );
+    assert.equal(docs.rows[0]!.c, 0, 'fs put creates no brain.documents row');
+    const mountId = await rt.query<{ mount_id: string | null }>(
+      `SELECT mount_id FROM brain.current_files WHERE kind='concept' AND slug='rrf' AND filename='post.md'`,
+    );
+    assert.equal(mountId.rows[0]!.mount_id, null, 'ledger row carries no mount');
   } finally {
     await rt.end();
     rmSync(file, { force: true });
@@ -123,7 +155,7 @@ test('fs put: text file lands in S3, records a ledger row, and is keyword-search
   }
 });
 
-test('fs put: binary file is stored with a pointer row but no chunks', opts, async () => {
+test('fs put: a binary file is stored with a pointer row and, like every put, no chunks', opts, async () => {
   const { fresh, password, teardown } = await provision();
   const rt = await runtimeClient(fresh.url, password, fresh.role);
   const store = new MemoryFileStore();
@@ -132,7 +164,6 @@ test('fs put: binary file is stored with a pointer row but no chunks', opts, asy
     const res = await putFile(rt, store, { bucket: 'test-brain-files', prefix: 'ws/' }, {
       kind: 'company', slug: 'acme', file,
     });
-    assert.equal(res.indexed, false, 'binary not indexed');
     const docs = await rt.query<{ c: number }>(
       `SELECT count(*)::int AS c FROM brain.documents WHERE source_path = $1`,
       [res.sourcePath],
@@ -141,7 +172,7 @@ test('fs put: binary file is stored with a pointer row but no chunks', opts, asy
     const row = await rt.query<{ mount_id: string | null }>(
       `SELECT mount_id FROM brain.current_files WHERE kind='company' AND slug='acme' AND filename='logo.png'`,
     );
-    assert.equal(row.rows[0]!.mount_id, null, 'binary pointer row has no mount');
+    assert.equal(row.rows[0]!.mount_id, null, 'pointer row has no mount');
   } finally {
     await rt.end();
     rmSync(file, { force: true });
@@ -185,6 +216,32 @@ test('fs get: round-trips bytes to a local path and verifies the hash', opts, as
     await rt.end();
     rmSync(file, { force: true });
     rmSync(outDir, { recursive: true, force: true });
+    await teardown();
+  }
+});
+
+test('fs get: a ledger row under a foreign bucket is refused without naming it', opts, async () => {
+  const { fresh, password, teardown } = await provision();
+  const rt = await runtimeClient(fresh.url, password, fresh.role);
+  const store = new MemoryFileStore();
+  const file = tmpFile('post.md', '# RRF\nforeign namespace\n');
+  try {
+    await putFile(rt, store, { bucket: 'test-brain-files', prefix: 'ws/' }, { kind: 'concept', slug: 'rrf', file });
+    await assert.rejects(
+      getFile(rt, store, {
+        kind: 'concept', slug: 'rrf', filename: 'post.md', expectedBucket: 'tracked-namespace',
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof RosterError);
+        assert.equal(error.code, 'BRAIN_FS_FOREIGN_BUCKET');
+        assert.deepEqual(error.details, { kind: 'concept', slug: 'rrf', filename: 'post.md' });
+        assert.doesNotMatch(`${error.header}${error.body}${error.remedy}`, /test-brain-files/u);
+        return true;
+      },
+    );
+  } finally {
+    await rt.end();
+    rmSync(file, { force: true });
     await teardown();
   }
 });
@@ -239,7 +296,7 @@ test('fs ls: lists current files, filterable by kind/slug, hides tombstones', op
 
 // ---------- rmFile ----------
 
-test('fs rm: tombstones the ledger, deletes the S3 object, hides chunks; history retained', opts, async () => {
+test('fs rm: tombstones the ledger and deletes the object; ledger history retained', opts, async () => {
   const { fresh, password, teardown } = await provision();
   const rt = await runtimeClient(fresh.url, password, fresh.role);
   const store = new MemoryFileStore();
@@ -252,18 +309,6 @@ test('fs rm: tombstones the ledger, deletes the S3 object, hides chunks; history
     const res = await rmFile(rt, store, { kind: 'concept', slug: 'rrf', filename: 'post.md', actor: 'ops' });
     assert.equal(res.s3Deleted, true);
     assert.equal(await store.head(put.s3Key), null, 'S3 object deleted');
-
-    // Chunks hidden from search, but raw history retained.
-    const hidden = await rt.query<{ c: number }>(
-      `SELECT count(*)::int AS c FROM brain.current_documents WHERE tsv @@ plainto_tsquery('english', $1)`,
-      ['wombatterm'],
-    );
-    assert.equal(hidden.rows[0]!.c, 0, 'chunk hidden after rm');
-    const raw = await rt.query<{ c: number }>(
-      `SELECT count(*)::int AS c FROM brain.documents WHERE source_path = $1`,
-      [put.sourcePath],
-    );
-    assert.ok(raw.rows[0]!.c > 0, 'raw chunk retained');
 
     // Ledger keeps both events.
     const ops = await rt.query<{ op: string }>(
@@ -390,13 +435,8 @@ test('fs rm: a failed S3 delete still leaves a durable tombstone (removed from v
     const cf = await rt.query<{ c: number }>(
       `SELECT count(*)::int AS c FROM brain.current_files WHERE kind='concept' AND slug='crash'`,
     );
-    assert.equal(cf.rows[0]!.c, 0, 'file removed from view despite the S3 delete failure');
-    const hit = await rt.query<{ c: number }>(
-      `SELECT count(*)::int AS c FROM brain.current_documents WHERE tsv @@ plainto_tsquery('english', $1)`,
-      ['deltaterm'],
-    );
-    assert.equal(hit.rows[0]!.c, 0, 'chunks hidden');
-    assert.ok(await inner.head(put.s3Key), 'the orphaned S3 object is still present');
+    assert.equal(cf.rows[0]!.c, 0, 'file removed from view despite the object delete failure');
+    assert.ok(await inner.head(put.s3Key), 'the orphaned object is still present');
   } finally {
     await rt.end();
     rmSync(file, { force: true });
@@ -439,100 +479,119 @@ test('fs get/rm concurrency: a get racing an rm never reports false drift', opts
   }
 });
 
-// ---------- executeBrainFs handler glue ----------
-
-test('executeBrainFs: full put → ls → get → rm cycle via the command handler (injected store)', opts, async () => {
-  const { fresh, password, teardown } = await provision();
-  const runtimeUrl = buildRuntimeUrl(fresh.url, password, fresh.role);
-  const store = new MemoryFileStore();
-  const makeStore = async () => store;
-  const file = tmpFile('post.md', '# RRF\nhandlerterm body\n');
-  const outDir = mkdtempSync(join(tmpdir(), 'brain-fs-h-'));
-  try {
-    const putCode = await executeBrainFs({
-      json: true, runtimeUrl, makeStore, op: 'put', kind: 'concept', slug: 'rrf', file,
-    });
-    assert.equal(putCode, 0);
-
-    const lsCode = await executeBrainFs({ json: true, runtimeUrl, makeStore, op: 'ls' });
-    assert.equal(lsCode, 0);
-
-    const getCode = await executeBrainFs({
-      json: true, runtimeUrl, makeStore, op: 'get', kind: 'concept', slug: 'rrf',
-      filename: 'post.md', out: join(outDir, 'g.md'),
-    });
-    assert.equal(getCode, 0);
-    assert.equal(readFileSync(join(outDir, 'g.md'), 'utf8'), '# RRF\nhandlerterm body\n');
-
-    const rmCode = await executeBrainFs({
-      json: true, runtimeUrl, makeStore, op: 'rm', kind: 'concept', slug: 'rrf', filename: 'post.md',
-    });
-    assert.equal(rmCode, 0);
-  } finally {
-    rmSync(file, { force: true });
-    rmSync(outDir, { recursive: true, force: true });
-    await teardown();
-  }
-});
-
-test('executeBrainFs: throws a setup error when files is not configured', opts, async () => {
-  // A brain with NO files.bucket set.
-  const fresh = await createFreshDb();
-  const pool = createBrainPool('admin', fresh.url);
-  let runtimeUrl: string;
-  try {
-    await runMigrations(pool);
-    const role = await withBrainClient(pool, (c) => ensureRuntimeRole(c, fresh.role));
-    runtimeUrl = buildRuntimeUrl(fresh.url, role.password!, fresh.role);
-  } finally {
-    await pool.end();
-  }
-  try {
-    await assert.rejects(
-      executeBrainFs({ json: true, runtimeUrl, op: 'put', kind: 'c', slug: 's', file: '/tmp/x.md' }),
-      /not configured/i,
-    );
-  } finally {
-    await fresh.drop();
-  }
-});
-
-test('fs put: overwrite supersedes chunks; rm then re-put resurrects search', opts, async () => {
+test('fs put: overwrite supersedes the ledger head; rm then re-put restores it', opts, async () => {
   const { fresh, password, teardown } = await provision();
   const rt = await runtimeClient(fresh.url, password, fresh.role);
   const store = new MemoryFileStore();
   const cfg = { bucket: 'test-brain-files', prefix: 'ws/' };
   try {
     const v1 = tmpFile('post.md', '# Post\nalphaterm original\n');
-    await putFile(rt, store, cfg, { kind: 'concept', slug: 'rrf', file: v1 });
+    const first = await putFile(rt, store, cfg, { kind: 'concept', slug: 'rrf', file: v1 });
 
-    // Overwrite with new content at the same address.
     const v2 = tmpFile('post.md', '# Post\nbetaterm revised\n');
-    await putFile(rt, store, cfg, { kind: 'concept', slug: 'rrf', file: v2 });
+    const second = await putFile(rt, store, cfg, { kind: 'concept', slug: 'rrf', file: v2 });
+    assert.notEqual(second.contentHash, first.contentHash, 'new bytes recorded');
 
-    const oldGone = await rt.query<{ c: number }>(
-      `SELECT count(*)::int AS c FROM brain.current_documents WHERE tsv @@ plainto_tsquery('english', $1)`,
-      ['alphaterm'],
+    const head = await rt.query<{ content_hash: string }>(
+      `SELECT content_hash FROM brain.current_files WHERE kind='concept' AND slug='rrf' AND filename='post.md'`,
     );
-    assert.equal(oldGone.rows[0]!.c, 0, 'old content superseded');
-    const newHere = await rt.query<{ c: number }>(
-      `SELECT count(*)::int AS c FROM brain.current_documents WHERE tsv @@ plainto_tsquery('english', $1)`,
-      ['betaterm'],
-    );
-    assert.ok(newHere.rows[0]!.c > 0, 'new content current');
+    assert.equal(head.rows[0]!.content_hash, second.contentHash, 'ledger head is the overwrite');
 
-    // rm then re-put the v2 bytes → resurrected.
     await rmFile(rt, store, { kind: 'concept', slug: 'rrf', filename: 'post.md' });
-    await putFile(rt, store, cfg, { kind: 'concept', slug: 'rrf', file: v2 });
-    const resurrected = await rt.query<{ c: number }>(
-      `SELECT count(*)::int AS c FROM brain.current_documents WHERE tsv @@ plainto_tsquery('english', $1)`,
-      ['betaterm'],
+    const gone = await rt.query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM brain.current_files WHERE kind='concept' AND slug='rrf'`,
     );
-    assert.ok(resurrected.rows[0]!.c > 0, 'chunk visible again after re-put');
+    assert.equal(gone.rows[0]!.c, 0, 'tombstoned out of the current view');
+
+    await putFile(rt, store, cfg, { kind: 'concept', slug: 'rrf', file: v2 });
+    const restored = await rt.query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM brain.current_files WHERE kind='concept' AND slug='rrf'`,
+    );
+    assert.equal(restored.rows[0]!.c, 1, 'visible again after re-put');
     rmSync(v1, { force: true });
     rmSync(v2, { force: true });
   } finally {
     await rt.end();
     await teardown();
   }
+});
+
+// The chunk supersede/resurrect lifecycle is `mountBytesTx`'s, not `fs put`'s.
+// Exercised directly so the coverage survives the #383 decoupling; the whole
+// mount module is deleted by #363.
+test('mountBytesTx: a re-mount supersedes the previous chunks for the same source', opts, async () => {
+  const { fresh, password, teardown } = await provision();
+  const rt = await runtimeClient(fresh.url, password, fresh.role);
+  try {
+    const uri = 's3://test-brain-files/ws/files/concept/rrf/post.md';
+    await rt.query('BEGIN');
+    await mountBytesTx(rt, uri, Buffer.from('# Post\nalphaterm original\n'), null);
+    await rt.query('COMMIT');
+    const first = await rt.query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM brain.current_documents WHERE tsv @@ plainto_tsquery('english', $1)`,
+      ['alphaterm'],
+    );
+    assert.ok(first.rows[0]!.c > 0, 'first mount is current');
+
+    await rt.query('BEGIN');
+    await mountBytesTx(rt, uri, Buffer.from('# Post\nbetaterm revised\n'), null);
+    await rt.query('COMMIT');
+    const superseded = await rt.query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM brain.current_documents WHERE tsv @@ plainto_tsquery('english', $1)`,
+      ['alphaterm'],
+    );
+    assert.equal(superseded.rows[0]!.c, 0, 'old chunks superseded');
+    const current = await rt.query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM brain.current_documents WHERE tsv @@ plainto_tsquery('english', $1)`,
+      ['betaterm'],
+    );
+    assert.ok(current.rows[0]!.c > 0, 'new chunks current');
+  } finally {
+    await rt.end();
+    await teardown();
+  }
+});
+
+// ---------- registry-derived store: the exact-origin network boundary --------
+
+// #383 B3: the tracked brain.storage namespace must be dialed through the SAME
+// boundary the content-addressed object store uses. deriveS3Origin fails closed
+// on a plaintext or userinfo-bearing endpoint and on a missing region; the
+// guarded lookup refuses a non-global or rebinding DNS answer.
+test('createBrainFilesStore refuses a plaintext, userinfo, or rebinding endpoint', async () => {
+  const base = { bucket: 'ws-vault', region: 'eu-central-1', forcePathStyle: false };
+  await assert.rejects(
+    createBrainFilesStore({ ...base, endpoint: 'http://objects.example.test' }),
+    S3NetworkPolicyError,
+  );
+  await assert.rejects(
+    createBrainFilesStore({ ...base, endpoint: 'https://user:pw@objects.example.test' }),
+    S3NetworkPolicyError,
+  );
+  await assert.rejects(
+    createBrainFilesStore({ ...base, region: '' }),
+    S3NetworkPolicyError,
+  );
+
+  let calls = 0;
+  const rebinding: DnsLookupAll = (_hostname, _options, callback) => {
+    calls += 1;
+    callback(null, calls === 1
+      ? [{ address: '93.184.216.34', family: 4 }]
+      : [{ address: '169.254.169.254', family: 4 }]);
+  };
+  const store = await createBrainFilesStore(
+    { ...base, endpoint: 'https://objects.example.test' },
+    { lookupAll: rebinding },
+  );
+  assert.equal(typeof store.head, 'function');
+  const guarded = createGuardedLookup('objects.example.test', { lookupAll: rebinding });
+  const resolve = (): Promise<unknown> => new Promise((ok, fail) => {
+    guarded('objects.example.test', { all: true }, (error, address) => {
+      if (error !== null) fail(error);
+      else ok(address);
+    });
+  });
+  await resolve();
+  await assert.rejects(resolve(), S3NetworkPolicyError);
 });

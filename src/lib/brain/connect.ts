@@ -8,13 +8,19 @@ import {
 import { EXIT_ERROR, isRosterError, RosterError } from '../errors.ts';
 import { readWorkspaceRegistry } from '../workspace-registry.ts';
 import { isWorkspaceFailure, workspaceFailure } from '../workspace-diagnostics.ts';
+import {
+  assertBrainActivationComplete,
+  assertBrainAdminCredential,
+} from '../brain-activation-config.ts';
 import { deriveWorkspaceRuntimeRoleName, RUNTIME_ROLE } from './roles.ts';
 import {
   bootstrapBrainWorkspaceAuthority,
+  createDiagnosticBrainPool,
   createVerifiedBrainPool as createAuthorityVerifiedBrainPool,
   deriveBrainWorkspaceAuthority,
   type BrainAuthorityBootstrapResult,
   type BrainWorkspaceAuthority,
+  type DiagnosticBrainPool,
   type VerifiedBrainPool,
 } from './workspace-authority.ts';
 
@@ -51,11 +57,7 @@ function requireBrainConfig(cwd: string) {
       { path: 'roster.yaml' },
     );
   }
-  return {
-    workspaceId: registry.workspace_id,
-    brain: registry.brain,
-    secretsPath: registry.brain.secrets_path,
-  };
+  return { workspaceId: registry.workspace_id, brain: registry.brain };
 }
 
 function runtimeCredentialFailure(
@@ -125,11 +127,29 @@ export function openVerifiedRuntimePool(
   cwd: string,
   roleBase: string = RUNTIME_ROLE,
 ): VerifiedBrainPool {
-  const workspace = requireBrainConfig(cwd);
+  const workspace = assertBrainActivationComplete(cwd, 'runtime');
   const authority = deriveBrainWorkspaceAuthority(workspace.workspaceId, workspace.brain);
   const expectedRole = deriveWorkspaceRuntimeRoleName(workspace.workspaceId, roleBase);
-  const credential = resolveRuntimeCredential(expectedRole, workspace.secretsPath);
+  const credential = resolveRuntimeCredential(expectedRole, workspace.brain.secrets_path);
   return createVerifiedBrainPool('runtime', authority, credential.connectionString);
+}
+
+// #383: `ingest` and every other administrative Brain verb run on the admin
+// credential — the runtime role structurally holds no INSERT on the protected
+// 011/012 lifecycle tables — but still through verified workspace authority.
+export function openVerifiedAdminPool(cwd: string): VerifiedBrainPool {
+  const workspace = assertBrainActivationComplete(cwd, 'admin');
+  const authority = deriveBrainWorkspaceAuthority(workspace.workspaceId, workspace.brain);
+  return createVerifiedBrainPool('admin', authority);
+}
+
+export function openBrainDiagnosticPool(cwd: string): DiagnosticBrainPool {
+  const workspace = assertBrainActivationComplete(cwd, 'admin');
+  const authority = deriveBrainWorkspaceAuthority(workspace.workspaceId, workspace.brain);
+  return createDiagnosticBrainPool({
+    connectionString: resolveBrainUrl('admin'),
+    authority,
+  });
 }
 
 type InitializeCleanBrainOptions = {
@@ -146,11 +166,12 @@ type InitializeCleanBrainResult = {
 export async function initializeCleanBrain(
   options: InitializeCleanBrainOptions,
 ): Promise<InitializeCleanBrainResult> {
-  const workspace = requireBrainConfig(options.cwd);
+  const workspace = assertBrainActivationComplete(options.cwd, 'admin+runtime');
   const authority = deriveBrainWorkspaceAuthority(workspace.workspaceId, workspace.brain);
   const roleBase = options.role ?? RUNTIME_ROLE;
   const expectedRole = deriveWorkspaceRuntimeRoleName(workspace.workspaceId, roleBase);
-  const runtimeCredential = resolveRuntimeCredential(expectedRole, workspace.secretsPath);
+  const runtimeCredential = resolveRuntimeCredential(expectedRole, workspace.brain.secrets_path);
+  if (options.adminUrl === undefined) assertBrainAdminCredential(workspace.brain.secrets_path);
   const adminUrl = options.adminUrl ?? resolveBrainUrl('admin');
   const bootstrapPool = createBrainPool('admin', adminUrl);
   let bootstrap: BrainAuthorityBootstrapResult;
@@ -190,11 +211,11 @@ export async function initializeCleanBrain(
       'SELECT current_user AS u',
     )).rows[0]?.u;
     if (runtimeRole !== expectedRole) {
-      throw runtimeCredentialFailure(expectedRole, workspace.secretsPath, 'verification-failed');
+      throw runtimeCredentialFailure(expectedRole, workspace.brain.secrets_path, 'verification-failed');
     }
   } catch (error) {
     if (isRosterError(error)) throw error;
-    throw runtimeCredentialFailure(expectedRole, workspace.secretsPath, 'verification-failed');
+    throw runtimeCredentialFailure(expectedRole, workspace.brain.secrets_path, 'verification-failed');
   } finally {
     await verifiedRuntimePool.end();
   }

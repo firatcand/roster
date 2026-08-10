@@ -1,12 +1,16 @@
 import chalk from 'chalk';
+import type pg from 'pg';
+import { relative } from 'node:path';
 import {
-  createBrainPool,
   initializeCleanBrain,
+  openBrainDiagnosticPool,
+  openVerifiedAdminPool,
   openVerifiedRuntimePool,
   resolveBrainDoctorRoleName,
-  resolveBrainUrl,
-  withBrainClient,
 } from '../lib/brain/connect.ts';
+import { assertBrainActivationComplete } from '../lib/brain-activation-config.ts';
+import type { VerifiedBrainPool } from '../lib/brain/workspace-authority.ts';
+import { fingerprintBrainNamespace } from '../lib/workspace-record.ts';
 import { readWorkspaceFile } from '../lib/workspace-io.ts';
 import type {
   CompletedRunInput,
@@ -20,35 +24,33 @@ import {
   recordHumanDecision,
   recordRunArtifact,
 } from '../lib/brain/evidence-store.ts';
-import { pendingMigrations } from '../lib/brain/migrate.ts';
 import { RUNTIME_ROLE } from '../lib/brain/roles.ts';
 import { runDoctor } from '../lib/brain/doctor.ts';
+import { requireBrainActivation, type BrainActivationStore } from '../lib/brain/activation.ts';
+import { ingestAndExtractBrainSource } from '../lib/brain/extraction.ts';
+import {
+  brainObjectStoreConfigFromRegistry,
+  createBrainObjectStore,
+  type BrainObjectStoreConfig,
+} from '../lib/brain/object-store.ts';
+import { MAX_SOURCE_BYTES, type SourceIngestInput } from '../lib/brain/source-contracts.ts';
 import { saveEntity } from '../lib/brain/save.ts';
 import type { EvidenceRecordVerb, FactPair } from '../lib/brain-args.ts';
 import { appendEvent } from '../lib/brain/event.ts';
 import { createLink } from '../lib/brain/link.ts';
 import { mergeEntities } from '../lib/brain/merge.ts';
 import { getEntity } from '../lib/brain/get.ts';
-import { createTable, listTables } from '../lib/brain/table.ts';
-import { runReadOnlyQuery } from '../lib/brain/sql.ts';
-import { mountFile } from '../lib/brain/mount.ts';
-import { exportBrain, type ExportFormat } from '../lib/brain/export.ts';
-import { loadConfig, setConfig, getConfigRows } from '../lib/brain/config.ts';
-import { resolveEmbedder } from '../lib/brain/embed.ts';
-import { filesConfig, createS3FileStore, type FileStore } from '../lib/brain/s3.ts';
-import { putFile, getFile, listFiles, rmFile } from '../lib/brain/fs.ts';
-import { query as runQuery, type QueryHit } from '../lib/brain/search.ts';
-import { reindexBrain, countReindexTargets } from '../lib/brain/reindex.ts';
-import { EMBED_MODEL } from '../lib/brain/config.ts';
 import {
-  GC_TABLES,
-  countEligible,
-  preflightGc,
-  resolveRetention,
-  runGc,
-  type GcCounts,
-} from '../lib/brain/gc.ts';
-import { EXIT_OK, EXIT_ERROR, RosterError } from '../lib/errors.ts';
+  brainFilesTarget,
+  createBrainFilesStore,
+  putFile,
+  getFile,
+  listFiles,
+  rmFile,
+  type FilesTarget,
+} from '../lib/brain/fs.ts';
+import type { FileStore } from '../lib/brain/s3.ts';
+import { EXIT_OK, EXIT_ERROR, RosterError, isRosterError } from '../lib/errors.ts';
 
 export type BrainInitOptions = {
   cwd: string;
@@ -63,16 +65,15 @@ export type BrainDoctorOptions = {
   cwd: string;
   json: boolean;
   silent: boolean;
-  adminUrl?: string;
   role?: string;
 };
 
 export async function executeBrainInit(opts: BrainInitOptions): Promise<number> {
-  const initialized = await initializeCleanBrain({
+  const initialized = await guardBrainProvider(() => initializeCleanBrain({
     cwd: opts.cwd,
     ...(opts.adminUrl === undefined ? {} : { adminUrl: opts.adminUrl }),
     role: opts.role ?? RUNTIME_ROLE,
-  });
+  }));
   const migration = initialized.bootstrap.migrations;
   const role = initialized.bootstrap.role;
   const adminRole = initialized.adminRole;
@@ -106,19 +107,18 @@ export async function executeBrainInit(opts: BrainInitOptions): Promise<number> 
     }
     console.log(`  ${chalk.green('✓')} ambient runtime credential verified`);
     console.log('');
-    console.log(chalk.dim('  Semantic search embeddings are OFF (no paid API calls).'));
-    console.log(chalk.dim('  Enable: roster brain config set embeddings.enabled true  (needs OPENAI_API_KEY)'));
+    console.log(chalk.dim('  Company knowledge enters the Brain through roster brain ingest,'));
+    console.log(chalk.dim('  which mints an immutable source version for it.'));
     console.log('');
   }
   return EXIT_OK;
 }
 
 export async function executeBrainDoctor(opts: BrainDoctorOptions): Promise<number> {
-  const roleName = resolveBrainDoctorRoleName(opts.cwd, opts.role ?? RUNTIME_ROLE);
-  const adminUrl = opts.adminUrl ?? resolveBrainUrl('admin');
-  const pool = createBrainPool('admin', adminUrl);
+  const pool = openBrainDiagnosticPool(opts.cwd);
   try {
-    const report = await runDoctor(pool, roleName);
+    const roleName = resolveBrainDoctorRoleName(opts.cwd, opts.role ?? RUNTIME_ROLE);
+    const report = await guardBrainProvider(() => runDoctor(pool, roleName));
     if (opts.json) {
       console.log(JSON.stringify({ ...report }, null, 2));
     } else if (!opts.silent) {
@@ -128,6 +128,7 @@ export async function executeBrainDoctor(opts: BrainDoctorOptions): Promise<numb
         const mark = c.ok ? chalk.green('✓') : chalk.red('✗');
         console.log(`  ${mark} ${c.name} — ${c.detail}`);
       }
+      console.log(`  ${chalk.dim('·')} identity: ${report.identity_state}`);
       console.log(`  ${chalk.dim('·')} tables: ${report.tables.length === 0 ? '(none)' : report.tables.join(', ')}`);
       console.log(`  ${chalk.dim('·')} pending migrations: ${report.pending.length === 0 ? '(none)' : report.pending.join(', ')}`);
       console.log('');
@@ -140,17 +141,230 @@ export async function executeBrainDoctor(opts: BrainDoctorOptions): Promise<numb
   }
 }
 
-type RuntimeVerbOptions = { json: boolean; runtimeUrl?: string };
-
-async function withRuntimePool<T>(
-  opts: RuntimeVerbOptions,
-  fn: (client: import('pg').PoolClient) => Promise<T>,
-): Promise<T> {
-  const url = opts.runtimeUrl ?? resolveBrainUrl('runtime');
-  const pool = createBrainPool('runtime', url);
+// §10 forbids printing a connection string OR ANY FRAGMENT of one. A raw pg or
+// AWS SDK failure carries exactly that (`connect ECONNREFUSED <host>:<port>`, a
+// request URL, a bucket), and errors.ts's global `unexpectedError` prints the
+// message verbatim. Rather than rewrite the global handler, every Brain verb
+// funnels its provider failures through this redactor: a driver failure becomes
+// one stable code with no address text, and anything that is NOT a driver
+// failure (a genuine Roster bug) is rethrown untouched so it still surfaces.
+export async function guardBrainProvider<T>(fn: () => Promise<T>): Promise<T> {
   try {
-    return await withBrainClient(pool, fn);
+    return await fn();
+  } catch (error) {
+    throw redactBrainProviderFailure(error);
+  }
+}
+
+// Only NETWORK-shaped syscalls count: a local `open`/`stat` ENOENT is a Roster
+// bug or a bad workspace path, and misreporting it as a Brain connection failure
+// would hide it behind a stable code.
+const NETWORK_SYSCALLS: ReadonlySet<string> = new Set([
+  'connect',
+  'read',
+  'write',
+  'getaddrinfo',
+  'querya',
+  'queryaaaa',
+]);
+
+// A TLS handshake failure carries NO syscall and names the private host in its
+// own message (`Hostname/IP does not match certificate's altnames: Host:
+// db.internal…`), so it must be classified explicitly or it prints verbatim.
+// Node's own failures use ERR_TLS_*; OpenSSL's verification verdicts surface on
+// `err.code` under their raw names.
+const TLS_FAILURE_CODES: ReadonlySet<string> = new Set([
+  'CERT_HAS_EXPIRED',
+  'CERT_NOT_YET_VALID',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+]);
+
+function isTlsFailureCode(code: unknown): boolean {
+  return typeof code === 'string' && (/^ERR_TLS_/u.test(code) || TLS_FAILURE_CODES.has(code));
+}
+
+export function redactBrainProviderFailure(error: unknown): unknown {
+  if (isRosterError(error)) return error;
+  const candidate = error as {
+    code?: unknown;
+    syscall?: unknown;
+    severity?: unknown;
+    routine?: unknown;
+    $metadata?: unknown;
+  };
+  const sqlState = typeof candidate.code === 'string' && /^[0-9A-Z]{5}$/u.test(candidate.code);
+  // TLS is checked first: a handshake failure may also carry a network syscall,
+  // and 'tls-failed' is the more precise verdict.
+  const tlsFailure = isTlsFailureCode(candidate.code);
+  const connectFailure = !tlsFailure
+    && typeof candidate.syscall === 'string'
+    && NETWORK_SYSCALLS.has(candidate.syscall.toLowerCase());
+  const providerFailure = tlsFailure
+    || connectFailure
+    // pg surfaces every server-side failure with BOTH a severity and a SQLSTATE.
+    || (typeof candidate.severity === 'string' && sqlState)
+    || (typeof candidate.routine === 'string' && sqlState)
+    // Every AWS SDK service exception carries $metadata.
+    || candidate.$metadata !== undefined;
+  if (!providerFailure) return error;
+  // Nothing from the original error is passed through — not its message, not its
+  // host, not its certificate subject.
+  return new RosterError({
+    header: 'Brain provider access failed',
+    body: 'The configured Brain database or object storage refused or dropped the operation.',
+    remedy: 'Verify the ambient Brain credentials and the tracked brain.storage namespace, then retry.',
+    exitCode: EXIT_ERROR,
+    code: 'BRAIN_CONNECTION_FAILED',
+    details: { reason: tlsFailure ? 'tls-failed' : connectFailure ? 'connect-failed' : 'query-failed' },
+  });
+}
+
+type RuntimeVerbOptions = { cwd: string; json: boolean };
+
+// The pool is opened FIRST and closed LAST: opening it runs the §6 activation
+// preflight and the runtime-credential contract check synchronously, before the
+// body may read a caller-supplied file or construct an object-storage client.
+async function withVerifiedRuntimePool<T>(
+  cwd: string,
+  fn: (pool: VerifiedBrainPool) => Promise<T>,
+): Promise<T> {
+  const pool = openVerifiedRuntimePool(cwd);
+  try {
+    return await guardBrainProvider(() => fn(pool));
   } finally {
+    await pool.end();
+  }
+}
+
+async function withVerifiedRuntimeClient<T>(
+  cwd: string,
+  fn: (client: pg.PoolClient) => Promise<T>,
+): Promise<T> {
+  return await withVerifiedRuntimePool(cwd, async (pool) => {
+    const client = await pool.connect();
+    try {
+      return await fn(client);
+    } finally {
+      client.release();
+    }
+  });
+}
+
+export type BrainIngestOptions = {
+  cwd: string;
+  json: boolean;
+  manifest?: string;
+  manifestFile?: string;
+  bytesFile?: string;
+  // Test seam: the hermetic ingest matrix needs a BrainObjectTransport double,
+  // and the real store is only reachable with live object-storage credentials.
+  makeObjectStore?: (config: BrainObjectStoreConfig) => BrainActivationStore;
+};
+
+const MAX_INGEST_MANIFEST_BYTES = 262_144;
+
+function ingestInputInvalid(reason: string): RosterError {
+  return new RosterError({
+    header: 'Invalid Brain ingest manifest',
+    body: `The ingest manifest is invalid: ${reason}.`,
+    remedy: 'Supply one bounded JSON object that follows the documented Brain source ingest contract.',
+    exitCode: EXIT_ERROR,
+    code: 'BRAIN_INGEST_INPUT_INVALID',
+    details: { reason },
+  });
+}
+
+function workspaceFilePath(manifest: Record<string, unknown>): string | undefined {
+  const source = manifest['source'];
+  if (source === null || typeof source !== 'object' || Array.isArray(source)) return undefined;
+  const origin = source as { kind?: unknown; workspacePath?: unknown };
+  if (origin.kind !== 'workspace-file' || typeof origin.workspacePath !== 'string') return undefined;
+  return origin.workspacePath;
+}
+
+// The manifest and the bytes are never echoed back: an ingested source can carry
+// internal or secret-class business text, and a CLI transcript is not a durable
+// store. Only content-addressed identities reach stdout.
+export async function executeBrainIngest(opts: BrainIngestOptions): Promise<number> {
+  const activation = assertBrainActivationComplete(opts.cwd, {
+    postgres: 'admin',
+    objectStorage: 'live',
+  });
+  const raw = opts.manifestFile === undefined
+    ? opts.manifest!
+    : readWorkspaceFile(opts.cwd, opts.manifestFile, { maxBytes: MAX_INGEST_MANIFEST_BYTES }).toString('utf8');
+  if (Buffer.byteLength(raw, 'utf8') > MAX_INGEST_MANIFEST_BYTES) {
+    throw ingestInputInvalid(`it exceeds ${MAX_INGEST_MANIFEST_BYTES} UTF-8 bytes`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw ingestInputInvalid('it is not valid JSON');
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw ingestInputInvalid('it must be a JSON object');
+  }
+  const manifest = parsed as Record<string, unknown>;
+  if (Object.hasOwn(manifest, 'bytes')) {
+    throw ingestInputInvalid("it must not carry 'bytes'; supply them with --bytes-file");
+  }
+  const bytesPath = opts.bytesFile ?? workspaceFilePath(manifest);
+  if (bytesPath === undefined) {
+    throw ingestInputInvalid(`'brain ingest': --bytes-file is required unless source.kind is 'workspace-file'`);
+  }
+  const bytes = readWorkspaceFile(opts.cwd, bytesPath, { maxBytes: MAX_SOURCE_BYTES });
+
+  const storeConfig = brainObjectStoreConfigFromRegistry(activation.brain);
+  const pool = openVerifiedAdminPool(opts.cwd);
+  const objectStore = opts.makeObjectStore === undefined
+    ? createBrainObjectStore(storeConfig)
+    : opts.makeObjectStore(storeConfig);
+  try {
+    const active = requireBrainActivation({ pool, objectStore });
+    const result = await guardBrainProvider(() => ingestAndExtractBrainSource(
+      active,
+      { ...manifest, bytes } as unknown as SourceIngestInput,
+    ));
+    if (opts.json) {
+      console.log(JSON.stringify({
+        ok: true,
+        verb: 'ingest',
+        ingest: {
+          intent_id: result.ingest.intentId,
+          source_id: result.ingest.sourceId,
+          source_version_id: result.ingest.sourceVersionId,
+          object_id: result.ingest.objectId,
+          published_as_current: result.ingest.publishedAsCurrent,
+        },
+        extraction: {
+          extraction_id: result.extraction.extractionId,
+          extractor_name: result.extraction.extractorName,
+          extractor_version: result.extraction.extractorVersion,
+          status: result.extraction.status,
+          unsupported_reason: result.extraction.unsupportedReason,
+          chunk_count: result.extraction.chunkCount,
+          text_sha256: result.extraction.textSha256,
+          outcome: result.extraction.outcome,
+        },
+      }, null, 2));
+    } else {
+      console.log(
+        `${chalk.green('✓')} ingested source version ${result.ingest.sourceVersionId}`
+        + `${result.ingest.publishedAsCurrent ? ' (current)' : ''}`,
+      );
+      console.log(
+        `  ${chalk.dim('·')} extraction ${result.extraction.status}: `
+        + `${result.extraction.chunkCount} chunk(s) (${result.extraction.outcome})`,
+      );
+    }
+    return EXIT_OK;
+  } finally {
+    objectStore.close();
     await pool.end();
   }
 }
@@ -166,7 +380,7 @@ export type BrainSaveOptions = RuntimeVerbOptions & {
 };
 
 export async function executeBrainSave(opts: BrainSaveOptions): Promise<number> {
-  const result = await withRuntimePool(opts, (client) =>
+  const result = await withVerifiedRuntimeClient(opts.cwd, (client) =>
     saveEntity(client, {
       kind: opts.kind,
       slug: opts.slug,
@@ -204,7 +418,7 @@ export type BrainMergeOptions = RuntimeVerbOptions & {
 };
 
 export async function executeBrainMerge(opts: BrainMergeOptions): Promise<number> {
-  const result = await withRuntimePool(opts, (client) =>
+  const result = await withVerifiedRuntimeClient(opts.cwd, (client) =>
     mergeEntities(client, {
       fromSlug: opts.fromSlug,
       intoSlug: opts.intoSlug,
@@ -230,7 +444,7 @@ export type BrainEventOptions = RuntimeVerbOptions & {
 };
 
 export async function executeBrainEvent(opts: BrainEventOptions): Promise<number> {
-  const result = await withRuntimePool(opts, (client) =>
+  const result = await withVerifiedRuntimeClient(opts.cwd, (client) =>
     appendEvent(client, { kind: opts.kind, slug: opts.slug, payload: opts.payload, actor: opts.actor }),
   );
   if (opts.json) {
@@ -251,8 +465,11 @@ export type BrainLinkOptions = RuntimeVerbOptions & {
   actor?: string;
 };
 
+// #383/D1: edges carry no immutable source-version citation, and #397 owns that
+// migration. The label is explicit so `link` is visibly deferred rather than
+// silently deferred; citation ENFORCEMENT for save/event/merge is PR B's.
 export async function executeBrainLink(opts: BrainLinkOptions): Promise<number> {
-  const result = await withRuntimePool(opts, (client) =>
+  const result = await withVerifiedRuntimeClient(opts.cwd, (client) =>
     createLink(client, {
       srcSlug: opts.srcSlug,
       rel: opts.rel,
@@ -264,9 +481,10 @@ export async function executeBrainLink(opts: BrainLinkOptions): Promise<number> 
     }),
   );
   if (opts.json) {
-    console.log(JSON.stringify({ ok: true, ...result }, null, 2));
+    console.log(JSON.stringify({ ok: true, ...result, cited: false, citation_owner: '397' }, null, 2));
   } else {
     console.log(`${chalk.green('✓')} ${opts.srcSlug} -[${opts.rel}]-> ${opts.dstSlug} #${result.edgeId}`);
+    console.log(`  ${chalk.yellow('⚠')} recorded without a citation — edge citation ships in #397`);
   }
   return EXIT_OK;
 }
@@ -274,7 +492,7 @@ export async function executeBrainLink(opts: BrainLinkOptions): Promise<number> 
 export type BrainGetOptions = RuntimeVerbOptions & { kind: string; slug: string };
 
 export async function executeBrainGet(opts: BrainGetOptions): Promise<number> {
-  const truth = await withRuntimePool(opts, (client) => getEntity(client, opts.kind, opts.slug));
+  const truth = await withVerifiedRuntimeClient(opts.cwd, (client) => getEntity(client, opts.kind, opts.slug));
   if (truth.entity === null) {
     if (opts.json) console.log(JSON.stringify({ ok: false, found: false }, null, 2));
     else console.log(chalk.yellow(`no entity ${opts.kind}/${opts.slug}`));
@@ -297,383 +515,143 @@ export async function executeBrainGet(opts: BrainGetOptions): Promise<number> {
   return EXIT_OK;
 }
 
-export type BrainTableOptions =
-  | (RuntimeVerbOptions & { op: 'create'; name: string; columns: { name: string; type: string }[] })
-  | (RuntimeVerbOptions & { op: 'list' });
+export type BrainFsOptions = RuntimeVerbOptions & {
+  // Test seam: the privacy and boundary regressions need a store double, and
+  // the real store is only reachable with live object-storage credentials.
+  makeStore?: (config: BrainObjectStoreConfig) => Promise<FileStore>;
+} & (
+  | { op: 'put'; kind: string; slug: string; file: string; filename?: string; actor?: string }
+  | { op: 'get'; kind: string; slug: string; filename: string; out?: string }
+  | { op: 'ls'; kind?: string; slug?: string }
+  | { op: 'rm'; kind: string; slug: string; filename: string; actor?: string }
+);
 
-export async function executeBrainTable(opts: BrainTableOptions): Promise<number> {
-  if (opts.op === 'create') {
-    await withRuntimePool(opts, (client) => createTable(client, opts.name, opts.columns));
-    if (opts.json) console.log(JSON.stringify({ ok: true, created: opts.name }, null, 2));
-    else console.log(`${chalk.green('✓')} table brain.${opts.name} created`);
+// The object-storage bucket, endpoint, key, and s3:// URI are private workspace
+// identifiers (§10): the namespace fingerprint is the addressable identity a
+// caller may see.
+export async function executeBrainFs(opts: BrainFsOptions): Promise<number> {
+  if (opts.op === 'ls') {
+    const entries = await withVerifiedRuntimeClient(opts.cwd, (client) =>
+      listFiles(client, { kind: opts.kind, slug: opts.slug }));
+    if (opts.json) {
+      console.log(JSON.stringify({
+        ok: true,
+        op: 'ls',
+        files: entries.map((entry) => ({
+          kind: entry.kind,
+          slug: entry.slug,
+          filename: entry.filename,
+          size_bytes: entry.sizeBytes,
+          indexed: entry.indexed,
+        })),
+      }, null, 2));
+    } else if (entries.length === 0) {
+      console.log(chalk.dim('no files'));
+    } else {
+      for (const e of entries) {
+        const size = e.sizeBytes === null ? '' : ` ${chalk.dim(`${e.sizeBytes}B`)}`;
+        const idx = e.indexed ? '' : chalk.dim(' (not indexed)');
+        console.log(`${e.kind}/${e.slug}/${e.filename}${size}${idx}`);
+      }
+    }
     return EXIT_OK;
   }
-  const tables = await withRuntimePool(opts, (client) => listTables(client));
-  if (opts.json) {
-    console.log(JSON.stringify({ ok: true, tables }, null, 2));
-  } else if (tables.length === 0) {
-    console.log(chalk.dim('(no user tables)'));
-  } else {
-    for (const t of tables) {
-      console.log(`${chalk.bold(t.name)}: ${t.columns.map((c) => `${c.name} ${c.type}`).join(', ')}`);
-    }
-  }
-  return EXIT_OK;
-}
 
-export type BrainMountOptions = RuntimeVerbOptions & { file: string };
-
-export async function executeBrainMount(opts: BrainMountOptions): Promise<number> {
-  const result = await withRuntimePool(opts, async (client) => {
-    const cfg = await loadConfig(client);
-    const embedder = resolveEmbedder(cfg);
-    return mountFile(client, opts.file, embedder);
+  const activation = assertBrainActivationComplete(opts.cwd, {
+    postgres: 'runtime',
+    objectStorage: 'live',
   });
-  if (opts.json) {
-    console.log(JSON.stringify({ ok: true, ...result }, null, 2));
-  } else if (result.mounted) {
-    const emb = result.embedded ? ', embedded' : '';
-    console.log(`${chalk.green('✓')} mounted ${result.sourcePath} (+${result.chunks} chunk(s)${emb})`);
-  } else {
-    console.log(`${chalk.dim('·')} ${result.sourcePath} unchanged — no new chunks`);
-  }
-  return EXIT_OK;
-}
+  const storeConfig = brainObjectStoreConfigFromRegistry(activation.brain);
+  const target = brainFilesTarget(storeConfig);
+  const namespaceFingerprint = fingerprintBrainNamespace(activation.brain).fingerprint;
 
-export type BrainFsOptions = RuntimeVerbOptions & {
-  // Test seam: inject a FileStore (MemoryFileStore) instead of hitting S3.
-  makeStore?: (bucket: string) => Promise<FileStore>;
-} & (
-    | { op: 'put'; kind: string; slug: string; file: string; filename?: string; actor?: string }
-    | { op: 'get'; kind: string; slug: string; filename: string; out?: string }
-    | { op: 'ls'; kind?: string; slug?: string }
-    | { op: 'rm'; kind: string; slug: string; filename: string; actor?: string }
-  );
-
-function filesNotConfigured(): RosterError {
-  return new RosterError({
-    header: 'brain fs is not configured',
-    body: 'No S3 file store is set up for this brain.',
-    remedy:
-      "Set a bucket with 'roster brain config set files.bucket <name>' and export " +
-      'AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (and AWS_REGION, or files.region).',
-    exitCode: EXIT_ERROR,
+  // Pool first: the runtime credential contract is proven before an
+  // object-storage client exists (§6.5 step 6 precedes step 7).
+  return await withVerifiedRuntimePool(opts.cwd, async (pool) => {
+    const store = opts.makeStore === undefined
+      ? await createBrainFilesStore(storeConfig)
+      : await opts.makeStore(storeConfig);
+    const client = await pool.connect();
+    try {
+      return await runFsOperation(client, store, opts, target, namespaceFingerprint);
+    } finally {
+      client.release();
+    }
   });
 }
 
-export async function executeBrainFs(opts: BrainFsOptions): Promise<number> {
-  return withRuntimePool(opts, async (client) => {
-    // `ls` is pure ledger — it never needs S3 or credentials.
-    if (opts.op === 'ls') {
-      const entries = await listFiles(client, { kind: opts.kind, slug: opts.slug });
-      if (opts.json) {
-        console.log(JSON.stringify({ ok: true, files: entries }, null, 2));
-      } else if (entries.length === 0) {
-        console.log(chalk.dim('no files'));
-      } else {
-        for (const e of entries) {
-          const size = e.sizeBytes === null ? '' : ` ${chalk.dim(`${e.sizeBytes}B`)}`;
-          const idx = e.indexed ? '' : chalk.dim(' (not indexed)');
-          console.log(`${e.kind}/${e.slug}/${e.filename}${size}${idx}`);
-        }
-      }
-      return EXIT_OK;
-    }
-
-    const cfg = await loadConfig(client);
-    if (!cfg.filesBucket) throw filesNotConfigured();
-    const target = { bucket: cfg.filesBucket, prefix: cfg.filesPrefix };
-    // The injected store (tests) needs only a configured bucket; the real S3
-    // store additionally needs env credentials (filesConfig returns null without
-    // them, which is the same "not configured" state to the user).
-    let store: FileStore;
-    if (opts.makeStore) {
-      store = await opts.makeStore(cfg.filesBucket);
-    } else {
-      const fc = filesConfig(cfg);
-      if (fc === null) throw filesNotConfigured();
-      store = await createS3FileStore(fc);
-    }
-
+async function runFsOperation(
+  client: pg.PoolClient,
+  store: FileStore,
+  opts: Exclude<BrainFsOptions, { op: 'ls' }>,
+  target: FilesTarget,
+  namespaceFingerprint: string,
+): Promise<number> {
+  {
     if (opts.op === 'put') {
-      const embedder = resolveEmbedder(cfg);
-      const res = await putFile(client, store, target, opts, embedder);
+      const res = await putFile(client, store, target, opts);
       if (opts.json) {
-        console.log(JSON.stringify({ ok: true, ...res }, null, 2));
+        console.log(JSON.stringify({
+          ok: true,
+          op: 'put',
+          kind: opts.kind,
+          slug: opts.slug,
+          filename: opts.filename ?? res.s3Key.slice(res.s3Key.lastIndexOf('/') + 1),
+          content_hash: `sha256:${res.contentHash}`,
+          size_bytes: res.sizeBytes,
+          entity_exists: res.entityExists,
+          superseded: res.supersededUri !== null,
+          namespace_fingerprint: namespaceFingerprint,
+        }, null, 2));
       } else {
-        const idx = res.indexed ? `, +${res.chunks} chunk(s)${res.embedded ? ', embedded' : ''}` : ', not indexed';
-        console.log(`${chalk.green('✓')} put ${res.sourcePath}${idx}`);
+        console.log(`${chalk.green('✓')} put ${opts.kind}/${opts.slug}`);
         if (!res.entityExists) {
           console.log(`  ${chalk.yellow('⚠')} entity ${opts.kind}/${opts.slug} not found in brain (file stored anyway)`);
         }
-        if (res.supersededUri) console.log(`  ${chalk.dim('·')} superseded ${res.supersededUri}`);
+        if (res.supersededUri !== null) console.log(`  ${chalk.dim('·')} superseded the previous namespace object`);
       }
       return EXIT_OK;
     }
 
     if (opts.op === 'get') {
-      const res = await getFile(client, store, opts);
+      const res = await getFile(client, store, { ...opts, expectedBucket: target.bucket });
+      const outPath = relative(opts.cwd, res.outPath);
       if (opts.json) {
-        console.log(JSON.stringify({ ok: true, ...res }, null, 2));
+        console.log(JSON.stringify({
+          ok: true,
+          op: 'get',
+          kind: opts.kind,
+          slug: opts.slug,
+          filename: opts.filename,
+          out_path: outPath,
+          size_bytes: res.bytes,
+          hash_matches: res.hashMatches,
+        }, null, 2));
       } else {
-        console.log(`${chalk.green('✓')} wrote ${res.outPath} (${res.bytes}B)`);
+        console.log(`${chalk.green('✓')} wrote ${outPath} (${res.bytes}B)`);
         if (!res.hashMatches) {
-          console.log(`  ${chalk.yellow('⚠')} content hash mismatch — the S3 object differs from what the ledger recorded`);
+          console.log(`  ${chalk.yellow('⚠')} content hash mismatch — the stored object differs from what the ledger recorded`);
         }
       }
       return EXIT_OK;
     }
 
-    // rm
     const res = await rmFile(client, store, opts);
     if (opts.json) {
-      console.log(JSON.stringify({ ok: true, ...res }, null, 2));
+      console.log(JSON.stringify({
+        ok: true,
+        op: 'rm',
+        kind: opts.kind,
+        slug: opts.slug,
+        filename: opts.filename,
+        tombstoned: true,
+        object_deleted: res.s3Deleted,
+      }, null, 2));
     } else {
-      const del = res.s3Deleted ? 'S3 object deleted' : chalk.yellow('S3 delete failed — run brain doctor');
+      const del = res.s3Deleted ? 'object deleted' : chalk.yellow('object delete failed — run brain doctor');
       console.log(`${chalk.green('✓')} tombstoned ${opts.kind}/${opts.slug}/${opts.filename}; ${del}`);
     }
     return EXIT_OK;
-  });
-}
-
-export type BrainQueryOptions = RuntimeVerbOptions & { text: string; kind?: string; limit?: number };
-
-export async function executeBrainQuery(opts: BrainQueryOptions): Promise<number> {
-  const hits = await withRuntimePool(opts, async (client) => {
-    const cfg = await loadConfig(client);
-    const embedder = resolveEmbedder(cfg);
-    return runQuery(client, opts.text, { kind: opts.kind, limit: opts.limit }, embedder, cfg);
-  });
-  if (opts.json) {
-    console.log(JSON.stringify({ ok: true, hits }, null, 2));
-  } else if (hits.length === 0) {
-    console.log(chalk.dim('no hits'));
-  } else {
-    for (const h of hits) console.log(formatHit(h));
-  }
-  return EXIT_OK;
-}
-
-function formatHit(h: QueryHit): string {
-  const score = h.score.toFixed(4);
-  if (h.type === 'document') {
-    return `${chalk.dim(score)} ${chalk.bold('doc')} ${h.source_path}#${h.chunk_index} — ${h.snippet}`;
-  }
-  const via = h.via === 'graph' ? chalk.dim(' (graph)') : '';
-  return `${chalk.dim(score)} ${chalk.bold('ent')} ${h.kind}/${h.slug}${h.title ? ` — ${h.title}` : ''}${via}`;
-}
-
-export type BrainReindexOptions = {
-  json: boolean;
-  since?: string;
-  model?: string;
-  yes: boolean;
-  adminUrl?: string;
-};
-
-export type BrainGcOptions = {
-  json: boolean;
-  olderThan?: string;
-  yes: boolean;
-  adminUrl?: string;
-};
-
-function gcTotal(counts: GcCounts): number {
-  return GC_TABLES.reduce((sum, t) => sum + counts[t], 0);
-}
-
-export async function executeBrainGc(opts: BrainGcOptions): Promise<number> {
-  const adminUrl = opts.adminUrl ?? resolveBrainUrl('admin');
-  const pool = createBrainPool('admin', adminUrl);
-  try {
-    const pre = await withBrainClient(pool, (c) => preflightGc(c));
-    if (!pre.ok) {
-      const remedy =
-        pre.reason === 'runtime-url'
-          ? `  Point ROSTER_BRAIN_ADMIN_URL at the owner/admin role — gc is the only sanctioned deleter and never runs as the append-only runtime role.`
-          : pre.reason === 'missing-schema'
-            ? `  Run ${chalk.bold('roster brain init')} first.`
-            : `  Connect with a role that owns the brain schema (the one used for brain init).`;
-      throw new RosterError({
-        header: `${chalk.red.bold('roster:')} brain gc refused — ${pre.detail}`,
-        body: '',
-        remedy,
-        exitCode: EXIT_ERROR,
-      });
-    }
-
-    // After the runtime-URL check (the runtime role can't read schema_migrations,
-    // so this would raise a raw permission error first). A stale schema means the
-    // eligibility queries and gc.retention lookup can't be trusted — refuse.
-    const pending = await pendingMigrations(pool);
-    if (pending.length > 0) {
-      throw new RosterError({
-        header: `${chalk.red.bold('roster:')} brain gc refused — schema has ${pending.length} pending migration(s)`,
-        body: '',
-        remedy: `  Run ${chalk.bold('roster brain init')} first to bring the brain up to date.`,
-        exitCode: EXIT_ERROR,
-      });
-    }
-
-    const retention = await withBrainClient(pool, (c) => resolveRetention(c, opts.olderThan));
-    const eligible = await withBrainClient(pool, (c) => countEligible(c, retention.interval));
-    const total = gcTotal(eligible);
-
-    if (total === 0) {
-      if (opts.json) {
-        console.log(JSON.stringify({ ok: true, mode: 'preview', retention: retention.raw, eligible, deleted: null }, null, 2));
-      } else {
-        console.log(`${chalk.green('✓')} nothing to prune — no superseded rows older than ${retention.raw}`);
-      }
-      return EXIT_OK;
-    }
-
-    // Destructive-op guard (mirrors reindex's bulk-cost guard): never delete
-    // without an explicit --yes; preview the per-table counts and stop.
-    if (!opts.yes) {
-      if (opts.json) {
-        console.log(JSON.stringify({ ok: true, mode: 'preview', retention: retention.raw, eligible, deleted: null, pending_confirmation: true }, null, 2));
-      } else {
-        console.log(`${chalk.yellow('⚠')} ${total} superseded row(s) older than ${retention.raw} would be deleted:`);
-        for (const table of GC_TABLES) {
-          if (eligible[table] > 0) console.log(`    brain.${table}: ${eligible[table]}`);
-        }
-        console.log(`  Current versions are never touched. Re-run with ${chalk.bold('--yes')} to delete.`);
-      }
-      return EXIT_OK;
-    }
-
-    const deleted = await runGc(pool, { interval: retention.interval });
-    if (opts.json) {
-      console.log(JSON.stringify({ ok: true, mode: 'delete', retention: retention.raw, eligible, deleted }, null, 2));
-    } else {
-      console.log(`${chalk.green('✓')} pruned ${gcTotal(deleted)} superseded row(s) older than ${retention.raw}`);
-      for (const table of GC_TABLES) {
-        if (deleted[table] > 0) console.log(`    brain.${table}: ${deleted[table]}`);
-      }
-    }
-    return EXIT_OK;
-  } finally {
-    await pool.end();
-  }
-}
-
-export async function executeBrainReindex(opts: BrainReindexOptions): Promise<number> {
-  if (opts.model !== undefined && opts.model !== EMBED_MODEL && opts.model !== `openai:${EMBED_MODEL}`) {
-    throw new RosterError({
-      header: `${chalk.red.bold('roster:')} unsupported --model ${chalk.yellow(opts.model)}`,
-      body: `  Only 'openai:${EMBED_MODEL}' is supported today.`,
-      remedy: `  Drop --model (uses the configured model) or pass openai:${EMBED_MODEL}.`,
-      exitCode: EXIT_ERROR,
-    });
-  }
-  const adminUrl = opts.adminUrl ?? resolveBrainUrl('admin');
-  const pool = createBrainPool('admin', adminUrl);
-  try {
-    const cfg = await withBrainClient(pool, (c) => loadConfig(c));
-    const embedder = resolveEmbedder(cfg);
-    if (!embedder) {
-      throw new RosterError({
-        header: `${chalk.red.bold('roster:')} embeddings are not enabled`,
-        body: '  reindex needs embeddings on + an API key (OPENAI_API_KEY in the environment).',
-        remedy: '  Enable with: roster brain config set embeddings.enabled true',
-        exitCode: EXIT_ERROR,
-      });
-    }
-    const targeted = await withBrainClient(pool, (c) => countReindexTargets(c, embedder.model, opts.since));
-    if (targeted === 0) {
-      if (opts.json) console.log(JSON.stringify({ ok: true, targeted: 0, embedded: 0, remaining: 0 }, null, 2));
-      else console.log(`${chalk.green('✓')} nothing to reindex — all active chunks are embedded`);
-      return EXIT_OK;
-    }
-    // Bulk-cost guard: a single reindex can embed a whole corpus. Never spend
-    // without an explicit --yes; without it, preview the count and stop.
-    if (!opts.yes) {
-      if (opts.json) {
-        console.log(JSON.stringify({ ok: true, targeted, embedded: 0, remaining: targeted, pending_confirmation: true }, null, 2));
-      } else {
-        console.log(`${chalk.yellow('⚠')} ${targeted} active chunk(s) need embedding — that's ${targeted} paid embedding call(s).`);
-        console.log(`  Re-run with ${chalk.bold('--yes')} to proceed.`);
-      }
-      return EXIT_OK;
-    }
-    const result = await reindexBrain(pool, embedder, { since: opts.since }, (done, total) => {
-      if (!opts.json) process.stderr.write(`\r  embedding ${done}/${total}…`);
-    });
-    if (!opts.json) process.stderr.write('\n');
-    if (opts.json) console.log(JSON.stringify({ ok: true, ...result }, null, 2));
-    else console.log(`${chalk.green('✓')} reindexed ${result.embedded} chunk(s); ${result.remaining} remaining`);
-    return EXIT_OK;
-  } finally {
-    await pool.end();
-  }
-}
-
-export type BrainConfigOptions =
-  | (RuntimeVerbOptions & { op: 'get'; key?: string })
-  | { json: boolean; op: 'set'; key: string; value: string; adminUrl?: string };
-
-export async function executeBrainConfig(opts: BrainConfigOptions): Promise<number> {
-  if (opts.op === 'set') {
-    const adminUrl = opts.adminUrl ?? resolveBrainUrl('admin');
-    const pool = createBrainPool('admin', adminUrl);
-    try {
-      const res = await withBrainClient(pool, (client) => setConfig(client, opts.key, opts.value));
-      if (opts.json) console.log(JSON.stringify({ ok: true, ...res }, null, 2));
-      else console.log(`${chalk.green('✓')} ${res.key} = ${JSON.stringify(res.value)}`);
-      return EXIT_OK;
-    } finally {
-      await pool.end();
-    }
-  }
-  const rows = await withRuntimePool(opts, (client) => getConfigRows(client));
-  const filtered = opts.key === undefined ? rows : rows.filter((r) => r.key === opts.key);
-  if (opts.json) {
-    console.log(JSON.stringify({ ok: true, config: filtered }, null, 2));
-  } else if (filtered.length === 0) {
-    console.log(chalk.dim(opts.key ? `${opts.key} unset (using default)` : '(no overrides set; using defaults)'));
-  } else {
-    for (const r of filtered) console.log(`${r.key} = ${JSON.stringify(r.value)}`);
-  }
-  return EXIT_OK;
-}
-
-export type BrainSqlOptions = RuntimeVerbOptions & { query: string };
-
-export async function executeBrainSql(opts: BrainSqlOptions): Promise<number> {
-  const result = await withRuntimePool(opts, (client) => runReadOnlyQuery(client, opts.query));
-  if (opts.json) {
-    console.log(JSON.stringify({ ok: true, rowCount: result.rowCount, rows: result.rows }, null, 2));
-  } else {
-    console.log(JSON.stringify(result.rows, null, 2));
-  }
-  return EXIT_OK;
-}
-
-export type BrainExportOptions = {
-  json: boolean;
-  outDir?: string;
-  format: ExportFormat;
-  adminUrl?: string;
-};
-
-export async function executeBrainExport(opts: BrainExportOptions): Promise<number> {
-  const adminUrl = opts.adminUrl ?? resolveBrainUrl('admin');
-  const pool = createBrainPool('admin', adminUrl);
-  try {
-    const exportedAt = new Date().toISOString();
-    const outDir = opts.outDir ?? `./brain-export-${exportedAt.replace(/[:.]/g, '-')}`;
-    const result = await exportBrain(pool, { outDir, format: opts.format, exportedAt });
-    if (opts.json) {
-      console.log(JSON.stringify({ ok: true, ...result }, null, 2));
-    } else {
-      console.log(
-        `${chalk.green('✓')} exported ${result.totalRows} row(s) across ${result.tables.length} table(s) → ${result.outDir} (${result.format})`,
-      );
-    }
-    return EXIT_OK;
-  } finally {
-    await pool.end();
   }
 }
 
@@ -701,24 +679,25 @@ function recordPayloadInvalid(reason: string): RosterError {
 // The payload is never echoed back: durable evidence can carry internal or
 // secret-class business text, and a CLI transcript is not a durable store.
 export async function executeBrainRecord(opts: BrainRecordOptions): Promise<number> {
-  const raw = opts.file === undefined
-    ? opts.payload!
-    : readWorkspaceFile(opts.cwd, opts.file, { maxBytes: MAX_RECORD_PAYLOAD_BYTES }).toString('utf8');
-  if (Buffer.byteLength(raw, 'utf8') > MAX_RECORD_PAYLOAD_BYTES) {
-    throw recordPayloadInvalid(`it exceeds ${MAX_RECORD_PAYLOAD_BYTES} UTF-8 bytes`);
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw recordPayloadInvalid('it is not valid JSON');
-  }
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw recordPayloadInvalid('it must be a JSON object');
-  }
+  // The pool is opened first so an unconfigured, half-declared, or
+  // credential-less workspace refuses BEFORE any caller-supplied file is read.
+  return await withVerifiedRuntimePool(opts.cwd, async (pool) => {
+    const raw = opts.file === undefined
+      ? opts.payload!
+      : readWorkspaceFile(opts.cwd, opts.file, { maxBytes: MAX_RECORD_PAYLOAD_BYTES }).toString('utf8');
+    if (Buffer.byteLength(raw, 'utf8') > MAX_RECORD_PAYLOAD_BYTES) {
+      throw recordPayloadInvalid(`it exceeds ${MAX_RECORD_PAYLOAD_BYTES} UTF-8 bytes`);
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw recordPayloadInvalid('it is not valid JSON');
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw recordPayloadInvalid('it must be a JSON object');
+    }
 
-  const pool = openVerifiedRuntimePool(opts.cwd);
-  try {
     const result = opts.recordKind === 'run'
       ? await recordCompletedRun(pool, parsed as CompletedRunInput)
       : opts.recordKind === 'artifact'
@@ -734,24 +713,5 @@ export async function executeBrainRecord(opts: BrainRecordOptions): Promise<numb
       );
     }
     return EXIT_OK;
-  } finally {
-    await pool.end();
-  }
-}
-
-export type BrainImportOptions = {
-  json: boolean;
-  dir: string;
-  adminUrl?: string;
-};
-
-export async function executeBrainImport(_opts: BrainImportOptions): Promise<number> {
-  throw new RosterError({
-    header: `${chalk.red.bold('roster:')} legacy Brain import is disabled`,
-    body: '  The legacy import path cannot prove that the target Brain belongs to this workspace.',
-    remedy: '  Keep the backup unchanged and use the reviewed workspace migration path when it is available.',
-    exitCode: EXIT_ERROR,
-    code: 'BRAIN_LEGACY_COMMAND_DISABLED',
-    details: { command: 'brain import' },
   });
 }

@@ -5,7 +5,7 @@ import { createBrainPool, withBrainClient } from '../src/lib/brain/connect.ts';
 import { runMigrations } from '../src/lib/brain/migrate.ts';
 import { ensureRuntimeRole, applyGrants } from '../src/lib/brain/roles.ts';
 import { runDoctor } from '../src/lib/brain/doctor.ts';
-import { HAS_DB, createFreshDb, type FreshDb } from './brain-helpers.ts';
+import { HAS_DB, createFreshDb, seedWorkspaceIdentity, type FreshDb } from './brain-helpers.ts';
 
 const opts = { skip: HAS_DB ? false : 'ROSTER_BRAIN_ADMIN_URL not set' };
 
@@ -16,6 +16,7 @@ async function provision(): Promise<Setup> {
   const pool = createBrainPool('admin', fresh.url);
   try {
     await runMigrations(pool);
+    await seedWorkspaceIdentity(pool);
     await withBrainClient(pool, (c) => ensureRuntimeRole(c, fresh.role));
   } catch (err) {
     await fresh.drop();
@@ -57,6 +58,12 @@ test('doctor green on a healthy DB (case 9)', opts, async () => {
     assert.equal(report.roleExists, true);
     assert.ok(report.tables.includes('entities'));
     assert.deepEqual(report.pending, []);
+    // #383 (AC-3): the report reads protected metadata only. Both company-content
+    // and object-storage checks are gone; #366 owns their v2 replacements.
+    assert.equal(report.object_storage_contacted, false);
+    assert.equal(report.company_content_read, false);
+    assert.deepEqual(report.checks.filter((c) => c.name.startsWith('canonical-id-no-drift')), []);
+    assert.deepEqual(report.checks.filter((c) => c.name.startsWith('s3-file-drift')), []);
   } finally {
     await pool.end();
     await teardown();
@@ -369,6 +376,7 @@ test('ensureRuntimeRole strips a Neon-style creator auto-grant; init self-heals 
   const pool = createBrainPool('admin', fresh.url);
   try {
     await runMigrations(pool);
+    await seedWorkspaceIdentity(pool);
     await pool.query(
       `CREATE ROLE ${fresh.role} LOGIN
          NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`,
@@ -490,6 +498,7 @@ test('stock-PG16 bootstrap-granted membership remains, but doctor passes — mem
     const pool = createBrainPool('admin', adminUrl.toString());
     try {
       await runMigrations(pool);
+      await seedWorkspaceIdentity(pool);
       const result = await withBrainClient(pool, (c) => ensureRuntimeRole(c, runtimeRole));
       assert.equal(result.created, true);
       assert.equal(result.creatorGrantRemains, true, 'bootstrap-granted membership must be reported as remaining');

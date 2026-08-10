@@ -178,6 +178,10 @@ async function stripCreatorGrant(client: pg.PoolClient, role: string): Promise<b
   return (remains.rowCount ?? 0) > 0;
 }
 
+// TEST-FIXTURE ONLY since #383: no `src/**` module imports this (pinned in
+// test/static-boundaries.test.ts). Production provisions roles through
+// ensureWorkspaceRuntimeRole, which derives the name from workspace identity and
+// consumes an ambient password instead of minting one. Removal is #363's.
 export async function ensureRuntimeRole(
   client: pg.PoolClient,
   roleName: string = RUNTIME_ROLE,
@@ -291,7 +295,9 @@ export async function applyGrants(
   await client.query(`REVOKE ALL PRIVILEGES ON SCHEMA brain_meta FROM ${qrole}`);
 
   await client.query(`GRANT USAGE ON SCHEMA brain TO ${qrole}`);
-  await client.query(`GRANT EXECUTE ON FUNCTION brain.create_table(text, jsonb) TO ${qrole}`);
+  // #383 (AC-2): brain.create_table is a DDL broker — it CREATEs a table and
+  // reassigns its owner. The runtime role may never reach it; the blanket
+  // function REVOKE above self-heals a pre-#383 Brain on re-init.
   await client.query(`GRANT EXECUTE ON FUNCTION brain.canonical_id(bigint) TO ${qrole}`);
 
   // ROS-146: merge is now an admin-owned SECURITY DEFINER function (008). The
@@ -420,6 +426,9 @@ async function applyEvidenceGrants(client: pg.PoolClient, qrole: string): Promis
   }
 }
 
+// TEST-FIXTURE ONLY since #383: reconstructing a connection string is exactly
+// what the workspace authority path must never do (pinned in
+// test/static-boundaries.test.ts). Removal is #363's.
 export function buildRuntimeUrl(
   adminUrl: string,
   password: string,

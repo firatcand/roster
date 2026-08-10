@@ -6,10 +6,15 @@ import type { BrainConfig } from './config.ts';
 // re-exported here unchanged; only the BrainConfig-aware wiring below is
 // brain-specific.
 
-import { createS3FileStore as createS3FileStoreCore, type FileStore } from '../persistence/s3-core.ts';
+import {
+  createS3FileStore as createS3FileStoreCore,
+  type FileStore,
+  type S3StoreBoundary,
+} from '../persistence/s3-core.ts';
 
 export {
   ConditionalWriteFailed,
+  ConditionalWriteUnsupported,
   MemoryFileStore,
   type FileStore,
   type GetResult,
@@ -52,6 +57,7 @@ export function filesConfig(cfg: BrainConfig, env: NodeJS.ProcessEnv = process.e
 export async function createS3FileStore(
   fc: FilesConfig,
   env: NodeJS.ProcessEnv = process.env,
+  boundary?: S3StoreBoundary,
 ): Promise<FileStore> {
-  return createS3FileStoreCore(fc, env);
+  return createS3FileStoreCore(fc, env, boundary);
 }

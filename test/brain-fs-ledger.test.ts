@@ -206,7 +206,11 @@ test('tombstone: an rm ledger row hides that file chunks from current_documents 
   }
 });
 
-test('tombstone: re-put after rm resurrects chunks without a new mount', opts, async () => {
+// #383: `fs put` writes ledger + object only, so this exercises the LEGACY
+// mount pairing directly — the ledger rows are hand-written here, exactly as a
+// pre-#383 put composed them. mountBytesTx and brain.files.mount_id are retired
+// together in #363.
+test('tombstone: a re-mounted source restores its chunks without a new mount', opts, async () => {
   const { fresh, password, teardown } = await provision();
   const rt = await runtimeClient(fresh.url, password, fresh.role);
   const uri = 's3://bkt/files/concept/rrf/post.md';
@@ -233,8 +237,8 @@ test('tombstone: re-put after rm resurrects chunks without a new mount', opts, a
     );
     assert.equal(hidden.rows[0]!.c, 0, 'hidden after rm');
 
-    // Re-put the same bytes: mountBytesTx no-ops (unchanged), reuses the mount;
-    // a fresh op='put' ledger row supersedes the tombstone.
+    // Re-mount the same bytes: mountBytesTx no-ops (unchanged) and reuses the
+    // mount; a fresh op='put' ledger row supersedes the tombstone.
     await rt.query('BEGIN');
     const m2 = await mountBytesTx(rt, uri, bytes, null);
     await rt.query(

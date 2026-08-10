@@ -4,9 +4,9 @@ import { basename, extname, resolve } from 'node:path';
 import type pg from 'pg';
 import { RosterError, EXIT_ERROR } from '../errors.ts';
 import { assertSafeSegment } from '../persistence/safe-path.ts';
-import { type Embedder } from './embed.ts';
-import { mountBytesTx } from './mount.ts';
-import { ConditionalWriteFailed, type FileStore } from './s3.ts';
+import { createS3FileStore, ConditionalWriteFailed, type FileStore } from './s3.ts';
+import { createS3NetworkBoundary, type S3NetworkPolicyDeps } from './s3-network-policy.ts';
+import type { BrainObjectStoreConfig } from './object-store.ts';
 
 export { assertSafeSegment };
 
@@ -27,6 +27,41 @@ export function deriveKey(prefix: string, addr: FileAddress): string {
 
 export function sourceUri(bucket: string, key: string): string {
   return `s3://${bucket}/${key}`;
+}
+
+// #383: the file store is derived from the TRACKED roster.yaml namespace, never
+// from brain_meta.config — that setter is fail-closed and the tracked namespace
+// is the one the workspace-authority fingerprint covers. deriveKey concatenates
+// the prefix verbatim, so a tracked root_prefix (never trailing-slashed) gains
+// the separator here and existing keys stay byte-identical.
+export function brainFilesTarget(config: BrainObjectStoreConfig): FilesTarget {
+  return {
+    bucket: config.bucket,
+    prefix: config.rootPrefix === undefined ? '' : `${config.rootPrefix}/`,
+  };
+}
+
+// The tracked namespace is dialed through the SAME exact-origin boundary the
+// content-addressed object store uses (#383, §1.1(c)): deriveS3Origin fails
+// closed on a plaintext or userinfo-bearing endpoint and on a missing region,
+// the guarded lookup refuses a non-global or rebinding DNS answer, and the
+// handler refuses any protocol/host/port/Host-header drift the SDK introduces.
+export async function createBrainFilesStore(
+  config: BrainObjectStoreConfig,
+  deps: S3NetworkPolicyDeps = {},
+): Promise<FileStore> {
+  const { requestHandler } = createS3NetworkBoundary(config, deps);
+  return await createS3FileStore(
+    {
+      bucket: config.bucket,
+      region: config.region,
+      endpoint: config.endpoint ?? null,
+      prefix: brainFilesTarget(config).prefix,
+      forcePathStyle: config.forcePathStyle,
+    },
+    process.env,
+    { requestHandler },
+  );
 }
 
 // The advisory-lock key for a file address. put and rm serialize on this so a
@@ -73,7 +108,9 @@ function contentTypeFor(filename: string): string {
 }
 
 // Indexable = a text extension AND no NUL byte in the first 8 KiB (a cheap
-// binary sniff — a stray NUL means it isn't the text we'd chunk usefully).
+// binary sniff). Kept as a pure predicate for the extraction pipeline's own
+// sniffing; `fs put` no longer chunks anything (#383 §7.4). Removal, if it stays
+// unused, is #363's.
 export function isIndexableText(filename: string, bytes: Buffer): boolean {
   if (!TEXT_EXTS.has(extname(filename).toLowerCase())) return false;
   const window = bytes.subarray(0, 8192);
@@ -92,23 +129,27 @@ export type PutFileResult = {
   op: 'put';
   s3Key: string;
   sourcePath: string;
-  indexed: boolean;
-  chunks: number;
-  embedded: boolean;
+  contentHash: string;
+  sizeBytes: number;
   entityExists: boolean;
   supersededUri: string | null;
 };
 
-// Store bytes in S3 (durable first), then record the ledger row + index in one
-// transaction. S3-first means nothing in the ledger can point at bytes that
-// never landed; a crash between the two leaves an S3 object with no ledger row,
-// which `brain doctor` surfaces and a re-run heals.
+// Store bytes in object storage (durable first), then record the ledger row in
+// one transaction. Object-first means nothing in the ledger can point at bytes
+// that never landed; a crash between the two leaves an object with no ledger
+// row, which the file-drift check surfaces and a re-run heals.
+//
+// #383 (§7.4): `fs put` no longer chunk-indexes. Extraction and indexing belong
+// to `roster brain ingest` (the 012 extraction pipeline), which cites an
+// immutable source version; a ledger-only put writes no brain.mounts and no
+// brain.documents rows, so `mount_id` is always NULL here. The column and the
+// legacy mount tables stay until #363 removes them.
 export async function putFile(
   client: pg.PoolClient | pg.Client,
   store: FileStore,
   target: FilesTarget,
   spec: PutSpec,
-  embedder: Embedder | null = null,
 ): Promise<PutFileResult> {
   const filename = spec.filename ?? basename(spec.file);
   assertSafeSegment('kind', spec.kind);
@@ -121,7 +162,6 @@ export async function putFile(
   const uri = sourceUri(target.bucket, key);
   const contentHash = sha256(bytes);
   const contentType = contentTypeFor(filename);
-  const indexable = isIndexableText(filename, bytes);
 
   await client.query('BEGIN');
   try {
@@ -158,16 +198,6 @@ export async function putFile(
       throw err;
     }
 
-    let mountId: string | null = null;
-    let chunks = 0;
-    let embedded = false;
-    if (indexable) {
-      const m = await mountBytesTx(client, uri, bytes, embedder);
-      mountId = m.mountId;
-      chunks = m.chunks;
-      embedded = m.embedded;
-    }
-
     // Config-change guard: if this address' previous current row lived at a
     // DIFFERENT source_path (bucket/prefix changed), tombstone the old URI in the
     // same transaction. The view already self-corrects on the address, but the
@@ -192,8 +222,8 @@ export async function putFile(
     await client.query(
       `INSERT INTO brain.files
          (kind, slug, filename, op, source_path, bucket, s3_key, size_bytes, content_hash, etag, content_type, mount_id, actor)
-       VALUES ($1, $2, $3, 'put', $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-      [spec.kind, spec.slug, filename, uri, target.bucket, key, bytes.length, contentHash, etag, contentType, mountId, spec.actor ?? null],
+       VALUES ($1, $2, $3, 'put', $4, $5, $6, $7, $8, $9, $10, NULL, $11)`,
+      [spec.kind, spec.slug, filename, uri, target.bucket, key, bytes.length, contentHash, etag, contentType, spec.actor ?? null],
     );
 
     const ent = await client.query(
@@ -203,14 +233,28 @@ export async function putFile(
     const entityExists = ent.rowCount !== 0;
 
     await client.query('COMMIT');
-    return { op: 'put', s3Key: key, sourcePath: uri, indexed: indexable, chunks, embedded, entityExists, supersededUri };
+    return {
+      op: 'put',
+      s3Key: key,
+      sourcePath: uri,
+      contentHash,
+      sizeBytes: bytes.length,
+      entityExists,
+      supersededUri,
+    };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     throw err;
   }
 }
 
-export type GetSpec = { kind: string; slug: string; filename: string; out?: string };
+export type GetSpec = {
+  kind: string;
+  slug: string;
+  filename: string;
+  out?: string;
+  expectedBucket?: string;
+};
 export type GetFileResult = { outPath: string; hashMatches: boolean; bytes: number };
 
 function notFound(addr: FileAddress): RosterError {
@@ -235,12 +279,25 @@ export async function getFile(
 ): Promise<GetFileResult> {
   const addr = { kind: spec.kind, slug: spec.slug, filename: spec.filename };
   return withAddressLock(client, spec.kind, spec.slug, spec.filename, async () => {
-    const row = await client.query<{ s3_key: string; content_hash: string | null }>(
-      `SELECT s3_key, content_hash FROM brain.current_files
+    const row = await client.query<{ s3_key: string; content_hash: string | null; bucket: string }>(
+      `SELECT s3_key, content_hash, bucket FROM brain.current_files
         WHERE kind = $1 AND slug = $2 AND filename = $3`,
       [spec.kind, spec.slug, spec.filename],
     );
     if (row.rowCount === 0) throw notFound(addr);
+    // #383: the store is bound to the TRACKED namespace, so a ledger row left
+    // behind by a previously-configured bucket is refused precisely instead of
+    // being read out of a foreign namespace. The bucket name is never echoed.
+    if (spec.expectedBucket !== undefined && row.rows[0]!.bucket !== spec.expectedBucket) {
+      throw new RosterError({
+        header: `File ${spec.kind}/${spec.slug}/${spec.filename} lives outside this workspace namespace`,
+        body: 'The ledger records this file under an object-storage namespace this workspace no longer declares.',
+        remedy: 'Re-upload the file into the tracked brain.storage namespace, or restore the previous tracked namespace.',
+        exitCode: EXIT_ERROR,
+        code: 'BRAIN_FS_FOREIGN_BUCKET',
+        details: { kind: spec.kind, slug: spec.slug, filename: spec.filename },
+      });
+    }
 
     const obj = await store.get(row.rows[0]!.s3_key);
     if (obj === null) {
@@ -393,13 +450,18 @@ export async function rmFile(
   return { op: 'rm', sourcePath: head.source_path, s3Deleted };
 }
 
+// The provider's own message can carry the bucket, endpoint, key, or a request
+// URL, none of which may reach a transcript (#383 §10) — only the error CLASS is
+// reported. This whole byte-deletion phase is removed in PR B, which makes
+// `fs rm` a pure ledger tombstone with no object-storage access at all.
 async function tryDelete(store: FileStore, key: string): Promise<boolean> {
   try {
     await store.del(key);
     return true;
   } catch (err) {
+    const kind = err instanceof Error && err.name.length > 0 ? err.name : 'Error';
     process.stderr.write(
-      `roster brain fs rm: tombstoned in the ledger, but the S3 delete failed (${(err as Error).message}); ` +
+      `roster brain fs rm: tombstoned in the ledger, but the object delete failed (${kind}); ` +
         `run 'roster brain doctor' — the orphan will be flagged and a re-run retries the delete\n`,
     );
     return false;

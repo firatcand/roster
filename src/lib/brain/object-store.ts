@@ -10,7 +10,7 @@ import {
   type S3EndpointConfig,
 } from './s3-network-policy.ts';
 import { MAX_SOURCE_BYTES } from './source-contracts.ts';
-import { fingerprintBrainNamespace } from '../workspace-record.ts';
+import { fingerprintBrainNamespace, type WorkspaceBrainConfig } from '../workspace-record.ts';
 
 const SHA256_RE = /^[0-9a-f]{64}$/u;
 const CONTENT_TYPE_RE = /^[\x20-\x7e]{1,255}$/u;
@@ -480,10 +480,24 @@ function explicitCredentials(env: NodeJS.ProcessEnv): {
   };
 }
 
+export function brainObjectStoreConfigFromRegistry(
+  brain: WorkspaceBrainConfig,
+): BrainObjectStoreConfig {
+  return {
+    bucket: brain.storage.bucket,
+    region: brain.storage.region,
+    ...(brain.storage.endpoint === undefined ? {} : { endpoint: brain.storage.endpoint }),
+    forcePathStyle: brain.storage.force_path_style,
+    ...(brain.storage.root_prefix === undefined ? {} : { rootPrefix: brain.storage.root_prefix }),
+  };
+}
+
+// Declared as the intersection the activation guard requires: the concrete class
+// already implements both halves, so the caller never needs a cast.
 export function createBrainObjectStore(
   config: BrainObjectStoreConfig,
   env: NodeJS.ProcessEnv = process.env,
-): BrainObjectStore {
+): BrainObjectStore & BrainObjectReader {
   const credentials = explicitCredentials(env);
   const { requestHandler } = createS3NetworkBoundary(config);
   const client = new S3Client({

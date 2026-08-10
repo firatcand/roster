@@ -8,7 +8,7 @@ import { runMigrations } from '../src/lib/brain/migrate.ts';
 import { ensureRuntimeRole } from '../src/lib/brain/roles.ts';
 import { setConfig } from '../src/lib/brain/config.ts';
 import { MemoryFileStore } from '../src/lib/brain/s3.ts';
-import { checkFileDrift } from '../src/lib/brain/doctor.ts';
+import { checkFileDrift } from '../src/lib/brain/doctor-file-drift.ts';
 import { putFile } from '../src/lib/brain/fs.ts';
 import { HAS_DB, createFreshDb, runtimeClient, type FreshDb } from './brain-helpers.ts';
 

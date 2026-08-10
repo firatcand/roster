@@ -14,7 +14,7 @@ export type BrainWorkspaceAuthority = {
   namespaceFingerprint: string;
 };
 
-type BrainWorkspaceIdentity = {
+export type BrainWorkspaceIdentity = {
   workspaceId: string;
   fingerprintFormatVersion: number;
   namespaceFingerprint: string;
@@ -211,6 +211,83 @@ export function createVerifiedBrainPool(options: VerifiedBrainPoolOptions): Veri
     max: 4,
   });
   return new VerifiedBrainPool(pool, options.authority, options.databaseAuthorityId);
+}
+
+export type BrainDiagnosticIdentityState =
+  | { state: 'uninitialized' }
+  | { state: 'migrating'; identity: BrainWorkspaceIdentity }
+  | { state: 'ready'; identity: BrainWorkspaceIdentity };
+
+// Diagnostics get a NARROWER but EARLIER authority than every other verb: they
+// may inspect protected metadata before identity is ready, so an uninitialized
+// or migrating database is permitted — but diagnosing ANOTHER workspace's
+// database never is, at any readiness.
+export async function verifyBrainDiagnosticAuthority(
+  client: AuthorityQueryable,
+  authority: BrainWorkspaceAuthority,
+): Promise<BrainDiagnosticIdentityState> {
+  const identity = await readBrainWorkspaceIdentity(client);
+  if (identity === null) return { state: 'uninitialized' };
+  if (identity.workspaceId !== authority.workspaceId) {
+    throw authorityError('BRAIN_WORKSPACE_MISMATCH', 'The protected database identity belongs to a different workspace.');
+  }
+  if (identity.fingerprintFormatVersion !== authority.fingerprintFormatVersion
+    || identity.namespaceFingerprint !== authority.namespaceFingerprint) {
+    throw authorityError('BRAIN_NAMESPACE_MISMATCH', 'The protected database identity has a different S3 namespace fingerprint.');
+  }
+  if (identity.migrationState !== 'ready') return { state: 'migrating', identity };
+  return { state: 'ready', identity };
+}
+
+export class DiagnosticBrainPool {
+  private readonly verified = new WeakSet<object>();
+  private readonly pool: pg.Pool;
+  readonly authority: BrainWorkspaceAuthority;
+
+  constructor(pool: pg.Pool, authority: BrainWorkspaceAuthority) {
+    this.pool = pool;
+    this.authority = authority;
+  }
+
+  async end(): Promise<void> {
+    await this.pool.end();
+  }
+
+  async connect(): Promise<pg.PoolClient> {
+    const client = await this.pool.connect();
+    try {
+      if (!this.verified.has(client)) {
+        await verifyBrainDiagnosticAuthority(client, this.authority);
+        this.verified.add(client);
+      }
+      return client;
+    } catch (error) {
+      client.release(error instanceof Error ? error : new Error('Brain diagnostic authority verification failed'));
+      throw error;
+    }
+  }
+
+  async query<T extends pg.QueryResultRow = pg.QueryResultRow>(
+    text: string,
+    values?: unknown[],
+  ): Promise<pg.QueryResult<T>> {
+    const client = await this.connect();
+    try {
+      return await client.query<T>(text, values);
+    } finally {
+      client.release();
+    }
+  }
+}
+
+export function createDiagnosticBrainPool(
+  options: { connectionString: string; authority: BrainWorkspaceAuthority },
+): DiagnosticBrainPool {
+  const pool = new pg.Pool({
+    connectionString: options.connectionString,
+    max: 4,
+  });
+  return new DiagnosticBrainPool(pool, options.authority);
 }
 
 export async function isPristineBrainDatabase(client: AuthorityQueryable): Promise<boolean> {
