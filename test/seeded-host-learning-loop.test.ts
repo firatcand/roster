@@ -7,7 +7,7 @@ import { DEFAULT_CONTEXT_BUDGET_TOKENS } from '../src/lib/context-args.ts';
 import { synchronizeGeneratedActivations } from '../src/lib/generated-artifacts.ts';
 import type {
   ContextRequest,
-  SeedBrainCandidate,
+  ContextBrainCandidate,
   WorkspaceContext,
 } from '../src/lib/workspace-context.ts';
 import { hashWorkspaceBytes, readWorkspaceFile } from '../src/lib/workspace-io.ts';
@@ -58,7 +58,7 @@ function brainCandidate(options: {
   selector: string;
   content: string;
   rank: number;
-}): SeedBrainCandidate {
+}): ContextBrainCandidate {
   return {
     candidate_id: options.id,
     selectors: [options.selector],
@@ -88,7 +88,7 @@ function brainCandidate(options: {
   };
 }
 
-function fixtureCandidates(): readonly SeedBrainCandidate[] {
+function fixtureCandidates(): readonly ContextBrainCandidate[] {
   return [
     brainCandidate({
       id: 'valid-practitioner-evidence',

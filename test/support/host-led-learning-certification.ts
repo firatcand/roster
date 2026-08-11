@@ -32,7 +32,7 @@ import {
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { DEFAULT_CONTEXT_BUDGET_TOKENS } from '../../src/lib/context-args.ts';
-import type { SeedBrainCandidate } from '../../src/lib/workspace-context.ts';
+import type { ContextBrainCandidate } from '../../src/lib/workspace-context.ts';
 import { installV2ProjectActivation } from '../../src/lib/generated-artifacts.ts';
 import { VENDOR_SKILL_MAP_PATH } from '../../src/lib/vendor-skills/adapter-map.ts';
 import { prepareVendorSkillMap } from '../../src/lib/workspace-registry.ts';
@@ -5805,7 +5805,7 @@ function seededContext(
       explain,
       includeLegacyUnverified: false,
     },
-    candidates: structuredClone(evidence['candidates']) as SeedBrainCandidate[],
+    candidates: structuredClone(evidence['candidates']) as ContextBrainCandidate[],
   });
 }
 

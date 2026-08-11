@@ -10,7 +10,7 @@ import type {
   ContextRetrievalReport,
   ContextRetrievalRequest,
   ContextRetrievalUnavailableReason,
-  SeedBrainCandidate,
+  ContextBrainCandidate,
 } from '../workspace-context.ts';
 import { assertBrainExtractionRegistryOnClient } from './activation.ts';
 import { loadConfig } from './config.ts';
@@ -166,7 +166,7 @@ function unavailable(
 ): ContextEvidenceInput {
   return freeze({
     status: 'unavailable' as const,
-    candidates: [] as SeedBrainCandidate[],
+    candidates: [] as ContextBrainCandidate[],
     report: {
       modes,
       graph: { status: 'unavailable' as const, reasons: ['no-cited-edge-relation', 'unmeasured'] },
@@ -581,7 +581,7 @@ function narrowestScopeClaim(
   labelKeys: readonly string[],
   allowed: ReadonlySet<string>,
   workspaceId: string,
-): SeedBrainCandidate['scope'] {
+): ContextBrainCandidate['scope'] {
   let winner: string | null = null;
   let winnerSpecificity = -1;
   for (const labelKey of labelKeys) {
@@ -618,7 +618,7 @@ function candidateFrom(
   rank: number,
   allowed: ReadonlySet<string>,
   workspaceId: string,
-): SeedBrainCandidate {
+): ContextBrainCandidate {
   // The locator must say TRUTHFULLY what its region denotes. `roster-text`
   // chunks ARE a byte slice of the immutable object, so `@bytes:` promises an
   // exact re-slice: the range hashes to content_hash. `roster-structured`
@@ -907,7 +907,7 @@ async function retrieveOnClient(
       unavailable_reason: null,
     };
     return {
-      evidence: freeze({ status: 'seeded' as const, candidates, report }),
+      evidence: freeze({ status: 'available' as const, candidates, report }),
       armRows,
     };
   } catch (error) {

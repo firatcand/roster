@@ -28,7 +28,7 @@ import {
   type ContextRetrievalReport,
   type ContextRetrievalRequest,
   type ContextSelectorCatalogEntry,
-  type SeedBrainCandidate,
+  type ContextBrainCandidate,
   type WorkspaceContext,
 } from '../src/lib/workspace-context.ts';
 import { isWorkspaceFailure, type WorkspaceRosterError } from '../src/lib/workspace-diagnostics.ts';
@@ -78,8 +78,8 @@ function deepFreeze<T>(value: T): T {
 
 function candidate(
   candidateId: string,
-  overrides: Partial<SeedBrainCandidate> = {},
-): SeedBrainCandidate {
+  overrides: Partial<ContextBrainCandidate> = {},
+): ContextBrainCandidate {
   const content = `Evidence ${candidateId} about reliable company operations.`;
   return {
     candidate_id: candidateId,
@@ -117,8 +117,8 @@ function candidate(
 function candidateWithContent(
   candidateId: string,
   content: string,
-  overrides: Partial<SeedBrainCandidate> = {},
-): SeedBrainCandidate {
+  overrides: Partial<ContextBrainCandidate> = {},
+): ContextBrainCandidate {
   const seeded = candidate(candidateId, { ...overrides, content });
   return {
     ...seeded,
@@ -131,7 +131,7 @@ function candidateWithContent(
 
 // label_keys carry the ONE label that implies the claimed scope, so scope
 // derivation reproduces the pre-#352 eligibility semantics exactly.
-function labelKeysForScope(scope: SeedBrainCandidate['scope']): string[] {
+function labelKeysForScope(scope: ContextBrainCandidate['scope']): string[] {
   if (scope.function === undefined) return ['workspace'];
   if (scope.agent === undefined) return [`function:${scope.function}`];
   if (scope.plan === undefined) return [`agent:${scope.function}/${scope.agent}`];
@@ -142,7 +142,7 @@ function labelKeysForScope(scope: SeedBrainCandidate['scope']): string[] {
 // the candidates. `assemble` re-derives it against the REAL catalog unless the
 // envelope is registered as raw, so a test can still ship a deliberately wrong M.
 function honestMatchedRequired(
-  candidates: readonly SeedBrainCandidate[],
+  candidates: readonly ContextBrainCandidate[],
   catalog: readonly ContextSelectorCatalogEntry[] | null,
 ): string[] {
   const required = catalog === null
@@ -166,7 +166,7 @@ function rawEvidence(evidence: ContextEvidenceInput): ContextEvidenceInput {
 }
 
 function reportFor(
-  candidates: readonly SeedBrainCandidate[],
+  candidates: readonly ContextBrainCandidate[],
   overrides: Partial<ContextRetrievalReport> = {},
 ): ContextRetrievalReport {
   const matched = honestMatchedRequired(candidates, null);
@@ -181,11 +181,11 @@ function reportFor(
 }
 
 function frozenEvidence(
-  candidates: readonly SeedBrainCandidate[],
+  candidates: readonly ContextBrainCandidate[],
   overrides: Partial<ContextRetrievalReport> = {},
 ): ContextEvidenceInput {
   return deepFreeze({
-    status: 'seeded' as const,
+    status: 'available' as const,
     candidates: [...candidates],
     report: reportFor(candidates, overrides),
   });
@@ -200,7 +200,7 @@ function assemble(
   return withContextReadCapability(root, (capability) => {
     const selection = deriveContextVendorSkillSelection(capability.source, request);
     const catalog = deriveContextSelectorCatalog(capability.source, request);
-    const resolved = evidence.status === 'seeded' && !RAW_EVIDENCE.has(evidence)
+    const resolved = evidence.status === 'available' && !RAW_EVIDENCE.has(evidence)
       ? deepFreeze({
         ...evidence,
         report: {
@@ -691,21 +691,21 @@ test('closed seed objects reject unknown candidate, scope, and citation fields w
     const unknownCandidate = {
       ...candidate('unknown-candidate'),
       [secretKey]: secretValue,
-    } as unknown as SeedBrainCandidate;
+    } as unknown as ContextBrainCandidate;
     const unknownScope = {
       ...candidate('unknown-scope'),
       scope: {
         ...candidate('unknown-scope').scope,
         secret_scope_key: secretValue,
       },
-    } as unknown as SeedBrainCandidate;
+    } as unknown as ContextBrainCandidate;
     const unknownCitation = {
       ...candidate('unknown-citation'),
       citation: {
         ...candidate('unknown-citation').citation,
         secret_citation_key: secretValue,
       },
-    } as unknown as SeedBrainCandidate;
+    } as unknown as ContextBrainCandidate;
     const result = assemble(
       fx.root,
       DEFAULT_REQUEST,
@@ -745,14 +745,14 @@ test('candidate prose preserves multiline tabs byte-for-byte but rejects unsafe 
 test('oversized scope and citation IDs fail before ranking without value egress', () => {
   const fx = buildSocialManagerContextFixture();
   try {
-    const cases: Array<[string, SeedBrainCandidate]> = [
+    const cases: Array<[string, ContextBrainCandidate]> = [
       ['scope-id-canary', {
         ...candidate('oversized-scope'),
         scope: {
           workspace: 'social-manager-context',
           function: `scope-id-canary-${'x'.repeat(256)}`,
         },
-      } as unknown as SeedBrainCandidate],
+      } as unknown as ContextBrainCandidate],
       ['citation-source-canary', {
         ...candidate('oversized-citation-source'),
         citation: {
@@ -1066,14 +1066,14 @@ test('Brain candidate scopes require complete ancestry and never borrow matching
         workspace: 'social-manager-context',
         plan: 'opportunity-discovery',
       },
-    } as unknown as SeedBrainCandidate;
+    } as unknown as ContextBrainCandidate;
     const agentWithoutFunction = {
       ...candidate('agent-without-function'),
       scope: {
         workspace: 'social-manager-context',
         agent: 'social-manager',
       },
-    } as unknown as SeedBrainCandidate;
+    } as unknown as ContextBrainCandidate;
     const foreignAncestry = candidate('foreign-ancestry', {
       scope: {
         workspace: 'social-manager-context',
@@ -2313,16 +2313,16 @@ function matrixFixture(required: readonly string[], optional: readonly string[] 
   return fx;
 }
 
-function matrixCandidate(id: string, selectors: readonly string[]): SeedBrainCandidate {
+function matrixCandidate(id: string, selectors: readonly string[]): ContextBrainCandidate {
   return candidate(id, { selectors: [...selectors].sort(compareUnicodeCodePoints) });
 }
 
 function matrixEvidence(
-  candidates: readonly SeedBrainCandidate[],
+  candidates: readonly ContextBrainCandidate[],
   matchedRequired: readonly string[],
 ): ContextEvidenceInput {
   return rawEvidence(deepFreeze({
-    status: 'seeded' as const,
+    status: 'available' as const,
     candidates: [...candidates],
     report: reportFor(candidates, {
       required_selectors_with_matches: [...matchedRequired].sort(compareUnicodeCodePoints),
@@ -2545,8 +2545,8 @@ test('M10..M13 — V1 to V4 reject an incoherent report before the partition run
     // V1: unsorted, and duplicated.
     for (const claimed of [['sel-b', 'sel-a'], ['sel-a', 'sel-a']]) {
       const invalid = failure(() => assemble(fx.root, DEFAULT_REQUEST, rawEvidence(deepFreeze({
-        status: 'seeded' as const,
-        candidates: [] as SeedBrainCandidate[],
+        status: 'available' as const,
+        candidates: [] as ContextBrainCandidate[],
         report: reportFor([], { required_selectors_with_matches: claimed }),
       }))));
       assert.equal(invalid.code, 'CONTEXT_EVIDENCE_INVALID');
@@ -2554,7 +2554,7 @@ test('M10..M13 — V1 to V4 reject an incoherent report before the partition run
     // V4: a non-seeded envelope may claim no coverage at all.
     const v4 = failure(() => assemble(fx.root, DEFAULT_REQUEST, rawEvidence(deepFreeze({
       status: 'unavailable' as const,
-      candidates: [] as SeedBrainCandidate[],
+      candidates: [] as ContextBrainCandidate[],
       report: reportFor([], {
         required_selectors_with_matches: ['sel-a'],
         unavailable_reason: 'query-failed',
@@ -2791,7 +2791,7 @@ test('the legacy floor ranks below every verified candidate and requires an expl
     const illegal = assemble(fx.root, DEFAULT_REQUEST, matrixEvidence(
       [candidate('illegal', {
         selectors: ['sel-optional'],
-        trust: 'authored-policy' as SeedBrainCandidate['trust'],
+        trust: 'authored-policy' as ContextBrainCandidate['trust'],
       })],
       [],
     ));
@@ -2820,8 +2820,8 @@ test('the retrieval report is closed at the boundary and carries no timing field
       assert.equal(unavailable.details['reason'], reason);
     }
     const withReason = assemble(fx.root, DEFAULT_REQUEST, rawEvidence(deepFreeze({
-      status: 'seeded' as const,
-      candidates: [] as SeedBrainCandidate[],
+      status: 'available' as const,
+      candidates: [] as ContextBrainCandidate[],
       report: reportFor([], {
         modes: {
           structured: { status: 'used' },
@@ -2857,8 +2857,8 @@ test('the retrieval report is closed at the boundary and carries no timing field
 
     // An open reason string cannot reach the bundle.
     const openReason = failure(() => assemble(fx.root, DEFAULT_REQUEST, rawEvidence(deepFreeze({
-      status: 'seeded' as const,
-      candidates: [] as SeedBrainCandidate[],
+      status: 'available' as const,
+      candidates: [] as ContextBrainCandidate[],
       report: reportFor([], {
         modes: {
           structured: { status: 'used' },
@@ -2903,9 +2903,9 @@ test('the awaited resolver is byte-identical to the synchronous zero-I/O path an
     }));
     const faults: Array<() => Promise<ContextEvidenceInput>> = [
       async () => { throw new Error('adapter exploded'); },
-      async () => ({ status: 'seeded', candidates: [], report: reportFor([]) }),
+      async () => ({ status: 'available', candidates: [], report: reportFor([]) }),
       async () => rawEvidence(deepFreeze({
-        status: 'seeded' as const,
+        status: 'available' as const,
         candidates: Array.from(
           { length: MAX_CONTEXT_EVIDENCE_CANDIDATES + 1 },
           (_, index) => candidate(`over-${index}`),
@@ -2913,7 +2913,7 @@ test('the awaited resolver is byte-identical to the synchronous zero-I/O path an
         report: reportFor([]),
       })),
       async () => rawEvidence(deepFreeze({
-        status: 'seeded' as const,
+        status: 'available' as const,
         candidates: [candidateWithContent('huge', 'x'.repeat(200_000))],
         report: reportFor([]),
       })),

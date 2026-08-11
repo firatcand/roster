@@ -115,7 +115,7 @@ test('acceptance 1 — retrieval returns only current, in-scope, non-secret, ver
 
     await t.test('the eligible source is the only candidate', async () => {
       const evidence = await retrieveBrainContextEvidence(request(corpus), { env: env(corpus) });
-      assert.equal(evidence.status, 'seeded');
+      assert.equal(evidence.status, 'available');
       assert.deepEqual(
         evidence.candidates.map((entry) => entry.citation.source_version_id),
         [eligible.sourceVersionId],
@@ -230,7 +230,7 @@ test('acceptance 3 — lexical and structured retrieval need no embedding provid
 
     await t.test('embedding disabled is a closed mode status, not a failure', async () => {
       const evidence = await retrieveBrainContextEvidence(request(corpus), { env: env(corpus) });
-      assert.equal(evidence.status, 'seeded');
+      assert.equal(evidence.status, 'available');
       assert.deepEqual(evidence.report.modes.embedding, { status: 'disabled' });
       assert.deepEqual(evidence.report.modes.lexical, { status: 'used' });
       assert.deepEqual(evidence.report.modes.structured, { status: 'used' });
@@ -777,7 +777,7 @@ test('one snapshot also serves the registry check, rrf_k, and the embedding reso
     // The registry check passed inside the snapshot, so the retrieval completes
     // with evidence instead of registry-drift, and the embedding mode reflects
     // the PRE-flip configuration the snapshot pinned.
-    assert.equal(evidence.status, 'seeded');
+    assert.equal(evidence.status, 'available');
     assert.equal(evidence.report.unavailable_reason, null);
     assert.equal(evidence.candidates.length, 1);
     assert.deepEqual(evidence.report.modes.embedding, { status: 'disabled' });
@@ -928,7 +928,7 @@ test('authority mismatches stop before any company-content read', options, async
       request(corpus),
       { env: env(corpus), createPool: acceptedSpy.createPool },
     );
-    assert.equal(accepted.status, 'seeded');
+    assert.equal(accepted.status, 'available');
     assert.equal(acceptedSpy.companyQueries.length > 0, true, 'the spy must observe the accepted path');
     assert.equal(acceptedSpy.verificationQueries.length > 0, true);
 
@@ -1000,7 +1000,7 @@ test('an arm with nothing to run reports disabled, never used', options, async (
       request(corpus, { selectors: [] }),
       { env: env(corpus) },
     );
-    assert.equal(evidence.status, 'seeded');
+    assert.equal(evidence.status, 'available');
     assert.deepEqual(evidence.report.modes.structured, { status: 'disabled' });
     assert.deepEqual(evidence.report.modes.lexical, { status: 'disabled' });
     assert.deepEqual(evidence.candidates, []);
@@ -1041,7 +1041,7 @@ test('the runtime credential retrieves an identical bundle and writes nothing', 
     const readOnly = await retrieveBrainContextEvidence(request(corpus), {
       env: { [BRAIN_RUNTIME_URL_ENV]: runtimeUrlFor(corpus) },
     });
-    assert.equal(readOnly.status, 'seeded');
+    assert.equal(readOnly.status, 'available');
     const afterCounts = await snapshot();
     assert.deepEqual(afterCounts, before, 'retrieval mutated durable state');
 
@@ -1736,7 +1736,7 @@ test('embedding parity — the adapter arm agrees with the TypeScript oracle', o
         status: 'invalid-configuration',
         reason: 'spec-changed-in-snapshot',
       });
-      assert.equal(evidence.status, 'seeded');
+      assert.equal(evidence.status, 'available');
       assert.equal(evidence.candidates.length > 0, true, 'the other arms proceed');
       assert.equal(
         evidence.candidates.every((entry) => !entry.retrieval_modes.includes('embedding')),
@@ -1759,7 +1759,7 @@ test('embedding parity — the adapter arm agrees with the TypeScript oracle', o
         adapters,
       });
       assert.deepEqual(disabled.report.modes.embedding, { status: 'disabled' });
-      assert.equal(disabled.status, 'seeded');
+      assert.equal(disabled.status, 'available');
       assert.equal(disabled.candidates.length > 0, true, 'the other arms proceed');
       assert.deepEqual(disabled.report.modes.lexical, { status: 'used' });
       assert.deepEqual(disabled.report.modes.structured, { status: 'used' });
@@ -1860,7 +1860,7 @@ test('embedding parity — the adapter arm agrees with the TypeScript oracle', o
           entry.name,
         );
         // The whole result must NOT collapse: lexical and structured proceed.
-        assert.equal(evidence.status, 'seeded', entry.name);
+        assert.equal(evidence.status, 'available', entry.name);
         assert.equal(evidence.report.unavailable_reason, null, entry.name);
         assert.equal(evidence.candidates.length > 0, true, entry.name);
         assert.deepEqual(evidence.report.modes.lexical, { status: 'used' }, entry.name);

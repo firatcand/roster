@@ -330,7 +330,7 @@ export type WorkspaceContext = {
   diagnostics: readonly WorkspaceDiagnostic[];
 };
 
-export type SeedBrainCandidate = {
+export type ContextBrainCandidate = {
   candidate_id: string;
   // Every authored selector this chunk matched, code-point sorted, at least one.
   selectors: readonly string[];
@@ -355,8 +355,8 @@ export type SeedBrainCandidate = {
 };
 
 export type ContextEvidenceInput = {
-  status: 'seeded' | 'unavailable';
-  candidates: readonly SeedBrainCandidate[];
+  status: 'available' | 'unavailable';
+  candidates: readonly ContextBrainCandidate[];
   report: ContextRetrievalReport;
 };
 
@@ -1576,7 +1576,7 @@ function validateEvidenceEnvelope(input: ContextEvidenceInput, local: ResolvedLo
   if (input === null || typeof input !== 'object' || !isDeepFrozen(input)) {
     evidenceFailure({ reason: 'not-recursively-frozen' });
   }
-  if ((input.status !== 'seeded' && input.status !== 'unavailable')
+  if ((input.status !== 'available' && input.status !== 'unavailable')
     || !Array.isArray(input.candidates)
     || Object.keys(input).length !== 3
     || !Object.hasOwn(input, 'report')) {
@@ -1594,7 +1594,7 @@ function validateEvidenceEnvelope(input: ContextEvidenceInput, local: ResolvedLo
     }
   }
   // V4 — a non-seeded envelope claims no coverage at all.
-  if (input.status !== 'seeded' && matched.size > 0) {
+  if (input.status !== 'available' && matched.size > 0) {
     evidenceFailure({ reason: 'report-required-selectors-status' });
   }
   // V3 — coverage containment: every required selector carried by a
@@ -1606,7 +1606,7 @@ function validateEvidenceEnvelope(input: ContextEvidenceInput, local: ResolvedLo
   // under-check, never false-positive.
   for (const candidate of input.candidates as readonly unknown[]) {
     if (candidateMalformed(candidate)) continue;
-    for (const entry of (candidate as SeedBrainCandidate).selectors) {
+    for (const entry of (candidate as ContextBrainCandidate).selectors) {
       if (requiredSelectors.has(entry) && !matched.has(entry)) {
         evidenceFailure({ reason: 'report-required-selector-contradiction' });
       }
@@ -1705,7 +1705,7 @@ function validCitation(value: unknown): value is ContextBrainCitation {
   return true;
 }
 
-function validScope(value: unknown): value is SeedBrainCandidate['scope'] {
+function validScope(value: unknown): value is ContextBrainCandidate['scope'] {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   const scope = value as Record<string, unknown>;
   if (!safeSeedId(scope['workspace'])) return false;
@@ -1790,7 +1790,7 @@ function narrowestEligibleLabel(
 
 function sameCandidateScope(
   derived: DerivedLabelScope,
-  claimed: SeedBrainCandidate['scope'],
+  claimed: ContextBrainCandidate['scope'],
 ): boolean {
   return derived.function === claimed.function
     && derived.agent === claimed.agent
@@ -1798,7 +1798,7 @@ function sameCandidateScope(
 }
 
 type CandidateEvaluation = {
-  candidate: SeedBrainCandidate | null;
+  candidate: ContextBrainCandidate | null;
   candidateKey: string;
   candidateId: string | null;
   reason: Exclude<ContextExclusionReason, 'budget-exhausted'> | null;
@@ -1824,7 +1824,7 @@ function termOverlap(requestTerms: ReadonlySet<string>, content: string): number
   return overlap;
 }
 
-function candidateMalformed(value: unknown): value is SeedBrainCandidate {
+function candidateMalformed(value: unknown): value is ContextBrainCandidate {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return true;
   const candidate = value as Record<string, unknown>;
   const citation = candidate['citation'];
@@ -1921,7 +1921,7 @@ function evaluateCandidates(
       stable = 'sha256:invalid';
     }
     const malformed = candidateMalformed(raw);
-    const candidate = malformed ? null : raw as SeedBrainCandidate;
+    const candidate = malformed ? null : raw as ContextBrainCandidate;
     const candidateId = candidate === null
       ? (raw !== null && typeof raw === 'object' && safeSeedId((raw as Record<string, unknown>)['candidate_id'])
           ? (raw as Record<string, unknown>)['candidate_id'] as string
@@ -2437,7 +2437,7 @@ function assembleResolvedContext(
   if (brainConfigured) {
     validateEvidenceEnvelope(evidenceInput, local);
     evidenceStatus = evidenceInput.status;
-    if (evidenceInput.status === 'seeded') {
+    if (evidenceInput.status === 'available') {
       evaluations = evaluateCandidates(
         evidenceInput,
         local,
@@ -2455,7 +2455,7 @@ function assembleResolvedContext(
   for (const evaluation of eligible) {
     for (const selector of evaluation.candidate!.selectors) bundleCoverage.add(selector);
   }
-  const accountRequiredCoverage = brainConfigured && evidenceStatus === 'seeded';
+  const accountRequiredCoverage = brainConfigured && evidenceStatus === 'available';
   const missingRequired = accountRequiredCoverage
     ? local.selectors
       .filter((selector) => selector.required && !bundleCoverage.has(selector.selector))
@@ -2711,7 +2711,7 @@ function emptyRetrievalReport(
 
 export function emptyContextEvidenceInput(): ContextEvidenceInput {
   return cloneAndFreeze({
-    status: 'seeded' as const,
+    status: 'available' as const,
     candidates: [],
     report: emptyRetrievalReport(null),
   });

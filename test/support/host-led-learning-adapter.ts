@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_CONTEXT_BUDGET_TOKENS } from '../../src/lib/context-args.ts';
 import {
   CONTEXT_ESTIMATOR,
-  type SeedBrainCandidate,
+  type ContextBrainCandidate,
 } from '../../src/lib/workspace-context.ts';
 import {
   hashSeededLearningValue,
@@ -2126,12 +2126,12 @@ function readFixtureSearchInput(workspace: string): unknown {
   }
 }
 
-function contextCandidates(workspace: string): readonly SeedBrainCandidate[] {
+function contextCandidates(workspace: string): readonly ContextBrainCandidate[] {
   const value = readJson(workspace, '.fixture/input/brain-evidence.json', 'Brain input');
   if (value === null || typeof value !== 'object' || Array.isArray(value)) fail('Brain input is invalid');
   const candidates = (value as Record<string, unknown>)['candidates'];
   if (!Array.isArray(candidates)) fail('Brain candidates are invalid');
-  return structuredClone(candidates) as SeedBrainCandidate[];
+  return structuredClone(candidates) as ContextBrainCandidate[];
 }
 
 function expandedRosterArgv(
