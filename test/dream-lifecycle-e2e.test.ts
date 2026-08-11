@@ -9,10 +9,18 @@ import { scaffoldWorkspace } from '../src/lib/workspace-registry.ts';
 import { hashWorkspaceBytes, readWorkspaceFile, readWorkspaceText } from '../src/lib/workspace-io.ts';
 import { registerDreamPolicy } from '../src/lib/brain/dream-readiness.ts';
 import { DEFAULT_DREAM_POLICY } from '../src/lib/brain/dream-contracts.ts';
-import { listDreamCandidates, loadDreamCandidate } from '../src/lib/brain/dream-candidates.ts';
+import {
+  decideLessonCandidate,
+  listDreamCandidates,
+  loadDreamCandidate,
+} from '../src/lib/brain/dream-candidates.ts';
 import { recordHumanDecision } from '../src/lib/brain/evidence-store.ts';
 import { evidenceActionDigest } from '../src/lib/brain/evidence-identity.ts';
-import { lessonTargetScope } from '../src/lib/brain/dream-candidate-contracts.ts';
+import {
+  lessonTargetScope,
+  normalizeLessonDecision,
+} from '../src/lib/brain/dream-candidate-contracts.ts';
+import { dreamWatermarkCanonical } from '../src/lib/brain/dream-contracts.ts';
 import {
   acquireDreamPhaseLock,
   materializeLesson,
@@ -367,22 +375,37 @@ test('the fence blocks a competing decision and the phase lock serializes phases
 // was lost is ever reported as SUCCESS, and no stale phase ever damages a
 // successor's completed materialization.
 
-async function killFenceBackend(fixture: EvidenceFixture): Promise<number> {
-  // Targeted through pg_stat_activity: the fence is the only session holding an
-  // ADVISORY lock while idle in transaction, because that is exactly what
-  // hold_dream_subject_lock leaves behind for the filesystem phase.
-  const killed = await fixture.admin.query<{ pid: number }>(
-    `SELECT DISTINCT a.pid
+// Targeted at the EXACT advisory lock the fence holds -- the subject frame
+// derived from this candidate's own subject -- rather than "any idle advisory
+// holder", and the terminate call's own boolean is what the caller asserts, so a
+// schedule that killed nothing can never read as a kill.
+async function killFenceBackend(
+  fixture: EvidenceFixture,
+  lessonAgentKey: string,
+  lessonId: string,
+): Promise<number> {
+  const terminated = await fixture.admin.query<{ killed: boolean }>(
+    `WITH target AS (
+       SELECT brain_evidence.lock_key(
+         'roster.brain.dream.lock.subject.v1', ARRAY[$1::text, $2::text]) AS key
+     )
+     SELECT pg_terminate_backend(a.pid) AS killed
        FROM pg_stat_activity a
-       JOIN pg_locks l ON l.pid = a.pid AND l.locktype = 'advisory'
-      WHERE a.datname = current_database()
+       JOIN pg_locks l ON l.pid = a.pid
+       CROSS JOIN target t
+      WHERE l.locktype = 'advisory'
+        AND l.objsubid = 1
+        AND l.classid = ((t.key >> 32) & 4294967295)::oid
+        AND l.objid = (t.key & 4294967295)::oid
+        AND a.datname = current_database()
         AND a.pid <> pg_backend_pid()
         AND a.state = 'idle in transaction'`,
+    [lessonAgentKey, lessonId],
   );
-  for (const row of killed.rows) {
-    await fixture.admin.query(`SELECT pg_terminate_backend($1)`, [row.pid]);
+  for (const row of terminated.rows) {
+    assert.equal(row.killed, true, 'pg_terminate_backend must report the kill');
   }
-  return killed.rows.length;
+  return terminated.rows.length;
 }
 
 function withUncaughtProbe(): { readonly seen: unknown[]; stop: () => void } {
@@ -437,7 +460,14 @@ test('the SKILL workflow, followed literally, produces an accepted decision', op
     assert.equal(action.scope, listed[0]!.lesson_scope_key);
 
     // STEP: `roster brain record decision` with those fields copied VERBATIM.
-    const recorded = { ...action, params: {} };
+    // The published block also carries `action_digest`, which is the digest OF
+    // the action rather than part of it, so exactly four keys are copied.
+    const recorded = {
+      target: action.target,
+      effect: action.effect,
+      scope: action.scope,
+      params: {},
+    };
     await recordHumanDecision(fixture.admin, {
       decisionId: 'hd-skill-workflow',
       action: recorded,
@@ -450,11 +480,12 @@ test('the SKILL workflow, followed literally, produces an accepted decision', op
         actorId: 'human',
         assurance: 'human-confirmed',
         decisionId: 'hd-skill-workflow',
-        actionDigest: evidenceActionDigest(recorded),
+        actionDigest: action.action_digest,
       },
       decidedAt: '2026-08-11T09:00:00.000Z',
       hostProvenance: { host: 'claude' },
     });
+    assert.equal(action.action_digest, evidenceActionDigest(recorded));
 
     // STEP: `roster dream candidates promote <id> --decision <id> --action-digest <...>`.
     const candidate = await loadDreamCandidate(fixture.runtime, candidateId);
@@ -464,7 +495,7 @@ test('the SKILL workflow, followed literally, produces an accepted decision', op
     );
     const committed = await decide(fixture, 'promote', candidateId, {
       decisionId: 'hd-skill-workflow',
-      actionDigest: evidenceActionDigest(recorded),
+      actionDigest: action.action_digest,
     }, { contentHash: rendered.contentHash });
     assert.equal(committed.status, 'created', 'the documented workflow must be ACCEPTED');
 
@@ -538,7 +569,11 @@ test('a fence lost BEFORE the phase touches no byte and reports UNVERIFIED', opt
       // backend dies before the first filesystem mutation.
       hooks: {
         afterPhaseLock: async () => {
-          assert.equal(await killFenceBackend(fixture), 1, 'the fence backend must have been killed');
+          assert.equal(
+            await killFenceBackend(fixture, candidate.lessonAgentKey, candidate.lessonId),
+            1,
+            'the fence backend must have been killed',
+          );
         },
       },
       phase: async (context) => {
@@ -609,7 +644,11 @@ test('a fence lost DURING the phase reports UNVERIFIED and the re-run converges'
           context,
           hooks: {
             afterScaffold: async () => {
-              assert.equal(await killFenceBackend(fixture), 1, 'the fence backend must have been killed');
+              assert.equal(
+                await killFenceBackend(fixture, candidate.lessonAgentKey, candidate.lessonId),
+                1,
+                'the fence backend must have been killed',
+              );
             },
           },
         });
@@ -639,15 +678,16 @@ test('a fence lost DURING the phase reports UNVERIFIED and the re-run converges'
   }
 });
 
-test('a stale retire can never damage a successor, in either schedule', options, async (t) => {
+test('the same-subject stale-retire schedules, B-first and A-first', options, async (t) => {
   for (const variant of ['byte-identical', 'different-bytes'] as const) {
-    await t.test(`B promotes ${variant} content while A's retire fence is dead`, async () => {
-      const fixture = await createEvidenceFixture(`dream-e2e-stale-${variant.slice(0, 6)}`);
+    await t.test(`B-first: A's retire fence dies before its phase, B promotes ${variant}`, async () => {
+      const fixture = await createEvidenceFixture(`dream-bfirst-${variant.slice(0, 4)}`);
       const { root, cleanup } = workspace();
+      const probe = withUncaughtProbe();
       try {
         await zeroCooldown(fixture);
         await seedRuns(fixture, 6);
-        // A promotes and materializes.
+        // A promotes and materializes the shared lesson file.
         const aId = await openCandidate(fixture, 'contested');
         const a = await loadDreamCandidate(fixture.runtime, aId);
         const aRendered = renderLessonContent(
@@ -655,32 +695,114 @@ test('a stale retire can never damage a successor, in either schedule', options,
         );
         assert.equal((await promote(fixture, root, aId, 'hd-a-promote')).outcome, 'completed');
 
-        // A's retire decision commits, and its fence dies BEFORE its phase.
+        // B is a SUCCESSOR on the SAME subject: same agent key, same lesson id.
+        await seedRuns(fixture, 6, {}, 'later');
+        const bId = await openCandidate(
+          fixture,
+          'contested',
+          variant === 'byte-identical'
+            ? {}
+            : { lessonBody: 'A different body from B.', lessonPurpose: 'B purpose.' },
+          'later',
+        );
+        const b = await loadDreamCandidate(fixture.runtime, bId);
+        assert.equal(b.lessonAgentKey, a.lessonAgentKey);
+        assert.equal(b.lessonId, a.lessonId);
+        const bRendered = renderLessonContent(
+          b.lessonId, b.lessonPurpose, b.lessonBody, lessonTargetScope(b.lessonScopeKey),
+        );
+        assert.equal(
+          bRendered.contentHash === aRendered.contentHash,
+          variant === 'byte-identical',
+          'the variant must actually differ in bytes',
+        );
+
+        // A's retire decision commits. Its fence then opens and DIES between
+        // fence-open and phase-lock acquisition -- the exact blocker window.
         const retire = await recordDecision(fixture, 'hd-a-retire', 'retire', aId, a.lessonScopeKey);
         const retireCommitted = await decide(fixture, 'retire', aId, retire, {
           contentHash: aRendered.contentHash,
         });
-        const staleOutcome = await withSubjectFence({
+
+        let releaseA = (): void => {};
+        const bDone = new Promise<void>((resolve) => { releaseA = resolve; });
+        let bOutcome: unknown;
+
+        const staleRun = withSubjectFence({
           pool: fixture.runtime,
           root,
           candidateId: aId,
           expectedDecision: 'retire',
           expectedSubjectSequence: retireCommitted.subjectSequence,
           hooks: {
-            afterPhaseLock: async () => {
-              assert.equal(await killFenceBackend(fixture), 1, 'the fence backend must have been killed');
+            afterFenceOpen: async () => {
+              assert.equal(
+                await killFenceBackend(fixture, a.lessonAgentKey, a.lessonId),
+                1,
+                "A's retire fence must be killed before its phase lock",
+              );
+              // A is now stale and paused; B runs to completion in this window.
+              await bDone;
             },
           },
           phase: async () => await retireLesson({
             root, candidate: a, lessonContentHash: aRendered.contentHash,
           }),
         });
-        assert.equal(staleOutcome.outcome, 'unverified');
-        assert.equal((staleOutcome as { stage: string }).stage, 'pre-phase');
 
-        // B now promotes over the same lesson file. In the byte-identical
-        // variant its content hashes EQUAL A's, which is precisely the case a
-        // hash-based fence would get wrong -- ordering is what decides here.
+        const bRun = (async () => {
+          await new Promise((resolve) => { setTimeout(resolve, 250); });
+          try {
+            bOutcome = await promote(fixture, root, bId, 'hd-b-promote');
+            return bOutcome;
+          } finally {
+            releaseA();
+          }
+        })();
+
+        const [stale] = await Promise.all([staleRun, bRun]);
+        assert.equal((bOutcome as { outcome: string }).outcome, 'completed', 'B must complete fully');
+        // A's stale phase proceeds only as far as the pre-phase verification,
+        // which fails on the dead client BEFORE any mutation.
+        assert.equal(stale.outcome, 'unverified');
+        assert.equal((stale as { stage: string }).stage, 'pre-phase');
+
+        const paths = resolveLessonPaths(root, b.lessonAgentKey, b.lessonId);
+        assert.equal(
+          hashWorkspaceBytes(readWorkspaceFile(root, paths.lessonPath)),
+          bRendered.contentHash,
+          "B's file must survive A's stale retire intact",
+        );
+        assert.match(
+          readWorkspaceText(root, paths.agentPath),
+          new RegExp(b.lessonId, 'u'),
+          "B's membership must survive A's stale retire intact",
+        );
+        assert.equal((await auditLessonDrift(fixture.runtime, root)).ok, true);
+
+        await new Promise((resolve) => { setImmediate(resolve); });
+        assert.deepEqual(probe.seen, []);
+      } finally {
+        probe.stop();
+        cleanup();
+        await fixture.close();
+      }
+    });
+
+    await t.test(`A-first: A's phase holds the lock when its fence dies, B is ${variant}`, async () => {
+      const fixture = await createEvidenceFixture(`dream-afirst-${variant.slice(0, 4)}`);
+      const { root, cleanup } = workspace();
+      const probe = withUncaughtProbe();
+      try {
+        await zeroCooldown(fixture);
+        await seedRuns(fixture, 6);
+        const aId = await openCandidate(fixture, 'contested');
+        const a = await loadDreamCandidate(fixture.runtime, aId);
+        const aRendered = renderLessonContent(
+          a.lessonId, a.lessonPurpose, a.lessonBody, lessonTargetScope(a.lessonScopeKey),
+        );
+        assert.equal((await promote(fixture, root, aId, 'hd-a-promote')).outcome, 'completed');
+
         await seedRuns(fixture, 6, {}, 'later');
         const bId = await openCandidate(
           fixture,
@@ -697,37 +819,74 @@ test('a stale retire can never damage a successor, in either schedule', options,
         assert.equal(
           bRendered.contentHash === aRendered.contentHash,
           variant === 'byte-identical',
-          'the variant must actually differ in bytes',
         );
-        assert.equal((await promote(fixture, root, bId, 'hd-b-promote')).outcome, 'completed');
 
-        const paths = resolveLessonPaths(root, b.lessonAgentKey, b.lessonId);
-        // A's stale retire phase runs LAST. Its fence is dead, so the pre-phase
-        // verification refuses before touching anything.
-        const replay = await withSubjectFence({
+        const retire = await recordDecision(fixture, 'hd-a-retire', 'retire', aId, a.lessonScopeKey);
+        const retireCommitted = await decide(fixture, 'retire', aId, retire, {
+          contentHash: aRendered.contentHash,
+        });
+
+        let releaseA = (): void => {};
+        const bTried = new Promise<void>((resolve) => { releaseA = resolve; });
+        let bError: unknown;
+        let bOutcome: unknown;
+
+        // A's phase STARTS and holds the local phase lock; the fence dies while
+        // it is held, so B can commit its decision but cannot start a phase.
+        const aRun = withSubjectFence({
           pool: fixture.runtime,
           root,
           candidateId: aId,
           expectedDecision: 'retire',
           expectedSubjectSequence: retireCommitted.subjectSequence,
-          phase: async () => await retireLesson({
-            root, candidate: a, lessonContentHash: aRendered.contentHash,
-          }),
+          phase: async () => {
+            assert.equal(
+              await killFenceBackend(fixture, a.lessonAgentKey, a.lessonId),
+              1,
+              "A's fence must die mid-phase",
+            );
+            const result = await retireLesson({
+              root, candidate: a, lessonContentHash: aRendered.contentHash,
+            });
+            await bTried;
+            return result;
+          },
         });
-        // Superseded (B's promote is the governor now) — either way, no phase.
-        assert.equal(replay.outcome, 'superseded');
+
+        const bRun = (async () => {
+          await new Promise((resolve) => { setTimeout(resolve, 250); });
+          try {
+            bOutcome = await promote(fixture, root, bId, 'hd-b-promote');
+            return bOutcome;
+          } catch (error) {
+            bError = error;
+            return null;
+          } finally {
+            releaseA();
+          }
+        })();
+
+        const [aOutcome] = await Promise.all([aRun, bRun]);
+        // A never reports success, and B was excluded from the workspace for the
+        // whole of A's phase.
+        assert.equal(aOutcome.outcome, 'unverified');
+        assert.equal((bError as { code?: string }).code, 'WORKSPACE_BUSY');
+        assert.equal(bOutcome, undefined);
+
+        // After A ends, B's re-run converges.
+        const retry = await promote(fixture, root, bId, 'hd-b-promote');
+        assert.equal(retry.outcome, 'completed');
+        const paths = resolveLessonPaths(root, b.lessonAgentKey, b.lessonId);
         assert.equal(
           hashWorkspaceBytes(readWorkspaceFile(root, paths.lessonPath)),
           bRendered.contentHash,
-          "B's file must survive intact",
-        );
-        assert.match(
-          readWorkspaceText(root, paths.agentPath),
-          new RegExp(b.lessonId, 'u'),
-          "B's membership must survive intact",
         );
         assert.equal((await auditLessonDrift(fixture.runtime, root)).ok, true);
+
+        await new Promise((resolve) => { setImmediate(resolve); });
+        assert.deepEqual(probe.seen, []);
       } finally {
+        probe.stop();
         cleanup();
         await fixture.close();
       }
@@ -881,7 +1040,11 @@ test('A-first: a successor waits out a dying phase, then converges its residue',
           context,
           hooks: {
             afterScaffold: async () => {
-              assert.equal(await killFenceBackend(fixture), 1, 'A’s fence backend must have been killed');
+              assert.equal(
+                await killFenceBackend(fixture, a.lessonAgentKey, a.lessonId),
+                1,
+                'A’s fence backend must have been killed',
+              );
             },
           },
         });
@@ -931,6 +1094,142 @@ test('A-first: a successor waits out a dying phase, then converges its residue',
   } finally {
     probe.stop();
     cleanup();
+    await fixture.close();
+  }
+});
+
+test('multiple skipped phases converge over the REAL fence retired list', options, async () => {
+  const fixture = await createEvidenceFixture('dream-e2e-skipped');
+  const { root, cleanup } = workspace();
+  try {
+    await zeroCooldown(fixture);
+
+    // C1: promoted AND materialized, then retired with its filesystem phase
+    // SKIPPED -- so its bytes stay on disk while the ledger says it is retired.
+    await seedRuns(fixture, 6);
+    const c1Id = await openCandidate(fixture, 'skipped-phases');
+    const c1 = await loadDreamCandidate(fixture.runtime, c1Id);
+    const c1Rendered = renderLessonContent(
+      c1.lessonId, c1.lessonPurpose, c1.lessonBody, lessonTargetScope(c1.lessonScopeKey),
+    );
+    assert.equal((await promote(fixture, root, c1Id, 'hd-c1-promote')).outcome, 'completed');
+    const c1Retire = await recordDecision(fixture, 'hd-c1-retire', 'retire', c1Id, c1.lessonScopeKey);
+    await decide(fixture, 'retire', c1Id, c1Retire, { contentHash: c1Rendered.contentHash });
+
+    // C2: promoted and retired with BOTH filesystem phases skipped. Its recorded
+    // content hash therefore never touched the disk at all.
+    await seedRuns(fixture, 6, {}, 'second');
+    const c2Id = await openCandidate(
+      fixture, 'skipped-phases', { lessonBody: 'C2 body.', lessonPurpose: 'C2 purpose.' }, 'second',
+    );
+    const c2 = await loadDreamCandidate(fixture.runtime, c2Id);
+    const c2Rendered = renderLessonContent(
+      c2.lessonId, c2.lessonPurpose, c2.lessonBody, lessonTargetScope(c2.lessonScopeKey),
+    );
+    const c2Promote = await recordDecision(fixture, 'hd-c2-promote', 'promote', c2Id, c2.lessonScopeKey);
+    await decide(fixture, 'promote', c2Id, c2Promote, { contentHash: c2Rendered.contentHash });
+    const c2Retire = await recordDecision(fixture, 'hd-c2-retire', 'retire', c2Id, c2.lessonScopeKey);
+    await decide(fixture, 'retire', c2Id, c2Retire, { contentHash: c2Rendered.contentHash });
+
+    const paths = resolveLessonPaths(root, c1.lessonAgentKey, c1.lessonId);
+    assert.equal(
+      hashWorkspaceBytes(readWorkspaceFile(root, paths.lessonPath)),
+      c1Rendered.contentHash,
+      'the file still holds C1 bytes after two skipped retire phases',
+    );
+
+    // C3 promotes now. The retired list comes from the PRODUCTION fence query --
+    // nothing here hands it an array -- and must arrive newest-first.
+    await seedRuns(fixture, 6, {}, 'third');
+    const c3Id = await openCandidate(
+      fixture, 'skipped-phases', { lessonBody: 'C3 body.', lessonPurpose: 'C3 purpose.' }, 'third',
+    );
+    const c3 = await loadDreamCandidate(fixture.runtime, c3Id);
+    const c3Rendered = renderLessonContent(
+      c3.lessonId, c3.lessonPurpose, c3.lessonBody, lessonTargetScope(c3.lessonScopeKey),
+    );
+    const c3Decision = await recordDecision(fixture, 'hd-c3-promote', 'promote', c3Id, c3.lessonScopeKey);
+    const committed = await decide(fixture, 'promote', c3Id, c3Decision, {
+      contentHash: c3Rendered.contentHash,
+    });
+
+    let observed: readonly string[] = [];
+    const outcome = await withSubjectFence({
+      pool: fixture.runtime,
+      root,
+      candidateId: c3Id,
+      expectedDecision: 'promote',
+      expectedSubjectSequence: committed.subjectSequence,
+      phase: async (context) => {
+        observed = context.fence.retiredContentHashes;
+        return await materializeLesson({ root, candidate: c3, context });
+      },
+    });
+
+    assert.equal(outcome.outcome, 'completed');
+    // DESC by subject_sequence: C2 retired after C1, so C2's hash leads.
+    assert.deepEqual(
+      [...observed],
+      [c2Rendered.contentHash, c1Rendered.contentHash],
+      'the fence must return the retired list newest-first',
+    );
+    assert.equal((outcome as { value: { status: string } }).value.status, 'replaced');
+    assert.equal(
+      hashWorkspaceBytes(readWorkspaceFile(root, paths.lessonPath)),
+      c3Rendered.contentHash,
+      "C3's content must replace C1's leftover bytes",
+    );
+    assert.equal((await auditLessonDrift(fixture.runtime, root)).ok, true);
+  } finally {
+    cleanup();
+    await fixture.close();
+  }
+});
+
+test('a tampered decision instant is refused against the human decision it cites', options, async () => {
+  const fixture = await createEvidenceFixture('dream-e2e-decided-at');
+  try {
+    await zeroCooldown(fixture);
+    await seedRuns(fixture, 6);
+    const candidateId = await openCandidate(fixture, 'forged-instant');
+    const candidate = await loadDreamCandidate(fixture.runtime, candidateId);
+    const decision = await recordDecision(
+      fixture, 'hd-forged', 'promote', candidateId, candidate.lessonScopeKey,
+    );
+
+    // `decided_at` is PROVENANCE: a direct broker caller must not be able to
+    // stamp an approval at a moment the human never decided.
+    const canonical = normalizeLessonDecision(fixture.workspaceId, {
+      decision: 'promote',
+      candidateId,
+      humanDecisionId: decision.decisionId,
+      actionDigest: decision.actionDigest,
+      frontierOrdinal: candidate.frontierOrdinal,
+      decidedAt: '2020-01-01T00:00:00.000Z',
+      lessonQualifiedId: `${candidate.lessonAgentKey}/playbook/${candidate.lessonId}`,
+      lessonContentHash: `sha256:${'c'.repeat(64)}`,
+      watermarkCanonical: dreamWatermarkCanonical({
+        scopeKey: candidate.scopeKey,
+        cursorOrdinal: candidate.frontierOrdinal,
+        policyVersion: candidate.policyVersion,
+        reason: 'promotion',
+        consumedCompletedRuns: candidate.consumedCompletedRuns,
+        consumedFeedbackRecords: candidate.consumedFeedbackRecords,
+        actorAssurance: 'human-confirmed',
+      }),
+    }).canonical;
+    await assert.rejects(
+      decideLessonCandidate(fixture.runtime, canonical),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, 'BRAIN_DREAM_DECISION_UNBOUND');
+        return true;
+      },
+    );
+    const rows = await fixture.admin.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM brain_evidence.lesson_decisions`,
+    );
+    assert.equal(rows.rows[0]!.n, '0', 'a forged instant must write nothing');
+  } finally {
     await fixture.close();
   }
 });

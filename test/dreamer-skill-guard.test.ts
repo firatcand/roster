@@ -20,41 +20,53 @@ test('the skill teaches no scheduler, no Slack approval, and no pending queue', 
 });
 
 test('every roster command the skill teaches parses through its own argv parser', () => {
-  const commands = [...SKILL.matchAll(/^roster ([a-z]+(?: [a-z-]+)*)((?: [^\n#]*)?)$/gmu)]
-    .map((match) => `${match[1]!}${match[2] ?? ''}`.trim())
-    .filter((command) => !command.includes('->') && !command.includes('|'));
-  assert.ok(commands.length >= 6, `expected taught commands, saw ${commands.length}`);
+  // THE HOLE THIS CLOSES: the previous pin dropped any line containing '|' --
+  // which silently excluded `roster brain record decision --json ...` because of
+  // its trailing "approved | rejected" comment -- and then parsed brain commands
+  // by their VERB ALONE, never through the full grammar. Both are fixed here: a
+  // trailing comment is stripped rather than disqualifying the line, and every
+  // command is parsed in full by the parser that actually gates it.
+  const taught = [...SKILL.matchAll(/^roster (.+)$/gmu)]
+    .map((match) => match[1]!.replace(/\s+#.*$/u, '').trim())
+    // The loop diagram uses '->' to describe what a verb DOES; those lines are
+    // prose, not commands, and are the only exclusion.
+    .filter((command) => !command.includes('->'));
+  assert.ok(taught.length >= 8, `expected taught commands, saw ${taught.length}`);
+
   let dreamCommands = 0;
-  for (const command of commands) {
-    const tokens = command
-      .split(/\s+/u)
-      .map((token) => token.replace(/^<|>$/gu, ''))
-      .filter((token) => token.length > 0);
+  let brainCommands = 0;
+  for (const command of taught) {
+    // Placeholders stand in for values the host fills; the GRAMMAR must parse.
+    const tokens = command.split(/\s+/u).filter((token) => token.length > 0).map((token) => {
+      if (token === '...') return '--json';
+      if (token.startsWith('<') && token.endsWith('>')) {
+        return token === '<sha256:...>' ? `sha256:${'a'.repeat(64)}` : 'placeholder';
+      }
+      return token;
+    });
     const [head, ...rest] = tokens;
     if (head === 'dream') {
       dreamCommands++;
-      const substituted = rest.map((token) => (token.startsWith('<') || token.includes('<')
-        ? 'placeholder'
-        : token));
-      // Placeholders stand in for ids the host fills; the GRAMMAR must parse.
-      const filled = substituted.map((token) => (token.startsWith('-') ? token : token
-        .replace(/^candidate-id$/u, 'sha256:aaaa')
-        .replace(/^decision-id$/u, 'hd-1')
-        .replace(/^sha256:\.\.\.$/u, `sha256:${'a'.repeat(64)}`)));
-      const parsed = parseDreamArgs(filled);
+      const parsed = parseDreamArgs(rest);
       assert.equal(parsed.kind, 'ok', `${command} -> ${JSON.stringify(parsed)}`);
       continue;
     }
     if (head === 'brain') {
-      // The brain verbs are taught with elided flags; only the verb spelling is
-      // pinned here, since a full record-decision payload is not a grammar fact.
-      const parsed = parseBrainArgs([rest[0]!]);
-      assert.notEqual(parsed.kind, undefined, command);
+      brainCommands++;
+      const parsed = parseBrainArgs(rest);
+      // The FULL grammar, not the verb spelling: this is exactly the check that
+      // would have caught `record decision --json` missing --payload/--file.
+      assert.equal(parsed.kind, 'ok', `${command} -> ${JSON.stringify(parsed)}`);
       continue;
     }
     assert.fail(`the skill teaches an unknown roster subcommand: ${command}`);
   }
-  assert.ok(dreamCommands >= 5, `expected every dream verb to be taught, saw ${dreamCommands}`);
+  assert.ok(dreamCommands >= 6, `expected every dream verb to be taught, saw ${dreamCommands}`);
+  assert.ok(brainCommands >= 1, `expected the record-decision command to be taught, saw ${brainCommands}`);
+
+  // And the pin is proven able to fail: the exact incomplete spelling the skill
+  // used to carry must NOT parse.
+  assert.equal(parseBrainArgs(['record', 'decision', '--json']).kind, 'err');
 });
 
 test('the skill teaches the REAL decision target, read from the CLI', () => {
@@ -65,7 +77,9 @@ test('the skill teaches the REAL decision target, read from the CLI', () => {
   assert.match(SKILL, /roster dream candidates list --candidate <candidate-id> --json/u);
   assert.match(SKILL, /decision_action/u);
   assert.match(SKILL, /"target": "dream-candidate:/u);
-  assert.match(SKILL, /Copy that verb's `target`, `effect`, and `scope` VERBATIM/u);
+  assert.match(SKILL, /copying `target`,\s+`effect`, `scope`, and `params` VERBATIM into `action`/u);
+  assert.match(SKILL, /"action_digest": "sha256/u);
+  assert.match(SKILL, /pass the value from the same\s+`decision_action` block as `--action-digest`/u);
   assert.match(SKILL, /The target is NOT the raw candidate id/u);
   assert.equal(
     /`target: <candidate-id>`/u.test(SKILL),

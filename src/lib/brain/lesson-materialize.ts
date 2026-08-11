@@ -504,16 +504,33 @@ export async function withSubjectFence<T>(options: SubjectFenceOptions<T>): Prom
       retiredContentHashes: Object.freeze([...(fenceRow!.retired_content_hashes ?? [])]),
     });
 
-    const subjectCandidates = (await client.query<{
-      candidate_id: string;
-      lesson_scope_key: string;
-      lesson_purpose: string;
-    }>(SUBJECT_CANDIDATES_SQL, [fence.lessonAgentKey, fence.lessonId])).rows.map((row) =>
-      Object.freeze({
-        candidateId: row.candidate_id,
-        lessonScopeKey: row.lesson_scope_key,
-        lessonPurpose: row.lesson_purpose,
-      }));
+    // The prefetch is the LAST database read before the phase lock, and it runs
+    // on the fence client -- so a fence that died between fence-open and here
+    // fails HERE. That is still "before any mutation", so it belongs to the
+    // pre-phase UNVERIFIED outcome rather than escaping as a raw driver error:
+    // reporting it as a crash would tell an operator nothing about whether the
+    // workspace was touched.
+    let subjectCandidates: readonly SubjectCandidate[];
+    try {
+      subjectCandidates = (await client.query<{
+        candidate_id: string;
+        lesson_scope_key: string;
+        lesson_purpose: string;
+      }>(SUBJECT_CANDIDATES_SQL, [fence.lessonAgentKey, fence.lessonId])).rows.map((row) =>
+        Object.freeze({
+          candidateId: row.candidate_id,
+          lessonScopeKey: row.lesson_scope_key,
+          lessonPurpose: row.lesson_purpose,
+        }));
+    } catch (error) {
+      captureError(error);
+      await rollbackTolerated();
+      return {
+        outcome: 'unverified',
+        stage: 'pre-phase',
+        reason: 'the fence connection was lost',
+      };
+    }
 
     // Local acquisition is FAIL-FAST, never a blocking wait: a process holding a
     // local lock must never wait on a database lock, and a busy exit converges
@@ -896,19 +913,26 @@ export async function materializeLesson(
     );
   });
 
-  // Narrowed to the LESSON this phase materialized, not the whole agent: an
-  // unrelated invalid plan under the same agent must not fail a promotion whose
-  // own mutation already landed, which would leave a converged file reported as
-  // a conflict and no way to converge it.
-  const validation = validateWorkspace(root, {
-    target: subject.qualifiedIdOf(candidate.lessonId),
-  });
-  if (!validation.ok) {
+  // Scoped to what THIS phase owes. The validator's workspace-wide checks --
+  // generated host activation, the vendor-skill map, unrelated plans -- can be
+  // failing for reasons a lesson promotion neither caused nor can fix, and this
+  // runs AFTER the mutation: a global verdict would report a file that is
+  // already converged as an unresolvable conflict on every re-run. Errors that
+  // name the lesson or its owning agent record are exactly the ones
+  // materialization is answerable for.
+  const owned = validateWorkspace(root, { target: subject.qualifiedIdOf(candidate.lessonId) })
+    .diagnostics
+    .filter((diagnostic) => diagnostic.severity === 'error')
+    .filter((diagnostic) => diagnostic.path === paths.lessonPath
+      || diagnostic.path === paths.agentPath);
+  if (owned.length > 0) {
     throw new LessonMaterializationConflict(
-      `The workspace does not validate after materializing ${paths.lessonPath}.`,
+      `The materialized lesson at ${paths.lessonPath} does not validate.`,
       {
         path: paths.lessonPath,
         candidate_id: candidate.candidateId,
+        diagnostic: owned[0]!.code,
+        detail: owned[0]!.message,
         remedy: 'Run roster validate, resolve the reported diagnostics, then re-run promote.',
       },
     );
@@ -985,15 +1009,22 @@ export async function retireLesson(options: Readonly<{
     return { removedMembership, removedFile };
   });
   await options.hooks?.afterMembership?.();
-  // The retired lesson no longer exists as a record, so the validation target is
-  // its owning AGENT -- the narrowest surface that can still be selected.
-  const validation = validateWorkspace(root, { target: candidate.lessonAgentKey });
-  if (!validation.ok) {
+  // Same scoping as promote: the retired lesson no longer exists as a record, so
+  // the target is its owning AGENT, and only errors naming the lesson path or
+  // that agent record are this verb's to answer for.
+  const owned = validateWorkspace(root, { target: candidate.lessonAgentKey })
+    .diagnostics
+    .filter((diagnostic) => diagnostic.severity === 'error')
+    .filter((diagnostic) => diagnostic.path === paths.lessonPath
+      || diagnostic.path === paths.agentPath);
+  if (owned.length > 0) {
     throw new LessonRetirementConflict(
-      `The workspace does not validate after retiring ${paths.lessonPath}.`,
+      `The retired lesson at ${paths.lessonPath} left the workspace invalid.`,
       {
         path: paths.lessonPath,
         candidate_id: candidate.candidateId,
+        diagnostic: owned[0]!.code,
+        detail: owned[0]!.message,
         remedy: 'Run roster validate and resolve the reported diagnostics.',
       },
     );

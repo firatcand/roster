@@ -2,7 +2,7 @@ import { EXIT_ERROR, RosterError, type JsonValue } from '../errors.ts';
 import { assertRecordId, qualifiedRecordId, type WorkspaceScope } from '../workspace-layout.ts';
 import { canonicalSourceJson, normalizeSourceActor, type SourceActorInput, type SourceJsonObject, type SourceJsonValue } from './source-contracts.ts';
 import { looksSecretShaped } from './evidence-contracts.ts';
-import { evidenceDigest } from './evidence-identity.ts';
+import { EVIDENCE_ACTION_DOMAIN, evidenceDigest } from './evidence-identity.ts';
 import { DREAM_SCHEMA_VERSION, DREAM_SCOPE_KEY_PATTERN, dreamReadinessKey } from './dream-contracts.ts';
 
 export const DREAM_CANDIDATE_DOMAIN = 'roster.brain.dream.candidate.v1';
@@ -521,16 +521,31 @@ export function dreamDecisionTarget(candidateId: string): string {
   return `dream-candidate:${candidateId.slice('sha256:'.length).replace(/(.{4})/gu, '$1-')}`;
 }
 
-// The exact action a human decision must be bound to. Roster never asks and
-// never waits: it verifies that this exact triple was already answered.
+// The exact action a human decision must be bound to, and the digest of that
+// action. Roster never asks and never waits: it verifies that this exact action
+// was already answered. Both are emitted by the CLI because neither is
+// derivable by a host -- the target is a grouped spelling of the digest, and the
+// action digest is canonical-JSON over the whole action object.
 export function lessonDecisionAction(
   decision: LessonDecisionVerb,
   candidateId: string,
   lessonScopeKey: string,
-): Readonly<{ target: string; effect: string; scope: string }> {
-  return Object.freeze({
+): Readonly<{
+  target: string;
+  effect: string;
+  scope: string;
+  params: Readonly<Record<string, never>>;
+  action_digest: string;
+}> {
+  const action = {
     target: dreamDecisionTarget(candidateId),
     effect: `dream-candidate-${decision}`,
     scope: lessonScopeKey,
+    params: {},
+  };
+  return Object.freeze({
+    ...action,
+    params: Object.freeze({}) as Readonly<Record<string, never>>,
+    action_digest: evidenceDigest(EVIDENCE_ACTION_DOMAIN, action as unknown as SourceJsonValue),
   });
 }

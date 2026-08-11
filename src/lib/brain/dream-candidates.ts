@@ -294,6 +294,8 @@ export type DreamCandidateListRow = Readonly<{
     target: string;
     effect: string;
     scope: string;
+    params: Readonly<Record<string, never>>;
+    action_digest: string;
   }>>>;
   warnings: readonly DreamCandidateWarning[];
 }>;

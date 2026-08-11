@@ -21,12 +21,11 @@ authority.
 ## The loop
 
 ```text
-roster dream status            -> due | not_due over observed evidence
-roster dream candidates create -> a cited draft, stored in the Brain
+roster dream status             -> due | not_due over observed evidence
+roster dream candidates create  -> a cited draft, stored in the Brain
 (present it; the human answers)
-roster brain record decision   -> the human's answer, durably
-roster dream candidates promote|reject|retire
-                               -> the approved lesson becomes a playbook file
+roster brain record decision    -> the human's answer, durably
+roster dream candidates promote -> the approved lesson becomes a playbook file
 ```
 
 Check `roster dream status` after recording evidence and at the start of a
@@ -161,23 +160,57 @@ Every candidate carries a `decision_action` block with one entry per verb:
   "promote": {
     "target": "dream-candidate:9f3a-1c07-…-b2e4-",
     "effect": "dream-candidate-promote",
-    "scope": "agent:gtm/sdr"
+    "scope": "agent:gtm/sdr",
+    "params": {},
+    "action_digest": "sha256:…"
   }
 }
 ```
 
-Copy that verb's `target`, `effect`, and `scope` VERBATIM into the decision:
+Write the decision payload to a file inside the workspace, copying `target`,
+`effect`, `scope`, and `params` VERBATIM into `action`:
+
+```json
+{
+  "decisionId": "hd-2026-08-11-shorter-openers",
+  "action": {
+    "target": "dream-candidate:9f3a-1c07-…-b2e4-",
+    "effect": "dream-candidate-promote",
+    "scope": "agent:gtm/sdr",
+    "params": {}
+  },
+  "actionSummary": "approve the drafted lesson",
+  "requestedDecision": "approval",
+  "answer": "approved",
+  "privacy": "internal",
+  "trust": "host-asserted",
+  "actor": {
+    "actorId": "human",
+    "assurance": "human-confirmed",
+    "decisionId": "hd-2026-08-11-shorter-openers",
+    "actionDigest": "sha256:…"
+  },
+  "decidedAt": "2026-08-11T09:00:00.000Z",
+  "hostProvenance": { "host": "claude" }
+}
+```
+
+Then record it:
 
 ```
-roster brain record decision --json ...   # answer: approved | rejected
+roster brain record decision --file decisions/shorter-openers.json --json
 ```
 
 **The target is NOT the raw candidate id.** A bare `sha256:` digest is
 credential-shaped, and the evidence contract refuses credential shapes in every
 free-text field — so the target carries the same digest in hyphen-separated
-groups. It is exact and injective; it just cannot be typed from memory. A
-decision recorded with any other target is refused at promote time with
-`BRAIN_DREAM_DECISION_UNBOUND`.
+groups. It is exact and injective; it just cannot be typed from memory, and
+recording a decision that names the raw id fails immediately at
+`roster brain record decision`. A decision recorded with any other well-formed
+target is refused later at promote time with `BRAIN_DREAM_DECISION_UNBOUND`.
+
+`action_digest` is likewise not derivable by hand: pass the value from the same
+`decision_action` block as `--action-digest` in step 6.
 
 ## 6. Act on the decision
 

@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import YAML from 'yaml';
 import { renderRosterBootstrap } from '../src/lib/generated-artifacts.ts';
-import { scaffoldWorkspace } from '../src/lib/workspace-registry.ts';
+import { scaffoldWorkspace, validateWorkspace } from '../src/lib/workspace-registry.ts';
 import {
   ensureWorkspaceDirectory,
   hashWorkspaceBytes,
@@ -1096,6 +1096,99 @@ test('multiple skipped filesystem phases converge through the DESC retired walk'
       scope,
     );
     assert.equal(hashWorkspaceBytes(readWorkspaceFile(root, result.path)), expected.contentHash);
+  } finally {
+    cleanup();
+  }
+});
+
+test('a throwing phase-lock release still releases the fence client', async () => {
+  const { root, cleanup } = fixture();
+  try {
+    const { pool, released } = stubPool({});
+    // The lock directory is removed out from under the phase, so release()'s
+    // identity re-check throws. The client release must still happen, or the
+    // transaction and its subject advisory lock are stranded and every later
+    // pool shutdown hangs.
+    await assert.rejects(
+      withSubjectFence({
+        pool,
+        root,
+        candidateId: CANDIDATE_ID,
+        expectedDecision: 'promote',
+        expectedSubjectSequence: 1,
+        phase: async () => {
+          rmSync(join(root, DREAM_PHASE_LOCK_PATH), { recursive: true, force: true });
+          return 'done';
+        },
+      }),
+    );
+    assert.deepEqual(released, [true], 'the client must be released even when the lock release throws');
+  } finally {
+    cleanup();
+  }
+});
+
+test('a REPLACED phase-lock directory is preserved, not removed', () => {
+  const { root, cleanup } = fixture();
+  try {
+    const held = acquireDreamPhaseLock(root);
+    const absolute = join(root, DREAM_PHASE_LOCK_PATH);
+    const original = statSync(absolute);
+    // Another writer's lock now occupies the path. Removing it would delete a
+    // live lock this process never acquired, so the dev/ino gate refuses.
+    rmSync(absolute, { recursive: true, force: true });
+    mkdirSync(absolute, { mode: 0o700 });
+    const replacement = statSync(absolute);
+    assert.notEqual(replacement.ino, original.ino, 'the fixture must actually replace the directory');
+
+    assert.throws(
+      () => held.release(),
+      (error: unknown) => {
+        assert.ok(isWorkspaceFailure(error), String(error));
+        assert.equal(error.code, 'WORKSPACE_BUSY');
+        assert.equal((error.details as { lockIno: number }).lockIno, original.ino);
+        return true;
+      },
+    );
+    assert.equal(existsSync(absolute), true, "the replacement lock must be preserved");
+  } finally {
+    rmSync(join(root, DREAM_PHASE_LOCK_PATH), { recursive: true, force: true });
+    cleanup();
+  }
+});
+
+test('an unrelated invalid record never blocks a converged materialization', async () => {
+  const { root, cleanup } = fixture();
+  try {
+    const binding = candidate();
+    // A sibling plan under the SAME agent is left as an invalid draft. It is
+    // nothing this promotion caused and nothing it can fix, and the validation
+    // runs AFTER the mutation -- so a workspace-wide verdict would report an
+    // already-converged file as an unresolvable conflict on every re-run.
+    scaffoldWorkspace(root, { kind: 'plan', id: 'broken', scope: 'agent:growth/sdr', purpose: 'Broken' });
+    assert.equal(validateWorkspace(root, { target: 'growth/sdr' }).ok, false, 'the fixture must be invalid');
+
+    const result = await materializeLesson({ root, candidate: binding, context: context() });
+    assert.equal(result.status, 'created');
+    const expected = renderLessonContent(
+      binding.lessonId,
+      binding.lessonPurpose,
+      binding.lessonBody,
+      lessonTargetScope(binding.lessonScopeKey),
+    );
+    assert.equal(hashWorkspaceBytes(readWorkspaceFile(root, result.path)), expected.contentHash);
+
+    // The lesson's OWN validity is still enforced: a corrupted lesson record is
+    // this verb's to answer for, and it refuses.
+    const paths = resolveLessonPaths(root, binding.lessonAgentKey, binding.lessonId);
+    writeFileSync(join(root, paths.lessonPath), '---\nschema_version: 2\nid: wrong-id\nkind: lesson\npurpose: p\nscope:\n  function: growth\n  agent: sdr\n---\n\n# Wrong\n');
+    await assert.rejects(
+      materializeLesson({ root, candidate: binding, context: context() }),
+      // Either layer may catch it first -- the registry's embedded-identity
+      // check or the scoped validation -- and both are refusals that leave the
+      // authored bytes in place for a human.
+      /embedded identity|does not validate/u,
+    );
   } finally {
     cleanup();
   }

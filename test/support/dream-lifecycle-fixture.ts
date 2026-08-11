@@ -129,7 +129,16 @@ export async function recordDecision(
   lessonScopeKey: string,
   answer: 'approved' | 'rejected' = verb === 'reject' ? 'rejected' : 'approved',
 ): Promise<{ decisionId: string; actionDigest: string }> {
-  const action = { ...lessonDecisionAction(verb, candidateId, lessonScopeKey), params: {} };
+  // The CLI hands a host `target/effect/scope/params` PLUS the digest of that
+  // action; only the first four are the action itself, and the evidence contract
+  // refuses any fifth key.
+  const published = lessonDecisionAction(verb, candidateId, lessonScopeKey);
+  const action = {
+    target: published.target,
+    effect: published.effect,
+    scope: published.scope,
+    params: {},
+  };
   await recordHumanDecision(fixture.admin, {
     decisionId,
     action,
@@ -142,12 +151,17 @@ export async function recordDecision(
       actorId: 'human',
       assurance: 'human-confirmed',
       decisionId,
-      actionDigest: evidenceActionDigest(action),
+      actionDigest: published.action_digest,
     },
     decidedAt: '2026-08-11T09:00:00.000Z',
     hostProvenance: { host: 'claude' },
   });
-  return { decisionId, actionDigest: evidenceActionDigest(action) };
+  // The digest the CLI publishes and the digest of the action just recorded are
+  // the same value by construction; asserting it here is what keeps them so.
+  if (published.action_digest !== evidenceActionDigest(action)) {
+    throw new Error('the published action digest does not match the recorded action');
+  }
+  return { decisionId, actionDigest: published.action_digest };
 }
 
 export async function decidedAtOf(

@@ -153,7 +153,8 @@ export function renderCandidateLines(rows: readonly DreamCandidateListRow[]): st
     for (const verb of ['promote', 'reject', 'retire'] as const) {
       const action = row.decision_action[verb];
       lines.push(`      ${chalk.dim(`decision action (${verb}):`)} target=${action.target} `
-        + `effect=${action.effect} scope=${action.scope}`);
+        + `effect=${action.effect} scope=${action.scope} params={} `
+        + `action_digest=${action.action_digest}`);
     }
     for (const warning of row.warnings) {
       lines.push(`      ${chalk.yellow('⚠')} ${warning.code} — ${warning.detail}`);
@@ -298,7 +299,8 @@ async function runCreate(
       decisionActionsFor(result.candidateId, draft.lessonScopeKey),
     )) {
       console.log(`  ${chalk.dim('·')} decision action (${verb}): target=${action.target} `
-        + `effect=${action.effect} scope=${action.scope}`);
+        + `effect=${action.effect} scope=${action.scope} params={} `
+        + `action_digest=${action.action_digest}`);
     }
     console.log(`  ${chalk.dim('·')} present it to a human, record their decision, then promote or reject it`);
     console.log('');
