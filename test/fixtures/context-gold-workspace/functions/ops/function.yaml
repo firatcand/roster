@@ -6,6 +6,8 @@ agents:
 guidelines:
   - access-reviews
   - continuity-runbook
+  - incident-comms
+  - intake-routing
   - escalation-policy
   - spend-policy
   - vendor-directory

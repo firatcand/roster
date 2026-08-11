@@ -1,0 +1,1219 @@
+{
+  "schemaVersion": 1,
+  "workspaceFixture": "context-gold-workspace",
+  "identities": {
+    "workspaceIds": [
+      "context-gold-workspace"
+    ]
+  },
+  "tasks": [
+    {
+      "id": "L1-full-closure-recall",
+      "tier": "local",
+      "family": "recall",
+      "target": "gtm/social-manager#opportunity-discovery",
+      "query": "Find timely public conversations about dependable analytics operations.",
+      "mandatory": [
+        {
+          "kind": "function",
+          "ref": "gtm",
+          "inclusionReason": "target-function"
+        },
+        {
+          "kind": "agent",
+          "ref": "gtm/social-manager",
+          "inclusionReason": "target-agent"
+        },
+        {
+          "kind": "plan",
+          "ref": "gtm/social-manager#opportunity-discovery",
+          "inclusionReason": "selected-plan-root"
+        },
+        {
+          "kind": "plan",
+          "ref": "gtm/social-manager#scan-linkedin",
+          "inclusionReason": "nested-plan-closure"
+        },
+        {
+          "kind": "plan",
+          "ref": "gtm/social-manager#scan-web",
+          "inclusionReason": "nested-plan-closure"
+        },
+        {
+          "kind": "guideline",
+          "ref": "gtm/guidelines/brand-voice",
+          "inclusionReason": "agent-default-guideline"
+        },
+        {
+          "kind": "guideline",
+          "ref": "gtm/social-manager/guidelines/discovery-policy",
+          "inclusionReason": "plan-referenced-guideline"
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/closure-prior",
+          "inclusionReason": "applicable-lesson"
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/nested-prior",
+          "inclusionReason": "applicable-lesson"
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/general-prior",
+          "inclusionReason": "applicable-lesson"
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/duplicate-brief",
+          "inclusionReason": "applicable-lesson"
+        },
+        {
+          "kind": "tool-use",
+          "ref": "signal-scan",
+          "inclusionReason": "plan-tool-step"
+        },
+        {
+          "kind": "tool-use",
+          "ref": "channel-drafts",
+          "inclusionReason": "plan-tool-step"
+        },
+        {
+          "kind": "skill-ref",
+          "ref": "harborline:search",
+          "inclusionReason": "tool-skill-ref"
+        },
+        {
+          "kind": "skill-ref",
+          "ref": "beacon-post:queue",
+          "inclusionReason": "tool-skill-ref"
+        }
+      ],
+      "forbidden": [
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/duplicate-verbose",
+          "rationale": "product-diagnostic",
+          "expect": {
+            "diagnostic": "CONTEXT_LESSON_EXCLUDED",
+            "reason": "duplicate"
+          }
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/sibling-prior",
+          "rationale": "product-diagnostic",
+          "expect": {
+            "diagnostic": "CONTEXT_LESSON_EXCLUDED",
+            "reason": "scope-ineligible"
+          }
+        },
+        {
+          "kind": "plan",
+          "ref": "gtm/social-manager#sibling-review",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "function",
+          "ref": "ops",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "tool-use",
+          "ref": "atlas-crawl",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "skill-ref",
+          "ref": "atlas-crawl:extract",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        }
+      ],
+      "budgetExpect": {
+        "lessonsScopeIneligible": 3,
+        "lessonsDuplicate": 1,
+        "lessonsBudgetExhausted": 0,
+        "candidateDiagnosticsOmitted": 0,
+        "lessonDiagnosticsOmitted": 0,
+        "retrievalReportOmitted": 0
+      },
+      "diagnosticsExpect": [
+        "BRAIN_NOT_CONFIGURED",
+        "CONTEXT_LESSON_EXCLUDED"
+      ],
+      "notes": "Full closure recall at the default budget: every mandatory fragment kind including both skill refs, with the sibling plan and the ops function structurally absent."
+    },
+    {
+      "id": "L2-agent-only-target",
+      "tier": "local",
+      "family": "coverage",
+      "target": "gtm/social-manager",
+      "query": "Summarize this agent's standing policy for public conversation work.",
+      "mandatory": [
+        {
+          "kind": "function",
+          "ref": "gtm",
+          "inclusionReason": "target-function"
+        },
+        {
+          "kind": "agent",
+          "ref": "gtm/social-manager",
+          "inclusionReason": "target-agent"
+        },
+        {
+          "kind": "guideline",
+          "ref": "gtm/guidelines/brand-voice",
+          "inclusionReason": "agent-default-guideline"
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/general-prior",
+          "inclusionReason": "applicable-lesson"
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/duplicate-brief",
+          "inclusionReason": "applicable-lesson"
+        }
+      ],
+      "forbidden": [
+        {
+          "kind": "plan",
+          "ref": "gtm/social-manager#opportunity-discovery",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "guideline",
+          "ref": "gtm/social-manager/guidelines/discovery-policy",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "tool-use",
+          "ref": "signal-scan",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "skill-ref",
+          "ref": "harborline:search",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/closure-prior",
+          "rationale": "product-diagnostic",
+          "expect": {
+            "diagnostic": "CONTEXT_LESSON_EXCLUDED",
+            "reason": "scope-ineligible"
+          }
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/duplicate-verbose",
+          "rationale": "product-diagnostic",
+          "expect": {
+            "diagnostic": "CONTEXT_LESSON_EXCLUDED",
+            "reason": "duplicate"
+          }
+        }
+      ],
+      "budgetExpect": {
+        "lessonsScopeIneligible": 5,
+        "lessonsDuplicate": 1,
+        "lessonsBudgetExhausted": 0,
+        "candidateDiagnosticsOmitted": 0,
+        "lessonDiagnosticsOmitted": 0,
+        "retrievalReportOmitted": 0
+      },
+      "diagnosticsExpect": [
+        "BRAIN_NOT_CONFIGURED",
+        "CONTEXT_LESSON_EXCLUDED"
+      ],
+      "notes": "An agent-only target resolves no plan, so no plan, tool-use, or skill-ref fragment may appear and every plan-scoped lesson is scope-ineligible."
+    },
+    {
+      "id": "L3-duplicate-lesson-exclusion",
+      "tier": "local",
+      "family": "exclusion",
+      "target": "gtm/social-manager#opportunity-discovery",
+      "query": "How should the lookback window be chosen for a fresh discovery sweep?",
+      "mandatory": [
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/duplicate-brief",
+          "inclusionReason": "applicable-lesson"
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/closure-prior",
+          "inclusionReason": "applicable-lesson"
+        }
+      ],
+      "forbidden": [
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/duplicate-verbose",
+          "rationale": "product-diagnostic",
+          "expect": {
+            "diagnostic": "CONTEXT_LESSON_EXCLUDED",
+            "reason": "duplicate"
+          }
+        }
+      ],
+      "budgetExpect": {
+        "lessonsDuplicate": 1,
+        "lessonsBudgetExhausted": 0,
+        "lessonDiagnosticsOmitted": 0
+      },
+      "diagnosticsExpect": [
+        "BRAIN_NOT_CONFIGURED",
+        "CONTEXT_LESSON_EXCLUDED"
+      ],
+      "notes": "The body-identical duplicate pair is deduplicated before budget admission: the lexicographic winner survives and the loser is excluded with the comparator disclosed."
+    },
+    {
+      "id": "L4-sibling-scope-exclusion",
+      "tier": "local",
+      "family": "exclusion",
+      "target": "gtm/social-manager#opportunity-discovery",
+      "query": "Qualify the strongest current conversations for a reply shortlist.",
+      "mandatory": [
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/closure-prior",
+          "inclusionReason": "applicable-lesson"
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/nested-prior",
+          "inclusionReason": "applicable-lesson"
+        }
+      ],
+      "forbidden": [
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/sibling-prior",
+          "rationale": "product-diagnostic",
+          "expect": {
+            "diagnostic": "CONTEXT_LESSON_EXCLUDED",
+            "reason": "scope-ineligible"
+          }
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/competitor-prior",
+          "rationale": "product-diagnostic",
+          "expect": {
+            "diagnostic": "CONTEXT_LESSON_EXCLUDED",
+            "reason": "scope-ineligible"
+          }
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/recap-prior",
+          "rationale": "product-diagnostic",
+          "expect": {
+            "diagnostic": "CONTEXT_LESSON_EXCLUDED",
+            "reason": "scope-ineligible"
+          }
+        }
+      ],
+      "budgetExpect": {
+        "lessonsScopeIneligible": 3,
+        "lessonsBudgetExhausted": 0,
+        "lessonDiagnosticsOmitted": 0
+      },
+      "diagnosticsExpect": [
+        "BRAIN_NOT_CONFIGURED",
+        "CONTEXT_LESSON_EXCLUDED"
+      ],
+      "notes": "Lessons scoped to plans outside the resolved closure are excluded with the owning plan named; valid policy for another workflow is neither stale nor conflicting."
+    },
+    {
+      "id": "L5-cross-function-isolation",
+      "tier": "local",
+      "family": "exclusion",
+      "target": "gtm/social-manager#opportunity-discovery",
+      "query": "Prepare the discovery workflow context for this cycle's sweep.",
+      "mandatory": [
+        {
+          "kind": "function",
+          "ref": "gtm",
+          "inclusionReason": "target-function"
+        },
+        {
+          "kind": "agent",
+          "ref": "gtm/social-manager",
+          "inclusionReason": "target-agent"
+        }
+      ],
+      "forbidden": [
+        {
+          "kind": "function",
+          "ref": "ops",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "agent",
+          "ref": "ops/vendor-support",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "plan",
+          "ref": "ops/vendor-support#ticket-triage",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "guideline",
+          "ref": "ops/guidelines/escalation-policy",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "guideline",
+          "ref": "ops/vendor-support/guidelines/triage-policy",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "lesson",
+          "ref": "ops/vendor-support/playbook/triage-prior",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "tool-use",
+          "ref": "ticket-search",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "skill-ref",
+          "ref": "ledgerdesk:tickets",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "agent",
+          "ref": "gtm/content-writer",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "plan",
+          "ref": "gtm/content-writer#draft-posts",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "guideline",
+          "ref": "gtm/content-writer/guidelines/writing-style",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/content-writer/playbook/writing-prior",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        }
+      ],
+      "budgetExpect": {
+        "lessonsBudgetExhausted": 0,
+        "retrievalReportOmitted": 0
+      },
+      "diagnosticsExpect": [
+        "BRAIN_NOT_CONFIGURED",
+        "CONTEXT_LESSON_EXCLUDED"
+      ],
+      "notes": "Cross-function and cross-agent isolation is structural: nothing owned by the ops function or the sibling content-writer agent can appear in this bundle under any budget."
+    },
+    {
+      "id": "L6-lesson-budget-exhaustion",
+      "tier": "local",
+      "family": "budget",
+      "target": "gtm/social-manager#opportunity-discovery",
+      "query": "Find timely public conversations about dependable analytics operations.",
+      "budgetTokens": 7400,
+      "mandatory": [
+        {
+          "kind": "function",
+          "ref": "gtm",
+          "inclusionReason": "target-function"
+        },
+        {
+          "kind": "agent",
+          "ref": "gtm/social-manager",
+          "inclusionReason": "target-agent"
+        },
+        {
+          "kind": "plan",
+          "ref": "gtm/social-manager#opportunity-discovery",
+          "inclusionReason": "selected-plan-root"
+        },
+        {
+          "kind": "plan",
+          "ref": "gtm/social-manager#scan-linkedin",
+          "inclusionReason": "nested-plan-closure"
+        },
+        {
+          "kind": "plan",
+          "ref": "gtm/social-manager#scan-web",
+          "inclusionReason": "nested-plan-closure"
+        },
+        {
+          "kind": "guideline",
+          "ref": "gtm/guidelines/brand-voice",
+          "inclusionReason": "agent-default-guideline"
+        },
+        {
+          "kind": "guideline",
+          "ref": "gtm/social-manager/guidelines/discovery-policy",
+          "inclusionReason": "plan-referenced-guideline"
+        },
+        {
+          "kind": "tool-use",
+          "ref": "signal-scan",
+          "inclusionReason": "plan-tool-step"
+        },
+        {
+          "kind": "tool-use",
+          "ref": "channel-drafts",
+          "inclusionReason": "plan-tool-step"
+        },
+        {
+          "kind": "skill-ref",
+          "ref": "harborline:search",
+          "inclusionReason": "tool-skill-ref"
+        },
+        {
+          "kind": "skill-ref",
+          "ref": "beacon-post:queue",
+          "inclusionReason": "tool-skill-ref"
+        }
+      ],
+      "forbidden": [
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/closure-prior",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "plan",
+          "ref": "gtm/social-manager#sibling-review",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        }
+      ],
+      "budgetExpect": {
+        "lessonsBudgetExhausted": 4,
+        "lessonDiagnosticsOmitted": 2,
+        "retrievalReportOmitted": 0
+      },
+      "diagnosticsExpect": [
+        "BRAIN_NOT_CONFIGURED",
+        "CONTEXT_LESSON_EXCLUDED"
+      ],
+      "notes": "A tight budget exhausts the whole optional lesson family while every mandatory fragment stays intact; the exhaustion is disclosed by counter, and the omitted-lesson entries are eligible policy withheld only by budget, so their absence is asserted as absence, not as a product diagnostic."
+    },
+    {
+      "id": "L7-explain-toggle-contract",
+      "tier": "local",
+      "family": "contract",
+      "target": "gtm/social-manager#opportunity-discovery",
+      "query": "Find timely public conversations about dependable analytics operations.",
+      "mandatory": [
+        {
+          "kind": "function",
+          "ref": "gtm",
+          "inclusionReason": "target-function"
+        },
+        {
+          "kind": "agent",
+          "ref": "gtm/social-manager",
+          "inclusionReason": "target-agent"
+        },
+        {
+          "kind": "plan",
+          "ref": "gtm/social-manager#opportunity-discovery",
+          "inclusionReason": "selected-plan-root"
+        }
+      ],
+      "forbidden": [
+        {
+          "kind": "plan",
+          "ref": "gtm/social-manager#sibling-review",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        }
+      ],
+      "budgetExpect": {
+        "lessonsBudgetExhausted": 0,
+        "candidateDiagnosticsOmitted": 0,
+        "lessonDiagnosticsOmitted": 0
+      },
+      "diagnosticsExpect": [
+        "BRAIN_NOT_CONFIGURED",
+        "CONTEXT_LESSON_EXCLUDED"
+      ],
+      "notes": "A8': the explain toggle changes explanation bytes and their derived size accounting and NOTHING else. The runner executes the explain-off companion under sufficient headroom, compares under the declared two-field-plus-budget projection, and pins the fragment-id sets, diagnostics, exclusions, and omission counters pairwise."
+    },
+    {
+      "id": "L8-step-hint-contract",
+      "tier": "local",
+      "family": "contract",
+      "target": "gtm/social-manager#opportunity-discovery",
+      "query": "Find timely public conversations about dependable analytics operations.",
+      "stepHint": "Rank the decisive excerpt above engagement counts for every candidate.",
+      "mandatory": [
+        {
+          "kind": "function",
+          "ref": "gtm",
+          "inclusionReason": "target-function"
+        },
+        {
+          "kind": "agent",
+          "ref": "gtm/social-manager",
+          "inclusionReason": "target-agent"
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/general-prior",
+          "inclusionReason": "applicable-lesson"
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/duplicate-brief",
+          "inclusionReason": "applicable-lesson"
+        }
+      ],
+      "forbidden": [
+        {
+          "kind": "plan",
+          "ref": "gtm/social-manager#sibling-review",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        }
+      ],
+      "budgetExpect": {
+        "lessonsBudgetExhausted": 0
+      },
+      "diagnosticsExpect": [
+        "BRAIN_NOT_CONFIGURED",
+        "CONTEXT_LESSON_EXCLUDED"
+      ],
+      "notes": "The host step hint influences optional ranking only: the runner executes a hint-free companion and asserts the fragment SET is identical while the lesson ordering difference is disclosed as ordering, never as loss."
+    },
+    {
+      "id": "L9-sparse-agent-coverage",
+      "tier": "local",
+      "family": "coverage",
+      "target": "gtm/content-writer#draft-posts",
+      "query": "Draft publishable posts from this cycle's verified findings.",
+      "mandatory": [
+        {
+          "kind": "function",
+          "ref": "gtm",
+          "inclusionReason": "target-function"
+        },
+        {
+          "kind": "agent",
+          "ref": "gtm/content-writer",
+          "inclusionReason": "target-agent"
+        },
+        {
+          "kind": "plan",
+          "ref": "gtm/content-writer#draft-posts",
+          "inclusionReason": "selected-plan-root"
+        },
+        {
+          "kind": "guideline",
+          "ref": "gtm/guidelines/brand-voice",
+          "inclusionReason": "agent-default-guideline"
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/content-writer/playbook/writing-prior",
+          "inclusionReason": "applicable-lesson"
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/content-writer/playbook/interview-prior",
+          "inclusionReason": "applicable-lesson"
+        }
+      ],
+      "forbidden": [
+        {
+          "kind": "tool-use",
+          "ref": "signal-scan",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "skill-ref",
+          "ref": "harborline:search",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "skill-ref",
+          "ref": "beacon-post:queue",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "guideline",
+          "ref": "gtm/content-writer/guidelines/writing-style",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/content-writer/playbook/case-study-prior",
+          "rationale": "product-diagnostic",
+          "expect": {
+            "diagnostic": "CONTEXT_LESSON_EXCLUDED",
+            "reason": "scope-ineligible"
+          }
+        }
+      ],
+      "budgetExpect": {
+        "lessonsScopeIneligible": 1,
+        "lessonsDuplicate": 0,
+        "lessonsBudgetExhausted": 0,
+        "candidateDiagnosticsOmitted": 0,
+        "lessonDiagnosticsOmitted": 0
+      },
+      "diagnosticsExpect": [
+        "BRAIN_NOT_CONFIGURED",
+        "CONTEXT_LESSON_EXCLUDED"
+      ],
+      "notes": "A plan with no tool steps exercises the empty vendor projection path: no tool-use and no skill-ref fragment exists, and the bundle stays a small fraction of the eager tree."
+    },
+    {
+      "id": "L10-partial-registry-fatal",
+      "tier": "local",
+      "family": "contract",
+      "target": "gtm/social-manager#opportunity-discovery",
+      "query": "Find timely public conversations about dependable analytics operations.",
+      "registryVariant": "partial",
+      "mandatory": [],
+      "forbidden": [],
+      "notes": "A half-declared Brain is fatal before any store contact: nonzero exit, no bundle, and the closed BRAIN_CONFIGURATION_INCOMPLETE envelope naming the missing half is the whole explanation."
+    },
+    {
+      "id": "L11-anyof-alternatives",
+      "tier": "local",
+      "family": "recall",
+      "target": "gtm/social-manager#opportunity-discovery",
+      "query": "Find timely public conversations about dependable analytics operations.",
+      "budgetTokens": 7800,
+      "mandatory": [
+        {
+          "kind": "function",
+          "ref": "gtm",
+          "inclusionReason": "target-function"
+        },
+        {
+          "kind": "agent",
+          "ref": "gtm/social-manager",
+          "inclusionReason": "target-agent"
+        },
+        {
+          "kind": "plan",
+          "ref": "gtm/social-manager#opportunity-discovery",
+          "inclusionReason": "selected-plan-root"
+        },
+        {
+          "kind": "lesson",
+          "anyOf": [
+            "gtm/social-manager/playbook/closure-prior",
+            "gtm/social-manager/playbook/nested-prior"
+          ],
+          "inclusionReason": "applicable-lesson"
+        }
+      ],
+      "forbidden": [
+        {
+          "kind": "plan",
+          "ref": "gtm/social-manager#sibling-review",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "function",
+          "ref": "ops",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        }
+      ],
+      "budgetExpect": {
+        "lessonsBudgetExhausted": 3
+      },
+      "diagnosticsExpect": [
+        "BRAIN_NOT_CONFIGURED",
+        "CONTEXT_LESSON_EXCLUDED"
+      ],
+      "notes": "A5: the anyOf group of two closure-eligible lessons under a budget that admits exactly one — the task passes with either member present."
+    },
+    {
+      "id": "B1-required-selector-recall",
+      "tier": "brain",
+      "family": "recall",
+      "target": "gtm/social-manager#opportunity-discovery",
+      "query": "Find timely public conversations about dependable analytics operations.",
+      "mandatory": [
+        {
+          "kind": "function",
+          "ref": "gtm",
+          "inclusionReason": "target-function"
+        },
+        {
+          "kind": "agent",
+          "ref": "gtm/social-manager",
+          "inclusionReason": "target-agent"
+        },
+        {
+          "kind": "plan",
+          "ref": "gtm/social-manager#opportunity-discovery",
+          "inclusionReason": "selected-plan-root"
+        },
+        {
+          "kind": "brain-evidence",
+          "ref": "gold-strong-example-a",
+          "inclusionReason": "required-selector-match"
+        },
+        {
+          "kind": "brain-evidence",
+          "ref": "gold-strong-example-b",
+          "inclusionReason": "required-selector-match"
+        },
+        {
+          "kind": "brain-evidence",
+          "ref": "gold-positioning-note",
+          "inclusionReason": "selector-match"
+        }
+      ],
+      "forbidden": [
+        {
+          "kind": "brain-evidence",
+          "ref": "secret-example-v1",
+          "rationale": "prefiltered",
+          "expect": {
+            "filtered": "privacy-incompatible"
+          }
+        }
+      ],
+      "budgetExpect": {
+        "requiredSelectorsUnmatched": 0,
+        "requiredSelectorsTruncated": 0,
+        "candidateDiagnosticsOmitted": 0,
+        "retrievalReportOmitted": 0
+      },
+      "diagnosticsExpect": [
+        "CONTEXT_EVIDENCE_FILTERED",
+        "CONTEXT_LESSON_EXCLUDED"
+      ],
+      "notes": "Required-selector evidence recall with the full seven-field citation envelope; the runner re-verifies sha256(content) == content_hash for every delivered candidate."
+    },
+    {
+      "id": "B2-exclusion-sweep",
+      "tier": "brain",
+      "family": "exclusion",
+      "target": "gtm/social-manager#opportunity-discovery",
+      "query": "Find timely public conversations about dependable analytics operations.",
+      "mandatory": [
+        {
+          "kind": "brain-evidence",
+          "ref": "gold-strong-example-a",
+          "inclusionReason": "required-selector-match"
+        },
+        {
+          "kind": "brain-evidence",
+          "ref": "gold-superseded-example",
+          "inclusionReason": "required-selector-match"
+        }
+      ],
+      "forbidden": [
+        {
+          "kind": "brain-evidence",
+          "ref": "superseded-example-v1",
+          "rationale": "prefiltered",
+          "expect": {
+            "filtered": "superseded"
+          }
+        },
+        {
+          "kind": "brain-evidence",
+          "ref": "tombstoned-example-v1",
+          "rationale": "prefiltered",
+          "expect": {
+            "filtered": "tombstoned"
+          }
+        },
+        {
+          "kind": "brain-evidence",
+          "ref": "secret-example-v1",
+          "rationale": "prefiltered",
+          "expect": {
+            "filtered": "privacy-incompatible"
+          }
+        },
+        {
+          "kind": "brain-evidence",
+          "ref": "legacy-note-v1",
+          "rationale": "prefiltered",
+          "expect": {
+            "filtered": "legacy-unverified"
+          }
+        }
+      ],
+      "budgetExpect": {
+        "requiredSelectorsUnmatched": 0,
+        "requiredSelectorsTruncated": 0,
+        "candidateDiagnosticsOmitted": 0,
+        "retrievalReportOmitted": 0
+      },
+      "diagnosticsExpect": [
+        "CONTEXT_EVIDENCE_FILTERED",
+        "CONTEXT_LESSON_EXCLUDED"
+      ],
+      "notes": "The exclusion sweep: superseded, tombstoned, secret, and unrequested legacy revisions are pre-filtered with the exact per-reason chunk accounting and evidence_prefiltered equal to the breakdown sum."
+    },
+    {
+      "id": "B3-legacy-optin-pair",
+      "tier": "brain",
+      "family": "contract",
+      "target": "gtm/social-manager#opportunity-discovery",
+      "query": "Find timely public conversations about dependable analytics operations.",
+      "includeLegacyUnverified": true,
+      "mandatory": [
+        {
+          "kind": "brain-evidence",
+          "ref": "gold-legacy-note",
+          "inclusionReason": "required-selector-match"
+        },
+        {
+          "kind": "brain-evidence",
+          "ref": "gold-strong-example-a",
+          "inclusionReason": "required-selector-match"
+        }
+      ],
+      "forbidden": [
+        {
+          "kind": "brain-evidence",
+          "ref": "secret-example-v1",
+          "rationale": "prefiltered",
+          "expect": {
+            "filtered": "privacy-incompatible"
+          }
+        }
+      ],
+      "budgetExpect": {
+        "candidateDiagnosticsOmitted": 0,
+        "retrievalReportOmitted": 0
+      },
+      "diagnosticsExpect": [
+        "CONTEXT_EVIDENCE_FILTERED",
+        "CONTEXT_LESSON_EXCLUDED"
+      ],
+      "notes": "The legacy opt-in pair: without the flag the runner's companion run proves the legacy row absent; with it the row returns with its legacy-unverified trust retained and floored below every non-legacy candidate.",
+      "budgetTokens": 13000
+    },
+    {
+      "id": "B4-evidence-budget-exhaustion",
+      "tier": "brain",
+      "family": "budget",
+      "target": "gtm/social-manager#opportunity-discovery",
+      "query": "Find timely public conversations about dependable analytics operations.",
+      "budgetTokens": 11300,
+      "mandatory": [
+        {
+          "kind": "function",
+          "ref": "gtm",
+          "inclusionReason": "target-function"
+        },
+        {
+          "kind": "brain-evidence",
+          "ref": "gold-strong-example-a",
+          "inclusionReason": "required-selector-match"
+        },
+        {
+          "kind": "brain-evidence",
+          "ref": "gold-positioning-note",
+          "inclusionReason": "selector-match"
+        }
+      ],
+      "forbidden": [
+        {
+          "kind": "brain-evidence",
+          "ref": "secret-example-v1",
+          "rationale": "prefiltered",
+          "expect": {
+            "filtered": "privacy-incompatible"
+          }
+        }
+      ],
+      "budgetExpect": {
+        "exclusions": {
+          "budget-exhausted": 1
+        },
+        "candidateDiagnosticsOmitted": 0,
+        "lessonDiagnosticsOmitted": 0,
+        "retrievalReportOmitted": 0
+      },
+      "diagnosticsExpect": [
+        "CONTEXT_EVIDENCE_EXCLUDED",
+        "CONTEXT_EVIDENCE_FILTERED",
+        "CONTEXT_LESSON_EXCLUDED"
+      ],
+      "notes": "Evidence budget exhaustion: the deterministically last-ordered bulk candidate is excluded as budget-exhausted with its CONTEXT_EVIDENCE_EXCLUDED diagnostic admitted and both omission counters still zero."
+    },
+    {
+      "id": "B5-required-selector-missing",
+      "tier": "brain",
+      "family": "coverage",
+      "target": "ops/vendor-support#ticket-triage",
+      "query": "Triage the incoming vendor ticket with precedent attached.",
+      "mandatory": [
+        {
+          "kind": "function",
+          "ref": "ops",
+          "inclusionReason": "target-function"
+        },
+        {
+          "kind": "agent",
+          "ref": "ops/vendor-support",
+          "inclusionReason": "target-agent"
+        },
+        {
+          "kind": "plan",
+          "ref": "ops/vendor-support#ticket-triage",
+          "inclusionReason": "selected-plan-root"
+        },
+        {
+          "kind": "guideline",
+          "ref": "ops/guidelines/escalation-policy",
+          "inclusionReason": "agent-default-guideline"
+        },
+        {
+          "kind": "guideline",
+          "ref": "ops/vendor-support/guidelines/triage-policy",
+          "inclusionReason": "plan-referenced-guideline"
+        },
+        {
+          "kind": "lesson",
+          "ref": "ops/vendor-support/playbook/triage-prior",
+          "inclusionReason": "applicable-lesson"
+        },
+        {
+          "kind": "tool-use",
+          "ref": "ticket-search",
+          "inclusionReason": "plan-tool-step"
+        },
+        {
+          "kind": "skill-ref",
+          "ref": "ledgerdesk:tickets",
+          "inclusionReason": "tool-skill-ref"
+        }
+      ],
+      "forbidden": [
+        {
+          "kind": "brain-evidence",
+          "ref": "gold-strong-example-a",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "brain-evidence",
+          "ref": "gold-positioning-note",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "function",
+          "ref": "gtm",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        }
+      ],
+      "budgetExpect": {
+        "requiredSelectorsUnmatched": 1,
+        "requiredSelectorsTruncated": 0,
+        "candidateDiagnosticsOmitted": 0,
+        "retrievalReportOmitted": 0
+      },
+      "diagnosticsExpect": [
+        "CONTEXT_EVIDENCE_FILTERED",
+        "CONTEXT_LESSON_EXCLUDED",
+        "CONTEXT_REQUIRED_EVIDENCE_MISSING"
+      ],
+      "notes": "A required selector with no eligible evidence anywhere in the Brain surfaces CONTEXT_REQUIRED_EVIDENCE_MISSING and required_selectors_unmatched = 1 — no silent required-context loss."
+    },
+    {
+      "id": "B6-representative-full-task",
+      "tier": "brain",
+      "family": "recall",
+      "target": "gtm/social-manager#opportunity-discovery",
+      "query": "Find timely public conversations about dependable analytics operations.",
+      "mandatory": [
+        {
+          "kind": "function",
+          "ref": "gtm",
+          "inclusionReason": "target-function"
+        },
+        {
+          "kind": "agent",
+          "ref": "gtm/social-manager",
+          "inclusionReason": "target-agent"
+        },
+        {
+          "kind": "plan",
+          "ref": "gtm/social-manager#opportunity-discovery",
+          "inclusionReason": "selected-plan-root"
+        },
+        {
+          "kind": "plan",
+          "ref": "gtm/social-manager#scan-linkedin",
+          "inclusionReason": "nested-plan-closure"
+        },
+        {
+          "kind": "plan",
+          "ref": "gtm/social-manager#scan-web",
+          "inclusionReason": "nested-plan-closure"
+        },
+        {
+          "kind": "guideline",
+          "ref": "gtm/guidelines/brand-voice",
+          "inclusionReason": "agent-default-guideline"
+        },
+        {
+          "kind": "guideline",
+          "ref": "gtm/social-manager/guidelines/discovery-policy",
+          "inclusionReason": "plan-referenced-guideline"
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/closure-prior",
+          "inclusionReason": "applicable-lesson"
+        },
+        {
+          "kind": "tool-use",
+          "ref": "signal-scan",
+          "inclusionReason": "plan-tool-step"
+        },
+        {
+          "kind": "tool-use",
+          "ref": "channel-drafts",
+          "inclusionReason": "plan-tool-step"
+        },
+        {
+          "kind": "skill-ref",
+          "ref": "harborline:search",
+          "inclusionReason": "tool-skill-ref"
+        },
+        {
+          "kind": "skill-ref",
+          "ref": "beacon-post:queue",
+          "inclusionReason": "tool-skill-ref"
+        },
+        {
+          "kind": "brain-evidence",
+          "ref": "gold-strong-example-a",
+          "inclusionReason": "required-selector-match"
+        },
+        {
+          "kind": "brain-evidence",
+          "ref": "gold-strong-example-b",
+          "inclusionReason": "required-selector-match"
+        },
+        {
+          "kind": "brain-evidence",
+          "ref": "gold-superseded-example",
+          "inclusionReason": "required-selector-match"
+        },
+        {
+          "kind": "brain-evidence",
+          "ref": "gold-positioning-note",
+          "inclusionReason": "selector-match"
+        }
+      ],
+      "forbidden": [
+        {
+          "kind": "brain-evidence",
+          "ref": "superseded-example-v1",
+          "rationale": "prefiltered",
+          "expect": {
+            "filtered": "superseded"
+          }
+        },
+        {
+          "kind": "brain-evidence",
+          "ref": "tombstoned-example-v1",
+          "rationale": "prefiltered",
+          "expect": {
+            "filtered": "tombstoned"
+          }
+        },
+        {
+          "kind": "brain-evidence",
+          "ref": "secret-example-v1",
+          "rationale": "prefiltered",
+          "expect": {
+            "filtered": "privacy-incompatible"
+          }
+        },
+        {
+          "kind": "brain-evidence",
+          "ref": "legacy-note-v1",
+          "rationale": "prefiltered",
+          "expect": {
+            "filtered": "legacy-unverified"
+          }
+        },
+        {
+          "kind": "function",
+          "ref": "ops",
+          "rationale": "outside-closure",
+          "expect": "not-selectable"
+        },
+        {
+          "kind": "lesson",
+          "ref": "gtm/social-manager/playbook/duplicate-verbose",
+          "rationale": "product-diagnostic",
+          "expect": {
+            "diagnostic": "CONTEXT_LESSON_EXCLUDED",
+            "reason": "duplicate"
+          }
+        }
+      ],
+      "budgetExpect": {
+        "requiredSelectorsUnmatched": 0,
+        "requiredSelectorsTruncated": 0,
+        "lessonsScopeIneligible": 3,
+        "lessonsDuplicate": 1,
+        "lessonsBudgetExhausted": 0,
+        "candidateDiagnosticsOmitted": 0,
+        "lessonDiagnosticsOmitted": 0,
+        "retrievalReportOmitted": 0
+      },
+      "diagnosticsExpect": [
+        "CONTEXT_EVIDENCE_FILTERED",
+        "CONTEXT_LESSON_EXCLUDED"
+      ],
+      "notes": "The representative full task: local recall, evidence recall, citation completeness, exclusion accounting, and the token-reduction gate all on one default-budget invocation."
+    }
+  ]
+}
