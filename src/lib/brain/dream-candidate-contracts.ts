@@ -9,6 +9,11 @@ export const DREAM_CANDIDATE_DOMAIN = 'roster.brain.dream.candidate.v1';
 export const DREAM_CANDIDATE_CONTENT_DOMAIN = 'roster.brain.dream.candidate-content.v1';
 export const DREAM_LESSON_DECISION_DOMAIN = 'roster.brain.dream.lesson-decision.v1';
 
+// The advisory frames 015 acquires, in the fixed intra-rank order
+// subject -> candidate -> watermark. They carry no TypeScript consumer by
+// design -- `lock_key` EXECUTE is revoked from PUBLIC and granted to nobody, so
+// the CLI can never frame a lock itself -- and they exist so the migration's
+// spelling is pinned against a single source rather than restated per test.
 export const DREAM_SUBJECT_LOCK_DOMAIN = 'roster.brain.dream.lock.subject.v1';
 export const DREAM_CANDIDATE_LOCK_DOMAIN = 'roster.brain.dream.lock.candidate.v1';
 

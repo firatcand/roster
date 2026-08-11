@@ -1161,7 +1161,7 @@ BEGIN
   -- The human decision is PORTABLE EVIDENCE, bound to this exact candidate by
   -- its normalized action digest. Roster verifies the binding; it never presents,
   -- waits, or enforces -- the host does all three.
-  SELECT h.answer, h.actor_assurance, h.action, h.action_digest INTO v_human
+  SELECT h.answer, h.actor_assurance, h.action, h.action_digest, h.decided_at INTO v_human
     FROM brain_evidence.human_decisions h WHERE h.decision_id = v_doc->>'human_decision_id';
   IF NOT FOUND THEN
     RAISE EXCEPTION 'the human decision does not exist' USING ERRCODE = 'RBE03';
@@ -1180,6 +1180,15 @@ BEGIN
      OR v_human.action->>'scope' IS DISTINCT FROM v_candidate.lesson_scope_key
      OR v_human.action_digest IS DISTINCT FROM (v_doc->>'action_digest') THEN
     RAISE EXCEPTION 'the human decision is not bound to this exact candidate decision'
+      USING ERRCODE = 'RBE08';
+  END IF;
+  -- `decided_at` is provenance, so it is SERVER-COMPARED against the human
+  -- decision's own timestamp rather than taken from the caller: a direct broker
+  -- caller could otherwise stamp an approval at a moment the human never
+  -- decided. It stays IN the canonical because the decision record has to be
+  -- self-describing, and the equality below is what makes it trustworthy.
+  IF (v_doc->>'decided_at')::timestamptz IS DISTINCT FROM v_human.decided_at THEN
+    RAISE EXCEPTION 'the decision instant does not match the human decision it cites'
       USING ERRCODE = 'RBE08';
   END IF;
 

@@ -1,5 +1,5 @@
 import { hostname } from 'node:os';
-import { mkdirSync, rmdirSync } from 'node:fs';
+import { lstatSync, mkdirSync, rmdirSync } from 'node:fs';
 import { isWorkspaceFailure, workspaceFailure } from '../workspace-diagnostics.ts';
 import {
   agentRecordPath,
@@ -238,6 +238,42 @@ export function acquireDreamPhaseLock(root: string): DreamPhaseLock {
       },
     );
   }
+  // The identity token of the directory THIS call created. Every later removal
+  // is gated on it, mirroring the workspace lock: a lock directory that was
+  // replaced between acquisition and release is another writer's and is
+  // preserved for inspection rather than removed.
+  const acquired = lstatSync(absolute);
+  if (acquired.isSymbolicLink() || !acquired.isDirectory()) {
+    throw workspaceFailure(
+      'WRITE_CONFLICT',
+      `Dream-phase lock '${DREAM_PHASE_LOCK_PATH}' is not the directory this process created.`,
+      'Inspect the exact lock path before retrying.',
+      { path: DREAM_PHASE_LOCK_PATH },
+    );
+  }
+  const lockIdentity = { dev: acquired.dev, ino: acquired.ino };
+  const removeAcquiredLock = (): void => {
+    const current = lstatSync(absolute);
+    if (
+      current.isSymbolicLink()
+      || !current.isDirectory()
+      || current.dev !== lockIdentity.dev
+      || current.ino !== lockIdentity.ino
+    ) {
+      throw workspaceFailure(
+        'WORKSPACE_BUSY',
+        `Dream-phase lock '${DREAM_PHASE_LOCK_PATH}' was replaced during the phase and was preserved.`,
+        'Inspect the disclosed lock identity before removing any lock or retrying.',
+        {
+          path: DREAM_PHASE_LOCK_PATH,
+          lockPath: DREAM_PHASE_LOCK_PATH,
+          lockDev: lockIdentity.dev,
+          lockIno: lockIdentity.ino,
+        },
+      );
+    }
+    rmdirSync(absolute);
+  };
   const owner: LockOwner = Object.freeze({
     pid: process.pid,
     process_start_time: new Date(Date.now() - process.uptime() * 1000).toISOString(),
@@ -256,7 +292,7 @@ export function acquireDreamPhaseLock(root: string): DreamPhaseLock {
     }
   } catch (error) {
     try {
-      rmdirSync(absolute);
+      removeAcquiredLock();
     } catch {
       // Preserve the acquired lock when cleanup cannot be proven safe.
     }
@@ -268,14 +304,11 @@ export function acquireDreamPhaseLock(root: string): DreamPhaseLock {
       if (released) return;
       released = true;
       // Hash-gated: the owner file this process published is the identity token,
-      // so a replaced owner is preserved for inspection rather than removed.
+      // so a replaced owner is preserved for inspection rather than removed --
+      // and the directory removal below then fails loudly rather than silently
+      // deleting a lock whose contents are not this process's.
       removeManagedWorkspaceFileIfHash(root, ownerPath, hashWorkspaceBytes(ownerBytes));
-      try {
-        rmdirSync(absolute);
-      } catch {
-        // A non-empty or already-removed lock directory is reported by the next
-        // acquisition rather than masked here.
-      }
+      removeAcquiredLock();
     },
   });
 }
@@ -522,8 +555,14 @@ export async function withSubjectFence<T>(options: SubjectFenceOptions<T>): Prom
     await rollbackTolerated();
     throw error;
   } finally {
-    phaseLock?.release();
-    releaseClient();
+    // NESTED, not sequential: a throwing lock release would otherwise skip the
+    // client release and strand both the open transaction and the subject
+    // advisory lock, hanging every later pool shutdown.
+    try {
+      phaseLock?.release();
+    } finally {
+      releaseClient();
+    }
   }
 }
 
@@ -565,14 +604,25 @@ function sameScope(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+export type MaterializeHooks = Readonly<{
+  afterScaffold?: () => Promise<void> | void;
+  afterRepair?: () => Promise<void> | void;
+  // The F-6a failpoint: a SYNCHRONOUS seam between the repair arm's membership
+  // removal and its file removal. It is synchronous because it sits inside a
+  // workspace-lock callback, and a test simulates the crash by throwing.
+  afterRepairMembershipRemoval?: () => void;
+}>;
+
 type RepairContext = Readonly<{
   root: string;
   paths: LessonPaths;
   lessonId: string;
   targetScope: WorkspaceScope;
+  expectedQualifiedId: string;
   governorCandidateId: string;
   subjectCandidates: readonly SubjectCandidate[];
   retiredContentHashes: readonly string[];
+  hooks?: MaterializeHooks;
 }>;
 
 // The membership-PRESENT arm: authenticate-then-mutate. All four clauses must
@@ -602,8 +652,15 @@ function repairWrongScopeRegistration(
       },
     );
   };
+  // Clause (a): authenticate the ERROR ITSELF. DUPLICATE_IDENTITY has seven raise
+  // sites across the registry, the record layer, and the plan layer; only the
+  // scaffold scope-mismatch branch carries this exact four-key details shape, so
+  // the code alone is insufficient and the shape is what identifies the branch.
+  if (Object.keys(details).sort().join(',') !== 'existingScope,kind,qualifiedId,requestedScope') {
+    conflict('a:details-shape');
+  }
   if (kind !== 'lesson') conflict('a:kind');
-  if (typeof qualifiedId !== 'string') conflict('a:qualified-id');
+  if (qualifiedId !== context.expectedQualifiedId) conflict('a:qualified-id');
   if (!sameScope(requestedScope, context.targetScope)) conflict('a:requested-scope');
   if (existingScope === undefined || existingScope === null) conflict('a:existing-scope');
   if (sameScope(existingScope, requestedScope)) conflict('a:scopes-equal');
@@ -657,6 +714,11 @@ function repairWrongScopeRegistration(
       removeYamlMembership(agentBytes.toString('utf8'), paths.agentPath, 'lessons', context.lessonId),
       { expectedHash: hashWorkspaceBytes(agentBytes) },
     );
+    // A crash HERE leaves an UNREGISTERED stale stub. That is convergent, not
+    // stranded: the replay's scaffold no longer sees membership, reaches
+    // publishCreateOnly, and raises the publish WRITE_CONFLICT the widened
+    // membership-absent arm authenticates and removes.
+    context.hooks?.afterRepairMembershipRemoval?.();
     removeManagedWorkspaceFileIfHash(root, paths.lessonPath, fileHash);
   });
 }
@@ -668,9 +730,43 @@ function repairWrongScopeRegistration(
 // scope -- are removed and the path is recreated create-only by the proven
 // governor. Provenance strictness scales with what the mutation can destroy;
 // foreign bytes remain the human boundary.
-function repairUnregisteredResidue(context: RepairContext): void {
+function repairUnregisteredResidue(context: RepairContext, details: Record<string, unknown>): void {
   const { root, paths } = context;
+  const conflict = (clause: string, extra: Record<string, string> = {}): never => {
+    throw new LessonMaterializationConflict(
+      `The lesson at ${paths.lessonPath} could not be authenticated as recoverable residue (${clause}).`,
+      {
+        clause,
+        path: paths.lessonPath,
+        candidate_id: context.governorCandidateId,
+        ...extra,
+        remedy: 'A human reconciles: retire the lesson, or move or adopt the conflicting file, then re-run promote.',
+      },
+    );
+  };
+  // WRITE_CONFLICT is a BROAD code inside scaffold: it is also raised when a
+  // publication's state is uncertain, when the parent registry replacement
+  // fails, and when a lock's owner file changed -- and the registry deliberately
+  // PRESERVES the published child whenever the parent's commit state cannot be
+  // proven, which means membership may already be committed. Entering this arm
+  // on the code alone would let it delete recorded-derivable bytes out from
+  // under a live registration. Only the exact publish conflict -- which carries
+  // this three-key shape at THIS path and is raised strictly BEFORE any parent
+  // mutation -- dispatches here; every other WRITE_CONFLICT is the named
+  // conflict with both file and membership preserved.
+  const keys = Object.keys(details).sort().join(',');
+  if (keys !== 'actualHash,expectedHash,path') conflict('x:details-shape');
+  if (details.path !== paths.lessonPath) conflict('x:path');
   withWorkspaceLock(root, () => {
+    // Re-proved UNDER the lock, immediately before any mutation: the arm's whole
+    // licence to delete is that no registration exists to destroy.
+    let agent;
+    try {
+      agent = parseAgentDefinition(readWorkspaceText(root, paths.agentPath), paths.agentPath);
+    } catch {
+      return conflict('x:agent-unreadable');
+    }
+    if (agent.lessons.includes(context.lessonId)) conflict('x:membership-present');
     let fileBytes: Buffer;
     try {
       fileBytes = readWorkspaceFile(root, paths.lessonPath);
@@ -695,15 +791,7 @@ function repairUnregisteredResidue(context: RepairContext): void {
         return;
       }
     }
-    throw new LessonMaterializationConflict(
-      `The file at ${paths.lessonPath} holds bytes this workspace never recorded.`,
-      {
-        path: paths.lessonPath,
-        candidate_id: context.governorCandidateId,
-        actual_hash: fileHash,
-        remedy: 'A human reconciles: retire the lesson, or move or adopt the conflicting file, then re-run promote.',
-      },
-    );
+    return conflict('x:provenance', { actual_hash: fileHash });
   });
 }
 
@@ -711,7 +799,7 @@ export type MaterializeLessonOptions = Readonly<{
   root: string;
   candidate: DreamCandidateBinding;
   context: FenceContext;
-  hooks?: Readonly<{ afterScaffold?: () => Promise<void> | void; afterRepair?: () => Promise<void> | void }>;
+  hooks?: MaterializeHooks;
 }>;
 
 // The filesystem phase. Synchronous within each sub-step, with NO database call
@@ -736,9 +824,11 @@ export async function materializeLesson(
     paths,
     lessonId: candidate.lessonId,
     targetScope,
+    expectedQualifiedId: subject.qualifiedIdOf(candidate.lessonId),
     governorCandidateId: candidate.candidateId,
     subjectCandidates: options.context.subjectCandidates,
     retiredContentHashes: options.context.fence.retiredContentHashes,
+    ...(options.hooks === undefined ? {} : { hooks: options.hooks }),
   });
   const repairs: string[] = [];
 
@@ -761,7 +851,7 @@ export async function materializeLesson(
       await options.hooks?.afterRepair?.();
       scaffold();
     } else if (error.code === 'WRITE_CONFLICT') {
-      repairUnregisteredResidue(repairContext);
+      repairUnregisteredResidue(repairContext, error.details as Record<string, unknown>);
       repairs.push('unregistered-residue');
       await options.hooks?.afterRepair?.();
       scaffold();
@@ -800,7 +890,13 @@ export async function materializeLesson(
     );
   });
 
-  const validation = validateWorkspace(root, { target: `${subject.agentKey}` });
+  // Narrowed to the LESSON this phase materialized, not the whole agent: an
+  // unrelated invalid plan under the same agent must not fail a promotion whose
+  // own mutation already landed, which would leave a converged file reported as
+  // a conflict and no way to converge it.
+  const validation = validateWorkspace(root, {
+    target: subject.qualifiedIdOf(candidate.lessonId),
+  });
   if (!validation.ok) {
     throw new LessonMaterializationConflict(
       `The workspace does not validate after materializing ${paths.lessonPath}.`,
@@ -883,6 +979,8 @@ export async function retireLesson(options: Readonly<{
     return { removedMembership, removedFile };
   });
   await options.hooks?.afterMembership?.();
+  // The retired lesson no longer exists as a record, so the validation target is
+  // its owning AGENT -- the narrowest surface that can still be selected.
   const validation = validateWorkspace(root, { target: candidate.lessonAgentKey });
   if (!validation.ok) {
     throw new LessonRetirementConflict(
@@ -908,4 +1006,3 @@ export function isLessonLifecycleConflict(
   return error instanceof LessonMaterializationConflict
     || error instanceof LessonRetirementConflict;
 }
-

@@ -147,15 +147,37 @@ You have no authority here. Roster has none either: it verifies that a durable
 human decision exists and is bound by action digest to this exact candidate, and
 refuses otherwise.
 
-Record the human's answer:
+Record the human's answer. **The action must match the candidate exactly, and
+you cannot derive it — read it from the CLI:**
+
+```
+roster dream candidates list --candidate <candidate-id> --json
+```
+
+Every candidate carries a `decision_action` block with one entry per verb:
+
+```json
+"decision_action": {
+  "promote": {
+    "target": "dream-candidate:9f3a-1c07-…-b2e4-",
+    "effect": "dream-candidate-promote",
+    "scope": "agent:gtm/sdr"
+  }
+}
+```
+
+Copy that verb's `target`, `effect`, and `scope` VERBATIM into the decision:
 
 ```
 roster brain record decision --json ...   # answer: approved | rejected
 ```
 
-The decision's action must name `target: <candidate-id>`,
-`effect: dream-candidate-promote|dream-candidate-reject|dream-candidate-retire`,
-and `scope: <the candidate's lessonScopeKey>`.
+**The target is NOT the raw candidate id.** A bare `sha256:` digest is
+credential-shaped, and the evidence contract refuses credential shapes in every
+free-text field — so the target carries the same digest in hyphen-separated
+groups. It is exact and injective; it just cannot be typed from memory. A
+decision recorded with any other target is refused at promote time with
+`BRAIN_DREAM_DECISION_UNBOUND`.
 
 ## 6. Act on the decision
 

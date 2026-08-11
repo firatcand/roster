@@ -1,6 +1,10 @@
 import { EXIT_ERROR, RosterError } from '../errors.ts';
 import type { VerifiedBrainPool } from './workspace-authority.ts';
-import type { LessonDecisionVerb } from './dream-candidate-contracts.ts';
+import {
+  LESSON_DECISIONS,
+  lessonDecisionAction,
+  type LessonDecisionVerb,
+} from './dream-candidate-contracts.ts';
 
 export type DreamLifecycleErrorCode =
   | 'BRAIN_DREAM_INPUT_INVALID'
@@ -282,6 +286,15 @@ export type DreamCandidateListRow = Readonly<{
   frontier_ordinal: number;
   recorded_at: string;
   supersedes_candidate_id: string | null;
+  // The EXACT `action` a human decision must carry for each verb. The target is
+  // a grouped spelling of the candidate digest, not the raw id -- a bare sha256
+  // is credential-shaped and the evidence contract refuses it in free text -- so
+  // a host that cannot read it here cannot record an acceptable decision at all.
+  decision_action: Readonly<Record<LessonDecisionVerb, Readonly<{
+    target: string;
+    effect: string;
+    scope: string;
+  }>>>;
   warnings: readonly DreamCandidateWarning[];
 }>;
 
@@ -364,6 +377,7 @@ SELECT s.candidate_id,
   ) other ON true
  WHERE ($1::text IS NULL OR s.state = $1::text)
    AND ($2::text IS NULL OR s.lesson_agent_key = $2::text)
+   AND ($4::text IS NULL OR s.candidate_id = $4::text)
  ORDER BY s.recorded_at DESC, s.candidate_id
  LIMIT $3::integer
 `;
@@ -399,9 +413,18 @@ function composeWarnings(row: ListRow): DreamCandidateWarning[] {
   return warnings;
 }
 
+export function decisionActionsFor(
+  candidateId: string,
+  lessonScopeKey: string,
+): DreamCandidateListRow['decision_action'] {
+  return Object.freeze(Object.fromEntries(
+    LESSON_DECISIONS.map((verb) => [verb, lessonDecisionAction(verb, candidateId, lessonScopeKey)]),
+  )) as DreamCandidateListRow['decision_action'];
+}
+
 export async function listDreamCandidates(
   pool: VerifiedBrainPool,
-  filter: { state?: string; lessonAgentKey?: string; limit?: number } = {},
+  filter: { state?: string; lessonAgentKey?: string; candidateId?: string; limit?: number } = {},
 ): Promise<readonly DreamCandidateListRow[]> {
   let rows: ListRow[];
   try {
@@ -409,6 +432,7 @@ export async function listDreamCandidates(
       filter.state ?? null,
       filter.lessonAgentKey ?? null,
       filter.limit ?? 50,
+      filter.candidateId ?? null,
     ])).rows;
   } catch (error) {
     rethrowDreamLifecycleError(error);
@@ -430,6 +454,7 @@ export async function listDreamCandidates(
     frontier_ordinal: Number(row.frontier_ordinal),
     recorded_at: row.recorded_at,
     supersedes_candidate_id: row.supersedes_candidate_id,
+    decision_action: decisionActionsFor(row.candidate_id, row.lesson_scope_key),
     warnings: Object.freeze(composeWarnings(row)),
   })));
 }

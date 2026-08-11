@@ -21,6 +21,7 @@ import {
 } from '../lib/brain/dream-candidate-contracts.ts';
 import {
   decideLessonCandidate,
+  decisionActionsFor,
   dreamLifecycleError,
   listDreamCandidates,
   loadDreamCandidate,
@@ -112,7 +113,15 @@ function emitDreamStatus(result: DreamReadinessResult, json: boolean): void {
 }
 
 export type DreamCandidatesOptions =
-  | { cwd: string; json: boolean; verb: 'list'; state?: string; target?: string; limit?: number }
+  | {
+      cwd: string;
+      json: boolean;
+      verb: 'list';
+      state?: string;
+      target?: string;
+      candidateId?: string;
+      limit?: number;
+    }
   | { cwd: string; json: boolean; verb: 'create'; file?: string; stdin: boolean }
   | {
       cwd: string;
@@ -138,6 +147,14 @@ export function renderCandidateLines(rows: readonly DreamCandidateListRow[]): st
     lines.push(`      ${row.lesson_qualified_id}  ${chalk.dim(`(${row.lesson_scope_key} from ${row.scope_key})`)}`);
     lines.push(`      ${row.lesson_purpose}`);
     lines.push(`      ${chalk.dim(`drafted by ${row.drafted_by_agent_id} · ${row.privacy_class} · ${row.recorded_at}`)}`);
+    // The human decision's action, verbatim. A host cannot derive this: the
+    // target is a grouped spelling of the candidate digest, because a bare
+    // sha256 is credential-shaped and the evidence contract refuses it.
+    for (const verb of ['promote', 'reject', 'retire'] as const) {
+      const action = row.decision_action[verb];
+      lines.push(`      ${chalk.dim(`decision action (${verb}):`)} target=${action.target} `
+        + `effect=${action.effect} scope=${action.scope}`);
+    }
     for (const warning of row.warnings) {
       lines.push(`      ${chalk.yellow('⚠')} ${warning.code} — ${warning.detail}`);
     }
@@ -234,6 +251,7 @@ async function runList(
   const rows = await listDreamCandidates(pool, {
     ...(opts.state === undefined ? {} : { state: opts.state }),
     ...(opts.target === undefined ? {} : { lessonAgentKey: opts.target }),
+    ...(opts.candidateId === undefined ? {} : { candidateId: opts.candidateId }),
     ...(opts.limit === undefined ? {} : { limit: opts.limit }),
   });
   if (opts.json) console.log(JSON.stringify({ ok: true, candidates: rows }, null, 2));
@@ -265,6 +283,7 @@ async function runCreate(
       status: result.status,
       candidate_id: result.candidateId,
       lesson_qualified_id: normalized.lessonQualifiedId,
+      decision_action: decisionActionsFor(result.candidateId, draft.lessonScopeKey),
       warnings,
     }, null, 2));
   } else {
@@ -275,6 +294,12 @@ async function runCreate(
       console.log(`  ${chalk.yellow('⚠')} ${warning.code} — ${warning.detail}`);
     }
     console.log(`  ${chalk.dim('·')} target: ${normalized.lessonQualifiedId}`);
+    for (const [verb, action] of Object.entries(
+      decisionActionsFor(result.candidateId, draft.lessonScopeKey),
+    )) {
+      console.log(`  ${chalk.dim('·')} decision action (${verb}): target=${action.target} `
+        + `effect=${action.effect} scope=${action.scope}`);
+    }
     console.log(`  ${chalk.dim('·')} present it to a human, record their decision, then promote or reject it`);
     console.log('');
   }

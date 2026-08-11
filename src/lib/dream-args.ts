@@ -25,6 +25,7 @@ export type ParsedDreamArgs =
       json: boolean;
       state?: string;
       target?: string;
+      candidateId?: string;
       limit?: number;
     }
   | {
@@ -103,6 +104,7 @@ function parseList(rest: readonly string[]): ParsedDreamArgs {
   let json = false;
   let state: string | undefined;
   let target: string | undefined;
+  let candidateId: string | undefined;
   let limit: number | undefined;
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i]!;
@@ -120,6 +122,11 @@ function parseList(rest: readonly string[]): ParsedDreamArgs {
       if ('kind' in v) return v;
       target = v.value;
       i = v.next;
+    } else if (arg === '--candidate') {
+      const v = readValue(rest, i, '--candidate', 'dream candidates list');
+      if ('kind' in v) return v;
+      candidateId = v.value;
+      i = v.next;
     } else if (arg === '--limit') {
       const v = readValue(rest, i, '--limit', 'dream candidates list');
       if ('kind' in v) return v;
@@ -135,7 +142,7 @@ function parseList(rest: readonly string[]): ParsedDreamArgs {
       return err(`'dream candidates list': unexpected positional argument '${arg}'`);
     }
   }
-  return { kind: 'ok', subcommand: 'candidates', verb: 'list', json, state, target, limit };
+  return { kind: 'ok', subcommand: 'candidates', verb: 'list', json, state, target, candidateId, limit };
 }
 
 // The draft arrives as a JSON document rather than a flag matrix: it carries a

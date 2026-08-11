@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { parseDreamArgs } from '../src/lib/dream-args.ts';
+import { decisionActionsFor } from '../src/lib/brain/dream-candidates.ts';
 import {
   SUPERSEDED_MESSAGE,
   executeDreamStatus,
@@ -88,11 +89,15 @@ test('dream status parses its scope aliases and refuses every other verb', () =>
 test('the candidate grammar accepts exactly the shipped surface', () => {
   assert.deepEqual({ ...ok(['candidates', 'list']) }, {
     kind: 'ok', subcommand: 'candidates', verb: 'list', json: false,
-    state: undefined, target: undefined, limit: undefined,
+    state: undefined, target: undefined, candidateId: undefined, limit: undefined,
   });
   assert.deepEqual({ ...ok(['candidates', 'list', '--json', '--state', 'open', '--target', 'gtm/sdr', '--limit', '5']) }, {
     kind: 'ok', subcommand: 'candidates', verb: 'list', json: true,
-    state: 'open', target: 'gtm/sdr', limit: 5,
+    state: 'open', target: 'gtm/sdr', candidateId: undefined, limit: 5,
+  });
+  assert.deepEqual({ ...ok(['candidates', 'list', '--candidate', 'sha256:abc']) }, {
+    kind: 'ok', subcommand: 'candidates', verb: 'list', json: false,
+    state: undefined, target: undefined, candidateId: 'sha256:abc', limit: undefined,
   });
   assert.deepEqual({ ...ok(['candidates', 'create', '--stdin']) }, {
     kind: 'ok', subcommand: 'candidates', verb: 'create', json: false,
@@ -150,11 +155,21 @@ test('the superseded, unverified, and warning reports say exactly what to do nex
     frontier_ordinal: 9,
     recorded_at: '2026-08-11T09:00:00.000Z',
     supersedes_candidate_id: null,
+    decision_action: decisionActionsFor(`sha256:${'a'.repeat(64)}`, 'agent:gtm/sdr'),
     warnings: [{ code: 'SAME_LESSON_FILE', detail: 'both cannot be promoted — retire the promoted one first.' }],
   }]).join('\n');
   assert.match(rendered, /SAME_LESSON_FILE/u);
   assert.match(rendered, /both cannot be promoted/u);
   assert.match(rendered, /gtm\/sdr\/playbook\/shorter-openers/u);
+
+  // The list PRINTS the exact human-decision action for every verb. A host
+  // cannot derive the target: it is a grouped spelling of the candidate digest,
+  // because a bare sha256 is credential-shaped and is refused in free text.
+  for (const verb of ['promote', 'reject', 'retire']) {
+    assert.match(rendered, new RegExp(`decision action \\(${verb}\\): target=dream-candidate:aaaa-`, 'u'));
+    assert.match(rendered, new RegExp(`effect=dream-candidate-${verb} scope=agent:gtm/sdr`, 'u'));
+  }
+  assert.equal(/target=sha256:/u.test(rendered), false, 'the raw digest is never the decision target');
   assert.deepEqual(renderCandidateLines([]).some((line) => line.includes('no candidates recorded')), true);
 });
 

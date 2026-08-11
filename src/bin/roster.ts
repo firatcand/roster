@@ -1056,6 +1056,7 @@ async function runDream(args: readonly string[]): Promise<number> {
         verb: 'list',
         ...(parsed.state !== undefined ? { state: parsed.state } : {}),
         ...(parsed.target !== undefined ? { target: parsed.target } : {}),
+        ...(parsed.candidateId !== undefined ? { candidateId: parsed.candidateId } : {}),
         ...(parsed.limit !== undefined ? { limit: parsed.limit } : {}),
       });
     }
