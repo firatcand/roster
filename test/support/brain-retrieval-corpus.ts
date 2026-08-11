@@ -16,6 +16,7 @@ import {
   type BrainWorkspaceAuthority,
   type VerifiedBrainPool,
 } from '../../src/lib/brain/workspace-authority.ts';
+import type { BrainObjectReader, BrainObjectStore } from '../../src/lib/brain/object-store.ts';
 import type { WorkspaceBrainConfig } from '../../src/lib/workspace-record.ts';
 import { createFreshDb, type FreshDb } from '../brain-helpers.ts';
 import { MemoryBrainObjectStore } from './brain-memory-object-store.ts';
@@ -40,7 +41,7 @@ export type RetrievalCorpus = Readonly<{
   activation: BrainActivation;
   // Exposed so a provenance test can re-slice the exact immutable object bytes
   // a citation locator addresses.
-  objectStore: MemoryBrainObjectStore;
+  objectStore: BrainObjectStore & BrainObjectReader;
   runtimeRole: string;
   runtimePassword: string;
   close: () => Promise<void>;
@@ -52,6 +53,10 @@ export type RetrievalCorpus = Readonly<{
 export type RetrievalCorpusOptions = Readonly<{
   workspaceId?: string;
   brainConfig?: WorkspaceBrainConfig;
+  // #353's S3 proof tier: the production ContentAddressedBrainObjectStore over a
+  // real object service. Omitting it keeps the in-memory store every existing
+  // suite already depends on, so the default is byte-for-byte unchanged.
+  objectStore?: (namespaceFingerprint: string) => Promise<BrainObjectStore & BrainObjectReader>;
 }>;
 
 export async function createRetrievalCorpus(
@@ -73,7 +78,9 @@ export async function createRetrievalCorpus(
     authority,
     databaseAuthorityId: bootstrap.databaseAuthorityId,
   });
-  const store = new MemoryBrainObjectStore(authority.namespaceFingerprint);
+  const store = options.objectStore === undefined
+    ? new MemoryBrainObjectStore(authority.namespaceFingerprint)
+    : await options.objectStore(authority.namespaceFingerprint);
   const activation = requireBrainActivation({ pool: adminPool, objectStore: store });
   return Object.freeze({
     db,
@@ -85,6 +92,11 @@ export async function createRetrievalCorpus(
     runtimePassword,
     close: async () => {
       await adminPool.end().catch(() => undefined);
+      try {
+        store.close();
+      } catch {
+        /* a transport that is already torn down must not mask the drop */
+      }
       await db.drop();
     },
   });
