@@ -1,19 +1,19 @@
 {
   "schema_version": 1,
   "kind": "context_quality_manifest",
-  "generated_at": "2026-08-11T21:12:25.177Z",
+  "generated_at": "2026-08-11T21:46:21.276Z",
   "authoritative": true,
   "git": {
-    "commit": "c7c7a437c11b9578d357eebd569e5f8f1f8dd55a",
+    "commit": "992394f17c96a11a712184f5481b2849d44b2bdf",
     "dirty": false
   },
   "fixture": {
     "files": {
-      "tasks.json": "sha256:1beed606fbabcac0796c51e8cdb09a6c97586e4802487f977713f7fd2656ccf6",
+      "tasks.json": "sha256:510e86bcd9a8c27de2f1f118f1bb8dbe1792d298c353328075e1babd884c986e",
       "brain-seeds.json": "sha256:1f9dcb8feb8d42c9f5ab7a5f8cdb5c2d72bd9a2864ab40ea5d018492437b51bb",
-      "eager-baseline.json": "sha256:b77835b0e013b1b1f5cd64e0acc20e85187e6686d2c0f440f703a185b22f1e1e"
+      "eager-baseline.json": "sha256:50afd9e0221949612849de02f68f732baaed662049ee5e72f524d24fa13f100c"
     },
-    "sha256": "sha256:bb263cd226adc34984a54c11b59967951f8e0173b8bfa04e54983ef95d88e9cc"
+    "sha256": "sha256:1abcfb2315c029a885ed333387164449f2199aaa143091fd09840e7120d5f4d1"
   },
   "workspace_fixture": {
     "files": {
@@ -83,7 +83,7 @@
       "functions/ops/agents/vendor-support/plans/quarterly-scorecard.yaml": "sha256:3f638f621f8463656c79afab7e8e552eb48595d98d6d96d95c8832897e64633c",
       "functions/ops/agents/vendor-support/plans/renewal-review.yaml": "sha256:9d5c2eb741333cea4b7a32b81a3bf6789612a7bb35720eb88269ec0bfb0507fa",
       "functions/ops/agents/vendor-support/plans/ticket-triage.yaml": "sha256:70e86757082d734134104ab037e4df3b73796ae289aa04c77fbef65322592c43",
-      "functions/ops/agents/vendor-support/plans/ticket-triage/tools/ticket-search.yaml": "sha256:375bf2119476af298ea3c1d43ecf76a980ae485d274772cec60b6d5e38de2900",
+      "functions/ops/agents/vendor-support/plans/ticket-triage/tools/ticket-search.yaml": "sha256:979de8885b1c391e9f621d8451ebfbc6eabe4837d086b684890937f708d5b4e7",
       "functions/ops/agents/vendor-support/plans/vendor-onboarding.yaml": "sha256:e99e9ea4bd779ae0e4b62f2a3fd40aef651ebe992dbf87a0a9c9010588a72bf4",
       "functions/ops/agents/vendor-support/plans/weekly-audit.yaml": "sha256:3713fa7b92b02a988624044e9e53e9512507eafb1408c29b33aee0dfa8ce3ed8",
       "functions/ops/agents/vendor-support/playbook/audit-prior.md": "sha256:1359df2c1d357c0aa88043ffa19779c90a7767dcaea4636cefdc3fa30f6f036c",
@@ -92,7 +92,7 @@
       "functions/ops/agents/vendor-support/playbook/renewal-prior.md": "sha256:cf53816faaf21a7b67ca6adbc919f8180869f81fe942d45709f8b7b261a35343",
       "functions/ops/agents/vendor-support/playbook/scorecard-prior.md": "sha256:9741b22ecc6dd98f00417f12f14105ddf7957c0643d149c295196f6887813053",
       "functions/ops/agents/vendor-support/playbook/triage-prior.md": "sha256:f67b499dad578f6098a5fc75b2a04eea3f2f08a3059bebab77835fb941ec9c6e",
-      "functions/ops/agents/vendor-support/tools/ticket-search.yaml": "sha256:d263e41a5d308080edfbdd732925f55d4804035d6176ca070558c3eb6abda170",
+      "functions/ops/agents/vendor-support/tools/ticket-search.yaml": "sha256:20dc24213ef0459d9abc6d3131c4e6534d474db9c565d04109f574fedb19c6ac",
       "functions/ops/function.yaml": "sha256:bb54926213d59f6eff831cfee49bcb74a62976d48e051be02156be298eb64d42",
       "functions/ops/guidelines/access-reviews.md": "sha256:bd96ef2a6c8cd7854bcb012d7cc4cfb1ba24fb00bcced308b4e1e61d9b000c21",
       "functions/ops/guidelines/continuity-runbook.md": "sha256:12d2fc78e431d57ff33088caa561f5524194225d1133a9adb435a9e67c239cb9",
@@ -101,13 +101,13 @@
       "functions/ops/guidelines/intake-routing.md": "sha256:e668b927ae6cf8b25e6508dc6d8580663af333d94ee773c72fdade87d6a8328d",
       "functions/ops/guidelines/spend-policy.md": "sha256:28946c97dc173f3aac1ea3cbc700cee6b8efcfa03868014200a3acf7336a5119",
       "functions/ops/guidelines/vendor-directory.md": "sha256:b20c3862d5b7371991002ed58bb3d4a1c0dbbed6a814d130217e0314968e63dc",
-      "functions/ops/tools/ticket-search.yaml": "sha256:5a1d65fa92e4d629fd7759e7871b63027dfe5eba6460cb7f466c025bfe75de10",
+      "functions/ops/tools/ticket-search.yaml": "sha256:8d61428f99f5be93d19ae8d175182e730fe97ee0c6b5e1431a835f81bf0e1c4a",
       "tools/channel-drafts.yaml": "sha256:276926e4556b4e8767090a17369ae1393fb17dcb0771f00c44f88c50547b3ccd",
       "tools/signal-scan.yaml": "sha256:5e3069faf5397ee82fae31daac63d485579a8b83ee2e3c455e04e7a4f392df57",
       "tools/site-crawl.yaml": "sha256:e55bebb06c45e262096955babc230d98cb34f13d1b38017e2387c029acb0545e",
-      "tools/ticket-search.yaml": "sha256:eb9c5a63b343b6b193e6eed095d01444adb4e0cb5a6ad52078937223bf20b00b"
+      "tools/ticket-search.yaml": "sha256:9351d857fbcd2fd3aea9d135468b7f005b101bd94b0918be8093151349dab49b"
     },
-    "sha256": "sha256:1e144cafc3ee3adbe91a214fb303e44d52bec84acf09513e04164d47a9522d7e"
+    "sha256": "sha256:bbcee901b2a50a0bc97dfeed91d23be73eab651735dc7ddcfa0e4b70561eb616"
   },
   "harness": {
     "test/support/privacy-lint.ts": "sha256:c00107ea012ea689c595bae8c514bee8f6d5bea1f5cf8bc825468c0a96796eaa",
@@ -120,7 +120,7 @@
     "estimator": "utf8-bytes-ceil-div-4/context-canonical-json-v1",
     "default_budget_tokens": 12000,
     "reduction_threshold": 0.4,
-    "baseline_tokens": 30587,
+    "baseline_tokens": 30578,
     "ratio_gated_tasks": [
       "L1-full-closure-recall",
       "L2-agent-only-target",
@@ -159,8 +159,8 @@
           "registry_variant": "local",
           "exit_status": 0,
           "bundle_tokens": 9054,
-          "baseline_tokens": 30587,
-          "reduction": 0.704,
+          "baseline_tokens": 30578,
+          "reduction": 0.7039,
           "ratio_gated": true,
           "gates": [
             {
@@ -216,7 +216,7 @@
             {
               "name": "reduction",
               "ok": true,
-              "detail": "9054 bundle tokens vs 30587 eager tokens — 70.4 % reduction (gate ≥ 60 %)"
+              "detail": "9054 bundle tokens vs 30578 eager tokens — 70.4 % reduction (gate ≥ 60 %)"
             }
           ]
         },
@@ -227,7 +227,7 @@
           "registry_variant": "local",
           "exit_status": 0,
           "bundle_tokens": 2955,
-          "baseline_tokens": 30587,
+          "baseline_tokens": 30578,
           "reduction": 0.9034,
           "ratio_gated": true,
           "gates": [
@@ -284,7 +284,7 @@
             {
               "name": "reduction",
               "ok": true,
-              "detail": "2955 bundle tokens vs 30587 eager tokens — 90.3 % reduction (gate ≥ 60 %)"
+              "detail": "2955 bundle tokens vs 30578 eager tokens — 90.3 % reduction (gate ≥ 60 %)"
             }
           ]
         },
@@ -295,8 +295,8 @@
           "registry_variant": "local",
           "exit_status": 0,
           "bundle_tokens": 9053,
-          "baseline_tokens": 30587,
-          "reduction": 0.704,
+          "baseline_tokens": 30578,
+          "reduction": 0.7039,
           "ratio_gated": true,
           "gates": [
             {
@@ -352,7 +352,7 @@
             {
               "name": "reduction",
               "ok": true,
-              "detail": "9053 bundle tokens vs 30587 eager tokens — 70.4 % reduction (gate ≥ 60 %)"
+              "detail": "9053 bundle tokens vs 30578 eager tokens — 70.4 % reduction (gate ≥ 60 %)"
             }
           ]
         },
@@ -363,8 +363,8 @@
           "registry_variant": "local",
           "exit_status": 0,
           "bundle_tokens": 9052,
-          "baseline_tokens": 30587,
-          "reduction": 0.7041,
+          "baseline_tokens": 30578,
+          "reduction": 0.704,
           "ratio_gated": true,
           "gates": [
             {
@@ -420,7 +420,7 @@
             {
               "name": "reduction",
               "ok": true,
-              "detail": "9052 bundle tokens vs 30587 eager tokens — 70.4 % reduction (gate ≥ 60 %)"
+              "detail": "9052 bundle tokens vs 30578 eager tokens — 70.4 % reduction (gate ≥ 60 %)"
             }
           ]
         },
@@ -431,8 +431,8 @@
           "registry_variant": "local",
           "exit_status": 0,
           "bundle_tokens": 9051,
-          "baseline_tokens": 30587,
-          "reduction": 0.7041,
+          "baseline_tokens": 30578,
+          "reduction": 0.704,
           "ratio_gated": true,
           "gates": [
             {
@@ -488,7 +488,7 @@
             {
               "name": "reduction",
               "ok": true,
-              "detail": "9051 bundle tokens vs 30587 eager tokens — 70.4 % reduction (gate ≥ 60 %)"
+              "detail": "9051 bundle tokens vs 30578 eager tokens — 70.4 % reduction (gate ≥ 60 %)"
             }
           ]
         },
@@ -499,8 +499,8 @@
           "registry_variant": "local",
           "exit_status": 0,
           "bundle_tokens": 7382,
-          "baseline_tokens": 30587,
-          "reduction": 0.7587,
+          "baseline_tokens": 30578,
+          "reduction": 0.7586,
           "ratio_gated": true,
           "gates": [
             {
@@ -556,7 +556,7 @@
             {
               "name": "reduction",
               "ok": true,
-              "detail": "7382 bundle tokens vs 30587 eager tokens — 75.9 % reduction (gate ≥ 60 %)"
+              "detail": "7382 bundle tokens vs 30578 eager tokens — 75.9 % reduction (gate ≥ 60 %)"
             }
           ]
         },
@@ -567,8 +567,8 @@
           "registry_variant": "local",
           "exit_status": 0,
           "bundle_tokens": 9054,
-          "baseline_tokens": 30587,
-          "reduction": 0.704,
+          "baseline_tokens": 30578,
+          "reduction": 0.7039,
           "ratio_gated": false,
           "gates": [
             {
@@ -635,8 +635,8 @@
           "registry_variant": "local",
           "exit_status": 0,
           "bundle_tokens": 9152,
-          "baseline_tokens": 30587,
-          "reduction": 0.7008,
+          "baseline_tokens": 30578,
+          "reduction": 0.7007,
           "ratio_gated": false,
           "gates": [
             {
@@ -703,7 +703,7 @@
           "registry_variant": "local",
           "exit_status": 0,
           "bundle_tokens": 3281,
-          "baseline_tokens": 30587,
+          "baseline_tokens": 30578,
           "reduction": 0.8927,
           "ratio_gated": true,
           "gates": [
@@ -760,7 +760,7 @@
             {
               "name": "reduction",
               "ok": true,
-              "detail": "3281 bundle tokens vs 30587 eager tokens — 89.3 % reduction (gate ≥ 60 %)"
+              "detail": "3281 bundle tokens vs 30578 eager tokens — 89.3 % reduction (gate ≥ 60 %)"
             }
           ]
         },
@@ -771,7 +771,7 @@
           "registry_variant": "partial",
           "exit_status": 1,
           "bundle_tokens": null,
-          "baseline_tokens": 30587,
+          "baseline_tokens": 30578,
           "reduction": null,
           "ratio_gated": false,
           "gates": [
@@ -799,8 +799,8 @@
           "registry_variant": "local",
           "exit_status": 0,
           "bundle_tokens": 7793,
-          "baseline_tokens": 30587,
-          "reduction": 0.7452,
+          "baseline_tokens": 30578,
+          "reduction": 0.7451,
           "ratio_gated": false,
           "gates": [
             {
@@ -874,7 +874,7 @@
         }
       ],
       "timings": {
-        "evaluation_ms": 9698
+        "evaluation_ms": 9748
       }
     },
     "brain": {
@@ -889,8 +889,8 @@
           "registry_variant": "brain",
           "exit_status": 0,
           "bundle_tokens": 11908,
-          "baseline_tokens": 30587,
-          "reduction": 0.6107,
+          "baseline_tokens": 30578,
+          "reduction": 0.6106,
           "ratio_gated": false,
           "gates": [
             {
@@ -962,8 +962,8 @@
           "registry_variant": "brain",
           "exit_status": 0,
           "bundle_tokens": 11908,
-          "baseline_tokens": 30587,
-          "reduction": 0.6107,
+          "baseline_tokens": 30578,
+          "reduction": 0.6106,
           "ratio_gated": false,
           "gates": [
             {
@@ -1035,8 +1035,8 @@
           "registry_variant": "brain",
           "exit_status": 0,
           "bundle_tokens": 12374,
-          "baseline_tokens": 30587,
-          "reduction": 0.5954,
+          "baseline_tokens": 30578,
+          "reduction": 0.5953,
           "ratio_gated": false,
           "gates": [
             {
@@ -1113,8 +1113,8 @@
           "registry_variant": "brain",
           "exit_status": 0,
           "bundle_tokens": 11144,
-          "baseline_tokens": 30587,
-          "reduction": 0.6357,
+          "baseline_tokens": 30578,
+          "reduction": 0.6356,
           "ratio_gated": false,
           "gates": [
             {
@@ -1185,9 +1185,9 @@
           "tier": "brain",
           "registry_variant": "brain",
           "exit_status": 0,
-          "bundle_tokens": 7389,
-          "baseline_tokens": 30587,
-          "reduction": 0.7584,
+          "bundle_tokens": 7373,
+          "baseline_tokens": 30578,
+          "reduction": 0.7589,
           "ratio_gated": false,
           "gates": [
             {
@@ -1259,8 +1259,8 @@
           "registry_variant": "brain",
           "exit_status": 0,
           "bundle_tokens": 11908,
-          "baseline_tokens": 30587,
-          "reduction": 0.6107,
+          "baseline_tokens": 30578,
+          "reduction": 0.6106,
           "ratio_gated": true,
           "gates": [
             {
@@ -1326,7 +1326,7 @@
             {
               "name": "reduction",
               "ok": true,
-              "detail": "11908 bundle tokens vs 30587 eager tokens — 61.1 % reduction (gate ≥ 60 %)"
+              "detail": "11908 bundle tokens vs 30578 eager tokens — 61.1 % reduction (gate ≥ 60 %)"
             }
           ]
         }
@@ -1349,12 +1349,12 @@
         }
       ],
       "timings": {
-        "evaluation_ms": 9410
+        "evaluation_ms": 9370
       }
     }
   },
   "timings": {
-    "wall_clock_ms": 19108
+    "wall_clock_ms": 19118
   },
   "corpus": {
     "seeds": 8,
