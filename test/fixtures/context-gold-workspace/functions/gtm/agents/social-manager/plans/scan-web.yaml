@@ -1,0 +1,41 @@
+schema_version: 2
+id: scan-web
+agent: gtm/social-manager
+purpose: Collect qualified candidates from public-web conversations and stage evidence notes.
+inputs: {}
+brain_selectors:
+  open-forums:
+    description: Public forum threads previously judged relevant to the company.
+    required: false
+guidelines: []
+tool_uses:
+  - channel-drafts
+artifacts:
+  evidence-notes:
+    description: Per-candidate evidence notes staged for qualification.
+caps:
+  web-candidates:
+    maximum: 12
+    guidance: Prefer open forums where replies stay publicly attributable.
+steps:
+  - id: sweep
+    kind: reasoning
+    instruction: Sweep public forums and open discussion threads with the same derived filters as the network sweep.
+  - id: verify
+    kind: reasoning
+    instruction: Open each candidate URL and confirm the substance is readable without authentication.
+  - id: stage
+    kind: tool
+    instruction: Stage one evidence note per surviving candidate in the internal review queue; staging never publishes.
+    tool_use: channel-drafts
+  - id: return
+    kind: artifact
+    instruction: Return the staged evidence notes alongside the candidate list.
+    artifact: evidence-notes
+completion:
+  artifacts:
+    - evidence-notes
+  output_guidance: Return public-web candidates with staged notes and verification status per URL.
+  criteria:
+    - Every candidate URL was opened and verified readable.
+    - Staging wrote internal notes only and published nothing.

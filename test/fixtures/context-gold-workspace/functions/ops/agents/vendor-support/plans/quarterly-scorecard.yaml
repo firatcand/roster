@@ -1,0 +1,49 @@
+schema_version: 2
+id: quarterly-scorecard
+agent: ops/vendor-support
+purpose: Produce the quarterly vendor scorecard from ticket evidence rather than from impressions.
+inputs:
+  quarter:
+    description: The scorecard quarter, defaulting to the one just closed.
+    required: false
+brain_selectors:
+  scorecard-history:
+    description: Earlier scorecards and the trend lines they established.
+    required: false
+guidelines: []
+tool_uses: []
+artifacts:
+  scorecard:
+    description: The quarterly scorecard with per-vendor evidence-backed grades.
+caps:
+  graded-vendors:
+    maximum: 20
+    guidance: Grade the vendors with real quarterly activity; a vendor with two tickets gets a note, not a grade.
+steps:
+  - id: assemble
+    kind: reasoning
+    instruction: Assemble each vendor's quarter from the ticket archive — volumes, response windows met
+      and missed, escalations, and incident involvement — with ticket references throughout.
+  - id: grade
+    kind: reasoning
+    instruction: Grade each vendor against its own contract commitments, not against other vendors,
+      so a grade change always traces to a commitment met or missed.
+  - id: trends
+    kind: reasoning
+    instruction: Extend each vendor's trend line from earlier scorecards and flag direction changes with
+      the tickets that drove them.
+  - id: actions
+    kind: reasoning
+    instruction: Attach a recommended action to every flagged vendor — a conversation, changed terms at
+      renewal, or exit evaluation — with the evidence items named.
+  - id: return
+    kind: artifact
+    instruction: Return the scorecard for the function owner's vendor review.
+    artifact: scorecard
+completion:
+  artifacts:
+    - scorecard
+  output_guidance: Return a scorecard whose every grade and flag traces to ticket evidence.
+  criteria:
+    - Every grade cites the commitments it was measured against.
+    - Every flagged vendor carries a recommended action with named evidence.

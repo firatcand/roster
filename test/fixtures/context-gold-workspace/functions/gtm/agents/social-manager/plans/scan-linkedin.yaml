@@ -1,0 +1,32 @@
+schema_version: 2
+id: scan-linkedin
+agent: gtm/social-manager
+purpose: Collect qualified candidates from professional-network conversations.
+inputs: {}
+brain_selectors:
+  platform-signals:
+    description: Recent engagement patterns observed on professional networks.
+    required: false
+guidelines: []
+tool_uses: []
+artifacts: {}
+caps:
+  network-candidates:
+    maximum: 12
+    guidance: Stop at twelve plausible candidates; qualification happens later.
+steps:
+  - id: sweep
+    kind: reasoning
+    instruction: Sweep active professional-network threads inside the lookback window, favoring practitioners describing concrete operational problems.
+  - id: sift
+    kind: reasoning
+    instruction: Discard announcements, hiring posts, and celebration threads; keep only genuine questions and comparisons.
+  - id: recency
+    kind: reasoning
+    instruction: Verify each surviving thread is still active; drop anything quiet beyond the window.
+completion:
+  artifacts: []
+  output_guidance: Return the strongest professional-network candidates with observed timestamps.
+  criteria:
+    - Candidates have attributable sources with visible authorship.
+    - No candidate was contacted or engaged during collection.

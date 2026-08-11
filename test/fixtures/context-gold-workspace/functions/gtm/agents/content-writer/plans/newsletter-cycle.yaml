@@ -1,0 +1,50 @@
+schema_version: 2
+id: newsletter-cycle
+agent: gtm/content-writer
+purpose: Run one newsletter cycle from finding selection to the send-ready draft.
+inputs:
+  cycle:
+    description: The newsletter cycle date and any findings the requester wants considered.
+    required: true
+brain_selectors:
+  newsletter-history:
+    description: Earlier newsletter issues and their reply themes.
+    required: false
+guidelines: []
+tool_uses: []
+artifacts:
+  issue:
+    description: The send-ready issue with its findings and evidence inline.
+caps:
+  findings-per-issue:
+    maximum: 3
+    guidance: Three findings per issue; readers finish three and skim five.
+steps:
+  - id: select
+    kind: reasoning
+    instruction: Select the cycle's findings by practitioner usefulness, preferring one deeply checkable
+      finding over three shallow ones, and record why each candidate was taken or passed.
+  - id: sequence
+    kind: reasoning
+    instruction: Sequence the findings so the strongest opens the issue, and write the subject line from
+      that finding alone without teasing the others.
+  - id: draft
+    kind: reasoning
+    instruction: Draft each finding to the writing-style structure with evidence inline, keeping the
+      issue readable in under four minutes.
+  - id: check
+    kind: reasoning
+    instruction: Check every link resolves to a page containing its claim and every number carries its
+      denominator before the issue is marked send-ready.
+  - id: return
+    kind: artifact
+    instruction: Return the send-ready issue for the human send decision; this workflow never sends.
+    artifact: issue
+completion:
+  artifacts:
+    - issue
+  output_guidance: Return the issue send-ready with the selection reasoning attached; sending is a human
+    decision outside this workflow.
+  criteria:
+    - Every finding survives the evidence standards.
+    - The workflow produced a draft and sent nothing.

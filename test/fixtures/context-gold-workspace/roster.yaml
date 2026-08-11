@@ -1,0 +1,15 @@
+schema_version: 2
+workspace_id: context-gold-workspace
+functions:
+  gtm:
+    path: functions/gtm
+  ops:
+    path: functions/ops
+hosts:
+  claude: enabled
+  codex: enabled
+tool_uses:
+  - site-crawl
+  - channel-drafts
+  - signal-scan
+  - ticket-search

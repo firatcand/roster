@@ -129,3 +129,64 @@ export async function createMinioBrainObjectStore(
   await client.send(new CreateBucketCommand({ Bucket: config.bucket }));
   return new ContentAddressedBrainObjectStore(new TestS3ObjectTransport(client), config);
 }
+
+// #371 A3: a checked-in workspace registry keeps its LOGICAL AWS-default
+// namespace (bucket + region, no endpoint, no force_path_style), so the
+// namespace fingerprint the registry derives and the one the DB records agree.
+// The PHYSICAL location is owned by the transport alone: the S3 client targets
+// the loopback test endpoint and every request is remapped onto one
+// test-created physical bucket. The production store class keeps every
+// content-addressing, digest-verification and key-layout guarantee; only the
+// production FACTORY's network boundary is (deliberately) not composed.
+class BucketMappedTransport implements BrainObjectTransport {
+  private readonly inner: TestS3ObjectTransport;
+  private readonly physicalBucket: string;
+
+  constructor(inner: TestS3ObjectTransport, physicalBucket: string) {
+    this.inner = inner;
+    this.physicalBucket = physicalBucket;
+  }
+
+  async putIfAbsent(input: {
+    bucket: string;
+    key: string;
+    body: Buffer;
+    contentType: string;
+    checksumSHA256: string;
+  }): Promise<TransportObservation> {
+    return this.inner.putIfAbsent({ ...input, bucket: this.physicalBucket });
+  }
+
+  async head(input: { bucket: string; key: string; versionId?: string }): Promise<TransportHeadResult | null> {
+    return this.inner.head({ ...input, bucket: this.physicalBucket });
+  }
+
+  async get(input: { bucket: string; key: string; versionId?: string }): Promise<TransportGetResult | null> {
+    return this.inner.get({ ...input, bucket: this.physicalBucket });
+  }
+
+  close(): void {
+    this.inner.close();
+  }
+}
+
+export async function createMinioTransportStore(
+  logicalConfig: WorkspaceBrainConfig,
+  physicalBucket: string,
+): Promise<BrainObjectStore & BrainObjectReader> {
+  const config = brainObjectStoreConfigFromRegistry(logicalConfig);
+  const client = new S3Client({
+    region: config.region,
+    endpoint: S3_TEST_ENDPOINT,
+    forcePathStyle: true,
+    credentials: {
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+    },
+  });
+  await client.send(new CreateBucketCommand({ Bucket: physicalBucket }));
+  return new ContentAddressedBrainObjectStore(
+    new BucketMappedTransport(new TestS3ObjectTransport(client), physicalBucket),
+    config,
+  );
+}

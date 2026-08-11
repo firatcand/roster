@@ -1,0 +1,169 @@
+{
+  "schemaVersion": 1,
+  "seeds": [
+    {
+      "stableKey": "gold-strong-example-a",
+      "labels": [
+        {
+          "workspace": "context-gold-workspace",
+          "function": "gtm",
+          "agent": "social-manager",
+          "plan": "opportunity-discovery"
+        }
+      ],
+      "privacy": "internal",
+      "trust": "brain-extract-untrusted",
+      "finalDisposition": "current",
+      "revisions": [
+        {
+          "fixtureVersionKey": "strong-example-a-v1",
+          "body": "Previously successful public replies and their source posts. A concise reply citing a measured onboarding failure earned a practitioner follow-up question within the hour."
+        }
+      ]
+    },
+    {
+      "stableKey": "gold-strong-example-b",
+      "labels": [
+        {
+          "workspace": "context-gold-workspace",
+          "function": "gtm",
+          "agent": "social-manager",
+          "plan": "opportunity-discovery"
+        }
+      ],
+      "privacy": "internal",
+      "trust": "brain-extract-untrusted",
+      "finalDisposition": "current",
+      "revisions": [
+        {
+          "fixtureVersionKey": "strong-example-b-v1",
+          "body": "Previously successful public replies and their source posts. The strongest reply of the spring cycle quoted the author's own words before adding one measured finding."
+        }
+      ]
+    },
+    {
+      "stableKey": "gold-positioning-note",
+      "labels": [
+        {
+          "workspace": "context-gold-workspace",
+          "function": "gtm",
+          "agent": "social-manager",
+          "plan": "opportunity-discovery"
+        }
+      ],
+      "privacy": "internal",
+      "trust": "brain-extract-untrusted",
+      "finalDisposition": "current",
+      "revisions": [
+        {
+          "fixtureVersionKey": "positioning-note-v1",
+          "body": "Current company positioning notes and the audience they serve. Vantmoor leads with checkable findings about dependable operations, written for practitioners first."
+        }
+      ]
+    },
+    {
+      "stableKey": "gold-superseded-example",
+      "labels": [
+        {
+          "workspace": "context-gold-workspace",
+          "function": "gtm",
+          "agent": "social-manager",
+          "plan": "opportunity-discovery"
+        }
+      ],
+      "privacy": "internal",
+      "trust": "brain-extract-untrusted",
+      "finalDisposition": "current",
+      "revisions": [
+        {
+          "fixtureVersionKey": "superseded-example-v1",
+          "body": "Previously successful public replies and their source posts. First revision of the archived reply example, kept for history."
+        },
+        {
+          "fixtureVersionKey": "superseded-example-v2",
+          "body": "Previously successful public replies and their source posts. Second revision of the archived reply example, corrected after review."
+        }
+      ]
+    },
+    {
+      "stableKey": "gold-tombstoned-example",
+      "labels": [
+        {
+          "workspace": "context-gold-workspace",
+          "function": "gtm",
+          "agent": "social-manager",
+          "plan": "opportunity-discovery"
+        }
+      ],
+      "privacy": "internal",
+      "trust": "brain-extract-untrusted",
+      "finalDisposition": "tombstoned",
+      "revisions": [
+        {
+          "fixtureVersionKey": "tombstoned-example-v1",
+          "body": "Previously successful public replies and their source posts. This example was later withdrawn after an editorial review."
+        }
+      ]
+    },
+    {
+      "stableKey": "gold-secret-example",
+      "labels": [
+        {
+          "workspace": "context-gold-workspace",
+          "function": "gtm",
+          "agent": "social-manager",
+          "plan": "opportunity-discovery"
+        }
+      ],
+      "privacy": "secret",
+      "trust": "brain-extract-untrusted",
+      "finalDisposition": "current",
+      "revisions": [
+        {
+          "fixtureVersionKey": "secret-example-v1",
+          "body": "Previously successful public replies and their source posts. Held at secret privacy so retrieval must exclude it from every sweep."
+        }
+      ]
+    },
+    {
+      "stableKey": "gold-legacy-note",
+      "labels": [
+        {
+          "workspace": "context-gold-workspace",
+          "function": "gtm",
+          "agent": "social-manager",
+          "plan": "opportunity-discovery"
+        }
+      ],
+      "privacy": "internal",
+      "trust": "legacy-unverified",
+      "finalDisposition": "current",
+      "revisions": [
+        {
+          "fixtureVersionKey": "legacy-note-v1",
+          "body": "Previously successful public replies and their source posts. Imported from a legacy engagement archive during migration rehearsal."
+        }
+      ]
+    },
+    {
+      "stableKey": "gold-bulk-archive",
+      "labels": [
+        {
+          "workspace": "context-gold-workspace",
+          "function": "gtm",
+          "agent": "social-manager",
+          "plan": "opportunity-discovery"
+        }
+      ],
+      "privacy": "internal",
+      "trust": "brain-extract-untrusted",
+      "finalDisposition": "current",
+      "revisions": [
+        {
+          "fixtureVersionKey": "bulk-archive-v1",
+          "body": "Current company positioning notes and the audience they serve. Archived positioning digest kept whole so budget pressure has a large trailing candidate to exclude deterministically. The digest restates the audience ladder in long form: practitioners who run pipelines daily reward specificity and distrust vendor prose; team leads decide adoption and forward the one-sentence version; evaluators hunt for disconfirming evidence and trust whoever names limitations unprompted. It preserves the standing phrasing rules: lead with a checkable observation, keep numbers beside their denominators, state uncertainty plainly, and never manufacture urgency where a reader could safely decide next quarter. It records the venue ladder as practiced: first-party practitioner writing at the top, persistent-identity forums next, high-velocity feeds below them, aggregators treated as pointers back to an origin, anonymous boards read only as weather. It keeps the engagement boundaries in force wherever the notes travel: one useful reply, one clarifying follow-up at most, unconditional affiliation disclosure, and absence as the strongest position in a competitor's bad week. It restates the measurement stance: reach justifies distribution choices only, engagement quality is read at thread level, outcome figures carry their lag windows, and applause metrics live in a labeled section no decision may cite. Finally it repeats the evidence classes verbatim so adaptations cannot drift: company measurements carry window and denominator, customer accounts keep their hedges, third-party links must contain their claims, and experience statements declare their scope."
+        }
+      ]
+    }
+  ]
+}

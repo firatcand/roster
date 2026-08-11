@@ -1,0 +1,13 @@
+schema_version: 2
+id: channel-drafts
+scope:
+  function: gtm
+  agent: social-manager
+purpose: Stage per-candidate evidence notes for qualification.
+skill_ref: spilloak:queue
+how:
+  - stage one note per candidate with the canonical URL and decisive excerpt inline
+effects:
+  allowed:
+    - brain-read
+    - brain-write

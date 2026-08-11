@@ -1,0 +1,46 @@
+schema_version: 2
+id: revise-drafts
+agent: gtm/content-writer
+purpose: Revise reviewed drafts without laundering weak findings through better prose.
+inputs:
+  reviewed-drafts:
+    description: Drafts returned from human review with structured comments attached.
+    required: true
+brain_selectors:
+  revision-history:
+    description: Earlier revision rounds and the comment patterns that recurred.
+    required: false
+guidelines: []
+tool_uses: []
+artifacts:
+  revised-drafts:
+    description: Revised drafts with a change note per review comment.
+caps:
+  revision-rounds:
+    maximum: 2
+    guidance: Two rounds at most; a draft needing a third round goes back to the finding stage.
+steps:
+  - id: triage
+    kind: reasoning
+    instruction: Separate review comments into evidence problems and style problems before touching a
+      sentence. Evidence problems always win the ordering.
+  - id: repair
+    kind: reasoning
+    instruction: Repair evidence problems first, returning to the finding owner when the evidence itself
+      is missing rather than writing around the gap.
+  - id: polish
+    kind: reasoning
+    instruction: Apply style comments last, keeping the one-sentence finding opening intact through every
+      edit.
+  - id: return
+    kind: artifact
+    instruction: Return revised drafts with one change note per addressed comment.
+    artifact: revised-drafts
+completion:
+  artifacts:
+    - revised-drafts
+  output_guidance: Return revised drafts whose change notes let the reviewer verify every comment was
+    addressed or explicitly declined with a reason.
+  criteria:
+    - Every review comment has a matching change note or a stated decline reason.
+    - No draft gained a claim its evidence does not support.

@@ -1,0 +1,15 @@
+schema_version: 2
+id: ops
+purpose: Keep Vantmoor Analytics internal operations dependable, with vendor issues resolved before they reach customers.
+agents:
+  - vendor-support
+guidelines:
+  - access-reviews
+  - continuity-runbook
+  - incident-comms
+  - intake-routing
+  - escalation-policy
+  - spend-policy
+  - vendor-directory
+tool_uses:
+  - ticket-search

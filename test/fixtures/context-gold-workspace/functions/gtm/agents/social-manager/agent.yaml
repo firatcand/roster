@@ -1,0 +1,32 @@
+schema_version: 2
+id: social-manager
+function: gtm
+purpose: Find and qualify public conversations where Vantmoor Analytics can add checkable value.
+plans:
+  - competitor-watch
+  - listening-report
+  - opportunity-discovery
+  - scan-linkedin
+  - scan-web
+  - sibling-review
+  - weekly-recap
+subagents: []
+guidelines:
+  - crisis-protocol
+  - discovery-policy
+  - platform-etiquette
+  - engagement-boundaries
+  - source-quality
+default_guidelines:
+  - brand-voice
+tool_uses:
+  - signal-scan
+lessons:
+  - closure-prior
+  - competitor-prior
+  - duplicate-brief
+  - duplicate-verbose
+  - general-prior
+  - nested-prior
+  - recap-prior
+  - sibling-prior

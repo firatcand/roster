@@ -1,0 +1,50 @@
+schema_version: 2
+id: incident-follow-up
+agent: ops/vendor-support
+purpose: Close the loop after a vendor-caused incident so the same failure cannot arrive twice as a surprise.
+inputs:
+  incident:
+    description: The resolved incident and its vendor ticket references.
+    required: true
+brain_selectors:
+  incident-history:
+    description: Earlier vendor incidents and the follow-up commitments they produced.
+    required: false
+guidelines: []
+tool_uses: []
+artifacts:
+  follow-up-record:
+    description: The follow-up record with vendor commitments and our own detection improvements.
+caps:
+  commitments:
+    maximum: 8
+    guidance: Track at most eight commitments per incident so each gets verified rather than filed.
+steps:
+  - id: timeline
+    kind: reasoning
+    instruction: Reconstruct the incident timeline from tickets and monitoring, separating what the
+      vendor knew and when from what we detected and when.
+  - id: commitments
+    kind: reasoning
+    instruction: Extract every commitment the vendor made during resolution into dated, verifiable
+      statements, and schedule the verification of each one.
+  - id: detection
+    kind: reasoning
+    instruction: Identify what our own monitoring should have caught earlier and record the specific
+      detection improvement with an owner, treating our side of the failure as honestly as the vendor's.
+  - id: precedent
+    kind: reasoning
+    instruction: Write the failure signature and the accepted fix back onto the ticket record so triage
+      matches the next occurrence by signature immediately.
+  - id: return
+    kind: artifact
+    instruction: Return the follow-up record with commitments, verification dates, and detection owners.
+    artifact: follow-up-record
+completion:
+  artifacts:
+    - follow-up-record
+  output_guidance: Return the record with every commitment dated and owned; verification happens on the
+    recorded dates, not on memory.
+  criteria:
+    - Every vendor commitment is dated and verifiable.
+    - Our own detection gap has a named improvement owner.

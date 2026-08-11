@@ -1,0 +1,45 @@
+schema_version: 2
+id: draft-posts
+agent: gtm/content-writer
+purpose: Draft publishable short-form posts from verified company findings.
+inputs:
+  findings:
+    description: The verified findings the requester wants turned into drafts this cycle.
+    required: true
+brain_selectors:
+  published-examples:
+    description: Earlier published posts and the findings they were built from.
+    required: false
+guidelines: []
+tool_uses: []
+artifacts:
+  drafts:
+    description: Publishable short-form drafts with their evidence inline.
+caps:
+  drafts-per-cycle:
+    maximum: 5
+    guidance: Five strong drafts beat ten thin ones; stop when the findings run out.
+steps:
+  - id: select
+    kind: reasoning
+    instruction: Select the findings with the clearest evidence and the widest practitioner relevance.
+      A finding without a denominator is returned to its owner, not drafted around.
+  - id: draft
+    kind: reasoning
+    instruction: Draft each post to the writing-style structure with the finding first, evidence second,
+      and the reader's next action last. Keep every number attached to its denominator.
+  - id: check
+    kind: reasoning
+    instruction: Check each draft against the brand-voice tests and the writing-style structure before
+      staging, recording which test any rejected draft failed.
+  - id: return
+    kind: artifact
+    instruction: Return the drafts with their evidence and structural check results.
+    artifact: drafts
+completion:
+  artifacts:
+    - drafts
+  output_guidance: Return drafts ready for human review with evidence inline and check results attached.
+  criteria:
+    - Every draft opens with its finding in one sentence.
+    - Every quoted number carries its denominator.

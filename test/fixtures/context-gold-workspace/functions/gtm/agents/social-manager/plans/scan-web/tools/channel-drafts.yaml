@@ -1,0 +1,15 @@
+schema_version: 2
+id: channel-drafts
+scope:
+  function: gtm
+  agent: social-manager
+  plan: scan-web
+purpose: Stage this scan's evidence notes with the source sweep recorded.
+skill_ref: spilloak:queue
+brain:
+  write:
+    - staged-evidence-note
+effects:
+  allowed:
+    - brain-read
+    - brain-write

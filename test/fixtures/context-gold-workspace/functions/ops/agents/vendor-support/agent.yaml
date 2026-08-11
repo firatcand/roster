@@ -1,0 +1,32 @@
+schema_version: 2
+id: vendor-support
+function: ops
+purpose: Resolve vendor tickets for Vantmoor Analytics quickly, with precedent captured for every resolution.
+plans:
+  - incident-follow-up
+  - knowledge-base-sync
+  - quarterly-scorecard
+  - renewal-review
+  - ticket-triage
+  - vendor-onboarding
+  - weekly-audit
+subagents: []
+guidelines:
+  - communication-templates
+  - data-handling
+  - queue-hygiene
+  - intake-standards
+  - tooling-access
+  - triage-policy
+  - vendor-meetings
+default_guidelines:
+  - escalation-policy
+tool_uses:
+  - ticket-search
+lessons:
+  - audit-prior
+  - notice-prior
+  - onboarding-prior
+  - renewal-prior
+  - scorecard-prior
+  - triage-prior

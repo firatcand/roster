@@ -1,0 +1,50 @@
+schema_version: 2
+id: weekly-recap
+agent: gtm/social-manager
+purpose: Assemble the weekly recap of public-conversation activity for the growth review.
+inputs:
+  week:
+    description: The recap window, defaulting to the previous calendar week when not supplied.
+    required: false
+brain_selectors:
+  recap-history:
+    description: Earlier weekly recaps and the follow-ups they generated.
+    required: false
+guidelines: []
+tool_uses: []
+artifacts:
+  recap:
+    description: The weekly recap with outcomes, misses, and follow-up owners.
+caps:
+  highlighted-threads:
+    maximum: 8
+    guidance: Highlight at most eight threads so each one gets discussed rather than skimmed.
+steps:
+  - id: gather
+    kind: reasoning
+    instruction: Gather the week's shortlists, the engagement decisions humans made on them, and any
+      replies that were ultimately published, keeping each item linked to its original evidence.
+  - id: outcomes
+    kind: reasoning
+    instruction: For every published reply, record what happened next in the thread — questions received,
+      corrections needed, and whether the author engaged — without inflating quiet outcomes.
+  - id: misses
+    kind: reasoning
+    instruction: List the qualified opportunities that were approved but never engaged, with the reason
+      each one lapsed, so capacity problems surface as data rather than anecdotes.
+  - id: patterns
+    kind: reasoning
+    instruction: Note which discovery filters produced the strongest candidates this week and which
+      produced noise, as input to the next filter revision.
+  - id: return
+    kind: artifact
+    instruction: Return the recap with outcomes, misses, filter notes, and a named owner per follow-up.
+    artifact: recap
+completion:
+  artifacts:
+    - recap
+  output_guidance: Return a recap the growth review can read in five minutes, with every claim linked to
+    its underlying thread or shortlist entry.
+  criteria:
+    - Every highlighted thread links to its original shortlist evidence.
+    - Every follow-up has a named owner and a date.

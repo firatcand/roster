@@ -1,0 +1,15 @@
+schema_version: 2
+id: gtm
+purpose: Grow demand for Vantmoor Analytics with evidence-backed public conversations and useful published writing.
+agents:
+  - content-writer
+  - social-manager
+guidelines:
+  - audience-map
+  - brand-voice
+  - channel-map
+  - faq-bank
+  - launch-checklist
+  - measurement-map
+tool_uses:
+  - signal-scan

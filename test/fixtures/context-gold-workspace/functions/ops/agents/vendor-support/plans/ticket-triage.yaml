@@ -1,0 +1,56 @@
+schema_version: 2
+id: ticket-triage
+agent: ops/vendor-support
+purpose: Triage incoming vendor tickets with precedent attached and a named owner for the next action.
+inputs:
+  ticket:
+    description: The incoming vendor ticket to triage, as received from the intake queue.
+    required: true
+brain_selectors:
+  past-resolutions:
+    description: Resolved vendor tickets and their accepted fixes.
+    required: true
+  vendor-commitments:
+    description: Current vendor commitments and their response windows.
+    required: false
+guidelines:
+  - ops/vendor-support/guidelines/triage-policy
+tool_uses:
+  - ticket-search
+artifacts:
+  triage-verdict:
+    description: The structured triage verdict with impact class, precedent, and named owner.
+caps:
+  precedent-candidates:
+    maximum: 8
+    guidance: Eight precedent candidates at most; verification beats a longer list.
+steps:
+  - id: impact
+    kind: reasoning
+    instruction: Classify customer-visible impact first, before any other reading of the ticket, and
+      record the classification with the sentence in the ticket that justifies it.
+  - id: precedent
+    kind: tool
+    instruction: Search the ticket archive for the same vendor and the same failure signature, keeping
+      the searched signature in the verdict so a reviewer can rerun it.
+    tool_use: ticket-search
+  - id: match
+    kind: reasoning
+    instruction: Compare precedent candidates against the live ticket and verify whether any accepted fix
+      applies as-is, applies with adaptation, or does not apply. Record the comparison outcome.
+  - id: owner
+    kind: reasoning
+    instruction: Name the single owner of the next action with a date, applying the escalation policy
+      when the ticket meets any escalation trigger.
+  - id: return
+    kind: artifact
+    instruction: Return the structured triage verdict with all three required evidence elements attached.
+    artifact: triage-verdict
+completion:
+  artifacts:
+    - triage-verdict
+  output_guidance: Return the triage verdict with impact classification, precedent search evidence, and
+    the named owner so resolution starts without rereading the ticket.
+  criteria:
+    - The verdict records impact class, precedent result, and a single named owner with a date.
+    - No vendor contact, spend commitment, or ticket closure happened during triage.

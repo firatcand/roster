@@ -1,0 +1,558 @@
+{
+  "schemaVersion": 1,
+  "workspaceFixture": "context-gold-workspace",
+  "estimator": "utf8-bytes-ceil-div-4/context-canonical-json-v1",
+  "composition": {
+    "include": [
+      "functions/**",
+      "tools/**"
+    ],
+    "exclude": [
+      "ROSTER.md",
+      "roster.yaml",
+      "roster.brain.yaml",
+      "_setup.ts"
+    ]
+  },
+  "files": [
+    {
+      "path": "functions/gtm/agents/content-writer/agent.yaml",
+      "sha256": "ffd1a30b6433c2c0009362fd0c18cfbc9154feef0eb00c0c3cf3ca90f55b1d24",
+      "bytes": 621,
+      "tokens": 156
+    },
+    {
+      "path": "functions/gtm/agents/content-writer/guidelines/distribution-policy.md",
+      "sha256": "ad28591f46b00c757c2bde7fb9acdf61af504203598f9c685e4bc73d8b40a072",
+      "bytes": 1851,
+      "tokens": 463
+    },
+    {
+      "path": "functions/gtm/agents/content-writer/guidelines/evidence-standards.md",
+      "sha256": "5dd9980b7722b0cf2aabafdf2bb0bcd96691819fcfc019d34e1995f59e939ce6",
+      "bytes": 2025,
+      "tokens": 507
+    },
+    {
+      "path": "functions/gtm/agents/content-writer/guidelines/glossary-terms.md",
+      "sha256": "3c9ddb2bc8e7e8b361c9f8c880ca788986c4980a54339144f2043131f0c88626",
+      "bytes": 2083,
+      "tokens": 521
+    },
+    {
+      "path": "functions/gtm/agents/content-writer/guidelines/imagery-standards.md",
+      "sha256": "3ad97465af99f9abbc72a06ab7d44a39f0af4ba8930a09b2e8731b7825365671",
+      "bytes": 1895,
+      "tokens": 474
+    },
+    {
+      "path": "functions/gtm/agents/content-writer/guidelines/newsletter-charter.md",
+      "sha256": "c96776d5954b0779fb09fa8961238bfbb3d8ed26cb2ba6a412e159bd6dd920a6",
+      "bytes": 1673,
+      "tokens": 419
+    },
+    {
+      "path": "functions/gtm/agents/content-writer/guidelines/review-etiquette.md",
+      "sha256": "c8d688429c3f1cd5f8187a3c3f45b341f4490fee45b927631d01debfaa4ec85b",
+      "bytes": 1823,
+      "tokens": 456
+    },
+    {
+      "path": "functions/gtm/agents/content-writer/guidelines/sourcing-interviews.md",
+      "sha256": "694491cf02b5132cc6882bdf04b65cf29df52272623739a7ab72fec15ec5dd5c",
+      "bytes": 2025,
+      "tokens": 507
+    },
+    {
+      "path": "functions/gtm/agents/content-writer/guidelines/writing-style.md",
+      "sha256": "5ec304f57aeb91e37a349ab2b7c95771cfb5def67f7f7111716e5249b690ff1e",
+      "bytes": 2041,
+      "tokens": 511
+    },
+    {
+      "path": "functions/gtm/agents/content-writer/plans/archive-refresh.yaml",
+      "sha256": "ede8c402d884614a7d8556b7ae2741ac758264bd0245d4a21eb0df361d45a332",
+      "bytes": 1996,
+      "tokens": 499
+    },
+    {
+      "path": "functions/gtm/agents/content-writer/plans/case-studies.yaml",
+      "sha256": "4e99de8f79a350eee164ac0200d03a113bfc17478e9f6f5d3f79904e4cad5b1b",
+      "bytes": 2077,
+      "tokens": 520
+    },
+    {
+      "path": "functions/gtm/agents/content-writer/plans/draft-posts.yaml",
+      "sha256": "a0ab8a6c74e3a38e04d6643007e162618ff4a714546e996b344fab5a3a65d4dc",
+      "bytes": 1715,
+      "tokens": 429
+    },
+    {
+      "path": "functions/gtm/agents/content-writer/plans/localization-pass.yaml",
+      "sha256": "b5a97b60ee5104b0624ccf40047742d59d40bbb84bb081c86ee207773bdaad31",
+      "bytes": 1798,
+      "tokens": 450
+    },
+    {
+      "path": "functions/gtm/agents/content-writer/plans/metrics-monthly.yaml",
+      "sha256": "141144eb6e99c70f62da1d1076ff5927b7eefa335003e99749183f778bd7f7e2",
+      "bytes": 1866,
+      "tokens": 467
+    },
+    {
+      "path": "functions/gtm/agents/content-writer/plans/newsletter-cycle.yaml",
+      "sha256": "d9557ec87c0ad9e87649cd055efd7175d473b2eaf6befe448d717488c08c86ef",
+      "bytes": 1903,
+      "tokens": 476
+    },
+    {
+      "path": "functions/gtm/agents/content-writer/plans/press-briefs.yaml",
+      "sha256": "06d1b3c907fbed92c15f149b92c606aee1449758e5b03b280e5f42869d597e81",
+      "bytes": 2080,
+      "tokens": 520
+    },
+    {
+      "path": "functions/gtm/agents/content-writer/plans/revise-drafts.yaml",
+      "sha256": "8ebc7593a5a5cf7253f098222662ed9a67d5a126439ce669473a62552c9cb8da",
+      "bytes": 1734,
+      "tokens": 434
+    },
+    {
+      "path": "functions/gtm/agents/content-writer/playbook/case-study-prior.md",
+      "sha256": "f1bc3dfd9686e4e73639582a6a52ff17e16f42287c40864a15a27cb43102937c",
+      "bytes": 726,
+      "tokens": 182
+    },
+    {
+      "path": "functions/gtm/agents/content-writer/playbook/interview-prior.md",
+      "sha256": "db8655abff00d8b92f849ad011b16be48a557e46557ba8aeea74cc880819c86d",
+      "bytes": 668,
+      "tokens": 167
+    },
+    {
+      "path": "functions/gtm/agents/content-writer/playbook/writing-prior.md",
+      "sha256": "9a4ca217aa2be961bc1218af0dba684e00a8f603a18b27a5e3875d6b7b776338",
+      "bytes": 606,
+      "tokens": 152
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/agent.yaml",
+      "sha256": "da870c6287dc7144376fde7801bc20400c4566fcaed9b6ae1b12db94abebfc29",
+      "bytes": 647,
+      "tokens": 162
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/guidelines/crisis-protocol.md",
+      "sha256": "fd6c644405cfeb3da38882fdc35887dbeb807e1a07cc6f782866a5136fd09700",
+      "bytes": 1842,
+      "tokens": 461
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/guidelines/discovery-policy.md",
+      "sha256": "0832d486c00990157aec9711f6bad330e8dc1ab5fb0a0c409517462d0f7f9123",
+      "bytes": 1189,
+      "tokens": 298
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/guidelines/engagement-boundaries.md",
+      "sha256": "f43424cd6ecf62fe9c4fa656cb5ac71801f4745d62a549d3c048dc7dc686fe5c",
+      "bytes": 1960,
+      "tokens": 490
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/guidelines/platform-etiquette.md",
+      "sha256": "dadb4c512e78b344302f7a347f176fef114007bbdeca1180af479d5fb50816bc",
+      "bytes": 1616,
+      "tokens": 404
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/guidelines/source-quality.md",
+      "sha256": "ebd1f52ccd0922c429f120cdc5b411a57b6d6be800ff8dd3deb7e46fc9c034ce",
+      "bytes": 1929,
+      "tokens": 483
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/plans/competitor-watch.yaml",
+      "sha256": "e9cc80df7c50f208fd2fe8151c9e6b906099394a4d64e69384422d2b3375fa31",
+      "bytes": 1845,
+      "tokens": 462
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/plans/listening-report.yaml",
+      "sha256": "632fdd3d0eaa7bc42cb658f3d4edfe00d922ee76de91766236d2661e6f45b825",
+      "bytes": 1993,
+      "tokens": 499
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/plans/opportunity-discovery.yaml",
+      "sha256": "36ceb77cddb5fcb01038282b6ec4b2a82e018d9ab91bfc187af5b1f60ef76dce",
+      "bytes": 2224,
+      "tokens": 556
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/plans/opportunity-discovery/tools/signal-scan.yaml",
+      "sha256": "a7954f7fda777cba1af9a1b363facf73d7c4ae7c240e90baf01ca5b1ea4a9051",
+      "bytes": 396,
+      "tokens": 99
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/plans/scan-linkedin.yaml",
+      "sha256": "36358f0302de08041f9363d6444cb7b0f823b7cd93f0e635174f495ec1e5a7b2",
+      "bytes": 1212,
+      "tokens": 303
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/plans/scan-web.yaml",
+      "sha256": "9fd551547d3f477d2f96536af768a82677b2eaacdd0b7f094c61cc451338474c",
+      "bytes": 1453,
+      "tokens": 364
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/plans/scan-web/tools/channel-drafts.yaml",
+      "sha256": "83e3eb3c51e0f0185d3144c5ce02644256f8b53e2bdbba53a28b536bfd7dbe59",
+      "bytes": 299,
+      "tokens": 75
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/plans/sibling-review.yaml",
+      "sha256": "4bdf5a29c41b363bce53e40727e52535d6a3fcf2e7aaae4540e4571ed0104bc3",
+      "bytes": 1830,
+      "tokens": 458
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/plans/weekly-recap.yaml",
+      "sha256": "d0a202d93ea4f015aac13dfef2d80351f16ef586d07592dcfa04e3aab2e3ebc2",
+      "bytes": 2058,
+      "tokens": 515
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/playbook/closure-prior.md",
+      "sha256": "1576e621ddd5a5b61725342e2f7f2a089a17b9e0f5c08be435489113ef8171ae",
+      "bytes": 556,
+      "tokens": 139
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/playbook/competitor-prior.md",
+      "sha256": "d2242a8808fbf898f64d727da9c3c5f858741ab1c64fd9a7feff66261a6fb54d",
+      "bytes": 627,
+      "tokens": 157
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/playbook/duplicate-brief.md",
+      "sha256": "6a2012af8906dd93aeda1ff3a2a8101595a3596e555d59bef099e697e0c0d923",
+      "bytes": 454,
+      "tokens": 114
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/playbook/duplicate-verbose.md",
+      "sha256": "88af1cfff7505ecbe8100b561e16e4d01f9508d4d6626910f80f1dcba54838ac",
+      "bytes": 474,
+      "tokens": 119
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/playbook/general-prior.md",
+      "sha256": "cb9b43f26b8b459b92332a7ec9d0dbbe6929f6c5b5a55c9ecf9b815c5dc3792d",
+      "bytes": 447,
+      "tokens": 112
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/playbook/nested-prior.md",
+      "sha256": "6ff48b4aea89592017b03f785d804a0a8a160f8305296dbf684544915b1f2144",
+      "bytes": 502,
+      "tokens": 126
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/playbook/recap-prior.md",
+      "sha256": "3cc967470d38b50c35c1e15b51166b120f1a6dad113d0f3d93059dca145b3ab7",
+      "bytes": 625,
+      "tokens": 157
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/playbook/sibling-prior.md",
+      "sha256": "f21b7c6d0c85888cf4ab0c3eb3e1ce484b88b08dc85233729bc7c8e758d030fb",
+      "bytes": 692,
+      "tokens": 173
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/tools/channel-drafts.yaml",
+      "sha256": "7561ee0f03392a323c53ab25a5d7144f85c859c49a6a3048b556da81e27afaa4",
+      "bytes": 317,
+      "tokens": 80
+    },
+    {
+      "path": "functions/gtm/agents/social-manager/tools/signal-scan.yaml",
+      "sha256": "70d46e09dcdc30118bf03a93d42d6d5c303184b9f79adcf449cdad27d68e1bbf",
+      "bytes": 441,
+      "tokens": 111
+    },
+    {
+      "path": "functions/gtm/function.yaml",
+      "sha256": "310455c235e911f27374bad2ae09be13499cd62c6e0c281ca0b26a6b24f3e591",
+      "bytes": 330,
+      "tokens": 83
+    },
+    {
+      "path": "functions/gtm/guidelines/audience-map.md",
+      "sha256": "35390e564dbb5ebd849341f1c5ea5a0f89aba6fcc97e392eaf6927b56295aa4d",
+      "bytes": 1821,
+      "tokens": 456
+    },
+    {
+      "path": "functions/gtm/guidelines/brand-voice.md",
+      "sha256": "7e007b439c614880224c901139270197c97412e612647066405a71f7338a2635",
+      "bytes": 1094,
+      "tokens": 274
+    },
+    {
+      "path": "functions/gtm/guidelines/channel-map.md",
+      "sha256": "b97ac372bbfea20f653b460cf553cbbb5915e3421505f7df0aaef0874def1a50",
+      "bytes": 1876,
+      "tokens": 469
+    },
+    {
+      "path": "functions/gtm/guidelines/faq-bank.md",
+      "sha256": "afb3c4e3836b9c2ede2e345dbd62c47b68f2cd92562ad2a861a6573159dfd398",
+      "bytes": 2842,
+      "tokens": 711
+    },
+    {
+      "path": "functions/gtm/guidelines/launch-checklist.md",
+      "sha256": "3e603143bd62fb113db344f4985bf0dfe21d4283739b23fd6b955d029efe05ac",
+      "bytes": 1666,
+      "tokens": 417
+    },
+    {
+      "path": "functions/gtm/guidelines/measurement-map.md",
+      "sha256": "db2a6ff97f6cfa6ac5ac5f852ca6096e147998ed5558004fd65cf82fa6a5aa60",
+      "bytes": 1790,
+      "tokens": 448
+    },
+    {
+      "path": "functions/gtm/tools/signal-scan.yaml",
+      "sha256": "b082421a292049b3a2f03ce68f3cf6b5abe3eb2f0cb88360fe2ddc6402b9f70a",
+      "bytes": 301,
+      "tokens": 76
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/agent.yaml",
+      "sha256": "a2081d08fa8a731147a3c9e27e9a49c70f4343314a5e2cf8a1d29e8c3164dfc7",
+      "bytes": 672,
+      "tokens": 168
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/guidelines/communication-templates.md",
+      "sha256": "d7969cb38e4128c5b858ec177b9b6708e6639323bcfe4e76801df24aa3b300b7",
+      "bytes": 1883,
+      "tokens": 471
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/guidelines/data-handling.md",
+      "sha256": "0f35e896133312ae1060f82cf8714099cf26c511056953f8f40794c043231e59",
+      "bytes": 2089,
+      "tokens": 523
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/guidelines/intake-standards.md",
+      "sha256": "2bcf7697d54c250684296864ba1b3af1f6e6ec0f8750e7bf057a1a28e3b8c02c",
+      "bytes": 2071,
+      "tokens": 518
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/guidelines/queue-hygiene.md",
+      "sha256": "f304795e6a3a84bd4476e183e030e7ee7a70e9a34c9cc56341b6ccbb92695a60",
+      "bytes": 2031,
+      "tokens": 508
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/guidelines/tooling-access.md",
+      "sha256": "84b506a09a0676838c74ea0129f89cf1817e0be7786545919c7ccc4017f22b56",
+      "bytes": 2001,
+      "tokens": 501
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/guidelines/triage-policy.md",
+      "sha256": "69d5e22c707910f3ff7b3dc99759bffa261fe6f47941a20f896e9933ad2190df",
+      "bytes": 1457,
+      "tokens": 365
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/guidelines/vendor-meetings.md",
+      "sha256": "a3468c58b5e36e834502346d720140260a3c3c96a5a2bba6e9fb24a9d1b556bc",
+      "bytes": 1868,
+      "tokens": 467
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/plans/incident-follow-up.yaml",
+      "sha256": "9918fb453533c4ae760cedf4140d01c2c290289458b3ef5db456ff46da418eb0",
+      "bytes": 2059,
+      "tokens": 515
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/plans/knowledge-base-sync.yaml",
+      "sha256": "b531b6c7b53eb196318b794088094b7fbcd3f3fd6c554580882e183dbbc125ff",
+      "bytes": 1792,
+      "tokens": 448
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/plans/quarterly-scorecard.yaml",
+      "sha256": "3f638f621f8463656c79afab7e8e552eb48595d98d6d96d95c8832897e64633c",
+      "bytes": 1958,
+      "tokens": 490
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/plans/renewal-review.yaml",
+      "sha256": "9d5c2eb741333cea4b7a32b81a3bf6789612a7bb35720eb88269ec0bfb0507fa",
+      "bytes": 2018,
+      "tokens": 505
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/plans/ticket-triage.yaml",
+      "sha256": "70e86757082d734134104ab037e4df3b73796ae289aa04c77fbef65322592c43",
+      "bytes": 2339,
+      "tokens": 585
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/plans/ticket-triage/tools/ticket-search.yaml",
+      "sha256": "979de8885b1c391e9f621d8451ebfbc6eabe4837d086b684890937f708d5b4e7",
+      "bytes": 409,
+      "tokens": 103
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/plans/vendor-onboarding.yaml",
+      "sha256": "e99e9ea4bd779ae0e4b62f2a3fd40aef651ebe992dbf87a0a9c9010588a72bf4",
+      "bytes": 2412,
+      "tokens": 603
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/plans/weekly-audit.yaml",
+      "sha256": "3713fa7b92b02a988624044e9e53e9512507eafb1408c29b33aee0dfa8ce3ed8",
+      "bytes": 1791,
+      "tokens": 448
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/playbook/audit-prior.md",
+      "sha256": "1359df2c1d357c0aa88043ffa19779c90a7767dcaea4636cefdc3fa30f6f036c",
+      "bytes": 704,
+      "tokens": 176
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/playbook/notice-prior.md",
+      "sha256": "2188e9d058d17ac58e1610d368e5e2425d34514144aa504200009e18623d7d45",
+      "bytes": 676,
+      "tokens": 169
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/playbook/onboarding-prior.md",
+      "sha256": "fedfc8f86be2c95d83ea8622117e997b8ab068e5f61a81f63e8ab9c0e676f1f5",
+      "bytes": 685,
+      "tokens": 172
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/playbook/renewal-prior.md",
+      "sha256": "cf53816faaf21a7b67ca6adbc919f8180869f81fe942d45709f8b7b261a35343",
+      "bytes": 700,
+      "tokens": 175
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/playbook/scorecard-prior.md",
+      "sha256": "9741b22ecc6dd98f00417f12f14105ddf7957c0643d149c295196f6887813053",
+      "bytes": 671,
+      "tokens": 168
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/playbook/triage-prior.md",
+      "sha256": "f67b499dad578f6098a5fc75b2a04eea3f2f08a3059bebab77835fb941ec9c6e",
+      "bytes": 767,
+      "tokens": 192
+    },
+    {
+      "path": "functions/ops/agents/vendor-support/tools/ticket-search.yaml",
+      "sha256": "20dc24213ef0459d9abc6d3131c4e6534d474db9c565d04109f574fedb19c6ac",
+      "bytes": 647,
+      "tokens": 162
+    },
+    {
+      "path": "functions/ops/function.yaml",
+      "sha256": "bb54926213d59f6eff831cfee49bcb74a62976d48e051be02156be298eb64d42",
+      "bytes": 356,
+      "tokens": 89
+    },
+    {
+      "path": "functions/ops/guidelines/access-reviews.md",
+      "sha256": "bd96ef2a6c8cd7854bcb012d7cc4cfb1ba24fb00bcced308b4e1e61d9b000c21",
+      "bytes": 1745,
+      "tokens": 437
+    },
+    {
+      "path": "functions/ops/guidelines/continuity-runbook.md",
+      "sha256": "12d2fc78e431d57ff33088caa561f5524194225d1133a9adb435a9e67c239cb9",
+      "bytes": 1913,
+      "tokens": 479
+    },
+    {
+      "path": "functions/ops/guidelines/escalation-policy.md",
+      "sha256": "79955bf5f2992e6802b5f27541c94b98f734667689e99ef66d7855ebb8c25196",
+      "bytes": 2400,
+      "tokens": 600
+    },
+    {
+      "path": "functions/ops/guidelines/incident-comms.md",
+      "sha256": "3da3add09ade9300ba9d1c1cfce6db811a378f10f6fc957b7bf64e8bcf89ed94",
+      "bytes": 2416,
+      "tokens": 604
+    },
+    {
+      "path": "functions/ops/guidelines/intake-routing.md",
+      "sha256": "e668b927ae6cf8b25e6508dc6d8580663af333d94ee773c72fdade87d6a8328d",
+      "bytes": 1610,
+      "tokens": 403
+    },
+    {
+      "path": "functions/ops/guidelines/spend-policy.md",
+      "sha256": "28946c97dc173f3aac1ea3cbc700cee6b8efcfa03868014200a3acf7336a5119",
+      "bytes": 1821,
+      "tokens": 456
+    },
+    {
+      "path": "functions/ops/guidelines/vendor-directory.md",
+      "sha256": "b20c3862d5b7371991002ed58bb3d4a1c0dbbed6a814d130217e0314968e63dc",
+      "bytes": 1807,
+      "tokens": 452
+    },
+    {
+      "path": "functions/ops/tools/ticket-search.yaml",
+      "sha256": "8d61428f99f5be93d19ae8d175182e730fe97ee0c6b5e1431a835f81bf0e1c4a",
+      "bytes": 345,
+      "tokens": 87
+    },
+    {
+      "path": "tools/channel-drafts.yaml",
+      "sha256": "276926e4556b4e8767090a17369ae1393fb17dcb0771f00c44f88c50547b3ccd",
+      "bytes": 293,
+      "tokens": 74
+    },
+    {
+      "path": "tools/signal-scan.yaml",
+      "sha256": "5e3069faf5397ee82fae31daac63d485579a8b83ee2e3c455e04e7a4f392df57",
+      "bytes": 331,
+      "tokens": 83
+    },
+    {
+      "path": "tools/site-crawl.yaml",
+      "sha256": "e55bebb06c45e262096955babc230d98cb34f13d1b38017e2387c029acb0545e",
+      "bytes": 415,
+      "tokens": 104
+    },
+    {
+      "path": "tools/ticket-search.yaml",
+      "sha256": "9351d857fbcd2fd3aea9d135468b7f005b101bd94b0918be8093151349dab49b",
+      "bytes": 605,
+      "tokens": 152
+    }
+  ],
+  "totals": {
+    "files": 89,
+    "bytes": 122311,
+    "tokens": 30578
+  }
+}

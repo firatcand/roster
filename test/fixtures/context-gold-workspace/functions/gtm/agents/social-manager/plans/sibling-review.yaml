@@ -1,0 +1,46 @@
+schema_version: 2
+id: sibling-review
+agent: gtm/social-manager
+purpose: Review a previously produced shortlist in a separate editorial workflow before any engagement decision.
+inputs:
+  shortlist:
+    description: The shortlist produced earlier by a discovery run, supplied by the requester.
+    required: true
+brain_selectors:
+  review-history:
+    description: Earlier shortlist reviews and the standards they applied.
+    required: false
+guidelines: []
+tool_uses: []
+artifacts:
+  review-notes:
+    description: Structured review notes with a keep, revise, or drop verdict per entry.
+caps:
+  review-passes:
+    maximum: 2
+    guidance: Two passes at most; a shortlist that needs a third pass goes back to discovery instead.
+steps:
+  - id: standards
+    kind: reasoning
+    instruction: Restate the qualification standards the shortlist claims to have applied, then check the
+      claim against the discovery policy before reading a single entry.
+  - id: audit
+    kind: reasoning
+    instruction: Audit every entry against the standards, opening each canonical URL and separating
+      evidence gaps from style preferences explicitly in the notes.
+  - id: verdicts
+    kind: reasoning
+    instruction: Assign keep, revise, or drop to every entry with the specific failing standard named for
+      each revise and drop verdict.
+  - id: return
+    kind: artifact
+    instruction: Return the structured review notes with per-entry verdicts to the requester.
+    artifact: review-notes
+completion:
+  artifacts:
+    - review-notes
+  output_guidance: Return review notes that distinguish evidence gaps from style preferences so the
+    shortlist owner knows which fixes need new discovery and which need editing.
+  criteria:
+    - Every verdict names the standard it rests on.
+    - No entry was engaged or replied to during review.

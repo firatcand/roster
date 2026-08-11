@@ -1,0 +1,50 @@
+schema_version: 2
+id: case-studies
+agent: gtm/content-writer
+purpose: Produce customer case studies whose every claim the customer has approved in writing.
+inputs:
+  customer:
+    description: The customer engagement the case study covers, with the internal contact named.
+    required: true
+brain_selectors:
+  case-history:
+    description: Earlier case studies and the approval rounds they went through.
+    required: false
+guidelines: []
+tool_uses: []
+artifacts:
+  case-study:
+    description: The approved case study with its evidence and permission trail.
+caps:
+  revision-rounds:
+    maximum: 3
+    guidance: Three rounds including customer review; longer means the story was not ready.
+steps:
+  - id: frame
+    kind: reasoning
+    instruction: Establish the one operational change the engagement actually produced, in the customer's
+      own framing, before writing anything; a case study without a change is a logo placement.
+  - id: evidence
+    kind: reasoning
+    instruction: Assemble the measurements and accounts supporting the change, each classified under the
+      evidence standards, with the customer's permission status tracked per item.
+  - id: draft
+    kind: reasoning
+    instruction: Draft the study finding-first with the customer's hedges preserved verbatim; a customer
+      who sounds more certain in our draft than in their words will not approve it twice.
+  - id: approval
+    kind: reasoning
+    instruction: Track written customer approval for the exact final text, treating any post-approval
+      edit beyond typography as requiring re-approval.
+  - id: return
+    kind: artifact
+    instruction: Return the approved study with its permission trail attached.
+    artifact: case-study
+completion:
+  artifacts:
+    - case-study
+  output_guidance: Return the case study only when the exact published text carries written customer
+    approval; the permission trail travels with the artifact.
+  criteria:
+    - Every claim has an evidence class and customer permission where required.
+    - The published text matches the approved text exactly.

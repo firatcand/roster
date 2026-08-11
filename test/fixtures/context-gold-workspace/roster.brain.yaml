@@ -1,0 +1,20 @@
+schema_version: 2
+workspace_id: context-gold-workspace
+brain:
+  secrets_path: /context-gold-workspace
+  storage:
+    bucket: context-gold-vault
+    region: eu-central-1
+functions:
+  gtm:
+    path: functions/gtm
+  ops:
+    path: functions/ops
+hosts:
+  claude: enabled
+  codex: enabled
+tool_uses:
+  - site-crawl
+  - channel-drafts
+  - signal-scan
+  - ticket-search
