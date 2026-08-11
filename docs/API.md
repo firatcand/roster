@@ -33,14 +33,13 @@ Repo maintenance. Operates on the repo itself, not on business workflows.
 
 ### `/dreamer`
 
-Cross-cutting reinforcement. Reads runs and feedback, drafts and promotes lessons.
+Cross-cutting reinforcement. Reads the recorded runs and feedback for one occasion, drafts a cited lesson candidate, and applies the human's decision.
 
 **Usage:**
-- `/dreamer run nightly-reflection` — run the reflection plan
-- `/dreamer run since <ISO timestamp>` — re-process from an earlier cutoff
-- `/dreamer` — show available plans
+- `/dreamer` — reflect on the current occasion (the host normally invokes this itself while `roster dream status` reports `due`)
+- `/dreamer <scope>` — reflect at a narrower scope, e.g. an agent
 
-**Plans available:** `nightly-reflection`.
+There is no reflection plan and no cutoff argument: `roster dream status` owns the durable watermark, and `roster dream candidates list --readiness-key <key>` says whether this occasion has already been drafted.
 
 ### Custom slash commands
 

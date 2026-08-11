@@ -59,8 +59,6 @@ while IFS= read -r f; do
   case "$f" in
     *"_archive/"*) continue ;;
     *"/logs/"*) continue ;;
-    *"/log/runs/"*) continue ;;
-    *"/log/feedback/"*) continue ;;
     *"/playbook/"*) continue ;;
     *) sed "${SED_INPLACE[@]}" "s|$FN/$OLD|$FN/$NEW|g" "$f" ;;
   esac
@@ -84,7 +82,7 @@ LOG_FILE="$LOG_DIR/operations-$(date +%Y-%m-%d).md"
 
 echo ""
 echo "Files mentioning '$OLD' that were NOT auto-updated (review manually):"
-grep -rln "$OLD" "$ROOT" 2>/dev/null | grep -v "_archive\|/logs/\|/log/runs/\|/log/feedback/\|/playbook/" | sed "s|$ROOT/|  - |" || echo "  (none found)"
+grep -rln "$OLD" "$ROOT" 2>/dev/null | grep -v "_archive\|/logs/\|/playbook/" | sed "s|$ROOT/|  - |" || echo "  (none found)"
 
 echo ""
 echo "✓ Rename complete."
