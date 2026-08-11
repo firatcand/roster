@@ -1,6 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import YAML from 'yaml';
@@ -1141,10 +1150,21 @@ test('a REPLACED phase-lock directory is preserved, not removed', () => {
     const original = statSync(absolute);
     // Another writer's lock now occupies the path. Removing it would delete a
     // live lock this process never acquired, so the dev/ino gate refuses.
-    rmSync(absolute, { recursive: true, force: true });
-    mkdirSync(absolute, { mode: 0o700 });
-    const replacement = statSync(absolute);
+    //
+    // The replacement is built at a SIBLING path while the original is still
+    // live, then renamed into place. Two directories that exist at the same
+    // moment cannot share an inode, and rename preserves the one it moves, so
+    // the replacement is provably distinct on every filesystem. A plain
+    // rmdir+mkdir at the same path is NOT: ext4 recycles the just-freed inode
+    // immediately and hands back the very same number, which made this
+    // precondition fail on Linux while passing on APFS.
+    const sibling = `${absolute}-replacement`;
+    mkdirSync(sibling, { mode: 0o700 });
+    const replacement = statSync(sibling);
     assert.notEqual(replacement.ino, original.ino, 'the fixture must actually replace the directory');
+    rmSync(absolute, { recursive: true, force: true });
+    renameSync(sibling, absolute);
+    assert.equal(statSync(absolute).ino, replacement.ino, 'the replacement must occupy the lock path');
 
     assert.throws(
       () => held.release(),
