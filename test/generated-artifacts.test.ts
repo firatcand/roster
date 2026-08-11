@@ -123,6 +123,31 @@ test('ROSTER.md renders one ordered lifecycle, exact context recovery, and every
   assert.match(rendered, /successful context document has no top-level `ok`/);
   assert.match(rendered, /retry once with `--budget <details\.required_tokens>`/);
   assert.match(rendered, /complete local bundle and empty `brain_evidence`/);
+  // #355 §7: the four host-facing context guidance additions.
+  assert.match(rendered, /`--step <hint>`.*`--budget <tokens>`.*`--explain`.*`--include-legacy-unverified`/);
+  assert.match(rendered, /retain the `legacy-unverified` trust class.*never gain authority/);
+  assert.match(
+    rendered,
+    /`BRAIN_CONFIGURATION_INCOMPLETE` is fatal.*neither store was contacted.*a different budget cannot help/,
+  );
+  assert.match(
+    rendered,
+    /`CONTEXT_EVIDENCE_UNAVAILABLE`, `CONTEXT_REQUIRED_EVIDENCE_MISSING`, and `CONTEXT_REQUIRED_EVIDENCE_TRUNCATED` are warnings inside a successful bundle/,
+  );
+  assert.match(rendered, /never substitute uncited recollection for missing evidence/);
+  assert.match(
+    rendered,
+    /Every `brain_evidence` entry carries an immutable citation envelope; attribute claims by `citation\.locator` and `citation\.source_version_id`/,
+  );
+  for (const code of [
+    'BRAIN_CONFIGURATION_INCOMPLETE',
+    'CONTEXT_EVIDENCE_UNAVAILABLE',
+    'CONTEXT_REQUIRED_EVIDENCE_MISSING',
+    'CONTEXT_REQUIRED_EVIDENCE_TRUNCATED',
+  ] as const) {
+    assert.ok(WORKSPACE_DIAGNOSTIC_CODES.includes(code));
+    assert.match(rendered, new RegExp(code));
+  }
   assert.match(rendered, /Do not call `roster run`.*`roster brain event` as substitutes/);
   assert.equal(
     (rendered.match(/`roster (?:run|schedule|pending|ops|brain save|brain event)`/g) ?? []).length,

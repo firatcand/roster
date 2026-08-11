@@ -13,6 +13,8 @@ import {
   CONTEXT_EXCLUSION_REASONS,
   MAX_CONTEXT_BUDGET_TOKENS,
   MAX_CONTEXT_EVIDENCE_CANDIDATES,
+  MAX_CONTEXT_EVIDENCE_PREFILTERED,
+  MAX_CONTEXT_OPTIONAL_DIAGNOSTICS,
   assembleWorkspaceContext,
   compareUnicodeCodePoints,
   deriveContextVendorSkillSelection,
@@ -361,7 +363,13 @@ test('representative context has the exact flat response shape and complete Opti
       result.lessons.map((entry) => entry.content.id),
       ['root-prior', 'nested-prior', 'general-prior'],
     );
+    // #355 D4.1: `sibling-prior` is scoped to a plan outside the resolved
+    // closure. It is still absent from the bundle, but no longer SILENTLY —
+    // it is counted and explained instead of dropped.
     assert.equal(result.lessons.some((entry) => entry.content.id === 'sibling-prior'), false);
+    assert.equal(result.budget.lessons_scope_ineligible, 1);
+    assert.equal(result.budget.lessons_duplicate, 0);
+    assert.equal(result.budget.lesson_diagnostics_omitted, 0);
     assert.equal(result.tool_uses.length, 1);
     assert.deepEqual(
       result.tool_uses[0]!.content.contributors.map((entry) => entry.qualified_id),
@@ -393,11 +401,18 @@ test('representative context has the exact flat response shape and complete Opti
     assert.equal(Object.isFrozen(result), true);
     assert.equal(Object.isFrozen(result.plan.definitions), true);
     assert.equal(Object.isFrozen(result.tool_uses[0]!.content.effective), true);
-    // The retrieval echo is the only optional diagnostic a clean seeded bundle
-    // carries; both required-coverage counters ride the budget block instead.
+    // The retrieval echo and the one out-of-closure lesson are the only optional
+    // diagnostics a clean bundle carries; both required-coverage counters ride
+    // the budget block instead.
     assert.deepEqual(result.diagnostics.map((entry) => [entry.code, entry.severity]), [
       ['CONTEXT_EVIDENCE_FILTERED', 'info'],
+      ['CONTEXT_LESSON_EXCLUDED', 'info'],
     ]);
+    assert.deepEqual(result.diagnostics[1]!.details, {
+      lesson_id: 'gtm/social-manager/playbook/sibling-prior',
+      reason: 'scope-ineligible',
+      plan: 'sibling-review',
+    });
     assert.deepEqual(result.diagnostics[0]!.details['counts'], {
       considered: 3,
       returned: 3,
@@ -592,9 +607,17 @@ test('missing Brain is one nonfatal warning and unavailable evidence stays optio
     assert.deepEqual(unbound.brain_evidence, []);
     assert.deepEqual(unbound.diagnostics.map((entry) => [entry.code, entry.severity]), [
       ['BRAIN_NOT_CONFIGURED', 'warning'],
+      ['CONTEXT_LESSON_EXCLUDED', 'info'],
     ]);
     assert.equal(unbound.budget.required_selectors_unmatched, 0);
     assert.equal(Object.values(unbound.budget.exclusions).every((count) => count === 0), true);
+    // D3 #4 pairing, asserted as a PAIR: the scalar is 0-by-absence only
+    // alongside the mandatory warning that says retrieval never ran.
+    assert.equal(unbound.budget.evidence_prefiltered, 0);
+    assert.equal(
+      unbound.diagnostics.some((entry) => entry.code === 'BRAIN_NOT_CONFIGURED'),
+      true,
+    );
 
     writeFileSync(registryPath, YAML.stringify({
       ...registry,
@@ -609,6 +632,7 @@ test('missing Brain is one nonfatal warning and unavailable evidence stays optio
     assert.deepEqual(unavailable.diagnostics.map((entry) => [entry.code, entry.severity]), [
       ['CONTEXT_EVIDENCE_UNAVAILABLE', 'warning'],
       ['CONTEXT_EVIDENCE_FILTERED', 'info'],
+      ['CONTEXT_LESSON_EXCLUDED', 'info'],
     ]);
     assert.equal(
       unavailable.diagnostics.find((entry) => entry.code === 'CONTEXT_EVIDENCE_UNAVAILABLE')!
@@ -616,6 +640,11 @@ test('missing Brain is one nonfatal warning and unavailable evidence stays optio
       'service-unavailable',
     );
     assert.equal(unavailable.plan.definitions.length, 4);
+    // D3 #4 pairing on the unavailable arm: 0-by-absence beside the mandatory,
+    // never-budget-droppable CONTEXT_EVIDENCE_UNAVAILABLE. Zero is never
+    // ambiguous because the state bit is always present.
+    assert.equal(unavailable.budget.evidence_prefiltered, 0);
+    assert.equal(unavailable.budget.retrieval_report_omitted, 0);
 
     const invalid = failure(() => assemble(fx.root, DEFAULT_REQUEST, deepFreeze({
       status: 'unavailable' as const,
@@ -623,6 +652,43 @@ test('missing Brain is one nonfatal warning and unavailable evidence stays optio
       report: reportFor([]),
     })));
     assert.equal(invalid.code, 'CONTEXT_EVIDENCE_INVALID');
+
+    // D8 #4 (i) — an ADVERSARIAL unavailable envelope carrying nonzero filtered
+    // counts is refused. Without this guard the pre-#355 validation admitted it
+    // (it checks only candidates and required-selector matches), and the counts
+    // would have looked like a measurement retrieval never took.
+    const unavailableWithCounts = failure(() => assemble(fx.root, DEFAULT_REQUEST, deepFreeze({
+      status: 'unavailable' as const,
+      candidates: [],
+      report: { ...reportFor([]), filtered: { ...reportFor([]).filtered, tombstoned: 7 } },
+    })));
+    assert.equal(unavailableWithCounts.code, 'CONTEXT_EVIDENCE_INVALID');
+
+    // D8 #4 (ii) — the six-reason sum cap. At the cap the envelope is admitted
+    // and the scalar carries the exact total; one over, it is refused. That is
+    // what makes the 928-byte reserve exact over the FULL accepted domain.
+    const atCap = assemble(fx.root, DEFAULT_REQUEST, deepFreeze({
+      status: 'available' as const,
+      candidates: [],
+      report: {
+        ...reportFor([]),
+        filtered: { ...reportFor([]).filtered, tombstoned: MAX_CONTEXT_EVIDENCE_PREFILTERED },
+      },
+    }));
+    assert.equal(atCap.budget.evidence_prefiltered, MAX_CONTEXT_EVIDENCE_PREFILTERED);
+    const overCap = failure(() => assemble(fx.root, DEFAULT_REQUEST, deepFreeze({
+      status: 'available' as const,
+      candidates: [],
+      report: {
+        ...reportFor([]),
+        filtered: {
+          ...reportFor([]).filtered,
+          tombstoned: MAX_CONTEXT_EVIDENCE_PREFILTERED,
+          superseded: 1,
+        },
+      },
+    })));
+    assert.equal(overCap.code, 'CONTEXT_EVIDENCE_INVALID');
   } finally {
     fx.cleanup();
   }
@@ -1645,6 +1711,15 @@ test('budget reserve, exact mandatory fit, rounding, and reachable retry are exa
     required_selectors_unmatched: 4_096,
     required_selectors_truncated: 4_096,
     candidate_diagnostics_omitted: 4_096,
+    lessons_scope_ineligible: 4_096,
+    lessons_duplicate: 4_096,
+    lesson_diagnostics_omitted: 4_096,
+    // The widest LEGAL value, not a convention: `validateRetrievalReport` caps
+    // the six-reason sum at MAX_CONTEXT_EVIDENCE_PREFILTERED, so the reserve
+    // proven here covers the full accepted numeric domain.
+    evidence_prefiltered: MAX_CONTEXT_EVIDENCE_PREFILTERED,
+    // The widest legal value of the `0 | 1` producer type.
+    retrieval_report_omitted: 1,
   };
   const reserveBytes = Buffer.byteLength(JSON.stringify({ budget: widestBudget }), 'utf8');
   assert.equal(BUDGET_BLOCK_RESERVE_BYTES, reserveBytes);
@@ -1690,6 +1765,11 @@ test('budget reserve, exact mandatory fit, rounding, and reachable retry are exa
       'required_selectors_unmatched',
       'required_selectors_truncated',
       'candidate_diagnostics_omitted',
+      'lessons_scope_ineligible',
+      'lessons_duplicate',
+      'lesson_diagnostics_omitted',
+      'evidence_prefiltered',
+      'retrieval_report_omitted',
     ]);
 
     const overflow = failure(() => assemble(
@@ -2156,9 +2236,13 @@ test('pure assembler instrumentation counts each optional serialization once', (
     const evidence = frozenEvidence([candidate('one'), candidate('two')]);
     const result = assemble(fx.root, DEFAULT_REQUEST, evidence, instrumentation);
     const optionalPool = 3 + evidence.candidates.length;
-    // +1: the retrieval echo diagnostic is serialized once for its own admission.
-    assert.equal(instrumentation.optional_content_serializations, optionalPool + 1);
+    // +2: the retrieval echo and the one out-of-closure lesson diagnostic are
+    // each serialized exactly once for their own admission.
+    assert.equal(instrumentation.optional_content_serializations, optionalPool + 2);
     assert.equal(instrumentation.optional_provenance_serializations, optionalPool);
+    // Still 3, not 4: the scope-ineligible lesson is partitioned from RECORD
+    // fields and never parsed, so it costs no tokenization and can introduce no
+    // new fatal parse path (D4.1).
     assert.equal(instrumentation.lesson_term_tokenizations, 3);
     assert.equal(instrumentation.complete_domain_serializations, 1);
     assert.equal(result.budget.total_tokens <= result.budget.limit_tokens, true);

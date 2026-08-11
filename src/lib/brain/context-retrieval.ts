@@ -31,9 +31,6 @@ export const BRAIN_RUNTIME_URL_ENV = 'ROSTER_BRAIN_URL';
 // keeps the whole pre-cap pool `P` on this side of the boundary.
 export const TOTAL_CANDIDATE_LIMIT = 64;
 export const PER_SELECTOR_ARM_LIMIT = 8;
-// A bounded diagnostic, never a selection input: the filter accounting scans at
-// most this many pre-filter rows.
-export const FILTER_ACCOUNTING_LIMIT = 512;
 const RRF_NUMERATOR = 1_000_000;
 const MAX_QUERY_TEXT_BYTES = 32_768;
 const SELECTOR_LOCAL_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -481,20 +478,19 @@ async function projectChunks(
   }]));
 }
 
-async function accountFiltering(
-  client: pg.PoolClient,
-  request: ContextRetrievalRequest,
-  allowed: readonly string[],
-): Promise<Record<ContextRetrievalFilterReason, number>> {
-  const filtered = emptyFiltered();
-  const text = boundedText([
-    ...request.selectors.map((entry) => entry.selector),
-    request.query,
-    request.stepHint ?? '',
-  ], ' or ');
-  if (text.length === 0) return filtered;
-  const result = await client.query<{ reason: string; entries: string }>(
-    `SELECT reason, count(*)::text AS entries FROM (
+// An EXACT accounting, never a selection input. Membership is the deterministic
+// arms' OWN predicates: one bounded tsquery per selector (mirroring
+// `runLexicalArm`'s `sel.member_text`, bounded per selector so no selector can be
+// lost to a global re-bounding) UNIONed with one jsonpath per structured path
+// (mirroring `runStructuredArm`). `UNION` deduplicates on chunk identity, so a
+// chunk matching both arms — or many selectors — is classified and counted
+// exactly once. The classification joins the BASE tables rather than
+// `brain.current_source_chunks`, because counting what that view hides is the
+// whole purpose. The embedding arm has no membership predicate (a distance
+// ranking over every embedded chunk), so what it "would have matched" is not
+// an exact count; that residue is stated in the report semantics and is
+// currently vacuous while EMBEDDING_ADAPTERS is empty.
+export const FILTER_ACCOUNTING_SQL = `SELECT reason, count(*)::text AS entries FROM (
        SELECT CASE
                 WHEN active_row.extractor_name IS NULL THEN 'extractor-inactive'
                 WHEN source_row.active_tombstone_id IS NOT NULL THEN 'tombstoned'
@@ -510,7 +506,21 @@ async function accountFiltering(
                      ) THEN 'scope-ineligible'
                 ELSE NULL
               END AS reason
-         FROM brain.source_chunks chunk_row
+         FROM (
+           SELECT member_chunk.chunk_id
+             FROM unnest($2::text[]) AS sel(member_text)
+             JOIN brain.source_chunks member_chunk
+               ON member_chunk.tsv @@ websearch_to_tsquery('english', sel.member_text)
+           UNION
+           SELECT member_chunk.chunk_id
+             FROM unnest($3::text[]) AS sel(json_path)
+             JOIN brain.source_extractions member_extraction
+               ON member_extraction.structured @? sel.json_path::jsonpath
+             JOIN brain.source_chunks member_chunk
+               ON member_chunk.extraction_id = member_extraction.extraction_id
+         ) member
+         JOIN brain.source_chunks chunk_row
+           ON chunk_row.chunk_id = member.chunk_id
          JOIN brain.source_extractions extraction_row
            ON extraction_row.extraction_id = chunk_row.extraction_id
           AND extraction_row.status = 'complete'
@@ -521,13 +531,24 @@ async function accountFiltering(
          LEFT JOIN brain.active_extractors active_row
            ON active_row.extractor_name = extraction_row.extractor_name
           AND active_row.active_version = extraction_row.extractor_version
-        WHERE chunk_row.tsv @@ websearch_to_tsquery('english', $2)
-        ORDER BY chunk_row.chunk_id COLLATE "C" ASC
-        LIMIT $3
      ) accounted
       WHERE reason IS NOT NULL
-      GROUP BY reason`,
-    [allowed, text, FILTER_ACCOUNTING_LIMIT, request.includeLegacyUnverified],
+      GROUP BY reason`;
+
+async function accountFiltering(
+  client: pg.PoolClient,
+  request: ContextRetrievalRequest,
+  allowed: readonly string[],
+): Promise<Record<ContextRetrievalFilterReason, number>> {
+  const filtered = emptyFiltered();
+  const membership = request.selectors
+    .map((entry) => selectorMembershipText(entry))
+    .filter((entry) => entry.length > 0);
+  const paths = request.selectors.flatMap((entry) => structuredJsonPaths(entry.selector));
+  if (membership.length === 0 && paths.length === 0) return filtered;
+  const result = await client.query<{ reason: string; entries: string }>(
+    FILTER_ACCOUNTING_SQL,
+    [allowed, membership, paths, request.includeLegacyUnverified],
   );
   for (const row of result.rows) {
     if (Object.hasOwn(filtered, row.reason)) {

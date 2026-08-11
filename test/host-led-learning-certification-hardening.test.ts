@@ -2051,6 +2051,11 @@ test('compact context log binding rejects raw, projection, and claimed-hash tamp
       required_selectors_unmatched: 0,
       required_selectors_truncated: 0,
       candidate_diagnostics_omitted: 0,
+      lessons_scope_ineligible: 0,
+      lessons_duplicate: 0,
+      lesson_diagnostics_omitted: 0,
+      evidence_prefiltered: 0,
+      retrieval_report_omitted: 0,
     },
     diagnostics: [],
   };
