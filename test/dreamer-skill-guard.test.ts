@@ -62,6 +62,12 @@ test('every roster command the skill teaches parses through its own argv parser'
     assert.fail(`the skill teaches an unknown roster subcommand: ${command}`);
   }
   assert.ok(dreamCommands >= 6, `expected every dream verb to be taught, saw ${dreamCommands}`);
+  // #359: an unfiltered list cannot answer "has THIS occasion already been
+  // drafted?", so the skill must teach the exact-key read before it drafts.
+  assert.ok(
+    taught.includes('dream candidates list --readiness-key <sha256:...> --json'),
+    'the skill must teach the exact-key candidate read',
+  );
   assert.ok(brainCommands >= 1, `expected the record-decision command to be taught, saw ${brainCommands}`);
 
   // And the pin is proven able to fail: the exact incomplete spelling the skill
