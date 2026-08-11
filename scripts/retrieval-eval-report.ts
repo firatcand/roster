@@ -324,7 +324,9 @@ ${familyTable(tier)}
 
 Citations: ${tier.citations.complete}/${tier.citations.delivered} delivered candidates fully verified (${percent(tier.citations.completeness)}) — ${tier.citations.text_byte_reslices} \`@bytes\` re-slices against the immutable object and ${tier.citations.structured_object_proofs} \`@object\` structured proofs. Privacy: ${tier.privacy.secret_candidates} secret candidates, ${tier.privacy.legacy_unverified_without_optin} legacy-unverified candidates without the opt-in.
 
-${gateTable(tier)}`)
+${gateTable(tier)}
+
+Deterministic statement cost per retrieval, on each family's representative query: ${Object.entries(tier.statements_per_family).map(([family, count]) => `${family} ${count}`).join(', ')}. Warm max-of-five \`transactionMs + embedMs\` per family: ${Object.entries(tier.timings.per_family_max_of_five_ms).map(([family, ms]) => `${family} ${ms} ms`).join(', ')}; report-only p95 over ${tier.timings.p95_samples} warm runs of one representative query: ${tier.timings.p95_transaction_ms} ms.`)
     .join('\n\n');
 
   return `# Brain retrieval quality — ${date}

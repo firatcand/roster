@@ -13,6 +13,7 @@ import { deriveChunkId, deriveExtractionId } from '../../src/lib/brain/extractor
 import { deriveEmbeddingSpecId } from '../../src/lib/brain/embedding-index.ts';
 import type { EmbeddingAdapterRegistry } from '../../src/lib/brain/embedding-provider.ts';
 import { tombstoneBrainSource } from '../../src/lib/brain/source-lifecycle.ts';
+import { createVerifiedBrainPool, type VerifiedBrainPool } from '../../src/lib/brain/workspace-authority.ts';
 import {
   CONTEXT_RETRIEVAL_FILTER_REASONS,
   type ContextBrainCandidate,
@@ -178,6 +179,9 @@ export type TierResult = Readonly<{
     legacy_unverified_without_optin: number;
   }>;
   graph_unavailable_everywhere: boolean;
+  // Deterministic cost proxy: how many statements one retrieval issues on each
+  // family's representative query. Counted, not asserted.
+  statements_per_family: Readonly<Record<string, number>>;
   alias_oracle: readonly AliasOracleRow[];
   multi_record: readonly MultiRecordRow[];
   embedding_mechanics: EmbeddingMechanics;
@@ -190,6 +194,8 @@ export type TierResult = Readonly<{
     evaluation_ms: number;
     embedding_arm_total_ms: number;
     embedding_embed_ms: number;
+    p95_transaction_ms: number;
+    p95_samples: number;
   }>;
 }>;
 
@@ -592,6 +598,45 @@ function kRecord(compute: (k: number) => number): Record<string, number> {
   return record;
 }
 
+// Counts the statements ONE retrieval issues, through the same injectable pool
+// seam `test/brain-context-retrieval.test.ts` uses for its mid-retrieval flip.
+async function countStatements(
+  request: ContextRetrievalRequest,
+  env: NodeJS.ProcessEnv,
+): Promise<number> {
+  let statements = 0;
+  await retrieveBrainContextEvidenceWithTelemetry(request, {
+    env,
+    createPool: (connectionString, retrievalRequest) => {
+      const pool = createVerifiedBrainPool({
+        connectionString,
+        authority: retrievalRequest.brainAuthority,
+      });
+      const connect = pool.connect.bind(pool);
+      (pool as unknown as { connect: VerifiedBrainPool['connect'] }).connect = async () => {
+        const client = await connect();
+        const issue = client.query.bind(client);
+        (client as unknown as { query: typeof client.query }).query = ((
+          text: unknown,
+          values?: unknown,
+        ) => {
+          statements += 1;
+          return (issue as (statement: unknown, parameters?: unknown) => unknown)(text, values);
+        }) as typeof client.query;
+        return client;
+      };
+      return pool;
+    },
+  });
+  return statements;
+}
+
+function percentile(samples: readonly number[], fraction: number): number {
+  if (samples.length === 0) return 0;
+  const sorted = [...samples].sort((left, right) => left - right);
+  return sorted[Math.min(sorted.length - 1, Math.ceil(fraction * sorted.length) - 1)]!;
+}
+
 function evidenceFingerprint(candidates: readonly ContextBrainCandidate[], report: unknown): string {
   return sha256Hex(JSON.stringify({ candidates, report }));
 }
@@ -991,12 +1036,14 @@ async function evaluateOnCorpus(
       gap: roundMetric(entry.recall_at['64']! - entry.joint_recall_at['64']!),
     }));
 
-  // --- latency (warm max-of-five per family) --------------------------------
+  // --- latency (warm max-of-five per family) + statement cost ---------------
   const perFamilyMax: Record<string, number> = {};
+  const statementsPerFamily: Record<string, number> = {};
   const families = [...new Set(gold.queries.map((query) => query.family))];
   for (const family of families) {
     const query = gold.queries.find((entry) => entry.family === family)!;
     const request = buildRequest(corpus, gold, query, query.selectors);
+    statementsPerFamily[family] = await countStatements(request, env);
     for (let warmup = 0; warmup < 2; warmup += 1) {
       await retrieveBrainContextEvidenceWithTelemetry(request, { env });
     }
@@ -1006,6 +1053,19 @@ async function evaluateOnCorpus(
       worst = Math.max(worst, telemetry.transactionMs + telemetry.embedMs);
     }
     perFamilyMax[family] = worst;
+  }
+
+  // Report-only p95 over 30 warm runs of one representative query, following
+  // the `test/context.benchmark.ts` discipline.
+  const representative = gold.queries.find((query) => query.family === 'baseline')!;
+  const representativeRequest = buildRequest(corpus, gold, representative, representative.selectors);
+  for (let warmup = 0; warmup < 5; warmup += 1) {
+    await retrieveBrainContextEvidenceWithTelemetry(representativeRequest, { env });
+  }
+  const samples: number[] = [];
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const { telemetry } = await retrieveBrainContextEvidenceWithTelemetry(representativeRequest, { env });
+    samples.push(telemetry.transactionMs);
   }
   // The detail carries no wall-clock value: an independent rebuild must produce
   // an identical gate record, and the measured samples live in `timings`.
@@ -1073,6 +1133,7 @@ async function evaluateOnCorpus(
       legacy_unverified_without_optin: legacyWithoutOptIn,
     },
     graph_unavailable_everywhere: graphUnavailableEverywhere,
+    statements_per_family: statementsPerFamily,
     alias_oracle: aliasRows,
     multi_record: multiRows,
     embedding_mechanics: embeddingMechanics.mechanics,
@@ -1085,6 +1146,8 @@ async function evaluateOnCorpus(
       evaluation_ms: evaluationMs,
       embedding_arm_total_ms: embeddingMechanics.totalMs,
       embedding_embed_ms: embeddingMechanics.embedMs,
+      p95_transaction_ms: percentile(samples, 0.95),
+      p95_samples: samples.length,
     },
   });
 }
