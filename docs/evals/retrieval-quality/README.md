@@ -137,7 +137,7 @@ misses; `X(q)` is the expected-excluded set.
 | `git.commit`, `git.dirty`, `authoritative` | the code identity; a dirty tree marks the run NON-AUTHORITATIVE in its own header and the generated Markdown says so |
 | `fixture.files`, `fixture.sha256` | per-file and combined digests over the canonicalised fixture JSON |
 | `harness` | per-file SHA-256 of the runner, the gold/lint/metric module, the MinIO transport and the report script **as read at run time**, so uncommitted harness code is identified exactly |
-| `config` | `rrf_k` **read from the Brain's own `brain_meta.config`** by the retrieval transaction (never a constant restated by the harness), `total_candidate_limit`, `per_selector_arm_limit`, the k values, the token budget, the latency budget |
+| `config` | `rrf_k` **read from the Brain's own `brain_meta.config`** — recorded via a separate `loadConfig` read against the same isolated Brain, not by the retrieval transaction itself (never a constant restated by the harness), `total_candidate_limit`, `per_selector_arm_limit`, the k values, the token budget, the latency budget |
 | `environment` | node, os, ci/dev, PostgreSQL `server_version`, pgvector `extversion`, the tiers that ran |
 | `tiers.<tier>` | per-tier ingest counts, per-query and per-family metric rows, citation and privacy counters, the alias oracle, the one-hop rows, the embedding mechanics, the self-check rows and the gate records |
 | `timings`, `tiers.<tier>.timings` | wall-clock data: the per-family five-run sample **arrays**, the thirty-run array behind the p95, the connect samples, and the ingest/evaluation totals |

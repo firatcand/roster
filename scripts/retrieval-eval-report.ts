@@ -336,7 +336,7 @@ ${gateTable(tier)}
 Deterministic statement cost per retrieval, on each family's representative query: ${Object.entries(tier.statements_per_family).map(([family, count]) => `${family} ${count}`).join(', ')}. Warm max-of-five \`transactionMs + embedMs\` per family: ${Object.entries(tier.timings.per_family_max_of_five_ms).map(([family, ms]) => `${family} ${ms} ms`).join(', ')}; report-only p95 over ${tier.timings.p95_sample_ms.length} warm runs of one representative query: ${tier.timings.p95_transaction_ms} ms.`)
     .join('\n\n');
 
-  return `# Brain retrieval quality — ${date}
+  const body = `# Brain retrieval quality — ${date}
 
 ${header}Generated from \`${date}.json\` by \`pnpm eval:retrieval\`. The JSON manifest is the
 ground truth; this document is prose and tables derived from it.
@@ -373,6 +373,7 @@ ${tierSections}
 
 ${dispositions(primary)}
 `;
+  return `${body.trimEnd()}\n`;
 }
 
 async function main(): Promise<void> {
