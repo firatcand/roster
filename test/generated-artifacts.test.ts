@@ -2249,3 +2249,64 @@ test('a deleted mandatory primary is reported by validate and recreated by updat
     fx.cleanup();
   }
 });
+
+// #365 review round 1, blocker 2: §5 promised "delete manifest + one host
+// file → refusal", misreading where hasMissingClaim fires. The host sync
+// recreates recreatable files BEFORE syncGeneratedManifest evaluates the
+// missing claim (ordering pre-existing on main 9e63154), so the honest
+// contract -- pinned here -- is: update SELF-HEALS the absent-manifest +
+// absent-host-file state; the read-only surface reports the absent manifest
+// and stops; the hasMissingClaim refusal fires exactly when reconstruction
+// is attempted while an enabled activation cannot be regenerated.
+
+test('an absent manifest with an absent host file blocks read-only and converges on update', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    unlinkSync(at(fx.root, GENERATED_MANIFEST_PATH));
+    unlinkSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH));
+
+    const readOnly = validateGeneratedArtifacts(fx.root);
+    assert.equal(readOnly.length, 1);
+    assert.equal(readOnly[0]?.code, 'GENERATED_FILE_EDITED');
+    assert.equal(readOnly[0]?.severity, 'error');
+    assert.equal(readOnly[0]?.path, GENERATED_MANIFEST_PATH);
+    assert.match(readOnly[0]?.message ?? '', /Enabled hosts require/);
+    assert.equal(readOnly.some((diagnostic) =>
+      diagnostic.path === CLAUDE_PROJECT_INSTRUCTIONS_PATH
+    ), false);
+
+    const updated = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(updated.ok, true);
+    assert.equal(
+      updated.results.find((result) => result.host === 'claude')?.files
+        .find((file) => file.path === CLAUDE_PROJECT_INSTRUCTIONS_PATH)?.status,
+      'created',
+    );
+    assert.ok(parseGeneratedManifest(readFileSync(at(fx.root, GENERATED_MANIFEST_PATH), 'utf8')));
+    assert.deepEqual(validateGeneratedArtifacts(fx.root), []);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('manifest reconstruction refuses while an enabled activation cannot be regenerated', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    unlinkSync(at(fx.root, GENERATED_MANIFEST_PATH));
+    const authoredBootstrap = '# Authored workspace notes\n';
+    writeFileSync(at(fx.root, 'ROSTER.md'), authoredBootstrap);
+
+    const updated = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(updated.ok, false);
+    assert.equal(existsSync(at(fx.root, GENERATED_MANIFEST_PATH)), false);
+    assert.equal(readFileSync(at(fx.root, 'ROSTER.md'), 'utf8'), authoredBootstrap);
+    assert.ok(updated.diagnostics.some((diagnostic) =>
+      diagnostic.path === GENERATED_MANIFEST_PATH
+      && /cannot be reconstructed while an enabled host activation is missing/.test(diagnostic.message)
+    ));
+  } finally {
+    fx.cleanup();
+  }
+});
