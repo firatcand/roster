@@ -281,8 +281,24 @@ async function runCreate(
   return EXIT_OK;
 }
 
-const SUPERSEDED_MESSAGE =
+export const SUPERSEDED_MESSAGE =
   'this decision was superseded by later lifecycle activity on this lesson; no filesystem change';
+
+// A phase whose fence could not be proven alive is NEVER reported as success.
+// The pre-phase variant additionally states that nothing was touched, because
+// that is the difference an operator acts on.
+export function renderUnverifiedLines(
+  stage: 'pre-phase' | 'post-phase' | 'commit',
+  reason: string,
+): string[] {
+  return [
+    '',
+    `  ✗ UNVERIFIED${stage === 'pre-phase' ? ' (no mutation performed)' : ''}`,
+    `    ${reason} during the ${stage} check.`,
+    '    The decision is durable — re-run the verb (it converges) and run roster brain doctor.',
+    '',
+  ];
+}
 
 async function runDecision(
   pool: RuntimePool,
@@ -396,7 +412,6 @@ async function runDecision(
     return EXIT_OK;
   }
   if (outcome.outcome === 'unverified') {
-    const scopeNote = outcome.stage === 'pre-phase' ? ' (no mutation performed)' : '';
     if (opts.json) {
       console.log(JSON.stringify({
         ok: false,
@@ -406,11 +421,7 @@ async function runDecision(
         detail: outcome.reason,
       }, null, 2));
     } else {
-      console.error('');
-      console.error(chalk.red(`  ✗ UNVERIFIED${scopeNote}`));
-      console.error(`    ${outcome.reason} during the ${outcome.stage} check.`);
-      console.error('    The decision is durable — re-run the verb (it converges) and run roster brain doctor.');
-      console.error('');
+      for (const line of renderUnverifiedLines(outcome.stage, outcome.reason)) console.error(line);
     }
     return EXIT_ERROR;
   }

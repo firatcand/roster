@@ -5,7 +5,12 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { parseDreamArgs } from '../src/lib/dream-args.ts';
-import { executeDreamStatus } from '../src/commands/dream.ts';
+import {
+  SUPERSEDED_MESSAGE,
+  executeDreamStatus,
+  renderCandidateLines,
+  renderUnverifiedLines,
+} from '../src/commands/dream.ts';
 import { RosterError } from '../src/lib/errors.ts';
 
 const BIN = resolve(process.cwd(), 'bin/roster.js');
@@ -78,6 +83,79 @@ test('dream status parses its scope aliases and refuses every other verb', () =>
   assert.match(bad(['status', '--function', '--json']), /--function requires a value/u);
   assert.match(bad(['status', '--force']), /unknown flag for 'dream status'/u);
   assert.match(bad(['status', 'workspace']), /unexpected positional argument/u);
+});
+
+test('the candidate grammar accepts exactly the shipped surface', () => {
+  assert.deepEqual({ ...ok(['candidates', 'list']) }, {
+    kind: 'ok', subcommand: 'candidates', verb: 'list', json: false,
+    state: undefined, target: undefined, limit: undefined,
+  });
+  assert.deepEqual({ ...ok(['candidates', 'list', '--json', '--state', 'open', '--target', 'gtm/sdr', '--limit', '5']) }, {
+    kind: 'ok', subcommand: 'candidates', verb: 'list', json: true,
+    state: 'open', target: 'gtm/sdr', limit: 5,
+  });
+  assert.deepEqual({ ...ok(['candidates', 'create', '--stdin']) }, {
+    kind: 'ok', subcommand: 'candidates', verb: 'create', json: false,
+    file: undefined, stdin: true,
+  });
+  const digest = `sha256:${'a'.repeat(64)}`;
+  for (const verb of ['promote', 'reject', 'retire'] as const) {
+    assert.deepEqual({ ...ok(['candidates', verb, 'cand-1', '--decision', 'hd-1', '--action-digest', digest]) }, {
+      kind: 'ok', subcommand: 'candidates', verb, json: false,
+      candidateId: 'cand-1', decisionId: 'hd-1', actionDigest: digest,
+    });
+  }
+
+  assert.match(bad(['candidates']), /missing verb for 'dream candidates'/u);
+  assert.match(bad(['candidates', 'approve']), /unknown 'dream candidates' verb 'approve'/u);
+  assert.match(bad(['candidates', 'list', '--state', 'nope']), /unknown --state 'nope'/u);
+  assert.match(bad(['candidates', 'list', '--limit', '0']), /--limit must be a whole number/u);
+  assert.match(bad(['candidates', 'create']), /pass exactly one of --file <path> or --stdin/u);
+  assert.match(bad(['candidates', 'create', '--file', 'a', '--stdin']), /pass exactly one of/u);
+  assert.match(bad(['candidates', 'promote']), /a candidate id is required/u);
+  assert.match(bad(['candidates', 'promote', 'c1']), /--decision <human-decision-id> is required/u);
+  assert.match(bad(['candidates', 'promote', 'c1', '--decision', 'hd']), /--action-digest <sha256:\.\.\.> is required/u);
+  assert.match(bad(['candidates', 'promote', 'c1', 'c2', '--decision', 'hd', '--action-digest', digest]), /unexpected positional/u);
+});
+
+test('the superseded, unverified, and warning reports say exactly what to do next', () => {
+  // A superseded replay is a deliberate NO-OP at exit 0: retrying is not the
+  // remedy, reading the current state is.
+  assert.match(SUPERSEDED_MESSAGE, /superseded by later lifecycle activity/u);
+  assert.match(SUPERSEDED_MESSAGE, /no filesystem change/u);
+
+  const pre = renderUnverifiedLines('pre-phase', 'the fence connection was lost').join('\n');
+  assert.match(pre, /UNVERIFIED \(no mutation performed\)/u);
+  assert.match(pre, /re-run the verb \(it converges\) and run roster brain doctor/u);
+  const post = renderUnverifiedLines('post-phase', 'the subject governor changed under the fence').join('\n');
+  assert.match(post, /UNVERIFIED/u);
+  assert.equal(/no mutation performed/u.test(post), false);
+  assert.match(post, /re-run the verb \(it converges\)/u);
+
+  // The list renderer prints the warning verbatim and never fails on one.
+  const rendered = renderCandidateLines([{
+    candidate_id: `sha256:${'a'.repeat(64)}`,
+    state: 'open',
+    scope_key: 'workspace',
+    lesson_scope_key: 'agent:gtm/sdr',
+    lesson_agent_key: 'gtm/sdr',
+    lesson_id: 'shorter-openers',
+    lesson_qualified_id: 'gtm/sdr/playbook/shorter-openers',
+    drafted_by_agent_id: 'dreamer',
+    lesson_purpose: 'Lead with the prospect.',
+    privacy_class: 'internal',
+    policy_version: 'roster.dream.default.v1',
+    readiness_key: `sha256:${'b'.repeat(64)}`,
+    watermark_ordinal: 0,
+    frontier_ordinal: 9,
+    recorded_at: '2026-08-11T09:00:00.000Z',
+    supersedes_candidate_id: null,
+    warnings: [{ code: 'SAME_LESSON_FILE', detail: 'both cannot be promoted — retire the promoted one first.' }],
+  }]).join('\n');
+  assert.match(rendered, /SAME_LESSON_FILE/u);
+  assert.match(rendered, /both cannot be promoted/u);
+  assert.match(rendered, /gtm\/sdr\/playbook\/shorter-openers/u);
+  assert.deepEqual(renderCandidateLines([]).some((line) => line.includes('no candidates recorded')), true);
 });
 
 test('a workspace with no brain block answers not_due at exit 0 without a pool', async () => {
