@@ -1028,6 +1028,7 @@ DECLARE
   v_stored_row record;
   v_expected_qualified text;
   v_expected_answer text;
+  v_expected_action jsonb;
   v_sequence integer;
   v_subject_sequence bigint;
   -- Held as scalars rather than read off the advance record: plpgsql substitutes
@@ -1167,17 +1168,41 @@ BEGIN
     RAISE EXCEPTION 'the human decision does not exist' USING ERRCODE = 'RBE03';
   END IF;
   v_expected_answer := CASE WHEN v_decision = 'reject' THEN 'rejected' ELSE 'approved' END;
+
+  -- THE WHOLE ACTION, not a field sample. The expected action is BUILT here from
+  -- server-held values and compared as one jsonb object, which is exact and
+  -- key-closed in both directions: an altered `params`, an added key, or a
+  -- missing key all fail, because jsonb equality is structural.
+  --
+  -- Comparing only target/effect/scope was not a binding. The action digest
+  -- covers the WHOLE action object, so a decision whose action carried altered
+  -- params had a different digest -- and supplying that record's OWN digest
+  -- satisfied every field check plus the digest equality, while the action a
+  -- human approved was never the action this promotion claims.
+  --
+  -- The division of labour, stated: SQL binds the OBJECT (below), TypeScript
+  -- binds the DIGEST (the CLI recomputes it over the canonical action and the
+  -- equality further down seals it). 013's rule that no hashing happens in SQL
+  -- is what makes that split necessary, and the object comparison is what makes
+  -- it sufficient.
+  --
+  -- `target` is free text and is credential-scanned on both sides, so a bare
+  -- sha256 candidate id can never be stored in it. The group-separated spelling
+  -- below is the SAME one dreamDecisionTarget renders: injective, exact, and
+  -- free of a 32-character hex run.
+  v_expected_action := jsonb_build_object(
+    'target', 'dream-candidate:' || regexp_replace(substring(v_candidate_id from 8), '(....)', '\1-', 'g'),
+    'effect', 'dream-candidate-' || v_decision,
+    'scope', v_candidate.lesson_scope_key,
+    -- A dream lifecycle action is fully determined by its candidate, verb, and
+    -- target scope. There is nothing left for params to carry, so the only
+    -- admissible value is the empty object -- anything else is unbound content
+    -- riding an approval.
+    'params', '{}'::jsonb
+  );
   IF v_human.actor_assurance <> 'human-confirmed'
      OR v_human.answer <> v_expected_answer
-     -- `target` is free text and is credential-scanned on both sides, so a bare
-     -- sha256 candidate id can never be stored in it. The group-separated
-     -- spelling below is the SAME one dreamDecisionTarget renders: injective,
-     -- exact, and free of a 32-character hex run.
-     OR v_human.action->>'target' IS DISTINCT FROM (
-          'dream-candidate:' || regexp_replace(substring(v_candidate_id from 8), '(....)', '\1-', 'g')
-        )
-     OR v_human.action->>'effect' IS DISTINCT FROM ('dream-candidate-' || v_decision)
-     OR v_human.action->>'scope' IS DISTINCT FROM v_candidate.lesson_scope_key
+     OR v_human.action IS DISTINCT FROM v_expected_action
      OR v_human.action_digest IS DISTINCT FROM (v_doc->>'action_digest') THEN
     RAISE EXCEPTION 'the human decision is not bound to this exact candidate decision'
       USING ERRCODE = 'RBE08';

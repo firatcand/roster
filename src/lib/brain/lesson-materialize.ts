@@ -366,6 +366,29 @@ type FenceRow = {
   retired_content_hashes: string[] | null;
 };
 
+// A LOST FENCE and a BROKEN QUERY are different failures with different
+// remedies: the first is the UNVERIFIED contract ("re-run, it converges"), the
+// second is a schema or permission defect that a re-run will reproduce forever.
+// Mapping both to "the fence connection was lost" would bury the second inside
+// the first's remediation, so only the connection classes below become
+// UNVERIFIED and everything else keeps its own identity.
+//
+// Class 08 is PostgreSQL's connection-exception family; 57P01/02/03 are the
+// admin-shutdown, crash-shutdown, and cannot-connect-now terminations a killed
+// backend raises. The message check covers node-postgres's own client-side
+// failures, which carry no SQLSTATE at all.
+function isFenceConnectionFailure(error: unknown, captured: unknown): boolean {
+  if (captured !== undefined) return true;
+  const sqlState = (error as { code?: unknown }).code;
+  if (typeof sqlState === 'string'
+    && (sqlState.startsWith('08') || sqlState === '57P01' || sqlState === '57P02' || sqlState === '57P03')) {
+    return true;
+  }
+  const message = (error as { message?: unknown }).message;
+  return typeof message === 'string'
+    && /not queryable|connection terminated|terminating connection|socket|ECONNRESET|EPIPE/iu.test(message);
+}
+
 export type SubjectFenceHooks = Readonly<{
   afterFenceOpen?: () => Promise<void> | void;
   afterPhaseLock?: () => Promise<void> | void;
@@ -438,6 +461,7 @@ export async function withSubjectFence<T>(options: SubjectFenceOptions<T>): Prom
       }
       return null;
     } catch (error) {
+      if (!isFenceConnectionFailure(error, capturedError)) throw error;
       captureError(error);
       return { outcome: 'unverified', stage, reason: 'the fence connection was lost' };
     }
@@ -523,6 +547,9 @@ export async function withSubjectFence<T>(options: SubjectFenceOptions<T>): Prom
           lessonPurpose: row.lesson_purpose,
         }));
     } catch (error) {
+      // A defect here -- a missing relation, a revoked grant -- is not a lost
+      // fence and must not inherit its "re-run converges" remedy.
+      if (!isFenceConnectionFailure(error, capturedError)) throw error;
       captureError(error);
       await rollbackTolerated();
       return {

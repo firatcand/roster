@@ -17,6 +17,7 @@ import {
 import { recordHumanDecision } from '../src/lib/brain/evidence-store.ts';
 import { evidenceActionDigest } from '../src/lib/brain/evidence-identity.ts';
 import {
+  lessonDecisionAction,
   lessonTargetScope,
   normalizeLessonDecision,
 } from '../src/lib/brain/dream-candidate-contracts.ts';
@@ -1229,6 +1230,147 @@ test('a tampered decision instant is refused against the human decision it cites
       `SELECT count(*)::text AS n FROM brain_evidence.lesson_decisions`,
     );
     assert.equal(rows.rows[0]!.n, '0', 'a forged instant must write nothing');
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('the binding proves the human record IS the expected action, not a field sample', options, async (t) => {
+  const fixture = await createEvidenceFixture('dream-e2e-action-binding');
+  try {
+    await zeroCooldown(fixture);
+    await seedRuns(fixture, 6);
+    const candidateId = await openCandidate(fixture, 'action-binding');
+    const candidate = await loadDreamCandidate(fixture.runtime, candidateId);
+    const expected = lessonDecisionAction('promote', candidateId, candidate.lessonScopeKey);
+
+    const promoteWith = async (
+      decisionId: string,
+      actionDigest: string,
+    ): Promise<unknown> => await decide(fixture, 'promote', candidateId, {
+      decisionId,
+      actionDigest,
+    }, { contentHash: `sha256:${'c'.repeat(64)}` });
+
+    const decisionCount = async (): Promise<string> => (await fixture.admin.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM brain_evidence.lesson_decisions`,
+    )).rows[0]!.n;
+
+    await t.test('altered params with the record own HONEST digest are refused', async () => {
+      // Every field check the old binding performed passes: the target, effect,
+      // and scope are exactly right, and the digest supplied IS this record's
+      // own digest. What differs is `params` -- unbound content riding an
+      // approval -- which only a whole-object comparison can see.
+      const tampered = {
+        target: expected.target,
+        effect: expected.effect,
+        scope: expected.scope,
+        params: { grant: 'everything' },
+      };
+      await recordHumanDecision(fixture.admin, {
+        decisionId: 'hd-tampered-params',
+        action: tampered,
+        actionSummary: 'approve the drafted lesson',
+        requestedDecision: 'approval',
+        answer: 'approved',
+        privacy: 'internal',
+        trust: 'host-asserted',
+        actor: {
+          actorId: 'human',
+          assurance: 'human-confirmed',
+          decisionId: 'hd-tampered-params',
+          actionDigest: evidenceActionDigest(tampered),
+        },
+        decidedAt: '2026-08-11T09:00:00.000Z',
+        hostProvenance: { host: 'claude' },
+      });
+      // The stored record is internally consistent -- its digest is honest.
+      const stored = await fixture.admin.query<{ action_digest: string }>(
+        `SELECT action_digest FROM brain_evidence.human_decisions WHERE decision_id = 'hd-tampered-params'`,
+      );
+      assert.equal(stored.rows[0]!.action_digest, evidenceActionDigest(tampered));
+      assert.notEqual(stored.rows[0]!.action_digest, expected.action_digest);
+
+      await assert.rejects(
+        promoteWith('hd-tampered-params', evidenceActionDigest(tampered)),
+        (error: unknown) => {
+          assert.equal((error as { code?: string }).code, 'BRAIN_DREAM_DECISION_UNBOUND');
+          return true;
+        },
+      );
+      assert.equal(await decisionCount(), '0', 'a refused binding must write nothing');
+    });
+
+    await t.test('an EXTRA action key smuggled past the record broker is refused', async () => {
+      // The record broker's own closed-key assertion refuses this shape, so the
+      // row is planted by a DIRECT admin insert -- the exact mutation an
+      // attacker with database access would make.
+      const smuggled = {
+        target: expected.target,
+        effect: expected.effect,
+        scope: expected.scope,
+        params: {},
+        escalate: true,
+      };
+      await fixture.admin.query(
+        `INSERT INTO brain_evidence.human_decisions (
+           decision_id, record_canonical, workspace_id, action, action_summary, action_digest,
+           requested_decision, answer, privacy_class, trust_class, actor_assurance,
+           assurance_evidence, decided_at, host_provenance
+         ) VALUES (
+           'hd-extra-key', '{}', $1, $2::jsonb, 'approve the drafted lesson', $3,
+           'approval', 'approved', 'internal', 'host-asserted', 'human-confirmed',
+           '{}'::jsonb, '2026-08-11T09:00:00.000Z'::timestamptz, '{}'::jsonb
+         )`,
+        [fixture.workspaceId, JSON.stringify(smuggled), evidenceActionDigest(smuggled)],
+      );
+      await assert.rejects(
+        promoteWith('hd-extra-key', evidenceActionDigest(smuggled)),
+        (error: unknown) => {
+          assert.equal((error as { code?: string }).code, 'BRAIN_DREAM_DECISION_UNBOUND');
+          return true;
+        },
+      );
+      assert.equal(await decisionCount(), '0', 'a refused binding must write nothing');
+    });
+
+    await t.test('a MISSING action key is refused just as an extra one is', async () => {
+      const truncated = {
+        target: expected.target,
+        effect: expected.effect,
+        scope: expected.scope,
+      };
+      await fixture.admin.query(
+        `INSERT INTO brain_evidence.human_decisions (
+           decision_id, record_canonical, workspace_id, action, action_summary, action_digest,
+           requested_decision, answer, privacy_class, trust_class, actor_assurance,
+           assurance_evidence, decided_at, host_provenance
+         ) VALUES (
+           'hd-missing-key', '{}', $1, $2::jsonb, 'approve the drafted lesson', $3,
+           'approval', 'approved', 'internal', 'host-asserted', 'human-confirmed',
+           '{}'::jsonb, '2026-08-11T09:00:00.000Z'::timestamptz, '{}'::jsonb
+         )`,
+        [fixture.workspaceId, JSON.stringify(truncated), evidenceActionDigest(truncated)],
+      );
+      await assert.rejects(
+        promoteWith('hd-missing-key', evidenceActionDigest(truncated)),
+        (error: unknown) => {
+          assert.equal((error as { code?: string }).code, 'BRAIN_DREAM_DECISION_UNBOUND');
+          return true;
+        },
+      );
+      assert.equal(await decisionCount(), '0');
+    });
+
+    await t.test('the exact published action is accepted', async () => {
+      const decision = await recordDecision(
+        fixture, 'hd-exact-action', 'promote', candidateId, candidate.lessonScopeKey,
+      );
+      assert.equal(decision.actionDigest, expected.action_digest);
+      const committed = await promoteWith('hd-exact-action', decision.actionDigest);
+      assert.equal((committed as { status: string }).status, 'created');
+      assert.equal(await decisionCount(), '1');
+    });
   } finally {
     await fixture.close();
   }
