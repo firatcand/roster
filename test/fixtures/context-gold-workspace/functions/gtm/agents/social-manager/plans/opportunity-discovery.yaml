@@ -1,0 +1,57 @@
+schema_version: 2
+id: opportunity-discovery
+agent: gtm/social-manager
+purpose: Produce an evidence-backed shortlist of public reply opportunities for Harborlight Analytics.
+inputs:
+  request:
+    description: The human request describing what kind of conversations to discover.
+    required: true
+brain_selectors:
+  strong-examples:
+    description: Previously successful public replies and their source posts.
+    required: true
+  company-positioning:
+    description: Current company positioning notes and the audience they serve.
+    required: false
+guidelines:
+  - gtm/social-manager/guidelines/discovery-policy
+tool_uses:
+  - signal-scan
+artifacts:
+  shortlist:
+    description: Cited qualified opportunities with relevance reasons attached.
+caps:
+  candidates:
+    maximum: 20
+    guidance: Keep only strongly relevant conversations.
+steps:
+  - id: frame
+    kind: reasoning
+    instruction: Derive request-specific filters from the request, the discovery policy, and any cited positioning evidence, and write them down before searching.
+  - id: scan-linkedin
+    kind: nested-plan
+    instruction: Collect professional-network candidates that pass the derived filters.
+    plan: gtm/social-manager#scan-linkedin
+  - id: scan-web
+    kind: nested-plan
+    instruction: Collect broader public-web candidates with the same derived filters.
+    plan: gtm/social-manager#scan-web
+  - id: search
+    kind: tool
+    instruction: Run the company-defined search guidance against the derived filters and return evidence only, with canonical URLs intact.
+    tool_use: signal-scan
+  - id: qualify
+    kind: reasoning
+    instruction: Apply the four qualification tests to every candidate and record the failing test for each rejection.
+  - id: return
+    kind: artifact
+    instruction: Return the qualified shortlist with relevance reasons and the derived filters used.
+    artifact: shortlist
+completion:
+  artifacts:
+    - shortlist
+  output_guidance: Return cited opportunities with relevance reasons and the filter audit trail for host review.
+  criteria:
+    - Every opportunity includes an attributable canonical source.
+    - Every relevance reason cites matching company experience.
+    - No external write was performed.

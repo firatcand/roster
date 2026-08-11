@@ -1,0 +1,46 @@
+schema_version: 2
+id: weekly-audit
+agent: ops/vendor-support
+purpose: Audit the week's resolved vendor tickets for precedent quality and recurring failure patterns.
+inputs:
+  window:
+    description: The audit window, defaulting to the previous calendar week when not supplied.
+    required: false
+brain_selectors:
+  audit-history:
+    description: Earlier weekly audits and the patterns they flagged.
+    required: false
+guidelines: []
+tool_uses: []
+artifacts:
+  audit-report:
+    description: The weekly audit report with precedent-quality scores and flagged patterns.
+caps:
+  flagged-patterns:
+    maximum: 6
+    guidance: Flag at most six patterns per week so each one gets a real follow-up.
+steps:
+  - id: collect
+    kind: reasoning
+    instruction: Collect the window's resolved tickets and check each resolution recorded its precedent
+      link, its accepted fix, and its decision trail as the policies require.
+  - id: score
+    kind: reasoning
+    instruction: Score precedent quality per ticket on whether the next similar ticket could be resolved
+      from the record alone, without asking anyone.
+  - id: patterns
+    kind: reasoning
+    instruction: Flag failure signatures that recurred across vendors or across weeks, with the ticket
+      list attached to each flagged pattern.
+  - id: return
+    kind: artifact
+    instruction: Return the audit report with scores, flagged patterns, and the follow-up owner per flag.
+    artifact: audit-report
+completion:
+  artifacts:
+    - audit-report
+  output_guidance: Return the audit report so precedent gaps and recurring patterns each have a named
+    follow-up owner before the next intake cycle.
+  criteria:
+    - Every flagged pattern carries its supporting ticket list.
+    - Every precedent gap has a named follow-up owner.

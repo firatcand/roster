@@ -1,0 +1,14 @@
+schema_version: 2
+id: signal-scan
+scope: {}
+purpose: Search public sources for timely conversations relevant to the company.
+skill_ref: harborline:search
+filters:
+  - require a canonical public URL for every result
+rules:
+  - never perform an external write
+effects:
+  allowed:
+    - external-read
+    - brain-read
+    - brain-write

@@ -1,0 +1,18 @@
+schema_version: 2
+id: signal-scan
+scope:
+  function: gtm
+  agent: social-manager
+  plan: opportunity-discovery
+purpose: Rank timely public conversations for this discovery request.
+skill_ref: harborline:search
+filters:
+  - exclude URLs already presented in prior discovery runs
+brain:
+  write:
+    - discovered-opportunity
+effects:
+  allowed:
+    - external-read
+    - brain-read
+    - brain-write

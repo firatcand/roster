@@ -1,0 +1,14 @@
+schema_version: 2
+id: atlas-crawl
+scope: {}
+purpose: Describe a cataloged site-crawl capability that no current plan selects.
+skill_ref: atlas-crawl:extract
+when:
+  - a future workflow needs full-page extraction rather than search
+filters:
+  - crawl only pages that are publicly reachable without authentication
+rules:
+  - respect robots directives and never submit forms
+effects:
+  allowed:
+    - external-read

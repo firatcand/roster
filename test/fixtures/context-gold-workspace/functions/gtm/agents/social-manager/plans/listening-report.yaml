@@ -1,0 +1,50 @@
+schema_version: 2
+id: listening-report
+agent: gtm/social-manager
+purpose: Produce the monthly listening report on how practitioners talk about the problem space.
+inputs:
+  month:
+    description: The reporting month, defaulting to the previous calendar month.
+    required: false
+brain_selectors:
+  listening-history:
+    description: Earlier listening reports and the vocabulary shifts they tracked.
+    required: false
+guidelines: []
+tool_uses: []
+artifacts:
+  listening-report:
+    description: The monthly report on practitioner vocabulary, pain themes, and shifts.
+caps:
+  themes:
+    maximum: 7
+    guidance: Seven themes at most; a theme that cannot fill a paragraph is an anecdote.
+steps:
+  - id: corpus
+    kind: reasoning
+    instruction: Assemble the month's observed practitioner conversations from the discovery archive,
+      keeping each item's source link so themes stay checkable at the thread level.
+  - id: vocabulary
+    kind: reasoning
+    instruction: Track the words practitioners actually use for the problems the product addresses,
+      noting where their vocabulary and the company's marketing vocabulary diverge.
+  - id: themes
+    kind: reasoning
+    instruction: Group the month's pain points into themes with at least three independent threads
+      behind each, discarding themes carried by a single loud voice.
+  - id: shifts
+    kind: reasoning
+    instruction: Compare against earlier reports and name what genuinely shifted this month, saying
+      explicitly when the honest finding is stability.
+  - id: return
+    kind: artifact
+    instruction: Return the report with themes, vocabulary notes, and shifts for the positioning owner.
+    artifact: listening-report
+completion:
+  artifacts:
+    - listening-report
+  output_guidance: Return a report whose every theme can be traced to at least three independent source
+    threads.
+  criteria:
+    - Every theme lists its supporting threads.
+    - Vocabulary divergences quote the practitioners' own words.

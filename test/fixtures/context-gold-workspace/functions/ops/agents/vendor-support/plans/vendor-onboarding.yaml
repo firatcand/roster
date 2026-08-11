@@ -1,0 +1,54 @@
+schema_version: 2
+id: vendor-onboarding
+agent: ops/vendor-support
+purpose: Onboard a newly contracted vendor so the first ticket is routine rather than an exploration.
+inputs:
+  vendor:
+    description: The newly contracted vendor and the signed scope of the engagement.
+    required: true
+brain_selectors:
+  onboarding-history:
+    description: Earlier vendor onboardings and the gaps they discovered late.
+    required: false
+guidelines: []
+tool_uses: []
+artifacts:
+  onboarding-record:
+    description: The completed onboarding record with contacts, channels, and commitments.
+caps:
+  open-questions:
+    maximum: 10
+    guidance: Ten open questions at most leave onboarding; the rest get answered before it closes.
+steps:
+  - id: contacts
+    kind: reasoning
+    instruction: Record the vendor's support contacts, escalation contacts, and the channel each expects
+      to be reached on, verified by an actual exchange rather than copied from the contract.
+  - id: commitments
+    kind: reasoning
+    instruction: Extract the response-window and availability commitments from the signed contract into
+      the working record, in the exact wording the escalation policy will later measure against.
+  - id: access
+    kind: reasoning
+    instruction: Verify every access the engagement requires actually works from our side, recording who
+      holds each credential reference and which system grants it, without recording any secret value.
+  - id: signature
+    kind: reasoning
+    instruction: Define the failure signatures this vendor's services would produce in our monitoring, so
+      the first real ticket can be matched to a vendor by signature rather than by guesswork.
+  - id: dry-run
+    kind: reasoning
+    instruction: Run one low-stakes support request end to end to verify the contacts, channels, and
+      response window behave as recorded, and correct the record where reality disagreed.
+  - id: return
+    kind: artifact
+    instruction: Return the onboarding record with the dry-run outcome and any open questions attached.
+    artifact: onboarding-record
+completion:
+  artifacts:
+    - onboarding-record
+  output_guidance: Return the record complete enough that the first real ticket needs no exploration; open
+    questions carry named owners.
+  criteria:
+    - Contacts and commitments were verified by actual exchange, not copied.
+    - No secret value appears anywhere in the record.

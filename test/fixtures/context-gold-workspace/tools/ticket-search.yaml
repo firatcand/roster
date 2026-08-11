@@ -1,0 +1,25 @@
+schema_version: 2
+id: ticket-search
+scope: {}
+purpose: Search the internal vendor ticket archive for related history.
+skill_ref: ledgerdesk:tickets
+when:
+  - locating earlier tickets about the same vendor or the same failure signature
+capabilities:
+  - ticket-search
+filters:
+  - search the company ticket archive only
+rules:
+  - never modify, close, or reassign a ticket from a search context
+effects:
+  allowed:
+    - external-read
+    - brain-read
+approval:
+  requirement: none
+  guidance: []
+evidence:
+  required:
+    - ticket_id
+  guidance:
+    - keep the ticket identifier with every cited resolution

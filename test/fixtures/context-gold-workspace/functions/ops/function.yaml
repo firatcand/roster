@@ -1,0 +1,13 @@
+schema_version: 2
+id: ops
+purpose: Keep Harborlight Analytics internal operations dependable, with vendor issues resolved before they reach customers.
+agents:
+  - vendor-support
+guidelines:
+  - access-reviews
+  - continuity-runbook
+  - escalation-policy
+  - spend-policy
+  - vendor-directory
+tool_uses:
+  - ticket-search

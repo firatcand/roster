@@ -1,0 +1,46 @@
+schema_version: 2
+id: localization-pass
+agent: gtm/content-writer
+purpose: Adapt finished pieces for regional audiences without letting translation sharpen or soften claims.
+inputs:
+  piece:
+    description: The finished canonical piece selected for regional adaptation.
+    required: true
+brain_selectors:
+  localization-history:
+    description: Earlier localization rounds and the claim-drift issues they caught.
+    required: false
+guidelines: []
+tool_uses: []
+artifacts:
+  localized-set:
+    description: The regional adaptations with their claim-fidelity check results.
+caps:
+  regions-per-pass:
+    maximum: 4
+    guidance: Four regions per pass keeps each adaptation reviewed rather than batched.
+steps:
+  - id: extract
+    kind: reasoning
+    instruction: Extract the piece's load-bearing claims with their evidence classes into a claim sheet
+      the adaptation will be checked against sentence by sentence.
+  - id: adapt
+    kind: reasoning
+    instruction: Adapt the piece for each region's reading conventions, keeping examples that do not
+      translate replaced by regional equivalents with the same evidence class.
+  - id: fidelity
+    kind: reasoning
+    instruction: Check every adapted claim against the claim sheet for sharpening, softening, or dropped
+      hedges, treating any drift as a blocking defect.
+  - id: return
+    kind: artifact
+    instruction: Return the adaptations with completed claim-fidelity checks for regional review.
+    artifact: localized-set
+completion:
+  artifacts:
+    - localized-set
+  output_guidance: Return adaptations whose claims are point-identical to the canonical piece under each
+    region's conventions.
+  criteria:
+    - Every adaptation passed the claim-fidelity check.
+    - Every replaced example keeps the original evidence class.

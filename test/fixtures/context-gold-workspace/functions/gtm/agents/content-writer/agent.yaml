@@ -1,0 +1,29 @@
+schema_version: 2
+id: content-writer
+function: gtm
+purpose: Turn verified company findings into useful published writing for Harborlight Analytics.
+plans:
+  - archive-refresh
+  - case-studies
+  - draft-posts
+  - localization-pass
+  - metrics-monthly
+  - newsletter-cycle
+  - press-briefs
+  - revise-drafts
+subagents: []
+guidelines:
+  - distribution-policy
+  - evidence-standards
+  - glossary-terms
+  - imagery-standards
+  - newsletter-charter
+  - review-etiquette
+  - writing-style
+default_guidelines:
+  - brand-voice
+tool_uses: []
+lessons:
+  - case-study-prior
+  - interview-prior
+  - writing-prior

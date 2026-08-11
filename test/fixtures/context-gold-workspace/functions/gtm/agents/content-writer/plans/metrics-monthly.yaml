@@ -1,0 +1,46 @@
+schema_version: 2
+id: metrics-monthly
+agent: gtm/content-writer
+purpose: Produce the monthly content metrics review with honest attribution of what moved and why.
+inputs:
+  month:
+    description: The review month, defaulting to the previous calendar month.
+    required: false
+brain_selectors:
+  metrics-history:
+    description: Earlier monthly reviews and the metric definitions they used.
+    required: false
+guidelines: []
+tool_uses: []
+artifacts:
+  metrics-review:
+    description: The monthly review with metric movements and their honest attributions.
+caps:
+  highlighted-movements:
+    maximum: 6
+    guidance: Six movements at most; a movement without a plausible mechanism is noise to note, not news.
+steps:
+  - id: collect
+    kind: reasoning
+    instruction: Collect the month's content metrics under the standing definitions, flagging any metric
+      whose collection method changed mid-month so its movement is not misread.
+  - id: attribute
+    kind: reasoning
+    instruction: Attribute each notable movement to a mechanism only when the timing and the affected
+      pieces support it, and label the rest as unexplained rather than inventing causes.
+  - id: compare
+    kind: reasoning
+    instruction: Compare against the trailing quarter to separate seasonal texture from genuine change,
+      and say plainly when the honest reading is flat.
+  - id: return
+    kind: artifact
+    instruction: Return the review with movements, attributions, and open questions for the function lead.
+    artifact: metrics-review
+completion:
+  artifacts:
+    - metrics-review
+  output_guidance: Return a review whose every attribution names its mechanism and whose unexplained
+    movements are labeled unexplained.
+  criteria:
+    - Every attribution is supported by timing and affected pieces.
+    - Metric definition changes are flagged with their movements.

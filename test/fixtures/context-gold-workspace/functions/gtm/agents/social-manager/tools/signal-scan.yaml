@@ -1,0 +1,19 @@
+schema_version: 2
+id: signal-scan
+scope:
+  function: gtm
+  agent: social-manager
+purpose: Find timely posts from practitioners relevant to the target audience.
+skill_ref: harborline:search
+how:
+  - begin with a twenty-four hour lookback and widen only when results are too small
+output_expectations:
+  required:
+    - canonical_url
+    - author
+    - relevance_reason
+effects:
+  allowed:
+    - external-read
+    - brain-read
+    - brain-write

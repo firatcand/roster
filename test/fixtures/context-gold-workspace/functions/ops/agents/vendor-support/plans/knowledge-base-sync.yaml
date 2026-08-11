@@ -1,0 +1,46 @@
+schema_version: 2
+id: knowledge-base-sync
+agent: ops/vendor-support
+purpose: Keep the support knowledge base synchronized with what resolutions actually taught.
+inputs:
+  window:
+    description: The sync window, defaulting to the previous month.
+    required: false
+brain_selectors:
+  sync-history:
+    description: Earlier knowledge-base syncs and the article-quality issues they found.
+    required: false
+guidelines: []
+tool_uses: []
+artifacts:
+  sync-report:
+    description: The sync report with articles created, updated, and retired.
+caps:
+  articles-per-sync:
+    maximum: 15
+    guidance: Fifteen article changes per sync keeps each one reviewed rather than bulk-imported.
+steps:
+  - id: harvest
+    kind: reasoning
+    instruction: Harvest the window's resolved tickets for resolutions that a knowledge-base article
+      does not yet cover, using the failure signature as the lookup key.
+  - id: draft
+    kind: reasoning
+    instruction: Draft each missing article from the resolution record — signature, accepted fix,
+      verification — in the reusable-by-a-stranger standard the audit scores against.
+  - id: reconcile
+    kind: reasoning
+    instruction: Reconcile existing articles that the window's tickets contradicted, updating or
+      retiring them with the contradicting tickets referenced.
+  - id: return
+    kind: artifact
+    instruction: Return the sync report with created, updated, and retired articles listed.
+    artifact: sync-report
+completion:
+  artifacts:
+    - sync-report
+  output_guidance: Return the report so the knowledge base converges toward the archive's actual
+    resolutions.
+  criteria:
+    - Every new article traces to a resolved ticket by failure signature.
+    - Every retirement references the tickets that contradicted the article.

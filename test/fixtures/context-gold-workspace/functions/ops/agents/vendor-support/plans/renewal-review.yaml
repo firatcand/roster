@@ -1,0 +1,50 @@
+schema_version: 2
+id: renewal-review
+agent: ops/vendor-support
+purpose: Review a vendor relationship ahead of renewal with the year's evidence assembled.
+inputs:
+  vendor:
+    description: The vendor whose renewal window is opening.
+    required: true
+brain_selectors:
+  renewal-history:
+    description: Earlier renewal reviews for this vendor and their negotiated outcomes.
+    required: false
+guidelines: []
+tool_uses: []
+artifacts:
+  renewal-brief:
+    description: The renewal brief with performance evidence and a recommended posture.
+caps:
+  evidence-items:
+    maximum: 15
+    guidance: Fifteen evidence items keep the brief readable; pick the decisive ones.
+steps:
+  - id: performance
+    kind: reasoning
+    instruction: Assemble the year's ticket history into performance evidence — response windows met and
+      missed, escalations and their outcomes, and recurring failure signatures — with ticket references.
+  - id: usage
+    kind: reasoning
+    instruction: Establish what the company actually used against what it contracted, so the renewal
+      conversation starts from consumption reality rather than from the original scoping.
+  - id: alternatives
+    kind: reasoning
+    instruction: Note the realistic alternatives and the switching cost honestly, including the cost of
+      staying when performance evidence is poor.
+  - id: posture
+    kind: reasoning
+    instruction: Recommend a posture — renew as-is, renew with changed terms, or exit — with the evidence
+      items that carry the recommendation named explicitly.
+  - id: return
+    kind: artifact
+    instruction: Return the renewal brief for the owner of the vendor relationship to decide with.
+    artifact: renewal-brief
+completion:
+  artifacts:
+    - renewal-brief
+  output_guidance: Return the brief so the relationship owner decides from evidence; this workflow
+    recommends and never negotiates.
+  criteria:
+    - Every performance claim carries ticket references.
+    - The recommendation names its decisive evidence.

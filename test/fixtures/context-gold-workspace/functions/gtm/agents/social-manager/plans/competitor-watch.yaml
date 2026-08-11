@@ -1,0 +1,46 @@
+schema_version: 2
+id: competitor-watch
+agent: gtm/social-manager
+purpose: Track competitor positioning changes in public without engaging or reacting in the moment.
+inputs:
+  competitors:
+    description: The competitor list to watch, defaulting to the standing list when not supplied.
+    required: false
+brain_selectors:
+  competitor-notes:
+    description: Earlier competitor observations and the positioning changes they recorded.
+    required: false
+guidelines: []
+tool_uses: []
+artifacts:
+  watch-notes:
+    description: Dated competitor observations with sources and a change assessment.
+caps:
+  observations:
+    maximum: 10
+    guidance: Record only genuine positioning changes; routine marketing activity is not an observation.
+steps:
+  - id: sweep
+    kind: reasoning
+    instruction: Review each watched competitor's public announcements, pricing pages, and stated
+      positioning since the last watch cycle, recording only what actually changed.
+  - id: assess
+    kind: reasoning
+    instruction: For each observed change, assess whether it affects how Harborlight describes itself,
+      and say explicitly when the honest answer is that it does not.
+  - id: separate
+    kind: reasoning
+    instruction: Keep observation and reaction strictly separate; this workflow records what competitors
+      did and never drafts a response, a comparison, or a counter-post.
+  - id: return
+    kind: artifact
+    instruction: Return dated watch notes with sources and change assessments for the positioning owner.
+    artifact: watch-notes
+completion:
+  artifacts:
+    - watch-notes
+  output_guidance: Return watch notes the positioning owner can act on later; no public reaction happens
+    from this workflow.
+  criteria:
+    - Every observation carries a dated public source.
+    - No reaction, reply, or comparison content was produced.

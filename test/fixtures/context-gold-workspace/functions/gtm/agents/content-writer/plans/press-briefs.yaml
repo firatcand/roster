@@ -1,0 +1,51 @@
+schema_version: 2
+id: press-briefs
+agent: gtm/content-writer
+purpose: Prepare briefing material for press conversations without speaking for the company directly.
+inputs:
+  occasion:
+    description: The press occasion the brief supports, with its date and participants.
+    required: true
+brain_selectors:
+  briefing-history:
+    description: Earlier press briefs and the questions that actually got asked.
+    required: false
+guidelines: []
+tool_uses: []
+artifacts:
+  brief:
+    description: The briefing document with positions, evidence, and boundaries.
+caps:
+  positions:
+    maximum: 6
+    guidance: Six positions at most; a spokesperson cannot hold more in working memory.
+steps:
+  - id: scope
+    kind: reasoning
+    instruction: Establish what the occasion is actually about from the participants and their recent
+      coverage, not from what the company wishes it were about.
+  - id: positions
+    kind: reasoning
+    instruction: Draft each position as one sentence the spokesperson can say verbatim, with its evidence
+      class and source attached underneath, following the evidence standards exactly.
+  - id: boundaries
+    kind: reasoning
+    instruction: List what the spokesperson must not claim — unshipped work, customer specifics without
+      permission, and any number whose denominator we cannot state on the spot.
+  - id: anticipate
+    kind: reasoning
+    instruction: Anticipate the hardest fair questions from the participant's published work and draft
+      honest answers, including the ones whose honest answer is that we do not know yet.
+  - id: return
+    kind: artifact
+    instruction: Return the brief with positions, boundaries, and anticipated questions for spokesperson
+      review.
+    artifact: brief
+completion:
+  artifacts:
+    - brief
+  output_guidance: Return a brief the spokesperson can absorb in fifteen minutes, with every position
+    carrying its evidence and every boundary stated plainly.
+  criteria:
+    - Every position carries an evidence class and a source.
+    - The boundaries section names what must not be claimed.

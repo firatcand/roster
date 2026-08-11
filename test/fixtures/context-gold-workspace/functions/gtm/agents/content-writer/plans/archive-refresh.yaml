@@ -1,0 +1,50 @@
+schema_version: 2
+id: archive-refresh
+agent: gtm/content-writer
+purpose: Re-verify the published archive so nothing under the company name asserts a stale number.
+inputs:
+  quarter:
+    description: The refresh quarter, defaulting to the current one.
+    required: false
+brain_selectors:
+  refresh-history:
+    description: Earlier archive refreshes and the corrections they produced.
+    required: false
+guidelines: []
+tool_uses: []
+artifacts:
+  refresh-report:
+    description: The refresh report with re-verified, corrected, and retired pieces listed.
+caps:
+  corrections-per-cycle:
+    maximum: 12
+    guidance: Twelve corrections per cycle; more means the archive needs a retirement pass instead.
+steps:
+  - id: inventory
+    kind: reasoning
+    instruction: Inventory the published archive by age and by evidence class, flagging every piece whose
+      load-bearing numbers are older than the refresh horizon.
+  - id: verify
+    kind: reasoning
+    instruction: Re-verify each flagged number against current data, recording verified, drifted, or no
+      longer measurable for every one.
+  - id: correct
+    kind: reasoning
+    instruction: Correct drifted numbers in the canonical version with a visible correction note, and
+      propagate each correction to every adaptation the same day.
+  - id: retire
+    kind: reasoning
+    instruction: Retire pieces whose finding no longer holds, with a dated retirement note in place of
+      the content rather than a silent deletion.
+  - id: return
+    kind: artifact
+    instruction: Return the refresh report listing verified, corrected, and retired pieces with dates.
+    artifact: refresh-report
+completion:
+  artifacts:
+    - refresh-report
+  output_guidance: Return the report so the archive's trustworthiness is a maintained property, with every
+    correction and retirement dated and visible.
+  criteria:
+    - Every flagged number was re-verified or its piece corrected or retired.
+    - No correction or retirement happened silently.
