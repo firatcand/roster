@@ -868,3 +868,85 @@ test('component-wise symlink safety rejects even in-workspace diversion', () => 
     fx.cleanup();
   }
 });
+
+// #355 D4.3′ / S5a. `spec/SPEC.md:635` asks that lesson conflicts be "reported
+// and resolved by explicit precedence plus human review". For the SAME-ID class
+// that obligation is discharged by PREVENTION rather than reporting, because the
+// state is structurally unrepresentable: one lesson id owns exactly one
+// plan-agnostic file path AND one plan-agnostic qualified id, with `scope.plan`
+// living only in the file's own front matter. Two same-id lessons at different
+// scopes therefore cannot coexist in any collectible workspace, and the only
+// authoring gesture that can even ATTEMPT the state — the same id listed twice
+// in the agent registry — is refused fail-loud before any bundle exists.
+test('one lesson id owns exactly one plan-agnostic path and qualified id', async () => {
+  const { childRecordPath, qualifiedRecordId } = await import('../src/lib/workspace-layout.ts');
+  // Plan scope changes NEITHER, which is the structural fact the same-id
+  // prevention argument rests on. A future schema change that gave a lesson a
+  // plan-dependent home would have to confront this pin.
+  for (const scope of [
+    { function: 'gtm', agent: 'social-manager' },
+    { function: 'gtm', agent: 'social-manager', plan: 'opportunity-discovery' },
+    { function: 'gtm', agent: 'social-manager', plan: 'sibling-review' },
+  ] as const) {
+    assert.equal(
+      childRecordPath('functions/gtm', 'social-manager', 'lesson', 'prior', scope),
+      'functions/gtm/agents/social-manager/playbook/prior.md',
+    );
+  }
+  assert.equal(
+    qualifiedRecordId('lesson', {
+      functionId: 'gtm',
+      agentId: 'social-manager',
+      localId: 'prior',
+    }),
+    'gtm/social-manager/playbook/prior',
+  );
+});
+
+test('a duplicate lesson identity is refused before any workspace output exists', () => {
+  for (const entry of [
+    // The duplicate proper.
+    { lessons: ['prior', 'prior'], code: 'DUPLICATE_IDENTITY' },
+    // A case-only variant is refused EARLIER, by the lowercase id grammar,
+    // which runs before the duplicate check. The test pins that precedence
+    // rather than pretending both cases reach the same code.
+    { lessons: ['prior', 'Prior'], code: 'IDENTITY_INVALID' },
+  ] as const) {
+    const fx = fixture();
+    try {
+      scaffoldWorkspace(fx.root, { kind: 'function', id: 'gtm', purpose: 'Grow demand.' });
+      scaffoldWorkspace(fx.root, {
+        kind: 'agent',
+        id: 'social-manager',
+        scope: 'function:gtm',
+        purpose: 'Reply well.',
+      });
+      scaffoldWorkspace(fx.root, {
+        kind: 'lesson',
+        id: 'prior',
+        scope: 'agent:gtm/social-manager',
+      });
+      const agentPath = join(fx.root, 'functions/gtm/agents/social-manager/agent.yaml');
+      const agent = YAML.parse(readFileSync(agentPath, 'utf8')) as Record<string, unknown>;
+      agent['lessons'] = [...entry.lessons];
+      writeFileSync(agentPath, YAML.stringify(agent));
+
+      // Discovery — the surface every consumer of a collected workspace goes
+      // through, including `roster context` — REFUSES outright, so no consumer
+      // can ever observe a half-collected workspace. That fail-loud refusal IS
+      // the "explicit non-corrupting behavior" for this class, and is strictly
+      // stronger than post-hoc reporting.
+      assert.equal(failureCode(() => discoverWorkspace(fx.root, {})), entry.code);
+      assert.equal(failureCode(() => discoverWorkspace(fx.root, { full: true })), entry.code);
+
+      // Validation is the deliberate exception: its whole contract is to REPORT
+      // authored failures rather than throw them, so it surfaces the same code
+      // as a diagnostic on a not-ok result. Either way the user sees the code.
+      const validation = validateWorkspace(fx.root, {});
+      assert.equal(validation.ok, false);
+      assert.equal(validation.diagnostics.some((diagnostic) => diagnostic.code === entry.code), true);
+    } finally {
+      fx.cleanup();
+    }
+  }
+});

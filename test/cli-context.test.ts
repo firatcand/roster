@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:net';
+import type { AddressInfo } from 'node:net';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -374,20 +376,71 @@ test('context accepts --include-legacy-unverified once and reports it in the req
   }
 });
 
-test('context on a half-declared Brain exits non-zero with no bundle and contacts neither store', () => {
+// #355 S6. The envelope half of this was already proven; "contacts neither
+// store" was INFERENCE. This turns the PostgreSQL half into an observed fact by
+// pointing the child's runtime Brain URL at a listener in this process and
+// asserting the accept count is exactly zero.
+//
+// Scope honesty: only the PostgreSQL half can be locally observed. Endpoint
+// validation refuses local and private literals, so an object-storage listener
+// cannot be configured at all; that half is proven STRUCTURALLY instead — the
+// context path imports no S3 client (`context-retrieval.ts` has no `@aws-sdk/*`
+// import, pinned by `test/static-boundaries.test.ts`), and the fatal is raised
+// by the registry parse before any adapter runs.
+async function runCliAsync(
+  root: string,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+): Promise<CliResult> {
+  return await new Promise<CliResult>((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      ['--experimental-strip-types', '--no-warnings', BIN, ...args],
+      {
+        cwd: root,
+        env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1', ...env },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => { stdout += chunk; });
+    child.stderr.on('data', (chunk: string) => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ status: code ?? -1, stdout, stderr }));
+  });
+}
+
+test('context on a half-declared Brain exits non-zero with no bundle and contacts neither store', async () => {
   for (const partial of PARTIAL_BRAINS) {
     const fx = fixture();
+    // The listener lives in the TEST process, whose event loop stays live for
+    // the child's whole lifetime, so any connection attempt is accepted and
+    // counted promptly rather than racing the assertion.
+    let accepted = 0;
+    const server = createServer((socket) => {
+      accepted += 1;
+      socket.destroy();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
     try {
       initializeAgent(fx.root);
       authorPlan(fx.root);
       writeBrainBlock(fx.root, partial.brain);
-      const result = runCli(fx.root, [
-        'context',
-        'gtm/social-manager#opportunity-discovery',
-        '--query',
-        'Find relevant reply opportunities.',
-        '--json',
-      ]);
+      const result = await runCliAsync(
+        fx.root,
+        [
+          'context',
+          'gtm/social-manager#opportunity-discovery',
+          '--query',
+          'Find relevant reply opportunities.',
+          '--json',
+        ],
+        { ROSTER_BRAIN_URL: `postgres://127.0.0.1:${port}/roster` },
+      );
       assert.equal(result.status, 1, partial.label);
       assert.equal(result.stderr, '');
       const envelope = json(result);
@@ -395,9 +448,63 @@ test('context on a half-declared Brain exits non-zero with no bundle and contact
       assert.equal(envelope['code'], 'BRAIN_CONFIGURATION_INCOMPLETE');
       assert.deepEqual(envelope['details'], { missing: [...partial.missing] });
       assert.equal(Object.hasOwn(envelope, 'schema_version'), false);
+
+      // Drain any connection already queued behind the child's exit...
+      await new Promise((resolve) => setImmediate(resolve));
+      // ...then close through the CALLBACK. `net.Server.close()` returns the
+      // Server and completes asynchronously, so a bare `await server.close()`
+      // is not a barrier and would let a late connection land after the count
+      // was read.
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+      assert.equal(accepted, 0, `${partial.label}: the CLI opened a PostgreSQL connection`);
     } finally {
+      server.close(() => undefined);
       fx.cleanup();
     }
+  }
+});
+
+// The positive control for the assertion above. Without it a zero could mean
+// "never contacted" or "the harness cannot observe a contact at all", and the
+// two are indistinguishable. Same listener, same spawn, same drain-and-close
+// barrier — only the declaration is complete, and the count moves.
+test('the connection counter observes a real contact when the Brain is complete', async () => {
+  const fx = fixture();
+  let accepted = 0;
+  const server = createServer((socket) => {
+    accepted += 1;
+    socket.destroy();
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = (server.address() as AddressInfo).port;
+  try {
+    initializeAgent(fx.root);
+    authorPlan(fx.root);
+    writeBrainBlock(fx.root, COMPLETE_BRAIN);
+    const result = await runCliAsync(
+      fx.root,
+      [
+        'context',
+        'gtm/social-manager#opportunity-discovery',
+        '--query',
+        'Find relevant reply opportunities.',
+        '--json',
+      ],
+      { ROSTER_BRAIN_URL: `postgres://127.0.0.1:${port}/roster` },
+    );
+    // Optional retrieval is CONTAINED: the refused connection never fails the
+    // bundle, it only makes evidence unavailable.
+    assert.equal(result.status, 0);
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+    assert.equal(accepted > 0, true, 'the harness cannot observe a PostgreSQL contact at all');
+  } finally {
+    server.close(() => undefined);
+    fx.cleanup();
   }
 });
 

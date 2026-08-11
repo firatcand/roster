@@ -5,6 +5,7 @@ import pg from 'pg';
 import {
   BRAIN_LABEL_PROJECTION_SQL,
   BRAIN_RUNTIME_URL_ENV,
+  FILTER_ACCOUNTING_SQL,
   PER_SELECTOR_ARM_LIMIT,
   TOTAL_CANDIDATE_LIMIT,
   retrieveBrainContextEvidence,
@@ -25,7 +26,11 @@ import { mergeEntities } from '../src/lib/brain/merge.ts';
 import { deriveLogicalSourceId, legacyRecordStableKey } from '../src/lib/brain/source-identity.ts';
 import { tombstoneBrainSource } from '../src/lib/brain/source-lifecycle.ts';
 import { VerifiedBrainPool, createVerifiedBrainPool } from '../src/lib/brain/workspace-authority.ts';
-import { compareUnicodeCodePoints, type ContextRetrievalRequest } from '../src/lib/workspace-context.ts';
+import {
+  MAX_CONTEXT_SELECTORS,
+  compareUnicodeCodePoints,
+  type ContextRetrievalRequest,
+} from '../src/lib/workspace-context.ts';
 import { HAS_DB } from './brain-helpers.ts';
 import {
   RETRIEVAL_WORKSPACE_ID,
@@ -1872,6 +1877,258 @@ test('embedding parity — the adapter arm agrees with the TypeScript oracle', o
         );
       }
     });
+  } finally {
+    await corpus.close();
+  }
+});
+
+// #355 D8 — the exact accounting. The pre-#355 statement scanned at most 512
+// pre-filter rows through ONE globally joined text predicate, so its counts were
+// truncated, blind to structured-only matches, and over-approximated by folding
+// the request text into membership. The replacement mirrors the arms' own
+// per-selector / per-jsonpath membership under a deduplicating UNION.
+test('acceptance 9 — pre-filter accounting is exact, deduplicated, and selector-complete', options, async (t) => {
+  const corpus = await createRetrievalCorpus();
+  try {
+    const inScope = [{
+      workspace: RETRIEVAL_WORKSPACE_ID,
+      function: TARGET.functionId,
+      agent: TARGET.agentId,
+      plan: TARGET.planId,
+    }] as const;
+
+    // (a) A tombstoned source matching ONLY the structured predicate. The old
+    // lexical-only membership could not see it at all.
+    const structuredOnly = await ingestCorpusSource(corpus, {
+      stableKey: 'accounting-structured-only',
+      body: structuredRecordBody('fact', { note: 'zzqqxx unrelated prose' }, 'strong-examples'),
+      labels: [...inScope],
+      structured: true,
+    });
+    await tombstoneBrainSource(corpus.adminPool, {
+      sourceId: structuredOnly.sourceId,
+      requestKey: 'tombstone-structured-only',
+      actor: { actorId: 'retrieval-corpus', assurance: 'host-attested', host: 'codex', sessionId: 'x' },
+      reason: 'fixture tombstone',
+      provenance: { fixture: 'brain-context-retrieval' },
+    });
+
+    // (b) A tombstoned source matching BOTH arms: its structured `identity`
+    // equals a selector AND its prose carries that selector's membership words.
+    const bothArms = await ingestCorpusSource(corpus, {
+      stableKey: 'accounting-both-arms',
+      body: structuredRecordBody(
+        'fact',
+        { note: 'Successful replies and strong examples in one record.' },
+        'company-positioning',
+      ),
+      labels: [...inScope],
+      structured: true,
+    });
+    await tombstoneBrainSource(corpus.adminPool, {
+      sourceId: bothArms.sourceId,
+      requestKey: 'tombstone-both-arms',
+      actor: { actorId: 'retrieval-corpus', assurance: 'host-attested', host: 'codex', sessionId: 'x' },
+      reason: 'fixture tombstone',
+      provenance: { fixture: 'brain-context-retrieval' },
+    });
+
+    const tombstonedChunks = structuredOnly.chunkIds.length + bothArms.chunkIds.length;
+
+    await t.test('a structured-only match is counted and a both-arms match counts exactly once', async () => {
+      const evidence = await retrieveBrainContextEvidence(request(corpus), { env: env(corpus) });
+      assert.equal(evidence.status, 'available');
+      // EXACT, not `> 0`: the both-arms row is reachable through the lexical
+      // membership AND through two structured jsonpaths, so a UNION ALL (or a
+      // per-arm sum) would report it two or three times over.
+      assert.equal(evidence.report.filtered.tombstoned, tombstonedChunks);
+    });
+
+    await t.test('the union deduplicates across selectors as well as across arms', async () => {
+      // The same chunk is reachable from BOTH catalog selectors' membership
+      // text. Deduplication is on chunk identity, so the count does not move.
+      const evidence = await retrieveBrainContextEvidence(
+        request(corpus, {
+          selectors: [
+            {
+              selector: 'strong-examples',
+              origins: ['plan-selector'],
+              required: true,
+              descriptions: ['Successful replies and strong examples in one record.'],
+            },
+            {
+              selector: 'company-positioning',
+              origins: ['plan-selector'],
+              required: false,
+              descriptions: ['Successful replies and strong examples in one record.'],
+            },
+          ],
+        }),
+        { env: env(corpus) },
+      );
+      assert.equal(evidence.report.filtered.tombstoned, tombstonedChunks);
+    });
+
+    await t.test('a MAX_CONTEXT_SELECTORS catalog still counts exactly', async () => {
+      // The per-selector `unnest` formulation must lose no selector. A single
+      // globally joined membership string would silently drop selectors here:
+      // `boundedText` HALVES any string over MAX_QUERY_TEXT_BYTES, and 4,096
+      // selector ids are far past that bound.
+      const selectors = Array.from({ length: MAX_CONTEXT_SELECTORS }, (_unused, index) => ({
+        selector: index === 0 ? 'strong-examples' : `filler-selector-${index}`,
+        origins: ['plan-selector'] as const,
+        required: index === 0,
+        descriptions: index === 0
+          ? ['Successful replies and strong examples in one record.']
+          : [],
+      }));
+      const evidence = await retrieveBrainContextEvidence(
+        request(corpus, { selectors }),
+        { env: env(corpus) },
+      );
+      assert.equal(evidence.status, 'available');
+      assert.equal(evidence.report.filtered.tombstoned, tombstonedChunks);
+    });
+  } finally {
+    await corpus.close();
+  }
+});
+
+// #355 R8 — the cost claim becomes EVIDENCE. Removing the 512-row LIMIT makes
+// accounting proportional to everything either membership predicate matches, so
+// the query must stay index-backed and inside the remote budget.
+test('acceptance 10 — exact accounting stays index-backed and inside the remote budget', options, async () => {
+  const corpus = await createRetrievalCorpus();
+  try {
+    const inScope = [{
+      workspace: RETRIEVAL_WORKSPACE_ID,
+      function: TARGET.functionId,
+      agent: TARGET.agentId,
+      plan: TARGET.planId,
+    }] as const;
+    // A SCALED, SELECTIVE corpus: thousands of chunks of which only a handful
+    // match either membership predicate. Selectivity is the condition under
+    // which an index scan is the correct plan at all — over a 45-row table the
+    // planner rightly prefers a sequential scan and would prove nothing. The
+    // markdown extractor starts a new chunk at each heading, so one source with
+    // 60 headings is 60 small chunks.
+    // Both membership branches must be scaled, and they scale on DIFFERENT
+    // tables: the lexical branch on `source_chunks`, the structured branch on
+    // `source_extractions`. One extraction per source, so the noise is many
+    // small sources rather than a few large ones.
+    for (let batch = 0; batch < 1_600; batch += 1) {
+      await ingestCorpusSource(corpus, {
+        stableKey: `scale-noise-${batch}`,
+        body: [
+          `## Filler section ${batch}`,
+          '',
+          `Unrelated prose about quarterly logistics scheduling and warehouse rotation ${batch}.`,
+          '',
+          `## Filler appendix ${batch}`,
+          '',
+          `Continued rotation notes and depot inventory counts ${batch}.`,
+        ].join('\n'),
+        labels: [...inScope],
+      });
+    }
+    for (let batch = 0; batch < 3; batch += 1) {
+      await ingestCorpusSource(corpus, {
+        stableKey: `scale-match-${batch}`,
+        body: `${EVIDENCE_TEXT} Scaled fixture ${batch}.`,
+        labels: [...inScope],
+      });
+      await ingestCorpusSource(corpus, {
+        stableKey: `scale-structured-${batch}`,
+        body: structuredRecordBody('fact', { note: `scaled ${batch}` }, 'strong-examples'),
+        labels: [...inScope],
+        structured: true,
+      });
+    }
+    const scale = await corpus.adminPool.query<{ chunks: string; extractions: string }>(
+      `SELECT (SELECT count(*) FROM brain.source_chunks)::text AS chunks,
+              (SELECT count(*) FROM brain.source_extractions)::text AS extractions`,
+    );
+    assert.equal(Number(scale.rows[0]!.chunks) > 3_000, true, `chunks not scaled: ${scale.rows[0]!.chunks}`);
+    assert.equal(
+      Number(scale.rows[0]!.extractions) > 1_500,
+      true,
+      `extractions not scaled: ${scale.rows[0]!.extractions}`,
+    );
+    await corpus.adminPool.query('ANALYZE brain.source_chunks');
+    await corpus.adminPool.query('ANALYZE brain.source_extractions');
+
+    const membership = ['strong examples or successful replies'];
+    const paths = ['$.identity ? (@ == "strong-examples")'];
+    const params = [['workspace'], membership, paths, false];
+
+    const version = await corpus.adminPool.query<{ num: string }>(
+      "SELECT current_setting('server_version_num') AS num",
+    );
+    const major = Math.floor(Number(version.rows[0]!.num) / 10_000);
+
+    if (major === 16) {
+      // Plan shape is optimizer- and statistics-dependent, so it is pinned ONLY
+      // to the PostgreSQL major CI tests (ci.yml:17). Any other major degrades
+      // to the structural indexability proof below.
+      const explained = await corpus.adminPool.query<{ 'QUERY PLAN': unknown }>(
+        `EXPLAIN (FORMAT JSON) ${FILTER_ACCOUNTING_SQL}`,
+        params,
+      );
+      const planText = JSON.stringify(explained.rows[0]!['QUERY PLAN']);
+      assert.match(planText, /source_chunks_tsv_idx/);
+      assert.match(planText, /source_extractions_structured_gin/);
+      assert.equal(
+        /"Node Type":"Seq Scan","Parallel Aware":(?:true|false),"Async Capable":(?:true|false),"Relation Name":"source_chunks"/
+          .test(planText),
+        false,
+        `accounting fell back to a sequential scan over source_chunks: ${planText}`,
+      );
+    } else {
+      // Structural indexability: each membership operator is a member of its
+      // index's operator class, so the planner MAY choose the index even where
+      // this version's statistics lead it elsewhere.
+      const indexable = await corpus.adminPool.query<{ index_name: string; operator: string }>(
+        `SELECT cls.relname AS index_name, op.oprname AS operator
+           FROM pg_index idx
+           JOIN pg_class cls ON cls.oid = idx.indexrelid
+           JOIN pg_opclass opc ON opc.oid = idx.indclass[0]
+           JOIN pg_amop amop ON amop.amopfamily = opc.opcfamily
+           JOIN pg_operator op ON op.oid = amop.amopopr
+          WHERE cls.relname IN ('source_chunks_tsv_idx', 'source_extractions_structured_gin')
+            AND op.oprname IN ('@@', '@?')`,
+      );
+      assert.equal(
+        indexable.rows.some((row) => row.index_name === 'source_chunks_tsv_idx' && row.operator === '@@'),
+        true,
+      );
+      assert.equal(
+        indexable.rows.some((row) => (
+          row.index_name === 'source_extractions_structured_gin' && row.operator === '@?'
+        )),
+        true,
+      );
+    }
+
+    // REPEATED WARM measurements with the assertion on the MAXIMUM: a max-of-5
+    // bound is a stricter statement than one sample, and is the honest
+    // CI-shaped proxy for SPEC.md:828's 2 s remote p95, which a single CI run
+    // cannot literally establish. SPEC.md:827's 500 ms gate is the LOCAL
+    // target and explicitly excludes remote Brain work.
+    const durations: number[] = [];
+    for (let run = 0; run < 6; run += 1) {
+      const telemetry = await retrieveBrainContextEvidenceWithTelemetry(
+        request(corpus),
+        { env: env(corpus) },
+      );
+      assert.equal(telemetry.evidence.status, 'available');
+      if (run > 0) durations.push(telemetry.telemetry.transactionMs);
+    }
+    assert.equal(durations.length, 5);
+    assert.equal(
+      Math.max(...durations) < 2_000,
+      true,
+      `max warm transactionMs was ${Math.max(...durations)}`,
+    );
   } finally {
     await corpus.close();
   }
