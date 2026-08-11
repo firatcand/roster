@@ -1134,6 +1134,10 @@ async function executeV2Doctor(opts: DoctorOptions): Promise<number> {
       const mark = isBlockingGeneratedShadow(shadow) ? chalk.red('!') : chalk.yellow('⚠');
       console.log(`  ${mark} shadow ${shadow.kind} at ${shadow.path} (${shadow.surface_host})`);
     }
+    console.log(chalk.dim(
+      '  shadow scan: CLAUDE.md, CLAUDE.local.md, GEMINI.md, AGENTS.override.md, .claude/rules/**'
+      + ' — Codex configured fallback filenames and nested-directory host files are not scanned',
+    ));
     for (const line of renderDreamerActivationLines(dreamerActivation)) console.log(line);
     for (const line of renderSafetySection(safety)) console.log(line);
     for (const line of renderSecretsSection(secrets)) console.log(line);

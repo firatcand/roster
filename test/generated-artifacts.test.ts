@@ -2310,3 +2310,29 @@ test('manifest reconstruction refuses while an enabled activation cannot be rege
     fx.cleanup();
   }
 });
+
+// DEVIATIONS entry 3 exercised directly: S4 precedence at GEMINI.md covers
+// the invalid-marker (S3) cell too -- both the unparseable-header and the
+// hash-broken variants classify unsupported-host, never edited.
+test('an invalid offset-0 marker at GEMINI.md keeps the unsupported-host classification', () => {
+  const fx = fixture();
+  try {
+    writeFileSync(at(fx.root, 'GEMINI.md'), '<!-- roster:generated\nnot a header\n-->\nBody.\n');
+    const unparseable = detectGeneratedShadows(fx.root);
+    assert.deepEqual(
+      unparseable.shadows.map((shadow) => [shadow.path, shadow.kind, shadow.surface_host, shadow.artifact]),
+      [['GEMINI.md', 'unsupported-host', 'gemini', null]],
+    );
+    assert.match(unparseable.diagnostics[0]?.message ?? '', /Gemini has no v2 activation contract/);
+    assert.equal(unparseable.diagnostics[0]?.severity, 'error');
+
+    writeFileSync(at(fx.root, 'GEMINI.md'), `${readFileSync(at(fx.root, 'ROSTER.md'), 'utf8')}edited\n`);
+    const hashBroken = detectGeneratedShadows(fx.root);
+    assert.deepEqual(
+      hashBroken.shadows.map((shadow) => [shadow.path, shadow.kind, shadow.artifact]),
+      [['GEMINI.md', 'unsupported-host', 'roster-bootstrap']],
+    );
+  } finally {
+    fx.cleanup();
+  }
+});

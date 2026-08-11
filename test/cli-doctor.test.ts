@@ -648,6 +648,10 @@ test('v2 doctor audits structural and generated activation without legacy projec
     assert.equal(doc.status, 0, `stderr: ${doc.stderr}\nstdout: ${doc.stdout}`);
     assert.match(doc.stdout, /Roster v2 workspace/);
     assert.match(doc.stdout, /claude activation: advisory \(assurance: advisory-manual\)/);
+    assert.match(
+      doc.stdout,
+      /shadow scan: .*\.claude\/rules\/\*\* — Codex configured fallback filenames and nested-directory host files are not scanned/,
+    );
     assert.doesNotMatch(doc.stdout, /Install scope|Shadow collisions|Scheduling/);
   } finally {
     h.cleanup();
@@ -1144,6 +1148,53 @@ test('v2 doctor keeps the inactive dreamer verdict ahead of drift in a no-host w
     assert.equal(payload.structural.ok, false);
     assert.equal(payload.generated.shadows.length, 1);
     assert.equal(payload.dreamer_activation.verdict, 'inactive');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor reports a diverted rules root as a blocking shadow, never empty metadata', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    assert.equal(installV2ProjectActivation({ root: ws, host: 'claude' }).ok, true);
+    const outsideDir = join(h.root, 'outside-rules');
+    mkdirSync(outsideDir, { recursive: true });
+    writeFileSync(join(outsideDir, 'injected.md'), '# injected rule\n');
+    symlinkSync(outsideDir, join(ws, '.claude', 'rules'));
+
+    const { status, payload } = v2Doctor(h, ws);
+    assert.equal(status, 1);
+    assert.deepEqual(
+      payload.generated.shadows.map((shadow) => [shadow.path, shadow.kind, shadow.surface_host]),
+      [['.claude/rules', 'unreadable', 'claude']],
+    );
+    assert.equal(payload.generated.hosts.claude?.activation_capability, 'drifted');
+    assert.ok(
+      payload.generated.versions.recorded_generator_versions.length > 0,
+      'metadata inspection did not collapse to the empty fallback',
+    );
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor reports zero shadows for authored host memory files', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    assert.equal(installV2ProjectActivation({ root: ws, host: 'claude' }).ok, true);
+    const authored = '# My project memory\n';
+    const quoting = '# Docs\n\nRoster stamps `<!-- roster:generated` on generated files.\n';
+    writeFileSync(join(ws, 'CLAUDE.md'), authored);
+    writeFileSync(join(ws, 'CLAUDE.local.md'), quoting);
+
+    const { status, payload } = v2Doctor(h, ws);
+    assert.equal(status, 0);
+    assert.deepEqual(payload.generated.shadows, []);
+    assert.equal(payload.generated.hosts.claude?.activation_capability, 'advisory');
+    assert.equal(readFileSync(join(ws, 'CLAUDE.md'), 'utf8'), authored);
+    assert.equal(readFileSync(join(ws, 'CLAUDE.local.md'), 'utf8'), quoting);
   } finally {
     h.cleanup();
   }

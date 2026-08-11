@@ -217,6 +217,35 @@ test('update: a generated-contract shadow exits 1 while canonical files are stil
   }
 });
 
+test('update: a generated copy under .claude/rules exits 1 and is never touched', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-update-rules-shadow-'));
+  const claudeHome = join(root, '.h-claude');
+  const fakeHome = join(root, '.home');
+  mkdirSync(claudeHome, { recursive: true });
+  mkdirSync(fakeHome, { recursive: true });
+  try {
+    const env = { HOME: fakeHome, ROSTER_CLAUDE_HOME: claudeHome };
+    assert.equal(runCli(['init', 'tw', '--silent'], root, env).status, 0);
+    assert.equal(
+      runCli(['install', '--tool', 'claude', '--scope', 'project', '--yes', '--silent'], root, env).status,
+      0,
+    );
+    mkdirSync(join(root, '.claude', 'rules'), { recursive: true });
+    const copied = readFileSync(join(root, '.claude', 'CLAUDE.md'));
+    const shadowPath = join(root, '.claude', 'rules', 'extra.md');
+    writeFileSync(shadowPath, copied);
+
+    const result = runCli(['update'], root, env);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /GENERATED_SHADOW/);
+    assert.match(result.stdout, /\.claude\/rules\/extra\.md/);
+    assert.deepEqual(readFileSync(shadowPath), copied);
+    assert.deepEqual(readFileSync(join(root, '.claude', 'CLAUDE.md')), copied);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('update: outside a workspace → refuses (non-zero)', () => {
   const root = mkdtempSync(join(tmpdir(), 'roster-update-bare-'));
   try {
