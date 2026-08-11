@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
   "fixture_id": "host-led-learning",
-  "behavior_revision": "host-led-learning-v5",
-  "fixture_iteration": 6,
+  "behavior_revision": "host-led-learning-v6",
+  "fixture_iteration": 7,
   "certification_profile": {
     "id": "ambient-auth-v1",
     "authentication": {
@@ -56,10 +56,14 @@
   "host_readable_inputs": {
     "discover_request": "common/requests/discover-opportunities.txt",
     "approval_request": "common/requests/approve-learning.txt",
+    "record_only_request": "common/requests/record-only.txt",
+    "recover_request": "common/requests/recover-learning.txt",
     "brain_evidence": "common/brain-evidence.json",
     "tool_results": "common/fake-search-results.json",
     "discover_output_schema": "common/discover-output-schema.json",
-    "approve_output_schema": "common/approve-output-schema.json"
+    "approve_output_schema": "common/approve-output-schema.json",
+    "record_only_output_schema": "common/record-only-output-schema.json",
+    "recover_output_schema": "common/recover-output-schema.json"
   },
   "roster": {
     "executable": "$NODE $REPO/bin/roster.js",
@@ -91,7 +95,8 @@
       "command": "roster-350-fixture-search",
       "log_category": "tool.search",
       "allowed_turns": [
-        "discover"
+        "discover",
+        "record-only"
       ],
       "required_flags": [
         "--query"
@@ -102,7 +107,8 @@
       "command": "roster-350-fixture-run-record",
       "log_category": "evidence.run-record",
       "allowed_turns": [
-        "discover"
+        "discover",
+        "record-only"
       ],
       "required_flags": [
         "--request-hash",
@@ -117,7 +123,8 @@
       "command": "roster-350-fixture-feedback-record",
       "log_category": "evidence.feedback-record",
       "allowed_turns": [
-        "discover"
+        "discover",
+        "record-only"
       ],
       "required_flags": [
         "--run-id",
@@ -129,7 +136,9 @@
       "command": "roster-350-fixture-dream-status",
       "log_category": "learning.status",
       "allowed_turns": [
-        "discover"
+        "discover",
+        "recover",
+        "approve"
       ],
       "required_flags": [],
       "repeatable_flags": []
@@ -138,7 +147,8 @@
       "command": "roster-350-fixture-candidate-create",
       "log_category": "learning.candidate-create",
       "allowed_turns": [
-        "discover"
+        "discover",
+        "recover"
       ],
       "required_flags": [
         "--run-id",
@@ -191,8 +201,39 @@
       ],
       "terminal_phase": "awaiting_human"
     },
+    "record-only": {
+      "required_log_categories": [
+        "roster.discover",
+        "roster.context",
+        "tool.search",
+        "evidence.run-record",
+        "evidence.feedback-record"
+      ],
+      "forbidden_log_categories": [
+        "learning.status",
+        "learning.candidate-create",
+        "learning.state-read",
+        "learning.candidate-promote"
+      ],
+      "terminal_phase": "recorded"
+    },
+    "recover": {
+      "required_log_categories": [
+        "learning.status",
+        "learning.candidate-create",
+        "roster.context"
+      ],
+      "forbidden_log_categories": [
+        "tool.search",
+        "evidence.run-record",
+        "evidence.feedback-record",
+        "learning.candidate-promote"
+      ],
+      "terminal_phase": "awaiting_human"
+    },
     "approve": {
       "required_log_categories": [
+        "learning.status",
         "learning.state-read",
         "learning.candidate-promote",
         "roster.context"

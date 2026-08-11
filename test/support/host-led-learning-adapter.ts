@@ -187,7 +187,16 @@ const CONTEXT_BUDGET_EXCLUSION_REASONS = [
   'unrequested-selector',
 ] as const;
 
-type Turn = 'discover' | 'approve';
+type Turn = 'discover' | 'record-only' | 'recover' | 'approve';
+
+const TURNS = ['discover', 'record-only', 'recover', 'approve'] as const;
+
+function isTurn(value: unknown): value is Turn {
+  return typeof value === 'string' && (TURNS as readonly string[]).includes(value);
+}
+// The recording turns: a completed run's context/search proof pair may only
+// originate in the turn that actually did the work.
+const RECORDING_TURNS: readonly string[] = ['discover', 'record-only'];
 
 type AdapterDefinition = {
   command: string;
@@ -1677,7 +1686,7 @@ function readContract(workspace: string): Contract {
   for (const adapter of contract.adapters) {
     if (!boundedString(adapter.command) || !boundedString(adapter.log_category)
       || !Array.isArray(adapter.allowed_turns)
-      || adapter.allowed_turns.some((turn) => turn !== 'discover' && turn !== 'approve')
+      || adapter.allowed_turns.some((turn) => !isTurn(turn))
       || !Array.isArray(adapter.required_flags) || !adapter.required_flags.every(boundedString)
       || !Array.isArray(adapter.repeatable_flags) || !adapter.repeatable_flags.every(boundedString)
       || adapterCommands.has(adapter.command)) {
@@ -1777,8 +1786,9 @@ function persistedContextQueryFromDiscoveryLog(
   }
   const proofs = queryRecords.map((record) => {
     const proof = record['query_proof'];
-    if (record['turn'] !== 'discover' || proof === null || typeof proof !== 'object' || Array.isArray(proof)) {
-      fail('completed-run query proof is missing or outside discovery');
+    if (typeof record['turn'] !== 'string' || !RECORDING_TURNS.includes(record['turn'])
+      || proof === null || typeof proof !== 'object' || Array.isArray(proof)) {
+      fail('completed-run query proof is missing or outside a recording turn');
     }
     const query = (proof as Record<string, unknown>)['query'];
     if (typeof query !== 'string') fail('completed-run query proof omitted its exact query');
@@ -2579,7 +2589,7 @@ function main(): never {
   const requestHash = process.env['ROSTER_350_REQUEST_SHA256'];
   const challengeHash = process.env['ROSTER_350_DREAMER_CHALLENGE_SHA256'];
   const rosterVersion = process.env['ROSTER_350_ROSTER_VERSION'];
-  if ((turn !== 'discover' && turn !== 'approve') || !boundedString(host)
+  if (!isTurn(turn) || !boundedString(host)
     || !SHA256.test(requestHash ?? '') || !SHA256.test(challengeHash ?? '')
     || !boundedString(rosterVersion)) fail('controlled runtime environment is incomplete');
   if (command === 'roster') {

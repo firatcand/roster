@@ -58,18 +58,37 @@ rules are absolute:
   support a lesson, because a promoted lesson becomes a plaintext Git file. An
   `internal` citation needs an `internal` candidate.
 
-## 3. Check for siblings before drafting
+## 3. Read this occasion before drafting
+
+Take the `readiness_key` from the snapshot you just read in step 1 and ask what
+already exists **at that exact key**:
 
 ```
-roster dream candidates list --json
+roster dream candidates list --readiness-key <sha256:...> --json
 ```
 
-Read the warnings. `SAME_LESSON_FILE` means another candidate targets the same
-playbook file — both cannot be promoted. If that sibling is **open and shares
-this candidate's exact occasion and target spelling**, supersede it with
-`--supersedes`. Otherwise reject one of the siblings, or retire the promoted one
-first. `SAME_LESSON_ID_OTHER_AGENT` names a genuinely different file; the
-narrower scope wins at selection time, and the human decides.
+Pass no `--state`: you need every candidate at the key, decided ones included.
+The result decides whether you draft at all.
+
+- **An open candidate** — the draft already exists. Present that one and stop.
+  Do not draft a second version of the same occasion.
+- **Only rejected or retired candidates** — this idea was already declined at
+  this key. Do not offer it again. Newer evidence gives a different key; without
+  it Roster refuses the re-create as `BRAIN_DREAM_DAMPED` anyway, and arguing
+  with that refusal is not your job.
+- **Empty** — nothing has been drafted for this occasion. This is the only case
+  that warrants a new draft; continue to step 4.
+
+The narrower `--candidate <candidate-id>` and unfiltered listings are for reading
+one row or surveying history, not for deciding whether to draft.
+
+Then read the warnings on whatever the list returned. `SAME_LESSON_FILE` means
+another candidate targets the same playbook file — both cannot be promoted. If
+that sibling is **open and shares this candidate's exact occasion and target
+spelling**, supersede it with `--supersedes`. Otherwise reject one of the
+siblings, or retire the promoted one first. `SAME_LESSON_ID_OTHER_AGENT` names a
+genuinely different file; the narrower scope wins at selection time, and the
+human decides.
 
 ## 4. Draft the candidate
 

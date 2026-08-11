@@ -63,9 +63,14 @@ allowlist and still rejects Anthropic/OpenAI model credentials or routing
 overrides. Authentication is proven from the host's first-party account state.
 
 Final behavior bytes require one certification consisting of three consecutive
-Claude Code 2.1.220 passes and three consecutive Codex CLI 0.144.1 passes. Each
-pass uses an independent git-initialized workspace and two fresh host
-processes, while authentication and host-owned cache lookup come from the same
+Claude Code 2.1.220 passes and three consecutive Codex CLI 0.144.1 passes.
+Passes one and two run the standard scenario (a `discover` and an `approve`
+turn); pass three runs the recovery scenario (`record-only`, `recover`, and
+`approve` turns). Each pass uses an independent git-initialized workspace, and
+every turn is one fresh host process launched with its own per-turn home,
+config, and temporary directories — two turns of a pass never share a session;
+only the pass's workspace (the durable fixture state) persists between its
+turns. Authentication and host-owned cache lookup come from the same
 ambient adopter profile. The executable proof runs on macOS and binds those
 exact host versions. It proves the loop for that profile, not for every
 personal configuration or browser/vendor workflow. No process, model,
@@ -137,11 +142,18 @@ citation values does not remove plan meaning. Exact agent and plan hashes,
 source revisions, effective policy, trust and scope, tool-resolution proof,
 Brain citations, skill pins, budget/exclusion completeness, and the full
 raw-context digest remain reconstructable. No controlled JSON result may exceed
-8,000 JavaScript characters, and model-free rehearsal caps all ten controlled
-results together at 25,000 characters before a paid turn. The exact seeded
-pre-promotion context measures 7,363 characters. The complete rehearsal
-measures 7,890 characters at maximum and 22,648 characters across all ten
-outputs for either host. The controlled search result uses a self-describing
+8,000 JavaScript characters, and the model-free rehearsal enforces a 25,000
+character ceiling PER TURN before any paid turn: each turn is one isolated host
+launch with its own home and config, so the controlled outputs of every
+scenario turn are summed separately and each turn's sum must stay under the
+ceiling. The rehearsal replays both scenarios complete — 23 blessed outputs
+(11 standard-scenario plus 12 recovery-scenario). Measured at this fixture
+iteration, for either host: the seeded pre-promotion context is 7,192
+characters, the largest single output is the post-promotion approval context
+at 7,719, and the largest turn (the standard scenario's discover turn) totals
+12,262 against the 25,000 per-turn ceiling. Scenario totals are informational,
+not the enforced bound: the recovery scenario's twelve outputs total 29,702
+characters across its three turns, which no single host session ever sees. The controlled search result uses a self-describing
 column/row projection that reconstructs every raw source value exactly while
 removing repeated keys. The approval state response carries status, the exact
 pending candidate and hash, and the persisted reviewed query; the complete

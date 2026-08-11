@@ -45,7 +45,13 @@ import {
   curatedHostEnvironmentKeysSha256,
   explicitHostEnv,
   expectedHostEnvironmentKeysSha256,
+  assertRecoveryAdapterLogCoherence,
+  firstTurnCanaryOptions,
   HOST_LED_LEARNING_REPO_ROOT,
+  HOST_LED_LEARNING_PASS_SCENARIOS,
+  HOST_LED_LEARNING_SCENARIO_TURNS,
+  HOST_LED_LEARNING_TURNS,
+  HOST_LED_LEARNING_TURN_TERMINAL_PHASES,
   loadHostLedLearningLaunchContract,
   normalizeHostTrace,
   normalizeClaudeSandboxCanaryCommands,
@@ -76,6 +82,7 @@ import {
   type CertificationInputSnapshot,
   type ClaudeSyntheticSkillContext,
   type HostLaunchProbe,
+  type HostLedLearningTurn,
   type JsonValue,
   type NormalizedHostTrace,
 } from './support/host-led-learning-certification.ts';
@@ -167,8 +174,13 @@ function certificationSnapshot(seed = 'baseline'): CertificationInputSnapshot {
 
 function syntheticAttestation(): Record<string, unknown> {
   const inputManifestHash = digest('input-manifest');
-  const semanticResult = {};
-  const semanticResultHash = digest(canonicalJson(semanticResult));
+  // Every scenario carries its OWN normalized projection, and each outcome is
+  // pinned to the one for its scenario.
+  const normalizedResult = Object.fromEntries(
+    [...new Set(HOST_LED_LEARNING_PASS_SCENARIOS)].map((scenario) => [scenario, { scenario }]),
+  );
+  const semanticResultsByScenario = normalizedResult as Record<string, JsonValue>;
+  const normalizedResultHash = digest(canonicalJson(normalizedResult));
   const authentication = {
     claude: {
       host: 'claude',
@@ -215,23 +227,28 @@ function syntheticAttestation(): Record<string, unknown> {
   const promotedLessonHash = digest('promoted-lesson');
   const outcomes = Object.fromEntries((['claude', 'codex'] as const).map((host) => [
     host,
-    Array.from({ length: 3 }, (_, index) => ({
+    HOST_LED_LEARNING_PASS_SCENARIOS.map((scenario, index) => ({
       pass: index + 1,
+      scenario,
       initial_workspace_sha256: digest(`${host}-initial`),
       final_workspace_sha256: digest(`${host}-final`),
       source_manifest_sha256: inputManifestHash,
       host_probe_sha256: digest(canonicalJson(probes[host])),
-      turn_one_config_sha256: digest(`${host}-turn-one-config`),
-      turn_two_config_sha256: digest(`${host}-turn-two-config`),
+      turn_configs: Object.fromEntries(HOST_LED_LEARNING_SCENARIO_TURNS[scenario].map((turn) => [
+        turn,
+        digest(`${host}-${scenario}-${turn}-config`),
+      ])),
+      turn_traces: Object.fromEntries(HOST_LED_LEARNING_SCENARIO_TURNS[scenario].map((turn) => [
+        turn,
+        digest(`${host}-${turn}-trace-${index + 1}`),
+      ])),
       sandbox_probe_sha256: digest(`${host}-sandbox`),
       skill_discovery_sha256: digest(`${host}-skills`),
-      prompt_input_sha256: host === 'codex' ? digest('codex-prompt') : null,
-      turn_one_trace_sha256: digest(`${host}-turn-one-trace-${index + 1}`),
-      turn_two_trace_sha256: digest(`${host}-turn-two-trace-${index + 1}`),
+      prompt_input_sha256: host === 'codex' ? digest(`codex-prompt-${scenario}`) : null,
       learning_state_sha256: digest(`${host}-learning`),
       promoted_lesson_sha256: promotedLessonHash,
-      semantic_result_sha256: semanticResultHash,
-      semantic_result: semanticResult,
+      semantic_result_sha256: digest(canonicalJson(semanticResultsByScenario[scenario])),
+      semantic_result: semanticResultsByScenario[scenario],
     })),
   ]));
   const withoutHash = {
@@ -256,8 +273,8 @@ function syntheticAttestation(): Record<string, unknown> {
     authentication,
     probes,
     outcomes,
-    normalized_result_sha256: semanticResultHash,
-    normalized_result: semanticResult,
+    normalized_result_sha256: normalizedResultHash,
+    normalized_result: normalizedResult,
   };
   return { ...withoutHash, attestation_sha256: digest(canonicalJson(withoutHash)) };
 }
@@ -789,36 +806,235 @@ test('host launch contract truthfully describes transient ambient-state handling
   }
 });
 
+test('sandbox canaries are allowed by turn INDEX, not by turn name', () => {
+  const claudeCanaries = { normalizedCommands: ['probe'] };
+  const codexCanaries = { writeCommand: 'w', networkCommand: 'n' };
+  // The pass's FIRST paid turn is where the canaries were planted -- whichever
+  // turn a scenario starts with. Gating on `turn === 'discover'` was equivalent
+  // only while every pass began with discover.
+  assert.deepEqual(
+    firstTurnCanaryOptions({ completedTurns: 0, claudeCanaries, codexCanaries }),
+    { claudeCanaries, codexCanaries },
+  );
+  assert.deepEqual(firstTurnCanaryOptions({ completedTurns: 0, claudeCanaries }), { claudeCanaries });
+  assert.deepEqual(firstTurnCanaryOptions({ completedTurns: 0, codexCanaries }), { codexCanaries });
+  assert.deepEqual(firstTurnCanaryOptions({ completedTurns: 0 }), {});
+  for (const completedTurns of [1, 2, 3]) {
+    assert.deepEqual(firstTurnCanaryOptions({ completedTurns, claudeCanaries, codexCanaries }), {});
+  }
+});
+
+test('the recovery coherence gate rejects every way the recovery claim can be faked', () => {
+  const candidate = {
+    id: 'candidate-1', watermark: `sha256:${'a'.repeat(64)}`, target: 'gtm/social-manager',
+  } as never;
+  const requestHash = `sha256:${'b'.repeat(64)}`;
+  // The forged run passes every persisted-query rule -- exact request-hash
+  // binding, bounded bytes, self-consistent hash, closed grammar -- so the
+  // exact-projection branch below is reached instead of short-circuiting on an
+  // incomplete run.
+  const contextQuery = 'reliable ai practitioners';
+  const completedRun = {
+    id: 'run-1',
+    request_hash: requestHash,
+    context_query: {
+      bytes: Buffer.byteLength(contextQuery, 'utf8'),
+      query: contextQuery,
+      query_sha256: `sha256:${digest(contextQuery)}`,
+    },
+  } as never;
+  const state = {
+    completed_runs: [completedRun],
+    feedback: [{ id: 'feedback-1' }],
+    candidates: [candidate],
+    processed_watermarks: [`sha256:${'a'.repeat(64)}`],
+  } as never;
+  const log = (entries: ReadonlyArray<[string, string]>) => entries.map(([turn, category], index) => ({
+    sequence: index + 1,
+    turn,
+    log_category: category,
+  }));
+  const honest = log([
+    ['record-only', 'roster.discover'],
+    ['record-only', 'roster.context'],
+    ['record-only', 'tool.search'],
+    ['record-only', 'evidence.run-record'],
+    ['record-only', 'evidence.feedback-record'],
+    ['recover', 'learning.status'],
+    ['recover', 'learning.candidate-create'],
+    ['recover', 'roster.context'],
+    ['approve', 'learning.status'],
+    ['approve', 'learning.state-read'],
+    ['approve', 'learning.candidate-promote'],
+    ['approve', 'roster.context'],
+  ]);
+  // The request-hash validation PASSES for this run, so the honest log falsifies
+  // exactly one branch: its state-read record carries no output_sha256, which can
+  // never equal the recomputed exact-projection hash. Every later mutation must
+  // fail with its OWN earlier message first.
+  assert.doesNotThrow(() => validatePersistedContextQuery(completedRun, requestHash));
+  assert.throws(
+    () => assertRecoveryAdapterLogCoherence(honest, state, requestHash),
+    (error: unknown) => error instanceof Error
+      && error.name === 'CertificationError'
+      && /did not read the exact persisted pending candidate projection/iu.test(error.message),
+  );
+
+  const checkedTooEarly = honest.map((entry) => (
+    entry.turn === 'record-only' && entry.log_category === 'tool.search'
+      ? { ...entry, log_category: 'learning.status' }
+      : entry
+  ));
+  assert.throws(
+    () => assertRecoveryAdapterLogCoherence(checkedTooEarly, state, requestHash),
+    /forbidden to touch/iu,
+  );
+
+  const draftedTwice = [...honest, { sequence: 13, turn: 'approve', log_category: 'learning.candidate-create' }];
+  assert.throws(
+    () => assertRecoveryAdapterLogCoherence(draftedTwice, state, requestHash),
+    /draft exactly once/iu,
+  );
+
+  const promotedBeforeChecking = honest.map((entry) => {
+    if (entry.turn !== 'approve') return entry;
+    if (entry.log_category === 'learning.status') return { ...entry, sequence: 99 };
+    return entry;
+  });
+  assert.throws(
+    () => assertRecoveryAdapterLogCoherence(promotedBeforeChecking, state, requestHash),
+    /re-check readiness before promoting/iu,
+  );
+
+  const neverPromoted = honest.filter((entry) => entry.log_category !== 'learning.candidate-promote');
+  assert.throws(
+    () => assertRecoveryAdapterLogCoherence(neverPromoted, state, requestHash),
+    /did not check, read, and promote/iu,
+  );
+
+  const twoCandidates = { ...(state as object), candidates: [candidate, candidate] } as never;
+  assert.throws(
+    () => assertRecoveryAdapterLogCoherence(honest, twoCandidates, requestHash),
+    /same single-candidate durable end state/iu,
+  );
+});
+
+test('the launch contract demands recovery: four turns, closed allowances, exact terminal phases', () => {
+  const contract = loadHostLedLearningLaunchContract();
+  assert.equal(contract.behavior_revision, 'host-led-learning-v6');
+  assert.equal(contract.fixture_iteration, 7);
+  assert.deepEqual(Object.keys(contract.turn_expectations).sort(), [...HOST_LED_LEARNING_TURNS].sort());
+  assert.deepEqual(HOST_LED_LEARNING_PASS_SCENARIOS, ['standard', 'standard', 'recovery']);
+  assert.deepEqual(HOST_LED_LEARNING_SCENARIO_TURNS.standard, ['discover', 'approve']);
+  assert.deepEqual(HOST_LED_LEARNING_SCENARIO_TURNS.recovery, ['record-only', 'recover', 'approve']);
+  for (const turn of HOST_LED_LEARNING_TURNS) {
+    assert.equal(
+      contract.turn_expectations[turn].terminal_phase,
+      HOST_LED_LEARNING_TURN_TERMINAL_PHASES[turn],
+    );
+  }
+
+  const categories = (turn: HostLedLearningTurn) => contract.turn_expectations[turn];
+  // The record-only turn is the missed check made contractual: the ABSENCE of a
+  // readiness read is what it is expected to prove.
+  assert.deepEqual(categories('record-only').required_log_categories, [
+    'roster.discover', 'roster.context', 'tool.search', 'evidence.run-record', 'evidence.feedback-record',
+  ]);
+  for (const forbidden of [
+    'learning.status', 'learning.candidate-create', 'learning.state-read', 'learning.candidate-promote',
+  ]) {
+    assert.ok(categories('record-only').forbidden_log_categories.includes(forbidden), forbidden);
+  }
+  // The recover turn picks the occasion up from durable state alone: check,
+  // draft exactly once, and re-read context. It may not redo the work or promote.
+  assert.deepEqual(categories('recover').required_log_categories, [
+    'learning.status', 'learning.candidate-create', 'roster.context',
+  ]);
+  for (const forbidden of [
+    'tool.search', 'evidence.run-record', 'evidence.feedback-record', 'learning.candidate-promote',
+  ]) {
+    assert.ok(categories('recover').forbidden_log_categories.includes(forbidden), forbidden);
+  }
+  // The recheck: every scenario's final turn must check readiness BEFORE it
+  // promotes, and may never draft.
+  const approve = categories('approve').required_log_categories;
+  assert.ok(approve.includes('learning.status'));
+  assert.ok(approve.indexOf('learning.status') < approve.indexOf('learning.candidate-promote'));
+  assert.ok(categories('approve').forbidden_log_categories.includes('learning.candidate-create'));
+
+  const allowed = Object.fromEntries(contract.adapters.map((entry) => [
+    entry.log_category,
+    [...entry.allowed_turns].sort(),
+  ]));
+  assert.deepEqual(allowed['learning.status'], ['approve', 'discover', 'recover']);
+  assert.deepEqual(allowed['learning.candidate-create'], ['discover', 'recover']);
+  assert.deepEqual(allowed['learning.state-read'], ['approve']);
+  assert.deepEqual(allowed['learning.candidate-promote'], ['approve']);
+  for (const category of ['tool.search', 'evidence.run-record', 'evidence.feedback-record']) {
+    assert.deepEqual(allowed[category], ['discover', 'record-only']);
+  }
+  // Every required category of every turn is reachable by an adapter that
+  // allows that turn, and no turn requires something it also forbids.
+  for (const turn of HOST_LED_LEARNING_TURNS) {
+    const expectation = contract.turn_expectations[turn];
+    for (const category of expectation.required_log_categories) {
+      assert.equal(expectation.forbidden_log_categories.includes(category), false, `${turn}/${category}`);
+      const adapter = contract.adapters.find((entry) => entry.log_category === category);
+      if (adapter === undefined) {
+        assert.ok(contract.roster.allowed_model_invocations.some((entry) => entry.log_category === category));
+        continue;
+      }
+      assert.ok(adapter.allowed_turns.includes(turn), `${turn}/${category}`);
+    }
+  }
+});
+
 test('Claude output schemas stay on draft-07 and reject newer-dialect keywords before host launch', () => {
   const contract = loadHostLedLearningLaunchContract();
   const fixtureRoot = join(HOST_LED_LEARNING_REPO_ROOT, 'test/fixtures/host-led-learning');
-  const discover = JSON.parse(readFileSync(join(
-    fixtureRoot,
-    contract.host_readable_inputs.discover_output_schema,
-  ), 'utf8')) as Record<string, unknown>;
-  const approve = JSON.parse(readFileSync(join(
-    fixtureRoot,
-    contract.host_readable_inputs.approve_output_schema,
-  ), 'utf8')) as Record<string, unknown>;
-  assert.doesNotThrow(() => validateClaudeOutputSchemaDialect({ discover, approve }));
+  const schemaKeys = {
+    discover: 'discover_output_schema',
+    'record-only': 'record_only_output_schema',
+    recover: 'recover_output_schema',
+    approve: 'approve_output_schema',
+  } as const;
+  const schemas = Object.fromEntries(HOST_LED_LEARNING_TURNS.map((turn) => [
+    turn,
+    JSON.parse(readFileSync(join(fixtureRoot, contract.host_readable_inputs[schemaKeys[turn]]), 'utf8')) as Record<string, unknown>,
+  ])) as Record<HostLedLearningTurn, Record<string, unknown>>;
+  assert.doesNotThrow(() => validateClaudeOutputSchemaDialect(schemas));
+  // Every turn's phase enum is exactly its contracted terminal phase, so a host
+  // cannot report a turn it did not finish.
+  for (const turn of HOST_LED_LEARNING_TURNS) {
+    const phase = (schemas[turn]['properties'] as Record<string, Record<string, unknown>>)['phase']!;
+    assert.deepEqual(phase['enum'], [contract.turn_expectations[turn].terminal_phase]);
+  }
+  // The record-only shape must be structurally unable to report learning it was
+  // forbidden to read.
+  assert.equal((schemas['record-only']['required'] as string[]).includes('learning'), false);
+  assert.equal('learning' in (schemas['record-only']['properties'] as Record<string, unknown>), false);
+  const recoverLearning = (schemas['recover']['properties'] as Record<string, Record<string, unknown>>)['learning']!;
+  assert.deepEqual(recoverLearning['required'], ['watermark', 'candidate', 'baseline_lesson_ids']);
 
-  const wrongDialect = structuredClone(discover);
-  wrongDialect['$schema'] = 'https://json-schema.org/draft/2020-12/schema';
-  assert.throws(
-    () => validateClaudeOutputSchemaDialect({ discover: wrongDialect, approve }),
-    /exact draft-07 dialect/iu,
-  );
+  for (const turn of HOST_LED_LEARNING_TURNS) {
+    const wrongDialect = structuredClone(schemas[turn]);
+    wrongDialect['$schema'] = 'https://json-schema.org/draft/2020-12/schema';
+    assert.throws(
+      () => validateClaudeOutputSchemaDialect({ ...schemas, [turn]: wrongDialect }),
+      /exact draft-07 dialect/iu,
+    );
+  }
 
   for (const keyword of [
     '$dynamicAnchor', '$dynamicRef', 'prefixItems', 'unevaluatedItems',
     'unevaluatedProperties', 'dependentSchemas', 'dependentRequired',
     'minContains', 'maxContains', '$vocabulary',
   ]) {
-    const drifted = structuredClone(approve);
+    const drifted = structuredClone(schemas.approve);
     const properties = drifted['properties'] as Record<string, Record<string, unknown>>;
     properties['learning']![keyword] = keyword.startsWith('$') ? 'forbidden' : {};
     assert.throws(
-      () => validateClaudeOutputSchemaDialect({ discover, approve: drifted }),
+      () => validateClaudeOutputSchemaDialect({ ...schemas, approve: drifted }),
       /post-draft-07 keyword/iu,
     );
   }
@@ -1035,18 +1251,37 @@ test('semantic oracle lesson IDs use exact normalized code-point order', () => {
   const oracle = JSON.parse(readFileSync(join(
     HOST_LED_LEARNING_REPO_ROOT,
     'test/fixtures/host-led-learning-oracle/expected-semantic-result.json',
-  ), 'utf8')) as Record<string, unknown>;
-  const turns = oracle['turns'] as Record<string, Record<string, unknown>>;
-  for (const [turn, key] of [['discover', 'baseline_lesson_ids'], ['approve', 'promoted_lesson_ids']] as const) {
-    const learning = turns[turn]!['learning'] as Record<string, unknown>;
-    const ids = learning[key] as string[];
-    assert.deepEqual(ids, ids.map((id) => id.normalize('NFKC')));
-    assert.deepEqual(ids, [...ids].sort((left, right) => left < right ? -1 : left > right ? 1 : 0));
-  }
+  ), 'utf8')) as Record<string, Record<string, unknown>>;
+  // One expected projection per scenario; recovery reaches the same end state by
+  // its own path, so it carries its own turn map rather than reusing standard's.
   assert.deepEqual(
-    (turns['approve']!['learning'] as Record<string, unknown>)['promoted_lesson_ids'],
-    ['general-prior', 'nested-prior', 'prefer-practitioner-operational-reject-contradict', 'root-prior'],
+    Object.keys(oracle).sort(),
+    ['recovery', 'schema_version', 'standard'],
   );
+  for (const scenario of ['standard', 'recovery'] as const) {
+    const projection = oracle[scenario]!;
+    assert.equal(projection['scenario'], scenario);
+    const turns = projection['turns'] as Record<string, Record<string, unknown>>;
+    assert.deepEqual(Object.keys(turns), [...HOST_LED_LEARNING_SCENARIO_TURNS[scenario]]);
+    for (const [turn, value] of Object.entries(turns)) {
+      assert.equal(value['phase'], HOST_LED_LEARNING_TURN_TERMINAL_PHASES[turn as HostLedLearningTurn]);
+      const learning = value['learning'] as Record<string, unknown> | undefined;
+      if (learning === undefined) {
+        // The record-only turn is forbidden to read readiness, so it carries no
+        // learning block at all.
+        assert.equal(turn, 'record-only');
+        continue;
+      }
+      const key = turn === 'approve' ? 'promoted_lesson_ids' : 'baseline_lesson_ids';
+      const ids = learning[key] as string[];
+      assert.deepEqual(ids, ids.map((id) => id.normalize('NFKC')));
+      assert.deepEqual(ids, [...ids].sort((left, right) => left < right ? -1 : left > right ? 1 : 0));
+    }
+    assert.deepEqual(
+      ((turns['approve']!['learning'] as Record<string, unknown>))['promoted_lesson_ids'],
+      ['general-prior', 'nested-prior', 'prefer-practitioner-operational-reject-contradict', 'root-prior'],
+    );
+  }
 });
 
 test('literal host command parser rejects shell composition and preserves quoted argv', () => {
@@ -2122,7 +2357,9 @@ test('model-free rehearsal covers every output and pins prepared runtime boundar
   const outputs = summary['model_visible_json'] as Record<CertificationHost, Record<string, JsonValue>>;
   const runtime = summary['prepared_runtime'] as Record<CertificationHost, Record<string, JsonValue>>;
   for (const host of ['claude', 'codex'] as const) {
-    assert.equal(outputs[host]!['output_count'], 10);
+    // 11 standard-scenario outputs plus 12 recovery ones: both scenarios are
+    // rehearsed COMPLETE, through their own approval turn.
+    assert.equal(outputs[host]!['output_count'], 23);
     assert.equal(typeof outputs[host]!['maximum_characters'], 'number');
     assert.ok((outputs[host]!['maximum_characters'] as number) > 0);
     assert.ok(
@@ -2844,20 +3081,29 @@ test('fresh approval accepts only the exact persisted completed-run query proof'
 });
 
 test('exact promoted revisions remain visible to cross-host semantic equality', () => {
-  const semantic = {
+  const semanticFor = (scenario: string) => ({
+    scenario,
     turns: {
       approve: {
         target: { record_hash: `sha256:${'a'.repeat(64)}` },
       },
     },
-  };
-  const outcomes = {
-    claude: Array.from({ length: 3 }, () => ({ semantic_result: semantic })),
-    codex: Array.from({ length: 3 }, () => ({ semantic_result: semantic })),
-  };
-  assert.deepEqual(sameSemanticResults(outcomes as never), semantic);
+  });
+  const passOutcomes = () => HOST_LED_LEARNING_PASS_SCENARIOS.map((scenario) => ({
+    scenario,
+    semantic_result: semanticFor(scenario),
+  }));
+  const outcomes = { claude: passOutcomes(), codex: passOutcomes() };
+  // Equality is asserted WITHIN a scenario: the recovery path produces a
+  // different turn map by construction, so one result across scenarios would be
+  // an assertion that is not true.
+  assert.deepEqual(sameSemanticResults(outcomes as never), {
+    standard: semanticFor('standard'),
+    recovery: semanticFor('recovery'),
+  });
   const changed = structuredClone(outcomes);
   changed.codex[2]!.semantic_result = {
+    scenario: 'recovery',
     turns: {
       approve: {
         target: { record_hash: `sha256:${'b'.repeat(64)}` },
@@ -2865,6 +3111,9 @@ test('exact promoted revisions remain visible to cross-host semantic equality', 
     },
   };
   assert.throws(() => sameSemanticResults(changed as never), /semantic outcomes are not equivalent/iu);
+  const crossScenario = structuredClone(outcomes);
+  crossScenario.claude[1]!.semantic_result = semanticFor('recovery');
+  assert.throws(() => sameSemanticResults(crossScenario as never), /semantic outcomes are not equivalent/iu);
   const oracle = readFileSync(join(
     HOST_LED_LEARNING_REPO_ROOT,
     'test/fixtures/host-led-learning-oracle/expected-semantic-result.json',
@@ -2874,20 +3123,37 @@ test('exact promoted revisions remain visible to cross-host semantic equality', 
 });
 
 test('the shared parser and generator trace gate rejects replayed pass transcripts', () => {
-  const outcomes = Array.from({ length: 3 }, (_, index) => ({
-    turn_one_trace_sha256: digest(`turn-one-${index + 1}`),
-    turn_two_trace_sha256: digest(`turn-two-${index + 1}`),
+  const outcomes = HOST_LED_LEARNING_PASS_SCENARIOS.map((scenario, index) => ({
+    scenario,
+    turn_traces: Object.fromEntries(HOST_LED_LEARNING_SCENARIO_TURNS[scenario].map((turn) => [
+      turn,
+      digest(`${turn}-${index + 1}`),
+    ])),
   }));
   assert.doesNotThrow(() => assertDistinctHostPassTraceHashes('claude', outcomes));
 
-  for (const key of ['turn_one_trace_sha256', 'turn_two_trace_sha256'] as const) {
+  // `approve` runs in all three passes and `discover` in the two standard ones;
+  // a replay of either must fail. The recovery pass's own turns run once, which
+  // is why its distinctness claim is shape, not repetition.
+  for (const [passIndex, turn] of [[1, 'discover'], [2, 'approve']] as const) {
     const replayed = structuredClone(outcomes);
-    replayed[2]![key] = replayed[0]![key];
+    (replayed[passIndex]!.turn_traces as Record<string, string>)[turn] =
+      (replayed[0]!.turn_traces as Record<string, string>)[turn]!;
     assert.throws(
       () => assertDistinctHostPassTraceHashes('codex', replayed),
-      /must be distinct across all three passes/iu,
+      /traces must be distinct across every pass that runs it/iu,
     );
   }
+
+  const wrongTurns = structuredClone(outcomes);
+  (wrongTurns[2] as { turn_traces: Record<string, string> }).turn_traces = {
+    discover: digest('wrong'),
+    approve: digest('wrong-two'),
+  };
+  assert.throws(
+    () => assertDistinctHostPassTraceHashes('codex', wrongTurns),
+    /closed contract/iu,
+  );
 });
 
 test('certification publication revalidates every snapshotted input before replacing prior evidence', () => {

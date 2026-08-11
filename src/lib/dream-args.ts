@@ -26,6 +26,7 @@ export type ParsedDreamArgs =
       state?: string;
       target?: string;
       candidateId?: string;
+      readinessKey?: string;
       limit?: number;
     }
   | {
@@ -50,6 +51,10 @@ export type ParsedDreamArgs =
 const SUBCOMMAND_LIST = DREAM_SUBCOMMANDS.join(' | ');
 const VERB_LIST = DREAM_CANDIDATE_VERBS.join(' | ');
 const CANDIDATE_STATES = ['open', 'promoted', 'rejected', 'retired', 'superseded'] as const;
+// The shape the schema itself enforces on readiness_key (015_dream_lifecycle.sql):
+// rejecting a malformed key here means an exact-key lookup can never silently
+// degrade into a listing of everything.
+const READINESS_KEY_PATTERN = /^sha256:[a-f0-9]{64}$/;
 
 function err(message: string): ParsedDreamArgs {
   return { kind: 'err', message };
@@ -105,6 +110,7 @@ function parseList(rest: readonly string[]): ParsedDreamArgs {
   let state: string | undefined;
   let target: string | undefined;
   let candidateId: string | undefined;
+  let readinessKey: string | undefined;
   let limit: number | undefined;
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i]!;
@@ -127,6 +133,14 @@ function parseList(rest: readonly string[]): ParsedDreamArgs {
       if ('kind' in v) return v;
       candidateId = v.value;
       i = v.next;
+    } else if (arg === '--readiness-key') {
+      const v = readValue(rest, i, '--readiness-key', 'dream candidates list');
+      if ('kind' in v) return v;
+      if (!READINESS_KEY_PATTERN.test(v.value)) {
+        return err(`'dream candidates list': --readiness-key must be a readiness key of the form sha256:<64 hex>`);
+      }
+      readinessKey = v.value;
+      i = v.next;
     } else if (arg === '--limit') {
       const v = readValue(rest, i, '--limit', 'dream candidates list');
       if ('kind' in v) return v;
@@ -142,7 +156,7 @@ function parseList(rest: readonly string[]): ParsedDreamArgs {
       return err(`'dream candidates list': unexpected positional argument '${arg}'`);
     }
   }
-  return { kind: 'ok', subcommand: 'candidates', verb: 'list', json, state, target, candidateId, limit };
+  return { kind: 'ok', subcommand: 'candidates', verb: 'list', json, state, target, candidateId, readinessKey, limit };
 }
 
 // The draft arrives as a JSON document rather than a flag matrix: it carries a

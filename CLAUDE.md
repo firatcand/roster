@@ -65,7 +65,7 @@ pnpm test            # node --test on test/**/*.test.ts
 pnpm smoke           # bash test/smoke.sh — pack, install, init end-to-end
 pnpm perf            # bash test/perf.sh — measure install/init/doctor + tarball against SPEC budgets (dev-machine only)
 pnpm test:scaffold-scripts # test/new-agent-slash-only.sh + test/audit-agent-guideline-refs.sh — exercises templates/scaffold/scripts/
-npm pack --dry-run   # confirm tarball stays clean (~359 kB packed, 81 files; +hitl state machine #319)
+npm pack --dry-run   # confirm tarball stays clean (~554 kB packed, 86 files after `pnpm build`; -2 retired v1 dreamer templates #359)
 ```
 
 The Phase gate command (run before opening a PR): `pnpm typecheck && pnpm build && pnpm test && pnpm test:scaffold-scripts && pnpm smoke`.

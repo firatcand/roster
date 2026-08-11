@@ -380,6 +380,7 @@ SELECT s.candidate_id,
  WHERE ($1::text IS NULL OR s.state = $1::text)
    AND ($2::text IS NULL OR s.lesson_agent_key = $2::text)
    AND ($4::text IS NULL OR s.candidate_id = $4::text)
+   AND ($5::text IS NULL OR s.readiness_key = $5::text)
  ORDER BY s.recorded_at DESC, s.candidate_id
  LIMIT $3::integer
 `;
@@ -426,7 +427,13 @@ export function decisionActionsFor(
 
 export async function listDreamCandidates(
   pool: VerifiedBrainPool,
-  filter: { state?: string; lessonAgentKey?: string; candidateId?: string; limit?: number } = {},
+  filter: {
+    state?: string;
+    lessonAgentKey?: string;
+    candidateId?: string;
+    readinessKey?: string;
+    limit?: number;
+  } = {},
 ): Promise<readonly DreamCandidateListRow[]> {
   let rows: ListRow[];
   try {
@@ -435,6 +442,7 @@ export async function listDreamCandidates(
       filter.lessonAgentKey ?? null,
       filter.limit ?? 50,
       filter.candidateId ?? null,
+      filter.readinessKey ?? null,
     ])).rows;
   } catch (error) {
     rethrowDreamLifecycleError(error);

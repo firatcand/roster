@@ -403,7 +403,7 @@ conflicts_with: []
 
 ### HITL flow
 
-Dreamer drafts → `<agent>/pending/`. The user approves via `roster pending` / SessionStart banner / `/dreamer`. On approval the file moves to `<agent>/playbook/`. There is no `promotion-arbiter` subagent — lessons land directly when approved.
+Dreamer drafts land in the Brain as candidates (`roster dream candidates create`), not as files. The host presents each one in your session and waits; nothing is queued anywhere. Your answer is recorded with `roster brain record decision` and applied with `roster dream candidates promote` / `reject` / `retire`. Promotion is the step that writes `<agent>/playbook/`; there is no `promotion-arbiter` subagent and no approval engine — the human is the authority.
 
 ## Run file format
 

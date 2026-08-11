@@ -62,7 +62,90 @@ export const CLAUDE_MODEL = 'claude-opus-5';
 export const CLAUDE_EFFORT = 'xhigh';
 export const CODEX_MODEL = 'gpt-5.6-sol';
 export const CODEX_REASONING_EFFORT = 'xhigh';
-export const HOST_LED_LEARNING_PASS_COUNT = 3;
+export const HOST_LED_LEARNING_TURNS = ['discover', 'record-only', 'recover', 'approve'] as const;
+
+export type HostLedLearningTurn = (typeof HOST_LED_LEARNING_TURNS)[number];
+
+// Turn semantics are keyed by NAME everywhere -- expectations, output schemas,
+// prompts, terminal phases, normalization. The only ordinal-keyed thing is which
+// scenario a pass runs, so a new turn extends a map instead of forking on index.
+export const HOST_LED_LEARNING_SCENARIO_TURNS = Object.freeze({
+  standard: Object.freeze(['discover', 'approve'] as const),
+  recovery: Object.freeze(['record-only', 'recover', 'approve'] as const),
+});
+
+export type HostLedLearningScenario = keyof typeof HOST_LED_LEARNING_SCENARIO_TURNS;
+
+// Two independent standard passes keep the pairwise trace-distinctness
+// (anti-memorization) proof; the third is the recovery variant, whose shape is
+// inherently distinct. The distinctness claim is two-way-plus-shape.
+export const HOST_LED_LEARNING_PASS_SCENARIOS = Object.freeze([
+  'standard', 'standard', 'recovery',
+] as const satisfies readonly HostLedLearningScenario[]);
+
+export const HOST_LED_LEARNING_TURN_TERMINAL_PHASES = Object.freeze({
+  discover: 'awaiting_human',
+  'record-only': 'recorded',
+  recover: 'awaiting_human',
+  approve: 'promoted',
+} as const);
+
+export type HostLedLearningTerminalPhase =
+  (typeof HOST_LED_LEARNING_TURN_TERMINAL_PHASES)[HostLedLearningTurn];
+
+// The turns that draft a candidate, and so invoke the Dreamer skill and carry its
+// challenge proof.
+const CANDIDATE_CREATING_TURNS: readonly HostLedLearningTurn[] = ['discover', 'recover'];
+// The turns that do the work and record it: the completed-run query proof pair
+// may only originate in one of these.
+const RECORDING_TURNS: readonly HostLedLearningTurn[] = ['discover', 'record-only'];
+const SHORTLIST_TURNS: readonly HostLedLearningTurn[] = ['discover', 'record-only'];
+
+const TURN_REQUEST_KEYS = Object.freeze({
+  discover: 'discover_request',
+  'record-only': 'record_only_request',
+  recover: 'recover_request',
+  approve: 'approval_request',
+} as const);
+
+const TURN_OUTPUT_SCHEMA_KEYS = Object.freeze({
+  discover: 'discover_output_schema',
+  'record-only': 'record_only_output_schema',
+  recover: 'recover_output_schema',
+  approve: 'approve_output_schema',
+} as const);
+
+export function isHostLedLearningTurn(value: unknown): value is HostLedLearningTurn {
+  return typeof value === 'string' && (HOST_LED_LEARNING_TURNS as readonly string[]).includes(value);
+}
+
+// The sandbox canaries are planted for the pass's FIRST paid turn only, so the
+// allowance travels with the turn INDEX, not with a turn NAME. Gating it on
+// `turn === 'discover'` was equivalent only while every pass began with
+// discover; the recovery scenario begins with `record-only`.
+export function firstTurnCanaryOptions<Claude, Codex>(options: Readonly<{
+  completedTurns: number;
+  claudeCanaries?: Claude;
+  codexCanaries?: Codex;
+}>): Readonly<{ claudeCanaries?: Claude; codexCanaries?: Codex }> {
+  if (options.completedTurns !== 0) return Object.freeze({});
+  return Object.freeze({
+    ...(options.claudeCanaries === undefined ? {} : { claudeCanaries: options.claudeCanaries }),
+    ...(options.codexCanaries === undefined ? {} : { codexCanaries: options.codexCanaries }),
+  });
+}
+
+export function turnsForScenario(scenario: HostLedLearningScenario): readonly HostLedLearningTurn[] {
+  return HOST_LED_LEARNING_SCENARIO_TURNS[scenario];
+}
+
+export function scenarioForPass(pass: number): HostLedLearningScenario {
+  const scenario = HOST_LED_LEARNING_PASS_SCENARIOS[pass - 1];
+  if (scenario === undefined) throw new CertificationError(`Pass ${pass} has no certification scenario.`);
+  return scenario;
+}
+
+export const HOST_LED_LEARNING_PASS_COUNT = HOST_LED_LEARNING_PASS_SCENARIOS.length;
 
 const SUPPORT_MODULE_PATH = 'test/support/host-led-learning-certification.ts';
 const ADAPTER_MODULE_PATH = 'test/support/host-led-learning-adapter.ts';
@@ -182,17 +265,18 @@ export type NormalizedHostTrace = Readonly<{
 
 export type CertificationPassOutcome = Readonly<{
   pass: number;
+  scenario: string;
   initial_workspace_sha256: string;
   final_workspace_sha256: string;
   source_manifest_sha256: string;
   host_probe_sha256: string;
-  turn_one_config_sha256: string;
-  turn_two_config_sha256: string;
+  // Turn-name keyed, not ordinal keyed: a scenario with a different turn list
+  // adds keys instead of renumbering what `turn_two` meant.
+  turn_configs: Readonly<Record<string, string>>;
+  turn_traces: Readonly<Record<string, string>>;
   sandbox_probe_sha256: string;
   skill_discovery_sha256: string | null;
   prompt_input_sha256: string | null;
-  turn_one_trace_sha256: string;
-  turn_two_trace_sha256: string;
   learning_state_sha256: string;
   promoted_lesson_sha256: string;
   semantic_result_sha256: string;
@@ -308,10 +392,14 @@ export type HostLedLearningLaunchContract = Readonly<{
   host_readable_inputs: Readonly<{
     discover_request: string;
     approval_request: string;
+    record_only_request: string;
+    recover_request: string;
     brain_evidence: string;
     tool_results: string;
     discover_output_schema: string;
     approve_output_schema: string;
+    record_only_output_schema: string;
+    recover_output_schema: string;
   }>;
   roster: Readonly<{
     executable: string;
@@ -325,14 +413,14 @@ export type HostLedLearningLaunchContract = Readonly<{
   adapters: readonly Readonly<{
     command: string;
     log_category: string;
-    allowed_turns: readonly ('discover' | 'approve')[];
+    allowed_turns: readonly HostLedLearningTurn[];
     required_flags: readonly string[];
     repeatable_flags: readonly string[];
   }>[];
-  turn_expectations: Readonly<Record<'discover' | 'approve', Readonly<{
+  turn_expectations: Readonly<Record<HostLedLearningTurn, Readonly<{
     required_log_categories: readonly string[];
     forbidden_log_categories: readonly string[];
-    terminal_phase: 'awaiting_human' | 'promoted';
+    terminal_phase: HostLedLearningTerminalPhase;
   }>>>;
   claude: Readonly<{
     version: string;
@@ -409,16 +497,16 @@ export type LiveCertificationPaths = CertificationPaths & Readonly<{
   codexBin: string;
 }>;
 
+type HostTurnPaths = Readonly<{ home: string; config: string; tmp: string }>;
+
 type HostPassPaths = Readonly<{
   certificationRoot: string;
   hostRoot: string;
   workspace: string;
-  turnOneHome: string;
-  turnOneConfig: string;
-  turnOneTmp: string;
-  turnTwoHome: string;
-  turnTwoConfig: string;
-  turnTwoTmp: string;
+  scenario: HostLedLearningScenario;
+  // One own home/config/tmp per turn: every turn is a fresh host launch that can
+  // carry nothing in memory from the previous one.
+  turns: readonly HostTurnPaths[];
 }>;
 
 type HostProbePaths = Readonly<{
@@ -476,11 +564,10 @@ export function assertNoClaudeToolResultPersistenceWrapper(value: unknown): void
   }
 }
 
-export function validateClaudeOutputSchemaDialect(schemas: Readonly<{
-  discover: unknown;
-  approve: unknown;
-}>): void {
-  const validate = (value: unknown, label: 'discover' | 'approve'): void => {
+export function validateClaudeOutputSchemaDialect(
+  schemas: Readonly<Record<HostLedLearningTurn, unknown>>,
+): void {
+  const validate = (value: unknown, label: HostLedLearningTurn): void => {
     if (!isJsonObject(value) || value['$schema'] !== JSON_SCHEMA_DRAFT_07_URI) {
       throw new CertificationError(`Claude ${label} output schema must declare the exact draft-07 dialect.`);
     }
@@ -499,8 +586,7 @@ export function validateClaudeOutputSchemaDialect(schemas: Readonly<{
     };
     visit(value);
   };
-  validate(schemas.discover, 'discover');
-  validate(schemas.approve, 'approve');
+  for (const turn of HOST_LED_LEARNING_TURNS) validate(schemas[turn], turn);
 }
 
 export function assertContextRawHashBinding(
@@ -623,8 +709,10 @@ function requiredObject(
 
 function parseContractPathMap(value: unknown): HostLedLearningLaunchContract['host_readable_inputs'] {
   const record = requiredObject(value, 'host_readable_inputs', [
-    'discover_request', 'approval_request', 'brain_evidence', 'tool_results',
+    'discover_request', 'approval_request', 'record_only_request', 'recover_request',
+    'brain_evidence', 'tool_results',
     'discover_output_schema', 'approve_output_schema',
+    'record_only_output_schema', 'recover_output_schema',
   ]);
   return Object.freeze(Object.fromEntries(Object.keys(record).map((key) => [
     key,
@@ -683,13 +771,13 @@ function parseWorkspaceEntries(
 
 function parseTurnExpectation(
   value: unknown,
-  turn: 'discover' | 'approve',
-): HostLedLearningLaunchContract['turn_expectations'][typeof turn] {
+  turn: HostLedLearningTurn,
+): HostLedLearningLaunchContract['turn_expectations'][HostLedLearningTurn] {
   const record = requiredObject(value, `turn_expectations.${turn}`, [
     'required_log_categories', 'forbidden_log_categories', 'terminal_phase',
   ]);
   const terminal = requiredString(record['terminal_phase'], `turn_expectations.${turn}.terminal_phase`);
-  const expectedTerminal = turn === 'discover' ? 'awaiting_human' : 'promoted';
+  const expectedTerminal = HOST_LED_LEARNING_TURN_TERMINAL_PHASES[turn];
   if (terminal !== expectedTerminal) throw new CertificationError(`${turn} has an invalid terminal phase.`);
   return Object.freeze({
     required_log_categories: requiredStringArray(
@@ -741,7 +829,7 @@ export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearn
       'command', 'log_category', 'allowed_turns', 'required_flags', 'repeatable_flags',
     ]);
     const allowedTurns = requiredStringArray(record['allowed_turns'], `adapters[${index}].allowed_turns`);
-    if (allowedTurns.some((turn) => turn !== 'discover' && turn !== 'approve')) {
+    if (allowedTurns.some((turn) => !isHostLedLearningTurn(turn))) {
       throw new CertificationError(`adapters[${index}] has an invalid allowed turn.`);
     }
     const requiredFlags = requiredStringArray(record['required_flags'], `adapters[${index}].required_flags`);
@@ -752,12 +840,12 @@ export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearn
     return Object.freeze({
       command: requiredString(record['command'], `adapters[${index}].command`),
       log_category: requiredString(record['log_category'], `adapters[${index}].log_category`),
-      allowed_turns: Object.freeze(allowedTurns) as readonly ('discover' | 'approve')[],
+      allowed_turns: Object.freeze(allowedTurns) as readonly HostLedLearningTurn[],
       required_flags: requiredFlags,
       repeatable_flags: repeatableFlags,
     });
   }));
-  const turnExpectations = requiredObject(root['turn_expectations'], 'turn_expectations', ['discover', 'approve']);
+  const turnExpectations = requiredObject(root['turn_expectations'], 'turn_expectations', [...HOST_LED_LEARNING_TURNS]);
   const certificationProfile = requiredObject(root['certification_profile'], 'certification_profile', [
     'id', 'authentication', 'external_host_state',
   ]);
@@ -897,10 +985,10 @@ export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearn
       allowed_model_invocations: rosterInvocations,
     }),
     adapters,
-    turn_expectations: Object.freeze({
-      discover: parseTurnExpectation(turnExpectations['discover'], 'discover'),
-      approve: parseTurnExpectation(turnExpectations['approve'], 'approve'),
-    }),
+    turn_expectations: Object.freeze(Object.fromEntries(HOST_LED_LEARNING_TURNS.map((turn) => [
+      turn,
+      parseTurnExpectation(turnExpectations[turn], turn),
+    ]))) as HostLedLearningLaunchContract['turn_expectations'],
     claude: Object.freeze({
       version: requiredString(claude['version'], 'claude.version'),
       plugin_root: assertRelativePath(requiredString(claude['plugin_root'], 'claude.plugin_root'), 'Claude plugin root'),
@@ -1010,8 +1098,8 @@ export function parseHostLedLearningLaunchContract(value: unknown): HostLedLearn
     ))) {
     throw new CertificationError('Claude skills must use unique exact plugin-scoped skill identities.');
   }
-  if (contract.behavior_revision !== 'host-led-learning-v5'
-    || contract.fixture_iteration !== 6
+  if (contract.behavior_revision !== 'host-led-learning-v6'
+    || contract.fixture_iteration !== 7
     || contract.claude.skill_permission_policy !== 'exact-fixture-identities-only'
     || contract.codex.skills_list.transport !== 'stdio-jsonl'
     || contract.codex.skills_list.required_skill_policy
@@ -1744,30 +1832,53 @@ function prepareWorkspace(
     copyFileSync(bundles.adapterPath, executable);
     chmodSync(executable, 0o700);
   }
-  for (const directory of [
-    passPaths.turnOneHome,
-    passPaths.turnOneConfig,
-    passPaths.turnOneTmp,
-    passPaths.turnTwoHome,
-    passPaths.turnTwoConfig,
-    passPaths.turnTwoTmp,
-  ]) mkdirSync(directory, { recursive: true, mode: 0o700 });
-  initializeGitRoot(passPaths.workspace, minimalProbeEnv(passPaths.turnOneHome, '/usr/bin:/bin'));
+  for (const turn of passPaths.turns) {
+    for (const directory of [turn.home, turn.config, turn.tmp]) {
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+    }
+  }
+  initializeGitRoot(passPaths.workspace, minimalProbeEnv(turnPaths(passPaths, 0).home, '/usr/bin:/bin'));
 }
 
-function passPaths(certificationRoot: string, host: CertificationHost): HostPassPaths {
+function passPaths(
+  certificationRoot: string,
+  host: CertificationHost,
+  scenario: HostLedLearningScenario,
+): HostPassPaths {
   const hostRoot = join(certificationRoot, host);
   return Object.freeze({
     certificationRoot,
     hostRoot,
     workspace: join(hostRoot, 'workspace'),
-    turnOneHome: join(hostRoot, 'turn-one/home'),
-    turnOneConfig: join(hostRoot, 'turn-one/config'),
-    turnOneTmp: join(hostRoot, 'turn-one/tmp'),
-    turnTwoHome: join(hostRoot, 'turn-two/home'),
-    turnTwoConfig: join(hostRoot, 'turn-two/config'),
-    turnTwoTmp: join(hostRoot, 'turn-two/tmp'),
+    scenario,
+    turns: Object.freeze(turnsForScenario(scenario).map((turn, index) => Object.freeze({
+      home: join(hostRoot, `turn-${index + 1}-${turn}/home`),
+      config: join(hostRoot, `turn-${index + 1}-${turn}/config`),
+      tmp: join(hostRoot, `turn-${index + 1}-${turn}/tmp`),
+    }))),
   });
+}
+
+function turnPaths(pass: HostPassPaths, index: number): HostTurnPaths {
+  const paths = pass.turns[index];
+  if (paths === undefined) throw new CertificationError(`Pass has no turn ${index + 1}.`);
+  return paths;
+}
+
+function turnRequestPath(
+  paths: CertificationPaths,
+  contract: HostLedLearningLaunchContract,
+  turn: HostLedLearningTurn,
+): string {
+  return join(paths.fixtureRoot, contract.host_readable_inputs[TURN_REQUEST_KEYS[turn]]);
+}
+
+function turnOutputSchemaPath(
+  paths: CertificationPaths,
+  contract: HostLedLearningLaunchContract,
+  turn: HostLedLearningTurn,
+): string {
+  return join(paths.fixtureRoot, contract.host_readable_inputs[TURN_OUTPUT_SCHEMA_KEYS[turn]]);
 }
 
 function allocateHostProbePaths(hostRoot: string, label: string): HostProbePaths {
@@ -1992,7 +2103,7 @@ export function curatedHostEnvironmentKeysSha256(
 
 export function explicitHostEnv(options: Readonly<{
   host: CertificationHost;
-  turn: 'discover' | 'approve';
+  turn: HostLedLearningTurn;
   processHome: string;
   hostStateHome: string;
   temp: string;
@@ -2482,18 +2593,13 @@ function writeClaudeSettings(
 function claudeArgs(
   paths: CertificationPaths,
   contract: HostLedLearningLaunchContract,
-  turn: 1 | 2,
+  turn: HostLedLearningTurn,
   settingsPath: string,
   mcpPath: string,
   includeSandboxCanaries: boolean,
   sandboxProbePrompt?: string,
 ): readonly string[] {
-  const schemaPath = join(
-    paths.fixtureRoot,
-    turn === 1
-      ? contract.host_readable_inputs.discover_output_schema
-      : contract.host_readable_inputs.approve_output_schema,
-  );
+  const schemaPath = turnOutputSchemaPath(paths, contract, turn);
   const pluginPath = join(paths.fixtureRoot, contract.claude.plugin_root);
   return Object.freeze([
     '-p',
@@ -2634,16 +2740,11 @@ function codexArgs(
   paths: CertificationPaths,
   pass: HostPassPaths,
   contract: HostLedLearningLaunchContract,
-  turn: 1 | 2,
+  turn: HostLedLearningTurn,
   env: Readonly<Record<string, string>>,
   prompt: string,
 ): readonly string[] {
-  const schemaPath = join(
-    paths.fixtureRoot,
-    turn === 1
-      ? contract.host_readable_inputs.discover_output_schema
-      : contract.host_readable_inputs.approve_output_schema,
-  );
+  const schemaPath = turnOutputSchemaPath(paths, contract, turn);
   return Object.freeze([
     ...codexTurnLaunchArgs(pass.workspace, env),
     ...codexPaidExecArgs(schemaPath, prompt),
@@ -4756,7 +4857,7 @@ function validateRosterTraceArgv(
 function validateAdapterTraceArgv(
   tokens: readonly string[],
   definition: HostLedLearningLaunchContract['adapters'][number],
-  turn: 'discover' | 'approve',
+  turn: HostLedLearningTurn,
 ): void {
   if (!definition.allowed_turns.includes(turn) || (tokens.length - 1) % 2 !== 0) {
     throw new CertificationError(`Fixture adapter '${definition.command}' is not allowed in this turn.`);
@@ -4807,7 +4908,7 @@ function isExactCodexSkillRead(
 function validateClaudeActionSurface(
   trace: NormalizedHostTrace,
   contract: HostLedLearningLaunchContract,
-  turn: 'discover' | 'approve',
+  turn: HostLedLearningTurn,
   claudeCanaries?: ReturnType<typeof claudeSandboxCanaries>,
 ): void {
   const skillCalls: string[] = [];
@@ -4841,7 +4942,7 @@ function validateClaudeActionSurface(
   if (primary === undefined || dreamer === undefined) {
     throw new CertificationError('Claude skill contract is incomplete.');
   }
-  const expected = turn === 'discover'
+  const expected = CANDIDATE_CREATING_TURNS.includes(turn)
     ? [primary.identity, dreamer.identity]
     : [primary.identity];
   if (canonicalJson(skillCalls) !== canonicalJson(expected)) {
@@ -4887,7 +4988,7 @@ function validateClaudeActionSurface(
 export function validateHostTraceCommands(options: Readonly<{
   trace: NormalizedHostTrace;
   host: CertificationHost;
-  turn: 'discover' | 'approve';
+  turn: HostLedLearningTurn;
   contract: HostLedLearningLaunchContract;
   required: readonly string[];
   forbidden: readonly string[];
@@ -4900,7 +5001,7 @@ export function validateHostTraceCommands(options: Readonly<{
   const names: string[] = [];
   const codexSequence: string[] = [];
   const codexSkillPaths = new Set(options.contract.codex.skills
-    .filter((entry) => options.turn === 'discover' || entry.name !== 'fixture-dreamer')
+    .filter((entry) => CANDIDATE_CREATING_TURNS.includes(options.turn) || entry.name !== 'fixture-dreamer')
     .map((entry) => entry.path));
   for (const command of options.trace.commands) {
     const tokens = tokenizeLiteralHostCommand(command, true);
@@ -4918,12 +5019,12 @@ export function validateHostTraceCommands(options: Readonly<{
       codexSequence.push(`command:${name}`);
       continue;
     }
-    if (options.host === 'claude' && options.turn === 'discover'
+    if (options.host === 'claude'
       && options.claudeCanaries !== undefined
       && options.claudeCanaries.normalizedCommands.includes(command)) {
       continue;
     }
-    if (options.host === 'codex' && options.turn === 'discover'
+    if (options.host === 'codex'
       && options.codexCanaries !== undefined
       && (command === options.codexCanaries.writeCommand || command === options.codexCanaries.networkCommand)) {
       continue;
@@ -4943,7 +5044,7 @@ export function validateHostTraceCommands(options: Readonly<{
   if (options.host === 'codex') {
     const primary = 'skill:roster-350-fixture-learning-loop';
     const expectedSequence = [primary, ...options.required.map((name) => `command:${name}`)];
-    if (options.turn === 'discover') {
+    if (CANDIDATE_CREATING_TURNS.includes(options.turn)) {
       expectedSequence.splice(expectedSequence.length - 1, 0, 'skill:fixture-dreamer');
     }
     if (canonicalJson(codexSequence) !== canonicalJson(expectedSequence)) {
@@ -4969,7 +5070,7 @@ export function validateHostTraceCommands(options: Readonly<{
       'skill:roster-350-fixture-learning-loop',
       ...options.required.map((name) => `command:${name}`),
     ];
-    if (options.turn === 'discover') {
+    if (CANDIDATE_CREATING_TURNS.includes(options.turn)) {
       expectedSequence.splice(expectedSequence.length - 1, 0, 'skill:fixture-dreamer');
     }
     if (canonicalJson(claudeSequence) !== canonicalJson(expectedSequence)) {
@@ -4994,7 +5095,7 @@ function readAdapterLog(workspace: string, contract: HostLedLearningLaunchContra
 function validateAdapterLog(options: Readonly<{
   records: readonly Record<string, unknown>[];
   start: number;
-  turn: 'discover' | 'approve';
+  turn: HostLedLearningTurn;
   workspace: string;
   fixtureRoot: string;
   contract: HostLedLearningLaunchContract;
@@ -5119,7 +5220,7 @@ function validateAdapterLog(options: Readonly<{
     throw new CertificationError('Roster context and controlled search omitted one exact shared derived query.');
   }
   const candidate = slice.find((entry) => entry['log_category'] === 'learning.candidate-create');
-  if (options.turn === 'discover'
+  if (CANDIDATE_CREATING_TURNS.includes(options.turn)
     && (candidate?.['skill_challenge_sha256'] !== options.challengeHash
       || canonicalJson(options.records).includes(options.challenge))) {
     throw new CertificationError('Dreamer challenge proof is missing, wrong, or retained in raw adapter logs.');
@@ -5223,15 +5324,16 @@ function hostTurnEnvironment(options: Readonly<{
   paths: LiveCertificationPaths;
   passPaths: HostPassPaths;
   contract: HostLedLearningLaunchContract;
-  turn: 1 | 2;
+  turnIndex: number;
+  turn: HostLedLearningTurn;
   ambientState: AmbientHostState;
 }>): Readonly<Record<string, string>> {
-  const home = options.turn === 1 ? options.passPaths.turnOneHome : options.passPaths.turnTwoHome;
-  const temp = options.turn === 1 ? options.passPaths.turnOneTmp : options.passPaths.turnTwoTmp;
+  const home = turnPaths(options.passPaths, options.turnIndex).home;
+  const temp = turnPaths(options.passPaths, options.turnIndex).tmp;
   const hostBinary = options.host === 'claude' ? options.paths.claudeBin : options.paths.codexBin;
   return explicitHostEnv({
     host: options.host,
-    turn: options.turn === 1 ? 'discover' : 'approve',
+    turn: options.turn,
     processHome: home,
     hostStateHome: options.host === 'claude'
       ? options.ambientState.claudeHome
@@ -5253,7 +5355,7 @@ function hostProbeEnvironment(options: Readonly<{
   paths: LiveCertificationPaths;
   passPaths: HostPassPaths;
   contract: HostLedLearningLaunchContract;
-  turn: 1 | 2;
+  turn: HostLedLearningTurn;
   label: string;
   ambientState: AmbientHostState;
   useAmbientHostState: boolean;
@@ -5267,7 +5369,7 @@ function hostProbeEnvironment(options: Readonly<{
     roots,
     env: explicitHostEnv({
       host: options.host,
-      turn: options.turn === 1 ? 'discover' : 'approve',
+      turn: options.turn,
       processHome: roots.home,
       hostStateHome: options.useAmbientHostState
         ? (options.host === 'claude' ? options.ambientState.claudeHome : options.ambientState.codexHome)
@@ -5290,15 +5392,14 @@ async function runHostTurn(options: Readonly<{
   paths: LiveCertificationPaths;
   passPaths: HostPassPaths;
   contract: HostLedLearningLaunchContract;
-  turn: 1 | 2;
+  turnIndex: number;
+  turn: HostLedLearningTurn;
   prompt: string;
   ambientState: AmbientHostState;
   hostProbe: HostLaunchProbe;
   claudeSandboxProbe?: ReturnType<typeof claudeSandboxCanaries>;
 }>): Promise<HostTurnOutcome> {
-  const home = options.turn === 1 ? options.passPaths.turnOneHome : options.passPaths.turnTwoHome;
-  const config = options.turn === 1 ? options.passPaths.turnOneConfig : options.passPaths.turnTwoConfig;
-  const temp = options.turn === 1 ? options.passPaths.turnOneTmp : options.passPaths.turnTwoTmp;
+  const { home, config, tmp: temp } = turnPaths(options.passPaths, options.turnIndex);
   const hostBinary = options.host === 'claude' ? options.paths.claudeBin : options.paths.codexBin;
   const env = hostTurnEnvironment(options);
   const includeSandboxCanaries = options.claudeSandboxProbe !== undefined;
@@ -5550,8 +5651,8 @@ function probePreparedRosterAdapterRuntime(
   contract: HostLedLearningLaunchContract,
 ): void {
   const env = {
-    HOME: currentPaths.turnOneHome,
-    TMPDIR: currentPaths.turnOneTmp,
+    HOME: turnPaths(currentPaths, 0).home,
+    TMPDIR: turnPaths(currentPaths, 0).tmp,
     PATH: `${join(currentPaths.workspace, contract.runtime.adapter_directory)}:${dirname(process.execPath)}:/usr/bin:/bin`,
     LANG: 'C.UTF-8',
     LC_ALL: 'C.UTF-8',
@@ -5599,6 +5700,77 @@ function probePreparedRosterAdapterRuntime(
   }
 }
 
+// The recovery scenario's durable claim, asserted over the adapter log and the
+// resulting state alone -- no host, no model, no paid turn. The live run proves
+// a host DELIVERS this; this proves the fixture DEMANDS it.
+export function assertRecoveryAdapterLogCoherence(
+  records: readonly Record<string, unknown>[],
+  state: SeededLearningSnapshot,
+  requestHash: string,
+): void {
+  const inTurn = (turn: HostLedLearningTurn): readonly Record<string, unknown>[] =>
+    records.filter((entry) => entry['turn'] === turn);
+  const categories = (turn: HostLedLearningTurn): readonly string[] =>
+    inTurn(turn).map((entry) => String(entry['log_category']));
+
+  const recorded = categories('record-only');
+  if (recorded.length === 0 || recorded.some((category) => category.startsWith('learning.'))) {
+    throw new CertificationError('Recovery record-only turn read learning state it was forbidden to touch.');
+  }
+  if (!recorded.includes('evidence.run-record') || !recorded.includes('evidence.feedback-record')) {
+    throw new CertificationError('Recovery record-only turn did not record the work it did.');
+  }
+
+  const creates = records.filter((entry) => entry['log_category'] === 'learning.candidate-create');
+  if (creates.length !== 1 || creates[0]!['turn'] !== 'recover') {
+    throw new CertificationError('Recovery pass did not draft exactly once, in the recover turn.');
+  }
+  if (!categories('recover').includes('learning.status')) {
+    throw new CertificationError('Recovery turn drafted without first checking readiness.');
+  }
+
+  const approve = inTurn('approve');
+  const status = approve.find((entry) => entry['log_category'] === 'learning.status');
+  const stateRead = approve.find((entry) => entry['log_category'] === 'learning.state-read');
+  const promote = approve.find((entry) => entry['log_category'] === 'learning.candidate-promote');
+  if (status === undefined || stateRead === undefined || promote === undefined) {
+    throw new CertificationError('Recovery approval turn did not check, read, and promote.');
+  }
+  if (categories('approve').includes('learning.candidate-create')) {
+    throw new CertificationError('Recovery approval turn drafted a second candidate.');
+  }
+  if (adapterSequence(status, 'learning.status') >= adapterSequence(stateRead, 'learning.state-read')
+    || adapterSequence(stateRead, 'learning.state-read') >= adapterSequence(promote, 'learning.candidate-promote')) {
+    throw new CertificationError('Recovery approval turn did not re-check readiness before promoting.');
+  }
+
+  const candidate = state.candidates[0];
+  const run = state.completed_runs[0];
+  const feedback = state.feedback[0];
+  if (state.candidates.length !== 1 || state.completed_runs.length !== 1 || state.feedback.length !== 1
+    || state.processed_watermarks.length !== 1
+    || candidate === undefined || run === undefined || feedback === undefined) {
+    throw new CertificationError('Recovery pass did not reach the same single-candidate durable end state.');
+  }
+  const expectedStateRead = {
+    status: {
+      status: 'not_due',
+      watermark: candidate.watermark,
+      run_ids: [run.id],
+      feedback_ids: [feedback.id],
+    },
+    pending_candidate: {
+      status: 'existing',
+      record: candidate,
+      content_hash: hashSeededLearningValue(candidate),
+    },
+    reviewed_query: validatePersistedContextQuery(run, requestHash),
+  };
+  if (stateRead['output_sha256'] !== `sha256:${sha256(canonicalJson(expectedStateRead))}`) {
+    throw new CertificationError('Recovery approval did not read the exact persisted pending candidate projection.');
+  }
+}
+
 function preflightControlledModelVisibleOutputs(
   paths: CertificationPaths,
   currentPaths: HostPassPaths,
@@ -5608,13 +5780,20 @@ function preflightControlledModelVisibleOutputs(
   total_characters: number;
   output_count: number;
 }> {
-  const roots = createHostProbePaths(currentPaths.workspace, currentPaths.hostRoot, 'model-visible-json');
   const requestHash = `sha256:${sha256(readFileSync(join(
     paths.fixtureRoot,
     contract.host_readable_inputs.discover_request,
   )))}`;
   const challenge = dreamerChallenge(paths, contract);
-  const commonEnv = {
+  // Each scenario rehearses against its OWN durable state: replaying the whole
+  // lifecycle twice into one store would be a duplicate record, not a rehearsal.
+  const scenarioRoots = Object.fromEntries(
+    (Object.keys(HOST_LED_LEARNING_SCENARIO_TURNS) as HostLedLearningScenario[]).map((scenario) => [
+      scenario,
+      createHostProbePaths(currentPaths.workspace, currentPaths.hostRoot, `model-visible-json-${scenario}`),
+    ]),
+  ) as Readonly<Record<HostLedLearningScenario, HostProbePaths>>;
+  const envFor = (roots: HostProbePaths) => ({
     HOME: roots.home,
     TMPDIR: roots.temp,
     PATH: `${join(roots.workspace, contract.runtime.adapter_directory)}:${dirname(process.execPath)}:/usr/bin:/bin`,
@@ -5626,9 +5805,13 @@ function preflightControlledModelVisibleOutputs(
     ROSTER_350_REQUEST_SHA256: requestHash,
     ROSTER_350_DREAMER_CHALLENGE_SHA256: `sha256:${sha256(challenge)}`,
     ROSTER_350_ROSTER_VERSION: packageVersion(paths),
-  };
+  });
   const characterCounts: number[] = [];
-  const invoke = (command: string, args: readonly string[], turn: 'discover' | 'approve'): JsonValue => {
+  const turnCharacters = new Map<string, number[]>();
+  let scenario: HostLedLearningScenario = 'standard';
+  const invoke = (command: string, args: readonly string[], turn: HostLedLearningTurn): JsonValue => {
+    const roots = scenarioRoots[scenario];
+    const commonEnv = envFor(roots);
     const result = requireSuccess(runCapturedProcess({
       command: join(roots.workspace, contract.runtime.adapter_directory, command),
       args,
@@ -5637,7 +5820,9 @@ function preflightControlledModelVisibleOutputs(
       timeoutMs: PROBE_TIMEOUT_MS,
     }), `model-visible-${command}`);
     const value = parseJson(result.stdout, `model-visible ${command} output`);
-    characterCounts.push(assertModelVisibleJsonLimit(value, `Model-free '${command}' output`));
+    const characters = assertModelVisibleJsonLimit(value, `Model-free '${command}' output`);
+    characterCounts.push(characters);
+    turnCharacters.set(`${scenario}/${turn}`, [...(turnCharacters.get(`${scenario}/${turn}`) ?? []), characters]);
     return value;
   };
   const queryPrefix = 'reliable ai practitioners';
@@ -5670,21 +5855,81 @@ function preflightControlledModelVisibleOutputs(
   ], 'discover');
   if (!isJsonObject(candidate)) throw new CertificationError('Model-free candidate output is not an object.');
   const candidateHash = requiredString(candidate['content_hash'], 'model-free candidate content hash');
+  invoke('roster-350-fixture-dream-status', [], 'approve');
   invoke('roster-350-fixture-state-show', [], 'approve');
   invoke('roster-350-fixture-candidate-promote', [
     '--candidate-id', 'candidate-opportunity-discovery-001',
     '--candidate-hash', candidateHash,
   ], 'approve');
   invoke('roster', ['context', contract.roster.target, '--query', query, '--json'], 'approve');
-  const totalCharacters = characterCounts.reduce((total, characters) => total + characters, 0);
-  if (totalCharacters > CLAUDE_CONTROLLED_RESULT_AGGREGATE_LIMIT) {
-    throw new CertificationError(
-      `Controlled model-visible outputs exceed the ${CLAUDE_CONTROLLED_RESULT_AGGREGATE_LIMIT}-character aggregate safety limit.`,
-    );
+  // The recovery scenario's own turns: a recording turn that stops before any
+  // learning read, and a fresh-session turn that checks, drafts, and re-reads
+  // context. Rehearsing them model-free is what proves the contract DEMANDS
+  // recovery before any paid host is asked to deliver it.
+  scenario = 'recovery';
+  invoke('roster', ['discover', contract.roster.target, '--exact', '--json'], 'record-only');
+  invoke('roster', ['context', contract.roster.target, '--query', query, '--json'], 'record-only');
+  invoke('roster-350-fixture-search', ['--query', query], 'record-only');
+  invoke('roster-350-fixture-run-record', [
+    '--request-hash', requestHash,
+    '--selected-result', 'result-c77f',
+    '--brain-citation', 'brain-record-a17f',
+    '--brain-citation', 'brain-record-b62c',
+    '--brain-citation', 'brain-record-d91e',
+  ], 'record-only');
+  invoke('roster-350-fixture-feedback-record', [
+    '--run-id', 'run-opportunity-discovery-001',
+    '--signal', 'useful',
+  ], 'record-only');
+  invoke('roster-350-fixture-dream-status', [], 'recover');
+  const recoveredCandidate = invoke('roster-350-fixture-candidate-create', [
+    '--run-id', 'run-opportunity-discovery-001',
+    '--feedback-id', 'feedback-opportunity-discovery-001',
+    '--disposition', 'prefer',
+    '--source-kind', 'attributable-practitioner',
+    '--topic-kind', 'operational-problem',
+    '--falsifier-action', 'reject',
+    '--falsifier-observation', 'reviewed-outcomes-contradict',
+    '--skill-challenge', challenge,
+  ], 'recover');
+  invoke('roster', ['context', contract.roster.target, '--query', query, '--json'], 'recover');
+  if (!isJsonObject(recoveredCandidate)) {
+    throw new CertificationError('Model-free recovered candidate output is not an object.');
+  }
+  // The recovery scenario's OWN approval turn. Without it the replay would stop
+  // one turn short and the recheck -- status before promote, no create, the
+  // exact pending projection -- would only ever run on the opt-in paid path.
+  invoke('roster-350-fixture-dream-status', [], 'approve');
+  invoke('roster-350-fixture-state-show', [], 'approve');
+  invoke('roster-350-fixture-candidate-promote', [
+    '--candidate-id', 'candidate-opportunity-discovery-001',
+    '--candidate-hash', requiredString(recoveredCandidate['content_hash'], 'recovered candidate content hash'),
+  ], 'approve');
+  invoke('roster', ['context', contract.roster.target, '--query', query, '--json'], 'approve');
+  assertRecoveryAdapterLogCoherence(
+    readAdapterLog(scenarioRoots.recovery.workspace, contract),
+    openSeededLearningStore(resolve(scenarioRoots.recovery.workspace, contract.runtime.state_path)).snapshot(),
+    requestHash,
+  );
+  // The aggregate ceiling bounds what ONE host session is shown, and a TURN is
+  // exactly one host launch with its own fresh home, config, and context -- two
+  // turns of a pass never share a session. It was previously summed over a
+  // whole (two-turn) pass, which happened to coincide; a three-turn scenario
+  // makes the difference visible, so the unit is stated explicitly here and the
+  // reported total is the largest single turn, the true worst case a session
+  // can reach. Measured headroom at this fixture iteration is roughly 2x.
+  const turnTotals = [...turnCharacters.values()]
+    .map((entries) => entries.reduce((total, characters) => total + characters, 0));
+  for (const total of turnTotals) {
+    if (total > CLAUDE_CONTROLLED_RESULT_AGGREGATE_LIMIT) {
+      throw new CertificationError(
+        `Controlled model-visible outputs exceed the ${CLAUDE_CONTROLLED_RESULT_AGGREGATE_LIMIT}-character aggregate safety limit.`,
+      );
+    }
   }
   return Object.freeze({
     maximum_characters: Math.max(...characterCounts),
-    total_characters: totalCharacters,
+    total_characters: Math.max(...turnTotals),
     output_count: characterCounts.length,
   });
 }
@@ -5693,16 +5938,10 @@ function preflightClaudeOutputSchemas(
   paths: CertificationPaths,
   contract: HostLedLearningLaunchContract,
 ): void {
-  validateClaudeOutputSchemaDialect({
-    discover: readJson(join(
-      paths.fixtureRoot,
-      contract.host_readable_inputs.discover_output_schema,
-    ), 'Claude discovery output schema'),
-    approve: readJson(join(
-      paths.fixtureRoot,
-      contract.host_readable_inputs.approve_output_schema,
-    ), 'Claude approval output schema'),
-  });
+  validateClaudeOutputSchemaDialect(Object.fromEntries(HOST_LED_LEARNING_TURNS.map((turn) => [
+    turn,
+    readJson(turnOutputSchemaPath(paths, contract, turn), `Claude ${turn} output schema`),
+  ]))as Readonly<Record<HostLedLearningTurn, unknown>>);
 }
 
 function rebuildModelFreeCertificationInputs(
@@ -5736,7 +5975,7 @@ function rebuildModelFreeCertificationInputs(
       lifecycle_present: boolean;
     }>>> = {};
     const initialWorkspaceSha256 = Object.fromEntries((['claude', 'codex'] as const).map((host) => {
-      const currentPaths = passPaths(root, host);
+      const currentPaths = passPaths(root, host, scenarioForPass(1));
       prepareWorkspace(host, paths, currentPaths, contract, bundles);
       const rosterMode = lstatSync(join(currentPaths.workspace, '.fixture/runtime/roster.js')).mode & 0o777;
       const contractMode = lstatSync(join(
@@ -5782,6 +6021,20 @@ function rebuildModelFreeCertificationInputs(
 
 function oracle(paths: CertificationPaths): JsonValue {
   return readJson(paths.oraclePath, 'semantic oracle');
+}
+
+// One expected projection PER SCENARIO: recovery reaches the same durable end
+// state by a different path, so it is its own expectation rather than something
+// asserted identical to the standard one.
+function scenarioOracles(paths: CertificationPaths): Readonly<Record<HostLedLearningScenario, JsonValue>> {
+  const value = requiredObject(oracle(paths), 'semantic oracle', [
+    'schema_version', 'standard', 'recovery',
+  ]);
+  if (value['schema_version'] !== 1) throw new CertificationError('Semantic oracle requires schema v1.');
+  return Object.freeze({
+    standard: value['standard'] as JsonValue,
+    recovery: value['recovery'] as JsonValue,
+  });
 }
 
 function seededContext(
@@ -5976,8 +6229,44 @@ function candidateOutputProjection(value: unknown, candidate: SeededLessonCandid
   });
 }
 
+const TURN_SEMANTIC_SHAPES = Object.freeze({
+  discover: Object.freeze({
+    required: Object.freeze([
+      'schema_version', 'phase', 'target', 'plan', 'tool_use', 'selected_results', 'rejected_results',
+      'brain_citation_ids', 'context_diagnostics', 'evidence', 'learning', 'external_write_performed',
+    ]),
+    lesson_key: 'baseline_lesson_ids',
+  }),
+  // A turn forbidden to check readiness cannot report a watermark, so it carries
+  // no learning block at all -- absence is the proof, not a null field.
+  'record-only': Object.freeze({
+    required: Object.freeze([
+      'schema_version', 'phase', 'target', 'plan', 'tool_use', 'selected_results', 'rejected_results',
+      'brain_citation_ids', 'context_diagnostics', 'evidence', 'external_write_performed',
+    ]),
+    lesson_key: null,
+  }),
+  recover: Object.freeze({
+    required: Object.freeze([
+      'schema_version', 'phase', 'target', 'plan', 'tool_use', 'evidence', 'learning',
+      'external_write_performed',
+    ]),
+    lesson_key: 'baseline_lesson_ids',
+  }),
+  approve: Object.freeze({
+    required: Object.freeze([
+      'schema_version', 'phase', 'target', 'plan', 'tool_use', 'evidence', 'learning',
+      'external_write_performed',
+    ]),
+    lesson_key: 'promoted_lesson_ids',
+  }),
+} as const satisfies Readonly<Record<HostLedLearningTurn, Readonly<{
+  required: readonly string[];
+  lesson_key: string | null;
+}>>>);
+
 function normalizeSemanticTurn(options: Readonly<{
-  turn: 'discover' | 'approve';
+  turn: HostLedLearningTurn;
   value: JsonValue;
   paths: CertificationPaths;
   contract: HostLedLearningLaunchContract;
@@ -5985,52 +6274,47 @@ function normalizeSemanticTurn(options: Readonly<{
   expectedLessonIds: readonly string[];
   expectedTargetHash: string;
 }>): JsonValue {
-  const requiredKeys = options.turn === 'discover'
-    ? [
-        'schema_version', 'phase', 'target', 'plan', 'tool_use', 'selected_results', 'rejected_results',
-        'brain_citation_ids', 'context_diagnostics', 'evidence', 'learning', 'external_write_performed',
-      ]
-    : [
-        'schema_version', 'phase', 'target', 'plan', 'tool_use', 'evidence', 'learning',
-        'external_write_performed',
-      ];
-  const turn = requiredObject(options.value, `${options.turn} semantic turn`, requiredKeys);
+  const shape = TURN_SEMANTIC_SHAPES[options.turn];
+  const turn = requiredObject(options.value, `${options.turn} semantic turn`, [...shape.required]);
   const target = requiredObject(turn['target'], `${options.turn} semantic target`, ['qualified_id', 'record_hash']);
   if (target['record_hash'] !== options.expectedTargetHash) {
     throw new CertificationError('Semantic target hash differs from the real seeded-context agent revision.');
   }
-  const learningKeys = options.turn === 'discover'
-    ? ['watermark', 'candidate', 'baseline_lesson_ids']
-    : ['watermark', 'candidate', 'promoted_lesson_ids'];
-  const learning = requiredObject(turn['learning'], `${options.turn} semantic learning`, learningKeys);
-  if (learning['watermark'] !== options.candidate.watermark) {
-    throw new CertificationError('Semantic learning watermark differs from the persisted candidate.');
+  if (turn['phase'] !== HOST_LED_LEARNING_TURN_TERMINAL_PHASES[options.turn]) {
+    throw new CertificationError(`Semantic ${options.turn} turn reported the wrong terminal phase.`);
   }
-  const lessonKey = options.turn === 'discover' ? 'baseline_lesson_ids' : 'promoted_lesson_ids';
-  const rawLessonIds = learning[lessonKey];
-  if (!Array.isArray(rawLessonIds) || rawLessonIds.some((entry) => (
-    typeof entry !== 'string' || entry !== entry.normalize('NFKC')
-  )) || new Set(rawLessonIds).size !== rawLessonIds.length) {
-    throw new CertificationError('Semantic turn lesson IDs are invalid.');
-  }
-  const sortedRawLessonIds = [...rawLessonIds].sort(compareCodePoints);
-  if (canonicalJson(sortedRawLessonIds) !== canonicalJson([...options.expectedLessonIds].sort(compareCodePoints))) {
-    throw new CertificationError('Semantic turn lesson set differs from the real fresh context lesson set.');
-  }
-  const normalizedLearning = {
-    watermark: learning['watermark'],
-    candidate: candidateOutputProjection(learning['candidate'], options.candidate),
-    [lessonKey]: sortedRawLessonIds,
-  };
   const projected: Record<string, unknown> = {
     ...turn,
     target: {
       ...target,
       record_hash: target['record_hash'],
     },
-    learning: normalizedLearning,
   };
-  if (options.turn === 'discover') {
+  const lessonKey = shape.lesson_key;
+  if (lessonKey !== null) {
+    const learning = requiredObject(turn['learning'], `${options.turn} semantic learning`, [
+      'watermark', 'candidate', lessonKey,
+    ]);
+    if (learning['watermark'] !== options.candidate.watermark) {
+      throw new CertificationError('Semantic learning watermark differs from the persisted candidate.');
+    }
+    const rawLessonIds = learning[lessonKey];
+    if (!Array.isArray(rawLessonIds) || rawLessonIds.some((entry) => (
+      typeof entry !== 'string' || entry !== entry.normalize('NFKC')
+    )) || new Set(rawLessonIds).size !== rawLessonIds.length) {
+      throw new CertificationError('Semantic turn lesson IDs are invalid.');
+    }
+    const sortedRawLessonIds = [...rawLessonIds].sort(compareCodePoints);
+    if (canonicalJson(sortedRawLessonIds) !== canonicalJson([...options.expectedLessonIds].sort(compareCodePoints))) {
+      throw new CertificationError('Semantic turn lesson set differs from the real fresh context lesson set.');
+    }
+    projected['learning'] = {
+      watermark: learning['watermark'],
+      candidate: candidateOutputProjection(learning['candidate'], options.candidate),
+      [lessonKey]: sortedRawLessonIds,
+    };
+  }
+  if (SHORTLIST_TURNS.includes(options.turn)) {
     if (!Array.isArray(turn['selected_results']) || !Array.isArray(turn['rejected_results'])
       || !Array.isArray(turn['brain_citation_ids'])
       || turn['brain_citation_ids'].some((entry) => typeof entry !== 'string')) {
@@ -6074,26 +6358,45 @@ function assertSemanticOracle(actual: JsonValue, expected: JsonValue): void {
   }
 }
 
-function assertDurableSemanticCoherence(
-  discoverTrace: NormalizedHostTrace,
-  approveTrace: NormalizedHostTrace,
-  state: ReturnType<ReturnType<typeof openSeededLearningStore>['snapshot']>,
-  host: CertificationHost,
-  contract: HostLedLearningLaunchContract,
-  adapterLog: readonly Record<string, unknown>[],
-  requestHash: string,
-): void {
-  const discover = discoverTrace.semantic_result;
-  const approve = approveTrace.semantic_result;
+type SeededLearningSnapshot = ReturnType<ReturnType<typeof openSeededLearningStore>['snapshot']>;
+
+type PassTurnRecord = Readonly<{
+  turn: HostLedLearningTurn;
+  trace: NormalizedHostTrace;
+  adapter_log: readonly Record<string, unknown>[];
+  snapshot: SeededLearningSnapshot;
+}>;
+
+function adapterSequence(record: Record<string, unknown> | undefined, label: string): number {
+  const sequence = record?.['sequence'];
+  if (typeof sequence !== 'number' || !Number.isSafeInteger(sequence)) {
+    throw new CertificationError(`Adapter log entry '${label}' has no usable sequence number.`);
+  }
+  return sequence;
+}
+
+// Every scenario ends in the SAME durable state; only the path there differs.
+// The shared assertions run for both, and each scenario adds the mid-pass
+// snapshots that make its own path observable.
+function assertDurableSemanticCoherence(options: Readonly<{
+  scenario: HostLedLearningScenario;
+  turns: readonly PassTurnRecord[];
+  state: SeededLearningSnapshot;
+  host: CertificationHost;
+  contract: HostLedLearningLaunchContract;
+  adapterLog: readonly Record<string, unknown>[];
+  requestHash: string;
+}>): void {
+  const { state, contract } = options;
   const run = state.completed_runs[0];
   const feedback = state.feedback[0];
   const candidate = state.candidates[0];
   if (state.completed_runs.length !== 1 || state.feedback.length !== 1 || state.candidates.length !== 1
     || state.processed_watermarks.length !== 1
-    || run === undefined || feedback === undefined || candidate === undefined || run.host !== host) {
+    || run === undefined || feedback === undefined || candidate === undefined || run.host !== options.host) {
     throw new CertificationError('Durable learning state is incomplete or attributed to the wrong host.');
   }
-  const reviewedQuery = validatePersistedContextQuery(run, requestHash);
+  const reviewedQuery = validatePersistedContextQuery(run, options.requestHash);
   if (candidate.target !== contract.roster.target
     || canonicalJson(candidate.citations.run_ids) !== canonicalJson([run.id])
     || canonicalJson(candidate.citations.feedback_ids) !== canonicalJson([feedback.id])
@@ -6101,29 +6404,88 @@ function assertDurableSemanticCoherence(
     throw new CertificationError('Durable candidate is not exactly bound to its run, feedback, target, and due watermark.');
   }
   assertCandidateSemantics(candidate);
-  for (const [phase, value] of [['discover', discover], ['approve', approve]] as const) {
-    if (!isJsonObject(value) || !isJsonObject(value['evidence']) || !isJsonObject(value['learning'])) {
-      throw new CertificationError(`${phase} semantic output is missing durable evidence fields.`);
+
+  const byTurn = new Map(options.turns.map((entry) => [entry.turn, entry] as const));
+  if (canonicalJson(options.turns.map((entry) => entry.turn))
+    !== canonicalJson([...turnsForScenario(options.scenario)])) {
+    throw new CertificationError(`Certified ${options.scenario} pass did not run its exact turn sequence.`);
+  }
+
+  for (const entry of options.turns) {
+    const value = entry.trace.semantic_result;
+    if (!isJsonObject(value) || !isJsonObject(value['evidence'])) {
+      throw new CertificationError(`${entry.turn} semantic output is missing durable evidence fields.`);
+    }
+    if (value['evidence']['run_id'] !== run.id || value['evidence']['feedback_id'] !== feedback.id) {
+      throw new CertificationError(`${entry.turn} semantic output is incoherent with durable adapter state.`);
+    }
+    if (TURN_SEMANTIC_SHAPES[entry.turn].lesson_key === null) {
+      if (value['learning'] !== undefined) {
+        throw new CertificationError(`${entry.turn} semantic output reported learning it was forbidden to read.`);
+      }
+      continue;
     }
     const learning = value['learning'];
-    if (value['evidence']['run_id'] !== run.id
-      || value['evidence']['feedback_id'] !== feedback.id
-      || learning['watermark'] !== candidate.watermark) {
-      throw new CertificationError(`${phase} semantic output is incoherent with durable adapter state.`);
+    if (!isJsonObject(learning) || learning['watermark'] !== candidate.watermark) {
+      throw new CertificationError(`${entry.turn} semantic output is incoherent with durable adapter state.`);
     }
     candidateOutputProjection(learning['candidate'], candidate);
   }
-  if (!isJsonObject(discover) || !Array.isArray(discover['selected_results'])
-    || !Array.isArray(discover['brain_citation_ids'])
-    || canonicalJson(discover['selected_results'].map((entry) => isJsonObject(entry) ? entry['result_id'] : null))
+
+  const recordingTurn = options.turns.find((entry) => RECORDING_TURNS.includes(entry.turn));
+  if (recordingTurn === undefined) throw new CertificationError('Certified pass has no recording turn.');
+  const shortlist = recordingTurn.trace.semantic_result;
+  if (!isJsonObject(shortlist) || !Array.isArray(shortlist['selected_results'])
+    || !Array.isArray(shortlist['brain_citation_ids'])
+    || canonicalJson(shortlist['selected_results'].map((entry) => isJsonObject(entry) ? entry['result_id'] : null))
       !== canonicalJson([run.selected_result_id])
-    || canonicalJson([...discover['brain_citation_ids']].sort(compareCodePoints))
+    || canonicalJson([...shortlist['brain_citation_ids']].sort(compareCodePoints))
       !== canonicalJson([...run.source_ids].sort(compareCodePoints))) {
-    throw new CertificationError('Discovery semantic output is incoherent with durable run citations.');
+    throw new CertificationError('Recording semantic output is incoherent with durable run citations.');
   }
-  const stateRead = adapterLog.find((entry) => entry['log_category'] === 'learning.state-read');
+
+  if (options.scenario === 'recovery') {
+    // The record-only turn must leave the occasion UNRESOLVED and unobserved:
+    // work recorded, nothing checked, nothing drafted.
+    const recorded = byTurn.get('record-only');
+    const recovered = byTurn.get('recover');
+    if (recorded === undefined || recovered === undefined) {
+      throw new CertificationError('Recovery pass is missing its record-only or recover turn.');
+    }
+    if (recorded.snapshot.completed_runs.length !== 1 || recorded.snapshot.feedback.length !== 1
+      || recorded.snapshot.candidates.length !== 0
+      || recorded.snapshot.processed_watermarks.length !== 0) {
+      throw new CertificationError('Record-only turn did not stop after recording exactly one run and its feedback.');
+    }
+    if (recorded.adapter_log.some((entry) => entry['log_category'] === 'learning.status')) {
+      throw new CertificationError('Record-only turn checked readiness it was contractually forbidden to check.');
+    }
+    if (recovered.snapshot.candidates.length !== 1) {
+      throw new CertificationError('Recovery turn did not draft exactly one candidate for the missed occasion.');
+    }
+    const creates = options.adapterLog.filter((entry) => entry['log_category'] === 'learning.candidate-create');
+    if (creates.length !== 1) {
+      throw new CertificationError('Recovery pass created a candidate more than once.');
+    }
+  }
+
+  const approve = byTurn.get('approve');
+  if (approve === undefined) throw new CertificationError('Certified pass has no approval turn.');
+  // The recheck is what makes the final turn a genuine repeated activation: it
+  // must check readiness BEFORE it acts on the human's answer.
+  const status = approve.adapter_log.find((entry) => entry['log_category'] === 'learning.status');
+  const promote = approve.adapter_log.find((entry) => entry['log_category'] === 'learning.candidate-promote');
+  if (status === undefined || promote === undefined
+    || adapterSequence(status, 'learning.status') >= adapterSequence(promote, 'learning.candidate-promote')) {
+    throw new CertificationError('Approval turn did not re-check readiness before promoting.');
+  }
+  const stateRead = approve.adapter_log.find((entry) => entry['log_category'] === 'learning.state-read');
   const expectedStateRead = {
     status: {
+      // Under the seeded store a watermark is processed at CREATE, so this
+      // recheck answers not_due. It still proves the ritual -- check, exact
+      // read, re-present, never re-draft. The STILL-due recheck of the real
+      // lifecycle is proven CLI-side in the dream-lifecycle suite.
       status: 'not_due',
       watermark: candidate.watermark,
       run_ids: [run.id],
@@ -6140,7 +6502,7 @@ function assertDurableSemanticCoherence(
     throw new CertificationError('Approval did not read the exact persisted pending candidate projection and hash.');
   }
   assertHostVisibleJsonCommandOutput(
-    approveTrace,
+    approve.trace,
     'roster-350-fixture-state-show',
     canonicalize(expectedStateRead),
   );
@@ -6153,14 +6515,30 @@ export function sameSemanticResults(
   if (all.length !== HOST_LED_LEARNING_PASS_COUNT * 2) {
     throw new CertificationError('Certification did not produce exactly three outcomes per host.');
   }
-  const first = all[0]!.semantic_result;
-  const expected = canonicalJson(first);
+  // Cross-host equality is asserted WITHIN a scenario: two different paths to
+  // the same end state produce different turn maps by construction, so demanding
+  // one result across scenarios would assert something untrue.
+  const normalized: Partial<Record<HostLedLearningScenario, JsonValue>> = {};
   for (const outcome of all) {
-    if (canonicalJson(outcome.semantic_result) !== expected) {
-      throw new CertificationError('Claude and Codex semantic outcomes are not equivalent.');
+    const scenario = outcome.scenario as HostLedLearningScenario;
+    if (HOST_LED_LEARNING_SCENARIO_TURNS[scenario] === undefined) {
+      throw new CertificationError(`Certification outcome names an unknown scenario '${outcome.scenario}'.`);
+    }
+    const first = normalized[scenario];
+    if (first === undefined) {
+      normalized[scenario] = outcome.semantic_result;
+      continue;
+    }
+    if (canonicalJson(outcome.semantic_result) !== canonicalJson(first)) {
+      throw new CertificationError(`Claude and Codex ${scenario} semantic outcomes are not equivalent.`);
     }
   }
-  return first;
+  for (const scenario of HOST_LED_LEARNING_PASS_SCENARIOS) {
+    if (normalized[scenario] === undefined) {
+      throw new CertificationError(`Certification produced no ${scenario} outcome.`);
+    }
+  }
+  return canonicalize(normalized) as JsonValue;
 }
 
 export function assertDeterministicCertificationArtifacts(
@@ -6299,7 +6677,11 @@ async function runPass(options: Readonly<{
 }>): Promise<CertificationPassOutcome> {
   const hostBinary = options.host === 'claude' ? options.paths.claudeBin : options.paths.codexBin;
   assertHostBinaryMatches(options.host, hostBinary, options.hostProbe);
-  const currentPaths = passPaths(options.certificationRoot, options.host);
+  const scenario = scenarioForPass(options.pass);
+  const turns = turnsForScenario(scenario);
+  const firstTurn = turns[0];
+  if (firstTurn === undefined) throw new CertificationError(`Scenario '${scenario}' declares no turns.`);
+  const currentPaths = passPaths(options.certificationRoot, options.host, scenario);
   prepareWorkspace(options.host, options.paths, currentPaths, options.contract, options.bundles);
   inventoryAncestorInstructions(currentPaths.workspace);
   const initialWorkspace = buildFileManifest([{
@@ -6312,13 +6694,20 @@ async function runPass(options: Readonly<{
     currentPaths,
     options.contract,
   );
-  const requestPath = join(options.paths.fixtureRoot, options.contract.host_readable_inputs.discover_request);
-  const approvalPath = join(options.paths.fixtureRoot, options.contract.host_readable_inputs.approval_request);
-  const request = readFileSync(requestPath, 'utf8');
-  const requestHash = `sha256:${sha256(request)}`;
+  const prompts = Object.freeze(Object.fromEntries(turns.map((turn) => [
+    turn,
+    readFileSync(turnRequestPath(options.paths, options.contract, turn), 'utf8'),
+  ]))) as Readonly<Record<HostLedLearningTurn, string>>;
+  // One fixed binding constant for every turn: the adapter proofs bind a derived
+  // query to the ORIGINAL request, not to whichever prompt started a turn.
+  const requestHash = `sha256:${sha256(readFileSync(
+    turnRequestPath(options.paths, options.contract, 'discover'),
+    'utf8',
+  ))}`;
   const challenge = dreamerChallenge(options.paths, options.contract);
   const challengeHash = `sha256:${sha256(challenge)}`;
   const sourceManifest = certificationInputManifest(options.paths);
+  const rosterBundleHash = `sha256:${sha256(readFileSync(options.bundles.rosterPath))}`;
   let skillDiscoveryHash: string;
   let promptInputHash: string | null = null;
   let sandboxProbeHash: string;
@@ -6331,7 +6720,7 @@ async function runPass(options: Readonly<{
       paths: options.paths,
       passPaths: currentPaths,
       contract: options.contract,
-      turn: 1,
+      turn: firstTurn,
       label: 'skill-discovery',
       ambientState: options.ambientState,
       useAmbientHostState: false,
@@ -6365,8 +6754,9 @@ async function runPass(options: Readonly<{
           paths: options.paths,
           passPaths: currentPaths,
           contract: options.contract,
-          turn: 1,
-          prompt: request,
+          turnIndex: 0,
+          turn: firstTurn,
+          prompt: prompts[firstTurn],
           ambientState: options.ambientState,
           hostProbe: options.hostProbe,
           claudeSandboxProbe: canaries,
@@ -6380,18 +6770,13 @@ async function runPass(options: Readonly<{
     turnOne = paidTurn.outcome;
     claudeCanaries = paidTurn.canaries;
     sandboxProbeHash = assertClaudeSandboxProof(turnOne.trace, claudeCanaries);
-    assertClaudeDreamerProof(
-      turnOne.trace,
-      options.contract,
-      dreamerChallenge(options.paths, options.contract),
-    );
   } else {
     const skillProbe = hostProbeEnvironment({
       host: options.host,
       paths: options.paths,
       passPaths: currentPaths,
       contract: options.contract,
-      turn: 1,
+      turn: firstTurn,
       label: 'skill-discovery',
       ambientState: options.ambientState,
       useAmbientHostState: true,
@@ -6404,54 +6789,35 @@ async function runPass(options: Readonly<{
         env: skillProbe.env,
       })
     ));
-    const discoverPromptProbe = hostProbeEnvironment({
-      host: options.host,
-      paths: options.paths,
-      passPaths: currentPaths,
-      contract: options.contract,
-      turn: 1,
-      label: 'discover-prompt',
-      ambientState: options.ambientState,
-      useAmbientHostState: true,
-    });
-    const discoverPromptHash = withHostBinaryProof(options.host, hostBinary, options.hostProbe, () => (
-      probeCodexPromptInput({
+    const promptHashes: Record<string, string> = {};
+    for (const turn of turns) {
+      const promptProbe = hostProbeEnvironment({
+        host: options.host,
         paths: options.paths,
-        workspace: discoverPromptProbe.roots.workspace,
+        passPaths: currentPaths,
         contract: options.contract,
-        env: discoverPromptProbe.env,
-        prompt: request,
-      })
-    ));
-    const approvePromptProbe = hostProbeEnvironment({
-      host: options.host,
-      paths: options.paths,
-      passPaths: currentPaths,
-      contract: options.contract,
-      turn: 2,
-      label: 'approve-prompt',
-      ambientState: options.ambientState,
-      useAmbientHostState: true,
-    });
-    const approvePromptHash = withHostBinaryProof(options.host, hostBinary, options.hostProbe, () => (
-      probeCodexPromptInput({
-        paths: options.paths,
-        workspace: approvePromptProbe.roots.workspace,
-        contract: options.contract,
-        env: approvePromptProbe.env,
-        prompt: readFileSync(approvalPath, 'utf8'),
-      })
-    ));
-    promptInputHash = sha256(canonicalJson({
-      discover: discoverPromptHash,
-      approve: approvePromptHash,
-    }));
+        turn,
+        label: `${turn}-prompt`,
+        ambientState: options.ambientState,
+        useAmbientHostState: true,
+      });
+      promptHashes[turn] = withHostBinaryProof(options.host, hostBinary, options.hostProbe, () => (
+        probeCodexPromptInput({
+          paths: options.paths,
+          workspace: promptProbe.roots.workspace,
+          contract: options.contract,
+          env: promptProbe.env,
+          prompt: prompts[turn],
+        })
+      ));
+    }
+    promptInputHash = sha256(canonicalJson(promptHashes));
     const sandboxProbe = hostProbeEnvironment({
       host: options.host,
       paths: options.paths,
       passPaths: currentPaths,
       contract: options.contract,
-      turn: 1,
+      turn: firstTurn,
       label: 'sandbox',
       ambientState: options.ambientState,
       useAmbientHostState: false,
@@ -6488,8 +6854,9 @@ async function runPass(options: Readonly<{
         paths: options.paths,
         passPaths: currentPaths,
         contract: options.contract,
-        turn: 1,
-        prompt: request,
+        turnIndex: 0,
+        turn: firstTurn,
+        prompt: prompts[firstTurn],
         ambientState: options.ambientState,
         hostProbe: options.hostProbe,
       });
@@ -6502,135 +6869,135 @@ async function runPass(options: Readonly<{
       standalone: standaloneSandboxProbeHash,
       paid_exec: assertCodexSandboxProof(turnOne.trace, canaries),
     }));
-    assertCodexPrimarySkillProof(turnOne.trace, currentPaths.workspace, options.contract);
-    assertCodexDreamerProof(
-      turnOne.trace,
-      currentPaths.workspace,
-      options.contract,
-      dreamerChallenge(options.paths, options.contract),
-    );
   }
   sandboxProbeHash = sha256(canonicalJson({
     sandbox: sandboxProbeHash,
     model_visible_json: modelVisibleOutputPreflight,
   }));
-  validateHostTraceCommands({
-    trace: turnOne.trace,
-    host: options.host,
-    turn: 'discover',
-    contract: options.contract,
-    required: commandsForLogCategories(
-      options.contract,
-      options.contract.turn_expectations.discover.required_log_categories,
-    ),
-    forbidden: commandsForLogCategories(
-      options.contract,
-      options.contract.turn_expectations.discover.forbidden_log_categories,
-    ),
-    ...(claudeCanaries === undefined ? {} : { claudeCanaries }),
-    ...(codexCanaries === undefined ? {} : { codexCanaries }),
-  });
-  const turnOneAdapterLog = readAdapterLog(currentPaths.workspace, options.contract);
-  const derivedQuery = validateAdapterLog({
-    records: turnOneAdapterLog,
-    start: 0,
-    turn: 'discover',
-    workspace: currentPaths.workspace,
-    fixtureRoot: options.paths.fixtureRoot,
-    contract: options.contract,
-    requestHash,
-    challengeHash,
-    challenge,
-    rosterBundleHash: `sha256:${sha256(readFileSync(options.bundles.rosterPath))}`,
-  });
-  assertHostVisibleAdapterOutputs(turnOne.trace, turnOneAdapterLog);
+
+  const statePath = resolve(currentPaths.workspace, options.contract.runtime.state_path);
+  assertInside(currentPaths.workspace, statePath, 'learning state');
+  const turnRecords: PassTurnRecord[] = [];
+  const turnOutcomes: HostTurnOutcome[] = [];
+  const derivedQueries: string[] = [];
+  let previousLog: readonly Record<string, unknown>[] = [];
+
+  const auditTurn = (turn: HostLedLearningTurn, outcome: HostTurnOutcome): void => {
+    if (options.host === 'codex') {
+      assertCodexPrimarySkillProof(outcome.trace, currentPaths.workspace, options.contract);
+    }
+    if (CANDIDATE_CREATING_TURNS.includes(turn)) {
+      if (options.host === 'claude') {
+        assertClaudeDreamerProof(outcome.trace, options.contract, challenge);
+      } else {
+        assertCodexDreamerProof(outcome.trace, currentPaths.workspace, options.contract, challenge);
+      }
+    }
+    validateHostTraceCommands({
+      trace: outcome.trace,
+      host: options.host,
+      turn,
+      contract: options.contract,
+      required: commandsForLogCategories(
+        options.contract,
+        options.contract.turn_expectations[turn].required_log_categories,
+      ),
+      forbidden: commandsForLogCategories(
+        options.contract,
+        options.contract.turn_expectations[turn].forbidden_log_categories,
+      ),
+      ...firstTurnCanaryOptions({
+        completedTurns: turnRecords.length,
+        ...(claudeCanaries === undefined ? {} : { claudeCanaries }),
+        ...(codexCanaries === undefined ? {} : { codexCanaries }),
+      }),
+    });
+    const adapterLog = readAdapterLog(currentPaths.workspace, options.contract);
+    if (canonicalJson(adapterLog.slice(0, previousLog.length)) !== canonicalJson(previousLog)
+      || (previousLog.length > 0 && adapterLog.length === previousLog.length)) {
+      throw new CertificationError(`Turn '${turn}' did not preserve and append to the exact prior trace.`);
+    }
+    derivedQueries.push(validateAdapterLog({
+      records: adapterLog,
+      start: previousLog.length,
+      turn,
+      workspace: currentPaths.workspace,
+      fixtureRoot: options.paths.fixtureRoot,
+      contract: options.contract,
+      requestHash,
+      challengeHash,
+      challenge,
+      rosterBundleHash,
+    }));
+    const slice = adapterLog.slice(previousLog.length);
+    assertHostVisibleAdapterOutputs(outcome.trace, slice);
+    turnRecords.push(Object.freeze({
+      turn,
+      trace: outcome.trace,
+      adapter_log: Object.freeze(slice),
+      snapshot: openSeededLearningStore(statePath).snapshot(),
+    }));
+    turnOutcomes.push(outcome);
+    previousLog = adapterLog;
+  };
+
+  auditTurn(firstTurn, turnOne);
+  const recordingRecord = turnRecords.find((entry) => RECORDING_TURNS.includes(entry.turn));
+  if (recordingRecord === undefined) {
+    throw new CertificationError('The first turn of every scenario must record the work it did.');
+  }
+  const baselineQuery = derivedQueries[0]!;
   const baselineContext = seededContextSummary(
     currentPaths.workspace,
     options.paths.fixtureRoot,
     options.contract,
-    derivedQuery,
+    baselineQuery,
   );
   const baselineLessonIds = baselineContext.lessonIds;
-  const discoveryStatePath = resolve(currentPaths.workspace, options.contract.runtime.state_path);
-  assertInside(currentPaths.workspace, discoveryStatePath, 'learning state');
-  const discoveryState = openSeededLearningStore(discoveryStatePath).snapshot();
-  const completedRun = discoveryState.completed_runs[0];
-  if (discoveryState.completed_runs.length !== 1 || completedRun === undefined) {
-    throw new CertificationError('Discovery turn did not persist one completed run for fresh approval.');
+  const completedRun = recordingRecord.snapshot.completed_runs[0];
+  if (recordingRecord.snapshot.completed_runs.length !== 1 || completedRun === undefined) {
+    throw new CertificationError('The recording turn did not persist one completed run for the rest of the pass.');
   }
   const persistedQuery = validatePersistedContextQuery(completedRun, requestHash);
-  if (persistedQuery.query !== derivedQuery) {
-    throw new CertificationError('Discovery completed-run state changed the exact derived context query.');
+  if (persistedQuery.query !== baselineQuery) {
+    throw new CertificationError('The recording turn changed the exact derived context query.');
   }
-  const turnTwo = await runHostTurn({
-    host: options.host,
-    paths: options.paths,
-    passPaths: currentPaths,
-    contract: options.contract,
-    turn: 2,
-    prompt: readFileSync(approvalPath, 'utf8'),
-    ambientState: options.ambientState,
-    hostProbe: options.hostProbe,
-  });
-  if (options.host === 'codex') {
-    assertCodexPrimarySkillProof(turnTwo.trace, currentPaths.workspace, options.contract);
+
+  for (const [index, turn] of turns.entries()) {
+    if (index === 0) continue;
+    auditTurn(turn, await runHostTurn({
+      host: options.host,
+      paths: options.paths,
+      passPaths: currentPaths,
+      contract: options.contract,
+      turnIndex: index,
+      turn,
+      prompt: prompts[turn],
+      ambientState: options.ambientState,
+      hostProbe: options.hostProbe,
+    }));
   }
-  validateHostTraceCommands({
-    trace: turnTwo.trace,
-    host: options.host,
-    turn: 'approve',
-    contract: options.contract,
-    required: commandsForLogCategories(
-      options.contract,
-      options.contract.turn_expectations.approve.required_log_categories,
-    ),
-    forbidden: commandsForLogCategories(
-      options.contract,
-      options.contract.turn_expectations.approve.forbidden_log_categories,
-    ),
-  });
-  const turnTwoAdapterLog = readAdapterLog(currentPaths.workspace, options.contract);
-  if (canonicalJson(turnOneAdapterLog) === canonicalJson(turnTwoAdapterLog)
-    || canonicalJson(turnTwoAdapterLog.slice(0, turnOneAdapterLog.length)) !== canonicalJson(turnOneAdapterLog)) {
-    throw new CertificationError('Approval turn did not preserve and append to the exact discovery trace.');
-  }
-  const approvalQuery = validateAdapterLog({
-    records: turnTwoAdapterLog,
-    start: turnOneAdapterLog.length,
-    turn: 'approve',
-    workspace: currentPaths.workspace,
-    fixtureRoot: options.paths.fixtureRoot,
-    contract: options.contract,
-    requestHash,
-    challengeHash,
-    challenge,
-    rosterBundleHash: `sha256:${sha256(readFileSync(options.bundles.rosterPath))}`,
-  });
-  assertHostVisibleAdapterOutputs(
-    turnTwo.trace,
-    turnTwoAdapterLog.slice(turnOneAdapterLog.length),
-  );
-  if (approvalQuery !== persistedQuery.query) {
-    throw new CertificationError('Approval turn did not use the exact reviewed query from completed-run state.');
+  for (const query of derivedQueries) {
+    if (query !== persistedQuery.query) {
+      throw new CertificationError('A turn did not use the exact reviewed query from completed-run state.');
+    }
   }
   const sourceAfter = certificationInputManifest(options.paths);
   if (sourceManifest.sha256 !== sourceAfter.sha256) {
     throw new CertificationError('Host certification mutated an immutable source root.');
   }
-  const statePath = resolve(currentPaths.workspace, options.contract.runtime.state_path);
-  assertInside(currentPaths.workspace, statePath, 'learning state');
   const state = openSeededLearningStore(statePath).snapshot();
   const candidate = state.candidates[0];
   if (candidate === undefined) throw new CertificationError('Certified pass has no durable candidate.');
-  assertDurableSemanticCoherence(
-    turnOne.trace,
-    turnTwo.trace,
+  assertDurableSemanticCoherence({
+    scenario,
+    turns: turnRecords,
     state,
-    options.host,
-    options.contract,
-    turnTwoAdapterLog,
+    host: options.host,
+    contract: options.contract,
+    adapterLog: previousLog,
     requestHash,
-  );
+  });
   const lessonPath = join(
     currentPaths.workspace,
     `functions/gtm/agents/social-manager/playbook/${candidate.lesson_id}.md`,
@@ -6644,12 +7011,12 @@ async function runPass(options: Readonly<{
   const retainedTokenSet = forbiddenRetentionTokens(options.paths, options.contract);
   assertNoForbiddenRetention('Durable learning state', readFileSync(statePath), retainedTokenSet);
   assertNoForbiddenRetention('Promoted lesson', lessonBytes, retainedTokenSet);
-  assertNoForbiddenRetention('Adapter log', canonicalize(turnTwoAdapterLog), retainedTokenSet);
+  assertNoForbiddenRetention('Adapter log', canonicalize(previousLog), retainedTokenSet);
   const finalContext = seededContextSummary(
     currentPaths.workspace,
     options.paths.fixtureRoot,
     options.contract,
-    derivedQuery,
+    persistedQuery.query,
   );
   const finalLessonIds = finalContext.lessonIds;
   const additions = finalLessonIds.filter((id) => !baselineLessonIds.includes(id));
@@ -6660,30 +7027,25 @@ async function runPass(options: Readonly<{
   if (finalContext.targetRecordHash === baselineContext.targetRecordHash) {
     throw new CertificationError('Promotion did not produce a distinct agent revision in fresh context.');
   }
-  const actualTurns = {
-    discover: normalizeSemanticTurn({
-      turn: 'discover',
-      value: turnOne.trace.semantic_result,
+  const actualTurns = Object.fromEntries(turnRecords.map((entry) => [
+    entry.turn,
+    normalizeSemanticTurn({
+      turn: entry.turn,
+      value: entry.trace.semantic_result,
       paths: options.paths,
       contract: options.contract,
       candidate,
-      expectedLessonIds: baselineLessonIds,
-      expectedTargetHash: baselineContext.targetRecordHash,
+      expectedLessonIds: entry.turn === 'approve' ? finalLessonIds : baselineLessonIds,
+      expectedTargetHash: entry.turn === 'approve'
+        ? finalContext.targetRecordHash
+        : baselineContext.targetRecordHash,
     }),
-    approve: normalizeSemanticTurn({
-      turn: 'approve',
-      value: turnTwo.trace.semantic_result,
-      paths: options.paths,
-      contract: options.contract,
-      candidate,
-      expectedLessonIds: finalLessonIds,
-      expectedTargetHash: finalContext.targetRecordHash,
-    }),
-  };
+  ]));
   const semanticResult = canonicalize({
     schema_version: 1,
     fixture_id: options.contract.fixture_id,
-    derived_query_code: validateDerivedQueryMeaning(derivedQuery),
+    scenario,
+    derived_query_code: validateDerivedQueryMeaning(persistedQuery.query),
     candidate_semantics: validateCandidateSemanticMeaning(
       candidate.meaning,
       candidate.recommendation,
@@ -6701,17 +7063,22 @@ async function runPass(options: Readonly<{
   assertHostBinaryMatches(options.host, hostBinary, options.hostProbe);
   return Object.freeze({
     pass: options.pass,
+    scenario,
     initial_workspace_sha256: initialWorkspace.sha256,
     final_workspace_sha256: finalWorkspace.sha256,
     source_manifest_sha256: sourceManifest.sha256,
     host_probe_sha256: sha256(canonicalJson(options.hostProbe)),
-    turn_one_config_sha256: turnOne.config_sha256,
-    turn_two_config_sha256: turnTwo.config_sha256,
+    turn_configs: Object.freeze(Object.fromEntries(turns.map((turn, index) => [
+      turn,
+      turnOutcomes[index]!.config_sha256,
+    ]))),
+    turn_traces: Object.freeze(Object.fromEntries(turns.map((turn, index) => [
+      turn,
+      turnOutcomes[index]!.trace.trace_sha256,
+    ]))),
     sandbox_probe_sha256: sandboxProbeHash,
     skill_discovery_sha256: skillDiscoveryHash,
     prompt_input_sha256: promptInputHash,
-    turn_one_trace_sha256: turnOne.trace.trace_sha256,
-    turn_two_trace_sha256: turnTwo.trace.trace_sha256,
     learning_state_sha256: sha256(readFileSync(statePath)),
     promoted_lesson_sha256: sha256(lessonBytes),
     semantic_result_sha256: sha256(canonicalJson(semanticResult)),
@@ -6889,11 +7256,23 @@ export function parseHostLedLearningAttestation(value: unknown): HostLedLearning
       throw new CertificationError(`Attestation ${host} passes do not share one skill-discovery proof.`);
     }
     if (host === 'codex') {
-      const promptInputHashes = new Set(hostOutcomes.map((entry) => (
-        isJsonObject(entry) ? entry['prompt_input_sha256'] : null
-      )));
-      if (promptInputHashes.size !== 1 || promptInputHashes.has(null)) {
-        throw new CertificationError('Attestation Codex passes do not share one closed prompt-input proof.');
+      // Per SCENARIO: the prompt set differs by turn list, so the sharing claim
+      // is that every pass running the same scenario used identical prompts.
+      const byScenario = new Map<unknown, Set<unknown>>();
+      hostOutcomes.forEach((entry, index) => {
+        const scenario = isJsonObject(entry) ? entry['scenario'] : null;
+        const hash = isJsonObject(entry) ? entry['prompt_input_sha256'] : null;
+        if (typeof hash !== 'string') {
+          throw new CertificationError(`Attestation Codex pass ${index + 1} has no prompt-input proof.`);
+        }
+        const set = byScenario.get(scenario) ?? new Set<unknown>();
+        set.add(hash);
+        byScenario.set(scenario, set);
+      });
+      for (const [scenario, hashes] of byScenario) {
+        if (hashes.size !== 1) {
+          throw new CertificationError(`Attestation Codex ${String(scenario)} passes do not share one closed prompt-input proof.`);
+        }
       }
     }
   }
@@ -6920,6 +7299,10 @@ function requireBareHash(value: unknown, label: string): string {
   return parsed;
 }
 
+// Anti-memorization: any turn a host runs more than once must produce a distinct
+// trace every time. With one recovery pass the claim is two-way-plus-shape --
+// `approve` runs in all three, `discover` in the two standard passes, and the
+// recovery pass's own turn list is inherently different.
 export function assertDistinctHostPassTraceHashes(
   host: CertificationHost,
   outcomes: readonly unknown[],
@@ -6927,17 +7310,36 @@ export function assertDistinctHostPassTraceHashes(
   if (outcomes.length !== HOST_LED_LEARNING_PASS_COUNT) {
     throw new CertificationError(`${host} trace replay audit requires exactly three pass outcomes.`);
   }
-  for (const key of ['turn_one_trace_sha256', 'turn_two_trace_sha256'] as const) {
-    const hashes = outcomes.map((outcome, index) => {
-      if (!isJsonObject(outcome)) {
-        throw new CertificationError(`${host} pass ${index + 1} is not a trace-bearing outcome.`);
-      }
-      return requireBareHash(outcome[key], `${host} pass ${index + 1} ${key}`);
-    });
-    if (new Set(hashes).size !== HOST_LED_LEARNING_PASS_COUNT) {
-      throw new CertificationError(`${host} ${key} must be distinct across all three passes.`);
+  const perTurn = new Map<string, string[]>();
+  outcomes.forEach((outcome, index) => {
+    if (!isJsonObject(outcome)) {
+      throw new CertificationError(`${host} pass ${index + 1} is not a trace-bearing outcome.`);
+    }
+    const scenario = outcome['scenario'];
+    if (!isHostLedLearningScenario(scenario)) {
+      throw new CertificationError(`${host} pass ${index + 1} names an unknown certification scenario.`);
+    }
+    const traces = requiredObject(
+      outcome['turn_traces'],
+      `${host} pass ${index + 1} turn_traces`,
+      turnsForScenario(scenario),
+    );
+    for (const [turn, hash] of Object.entries(traces)) {
+      const list = perTurn.get(turn) ?? [];
+      list.push(requireBareHash(hash, `${host} pass ${index + 1} turn_traces.${turn}`));
+      perTurn.set(turn, list);
+    }
+  });
+  for (const [turn, hashes] of perTurn) {
+    if (new Set(hashes).size !== hashes.length) {
+      throw new CertificationError(`${host} '${turn}' traces must be distinct across every pass that runs it.`);
     }
   }
+}
+
+export function isHostLedLearningScenario(value: unknown): value is HostLedLearningScenario {
+  return typeof value === 'string'
+    && Object.hasOwn(HOST_LED_LEARNING_SCENARIO_TURNS, value);
 }
 
 function validateAttestedOutcome(
@@ -6947,16 +7349,24 @@ function validateAttestedOutcome(
   attestation: Record<string, unknown>,
 ): void {
   const outcome = requiredObject(value, `attestation.outcomes.${host}[${pass - 1}]`, [
-    'pass', 'initial_workspace_sha256', 'final_workspace_sha256', 'source_manifest_sha256',
-    'host_probe_sha256', 'turn_one_config_sha256', 'turn_two_config_sha256', 'sandbox_probe_sha256',
-    'skill_discovery_sha256', 'prompt_input_sha256', 'turn_one_trace_sha256', 'turn_two_trace_sha256',
+    'pass', 'scenario', 'initial_workspace_sha256', 'final_workspace_sha256', 'source_manifest_sha256',
+    'host_probe_sha256', 'turn_configs', 'turn_traces', 'sandbox_probe_sha256',
+    'skill_discovery_sha256', 'prompt_input_sha256',
     'learning_state_sha256', 'promoted_lesson_sha256', 'semantic_result_sha256', 'semantic_result',
   ]);
   if (outcome['pass'] !== pass) throw new CertificationError(`${host} attestation pass ordinal is invalid.`);
+  const scenario = outcome['scenario'];
+  if (!isHostLedLearningScenario(scenario) || scenario !== scenarioForPass(pass)) {
+    throw new CertificationError(`${host} attestation pass ${pass} names the wrong certification scenario.`);
+  }
+  for (const key of ['turn_configs', 'turn_traces'] as const) {
+    const map = requiredObject(outcome[key], `${host} outcome ${key}`, turnsForScenario(scenario));
+    for (const turn of turnsForScenario(scenario)) requireBareHash(map[turn], `${host} outcome ${key}.${turn}`);
+  }
   for (const key of [
     'initial_workspace_sha256', 'final_workspace_sha256', 'source_manifest_sha256',
-    'host_probe_sha256', 'turn_one_config_sha256', 'turn_two_config_sha256', 'sandbox_probe_sha256',
-    'skill_discovery_sha256', 'turn_one_trace_sha256', 'turn_two_trace_sha256',
+    'host_probe_sha256', 'sandbox_probe_sha256',
+    'skill_discovery_sha256',
     'learning_state_sha256', 'promoted_lesson_sha256', 'semantic_result_sha256',
   ]) requireBareHash(outcome[key], `${host} outcome ${key}`);
   if (outcome['source_manifest_sha256'] !== attestation['input_manifest_sha256']) {
@@ -6974,8 +7384,10 @@ function validateAttestedOutcome(
   if (typeof outcome['prompt_input_sha256'] === 'string') {
     requireBareHash(outcome['prompt_input_sha256'], `${host} outcome prompt_input_sha256`);
   }
+  const normalized = attestation['normalized_result'];
   if (sha256(canonicalJson(outcome['semantic_result'])) !== outcome['semantic_result_sha256']
-    || canonicalJson(outcome['semantic_result']) !== canonicalJson(attestation['normalized_result'])) {
+    || !isJsonObject(normalized)
+    || canonicalJson(outcome['semantic_result']) !== canonicalJson(normalized[scenario])) {
     throw new CertificationError(`${host} attested semantic outcome is not normalized and equivalent.`);
   }
 }
@@ -7015,7 +7427,7 @@ export function verifyHostLedLearningAttestationFreshness(options: Readonly<{
   for (const [actual, expected, label] of checks) {
     if (actual !== expected) throw new CertificationError(`Host-led learning ${label} attestation is stale.`);
   }
-  assertSemanticOracle(attestation.normalized_result, oracle(paths));
+  assertSemanticOracle(attestation.normalized_result, canonicalize(scenarioOracles(paths)) as JsonValue);
   for (const host of ['claude', 'codex'] as const) {
     for (const outcome of attestation.outcomes[host]) {
       if (outcome.initial_workspace_sha256 !== rebuilt.initialWorkspaceSha256[host]) {
@@ -7053,7 +7465,7 @@ export async function runHostLedLearningCertification(
   const paths = resolveLiveCertificationPaths(repoRoot, env);
   const contract = loadHostLedLearningLaunchContract(repoRoot);
   preflightClaudeOutputSchemas(paths, contract);
-  const expected = oracle(paths);
+  const expected = scenarioOracles(paths);
   const ambientState = resolveAmbientHostState(env);
   inventoryManagedSettings();
   runBuild(paths);
@@ -7092,7 +7504,7 @@ export async function runHostLedLearningCertification(
     >;
     const snapshot = captureCertificationInputSnapshot({ paths, bundles, probes });
     if (snapshot.launch_contract_sha256 !== sha256(canonicalJson(contract))
-      || snapshot.oracle_sha256 !== sha256(canonicalJson(expected))) {
+      || snapshot.oracle_sha256 !== sha256(canonicalJson(oracle(paths)))) {
       throw new CertificationError('Certification contract or oracle changed before the paid run began.');
     }
     const outcomes: Record<CertificationHost, readonly CertificationPassOutcome[]> = {
@@ -7108,7 +7520,7 @@ export async function runHostLedLearningCertification(
           paths,
           certificationRoot,
           contract,
-          expected,
+          expected: expected[scenarioForPass(pass)],
           ambientState,
           bundles,
           hostProbe: probes[host],
@@ -7129,9 +7541,13 @@ export async function runHostLedLearningCertification(
         throw new CertificationError(`${host} passes did not share one skill-discovery proof.`);
       }
       if (host === 'codex') {
-        const promptInputHashes = new Set(hostOutcomes.map((entry) => entry.prompt_input_sha256));
-        if (promptInputHashes.size !== 1 || promptInputHashes.has(null)) {
-          throw new CertificationError('Codex passes did not share one closed prompt-input proof.');
+        for (const scenario of new Set(hostOutcomes.map((entry) => entry.scenario))) {
+          const promptInputHashes = new Set(hostOutcomes
+            .filter((entry) => entry.scenario === scenario)
+            .map((entry) => entry.prompt_input_sha256));
+          if (promptInputHashes.size !== 1 || promptInputHashes.has(null)) {
+            throw new CertificationError(`Codex ${scenario} passes did not share one closed prompt-input proof.`);
+          }
         }
       }
       outcomes[host] = Object.freeze(hostOutcomes);
