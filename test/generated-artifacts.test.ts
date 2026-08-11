@@ -1483,37 +1483,28 @@ test('v2 update preserves edited disabled-host bytes and reports the stale activ
   }
 });
 
-test('v2 update preserves a self-hashed noncanonical disabled-host shadow', () => {
+// #365 disclosed behavior change: a hash-valid old-version disabled-host
+// artifact is Roster-owned unedited content (the C3 premise) and is removed
+// like its current-canonical sibling -- leaving it was a stale auto-loaded
+// contract. The removal compare-and-swaps against the OBSERVED stale bytes,
+// so a concurrent edit is refused, never clobbered; a hash-BROKEN disabled
+// artifact keeps the preserve + GENERATED_FILE_EDITED path pinned above.
+test('v2 update removes a hash-valid stale disabled-host artifact', () => {
   const fx = fixture();
   try {
     assert.equal(installV2ProjectActivation({ root: fx.root, host: 'codex' }).ok, true);
     const artifactPath = at(fx.root, CODEX_PROJECT_INSTRUCTIONS_PATH);
-    const parsed = parseGeneratedMarkdown(readFileSync(artifactPath, 'utf8'));
-    assert.ok(parsed?.valid);
-    const { content_hash: _contentHash, ...header } = parsed.header;
-    const stale = renderGeneratedMarkdown(
-      { ...header, generator_version: '0.0.0-prior' },
-      parsed.body,
-      parsed.prefix,
-    );
+    const stale = rehashWithVersion(readFileSync(artifactPath, 'utf8'), '0.0.0-prior');
     writeFileSync(artifactPath, stale);
     disableAllHosts(fx.root);
 
     const updated = updateV2ProjectActivations({ root: fx.root });
-    assert.equal(updated.ok, false);
-    assert.equal(readFileSync(artifactPath, 'utf8'), stale);
+    assert.equal(updated.ok, true);
+    assert.equal(existsSync(artifactPath), false);
     assert.equal(existsSync(at(fx.root, CODEX_ROSTER_SKILL_PATH)), false);
-    assert.ok(updated.manifest?.files.some((entry) =>
-      entry.path === CODEX_PROJECT_INSTRUCTIONS_PATH && entry.host === 'codex'
-    ));
-    const diagnostics = validateGeneratedArtifacts(fx.root);
-    assert.ok(diagnostics.some((diagnostic) =>
-      diagnostic.message === `Generated activation '${CODEX_PROJECT_INSTRUCTIONS_PATH}' remains for disabled host 'codex'.`
-    ));
-    assert.ok(diagnostics.some((diagnostic) =>
-      diagnostic.path === CODEX_PROJECT_INSTRUCTIONS_PATH &&
-      /current canonical renderer or attestation/.test(diagnostic.message)
-    ));
+    assert.deepEqual(updated.manifest?.hosts, {});
+    assert.equal(updated.manifest?.files.some((entry) => entry.host === 'codex'), false);
+    assert.deepEqual(validateGeneratedArtifacts(fx.root), []);
   } finally {
     fx.cleanup();
   }
