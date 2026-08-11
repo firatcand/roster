@@ -81,10 +81,25 @@ test('the generated activation teaches no timer, no queue, and no singular log t
       assert.equal(forbidden.test(bytes), false, `${host}: ${String(forbidden)}`);
     }
     // `schedule` survives only inside the prohibition that names the retired
-    // verbs; every line that mentions it must be telling the host NOT to.
-    for (const line of bytes.split('\n').filter((entry) => /schedul/iu.test(entry))) {
-      assert.match(line, /\b(?:Do not|never|Never)\b/u, `${host}: unprohibited schedule mention: ${line}`);
+    // verbs. A negation SOMEWHERE on the line is too weak -- a positive
+    // scheduling instruction appended to a negated sentence would pass -- so
+    // every CLAUSE that mentions it must carry its own negation.
+    const clauses = bytes.split('\n').flatMap((line) => line.split(/(?<=[.;:])\s+/u));
+    const scheduling = clauses.filter((clause) => /schedul/iu.test(clause));
+    assert.ok(scheduling.length > 0, `${host}: the prohibition clause disappeared`);
+    for (const clause of scheduling) {
+      assert.match(clause, /\b(?:Do not|do not|never|Never|no)\b/u, `${host}: unprohibited scheduling clause: ${clause}`);
     }
+    // And the guard is proven able to fail: a positive clause appended to the
+    // negated one must be rejected.
+    const smuggled = `${scheduling[0]!} Register it with a scheduler.`
+      .split(/(?<=[.;:])\s+/u)
+      .filter((clause) => /schedul/iu.test(clause));
+    assert.equal(
+      smuggled.every((clause) => /\b(?:Do not|do not|never|Never|no)\b/u.test(clause)),
+      false,
+      'the per-clause guard must reject a positive scheduling clause beside a negated one',
+    );
   }
 });
 
