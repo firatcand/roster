@@ -4,7 +4,7 @@ scope:
   function: ops
   agent: vendor-support
 purpose: Find precedent tickets by failure signature and vendor for triage verdicts.
-skill_ref: quartzharbor-desk:tickets
+skill_ref: torlvesk:tickets
 how:
   - search the failure signature first and the vendor name second, recording both searched strings
 filters:

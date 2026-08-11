@@ -400,7 +400,7 @@
         },
         {
           "kind": "skill-ref",
-          "ref": "quartzharbor-desk:tickets",
+          "ref": "torlvesk:tickets",
           "rationale": "outside-closure",
           "expect": "not-selectable"
         },
@@ -1034,7 +1034,7 @@
         },
         {
           "kind": "skill-ref",
-          "ref": "quartzharbor-desk:tickets",
+          "ref": "torlvesk:tickets",
           "inclusionReason": "tool-skill-ref"
         }
       ],

@@ -2,7 +2,7 @@ schema_version: 2
 id: ticket-search
 scope: {}
 purpose: Search the internal vendor ticket archive for related history.
-skill_ref: quartzharbor-desk:tickets
+skill_ref: torlvesk:tickets
 when:
   - locating earlier tickets about the same vendor or the same failure signature
 capabilities:

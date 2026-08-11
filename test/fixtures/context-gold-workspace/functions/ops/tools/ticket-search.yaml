@@ -3,7 +3,7 @@ id: ticket-search
 scope:
   function: ops
 purpose: Search the vendor ticket archive within operations workflows.
-skill_ref: quartzharbor-desk:tickets
+skill_ref: torlvesk:tickets
 filters:
   - exclude draft tickets that never reached intake
 rules:

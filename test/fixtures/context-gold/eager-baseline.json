@@ -413,9 +413,9 @@
     },
     {
       "path": "functions/ops/agents/vendor-support/plans/ticket-triage/tools/ticket-search.yaml",
-      "sha256": "375bf2119476af298ea3c1d43ecf76a980ae485d274772cec60b6d5e38de2900",
-      "bytes": 418,
-      "tokens": 105
+      "sha256": "979de8885b1c391e9f621d8451ebfbc6eabe4837d086b684890937f708d5b4e7",
+      "bytes": 409,
+      "tokens": 103
     },
     {
       "path": "functions/ops/agents/vendor-support/plans/vendor-onboarding.yaml",
@@ -467,9 +467,9 @@
     },
     {
       "path": "functions/ops/agents/vendor-support/tools/ticket-search.yaml",
-      "sha256": "d263e41a5d308080edfbdd732925f55d4804035d6176ca070558c3eb6abda170",
-      "bytes": 656,
-      "tokens": 164
+      "sha256": "20dc24213ef0459d9abc6d3131c4e6534d474db9c565d04109f574fedb19c6ac",
+      "bytes": 647,
+      "tokens": 162
     },
     {
       "path": "functions/ops/function.yaml",
@@ -521,9 +521,9 @@
     },
     {
       "path": "functions/ops/tools/ticket-search.yaml",
-      "sha256": "5a1d65fa92e4d629fd7759e7871b63027dfe5eba6460cb7f466c025bfe75de10",
-      "bytes": 354,
-      "tokens": 89
+      "sha256": "8d61428f99f5be93d19ae8d175182e730fe97ee0c6b5e1431a835f81bf0e1c4a",
+      "bytes": 345,
+      "tokens": 87
     },
     {
       "path": "tools/channel-drafts.yaml",
@@ -545,14 +545,14 @@
     },
     {
       "path": "tools/ticket-search.yaml",
-      "sha256": "eb9c5a63b343b6b193e6eed095d01444adb4e0cb5a6ad52078937223bf20b00b",
-      "bytes": 614,
-      "tokens": 154
+      "sha256": "9351d857fbcd2fd3aea9d135468b7f005b101bd94b0918be8093151349dab49b",
+      "bytes": 605,
+      "tokens": 152
     }
   ],
   "totals": {
     "files": 89,
-    "bytes": 122347,
-    "tokens": 30587
+    "bytes": 122311,
+    "tokens": 30578
   }
 }
