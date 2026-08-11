@@ -127,6 +127,7 @@ export type GoldMissItem = Readonly<{
   expectSelectorClaim: false;
   expectLabelScopeEligible: true;
   expectedLabelKeys: readonly string[];
+  expectedScope: Readonly<Record<string, string>>;
   expectPolicyEligible: true;
   missClass: GoldMissClass;
 }>;
@@ -308,6 +309,13 @@ export function validateGoldSet(gold: GoldSet): string[] {
       if (!GOLD_MISS_CLASSES.includes(item.missClass)) {
         problems.push(`query '${query.id}' miss item declares unknown missClass '${item.missClass}'`);
       }
+      if (item.expectedLabelKeys.length === 0) {
+        problems.push(`query '${query.id}' miss item '${item.fixtureVersionKey}' declares no label keys`);
+      }
+      if (item.expectedScope === undefined
+        || !SYNTHETIC_WORKSPACE_IDS.includes(item.expectedScope.workspace ?? '')) {
+        problems.push(`query '${query.id}' miss item '${item.fixtureVersionKey}' declares no synthetic scope`);
+      }
     }
     for (const item of query.excluded ?? []) {
       if (!revisions.has(item.fixtureVersionKey)) {
@@ -370,7 +378,21 @@ const SCHEMA_VOCABULARY: ReadonlySet<string> = new Set([
 
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '::1', 'example.com']);
 const ALLOWED_HOST_SUFFIXES: readonly string[] = Object.freeze(['.example', '.invalid', '.test', '.example.com']);
-const HOST_TLDS = 'com|net|org|io|dev|ai|co|tech|cloud|app|so|sh|me|us|uk|de|fr|jp|cn|ru|info|biz';
+// A CLOSED list, deliberately. The scanned artifacts legitimately contain file
+// paths and SQL identifiers (`context-retrieval.ts`, `corpus.json`,
+// `brain.edges`) that are syntactically indistinguishable from a bare hostname,
+// so a general "dotted token ending in letters" rule would fire on dozens of
+// them. The boundary is documented in both READMEs and pinned by a test: a bare
+// host on an unlisted TLD is OUT of the bare-host rule's contract, while the URL
+// rule below catches any host under any scheme regardless of TLD.
+const HOST_TLDS = [
+  'com', 'net', 'org', 'io', 'dev', 'ai', 'co', 'tech', 'cloud', 'app', 'so',
+  'me', 'us', 'uk', 'de', 'fr', 'jp', 'cn', 'ru', 'info', 'biz', 'xyz', 'site',
+  'online', 'email', 'link', 'zone', 'space', 'live', 'host', 'network',
+  'systems', 'services', 'works', 'agency', 'digital', 'solutions', 'eu', 'ca',
+  'au', 'nl', 'se', 'ch', 'es', 'it', 'br', 'in', 'nz', 'sg', 'hk', 'kr', 'tw',
+  'za', 'ie', 'fi', 'no', 'dk', 'pl', 'cz', 'pt', 'gr', 'il', 'tr',
+].join('|');
 
 const URL_RE = new RegExp('[a-z][a-z0-9+.-]*://[^\\s"\'<>)\\]]+', 'giu');
 const BARE_HOST_RE = new RegExp(`\\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.)+(?:${HOST_TLDS})\\b`, 'giu');
@@ -398,6 +420,7 @@ const DENYLIST_LITERALS: readonly string[] = Object.freeze([
 const WORKSPACE_SHAPED_RE = /\b[a-z0-9][a-z0-9-]*-workspace\b/giu;
 const WORKSPACE_KEYS: ReadonlySet<string> = new Set(['workspace', 'workspaceId', 'workspace_id']);
 const ENTROPY_TOKEN_RE = /[A-Za-z0-9+/=_-]{24,}/gu;
+const DIGEST_TOKEN_RE = /\b(?:sha256:)?[0-9a-f]{64}\b|\b[0-9a-f]{40}\b/gu;
 
 function shannonEntropy(token: string): number {
   const counts = new Map<string, number>();
@@ -458,15 +481,42 @@ function scanText(file: string, text: string, findings: PrivacyLintFinding[]): v
   }
 }
 
-function scanEntropy(file: string, text: string, findings: PrivacyLintFinding[]): void {
+// `shapeExemptDigests` is TRUE only outside JSON, where there is no schema
+// position to key an exemption on. Inside JSON the exemption is POINTER-scoped
+// and already applied by the caller, so a digest-shaped token at an undeclared
+// position must NOT be waved through here.
+function scanEntropy(
+  file: string,
+  text: string,
+  findings: PrivacyLintFinding[],
+  shapeExemptDigests: boolean,
+): void {
   for (const match of text.matchAll(ENTROPY_TOKEN_RE)) {
     const token = match[0];
     if (SCHEMA_VOCABULARY.has(token)) continue;
-    if (DIGEST_SHAPE.test(token)) continue;
+    if (shapeExemptDigests && DIGEST_SHAPE.test(token)) continue;
     const mixed = /[a-z]/u.test(token) && /[A-Z]/u.test(token) && /[0-9]/u.test(token);
     if (!mixed) continue;
     if (shannonEntropy(token) < 3.9) continue;
     findings.push({ file, rule: 'high-entropy-token', detail: `${token.slice(0, 8)}… (${token.length} chars)` });
+  }
+}
+
+// A digest at an undeclared JSON position is the exact leak the pointer-scoped
+// exemption exists to catch: a real workspace's object id or content hash copied
+// into a body, a note or a query field.
+function scanUnexpectedDigest(
+  file: string,
+  pointer: string,
+  value: string,
+  findings: PrivacyLintFinding[],
+): void {
+  for (const match of value.matchAll(DIGEST_TOKEN_RE)) {
+    findings.push({
+      file,
+      rule: 'unexpected-digest',
+      detail: `${match[0].slice(0, 12)}… at ${pointer === '' ? '/' : pointer}`,
+    });
   }
 }
 
@@ -497,7 +547,8 @@ function scanJsonValue(
   const commitExempt = COMMIT_POINTERS.some((pattern) => pattern.test(pointer)) && COMMIT_SHAPE.test(value);
   if (digestExempt || commitExempt) return;
   scanText(file, value, findings);
-  scanEntropy(file, value, findings);
+  scanEntropy(file, value, findings, false);
+  scanUnexpectedDigest(file, pointer, value, findings);
   if (WORKSPACE_KEYS.has(key) && !SYNTHETIC_WORKSPACE_IDS.includes(value)) {
     findings.push({ file, rule: 'workspace-identity', detail: `${key}=${value}` });
   }
@@ -549,9 +600,10 @@ export function lintRetrievalGoldArtifacts(root: string = REPOSITORY_ROOT): Priv
       }
       scanText(file, text, findings);
       // Outside JSON there is no schema position to key an exemption on, so a
-      // shape-valid digest token is exempted by shape alone. `scanEntropy`
-      // already skips those; every other rule still applies to the whole file.
-      scanEntropy(file, text, findings);
+      // shape-valid digest token is exempted by SHAPE alone — documented in both
+      // READMEs as the one place the exemption is weaker than pointer-scoped.
+      // Every other rule still applies to the whole file.
+      scanEntropy(file, text, findings, true);
     }
   }
   return findings;

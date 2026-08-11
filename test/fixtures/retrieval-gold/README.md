@@ -37,13 +37,32 @@ pointer is a KNOWN digest-typed position **and** its exact shape validates (64 l
 optionally `sha256:`-prefixed; 7–40 hex for a commit id). Every other string still runs the
 full rule set, so a credential parked in a digest field fails like any other.
 
+Inside JSON the exemption is **pointer-scoped, never shape-only**: a digest-shaped token at
+an undeclared position is reported as `unexpected-digest`, because that is exactly what a
+real workspace's object id or content hash would look like if it were copied into a body, a
+note or a query field. Two false-negative tests pin this.
+
+**Two documented boundaries, stated plainly rather than papered over:**
+
+1. *Outside JSON* (Markdown) there is no schema position to key an exemption on, so a
+   shape-valid digest token is exempted by **shape alone**. A 64-hex secret written into
+   Markdown would therefore pass the entropy rule. `gitleaks` is the second layer.
+2. *Bare hostname detection uses a CLOSED TLD list.* The scanned artifacts legitimately
+   contain file paths and SQL identifiers — `context-retrieval.ts`, `corpus.json`,
+   `brain.edges` — that are syntactically indistinguishable from a hostname, so a general
+   "dotted token ending in letters" rule would fire on dozens of them and the lint would be
+   turned off in practice. A bare host on an unlisted TLD (say `internal.corp.local`) is
+   therefore **out of the bare-host rule's contract**, and a test pins that boundary. The
+   URL rule and the email rule are TLD-independent, so the same host IS caught the moment
+   it appears under any scheme or in an address.
+
 **Self-match scoping.** The denylist literals live inside the lint module, and the lint's
 scan scope is exactly this directory plus `docs/evals/retrieval-quality/` — never the lint
 module itself, and never the wider test tree, which legitimately contains absolute home
 paths in unrelated fixtures.
 
 **Honesty statement.** A denylist cannot *prove* synthetic provenance; it can only catch
-known-shaped leaks. The control is the conjunction of four things: the authoring rule (no
+known-shaped leaks, and the two boundaries above say exactly where it stops. The control is the conjunction of four things: the authoring rule (no
 copying from any real workspace), the allowlisted synthetic identities, the hermetic lint
 over the fixtures *and* the generated artifacts, and the repository `gitleaks` secret scan
 run over both directories before the PR (a documented pre-PR step — `gitleaks` is not a CI
@@ -144,8 +163,12 @@ can never masquerade as a membership gap:
 | | `expectSelectorClaim` | `expectLabelScopeEligible` | `expectPolicyEligible` |
 |---|---|---|---|
 | relevant | true (+ selectors, arms) | true (+ label keys, scope) | true |
-| deliberate membership miss | **false** | true (+ label keys) | true |
+| deliberate membership miss | **false** | true (+ label keys **and** scope) | true |
 | policy-filtered | — | — | **false** (+ exact reason) |
+
+A miss is never delivered, so it has no candidate to read a scope claim off. The harness
+derives the narrowest scope from the proven label keys the same way the engine's
+`narrowestScopeClaim` does and compares it to `expectedScope`.
 
 A membership miss is verified to be membership-**only** by DIRECT item-keyed assertions
 against the admin pool. Bucket absence proves nothing here: `FILTER_ACCOUNTING_SQL` selects

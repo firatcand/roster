@@ -1252,6 +1252,9 @@
           "expectedLabelKeys": [
             "workspace"
           ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
           "expectPolicyEligible": true,
           "missClass": "abbreviation"
         }
@@ -1297,6 +1300,9 @@
           "expectedLabelKeys": [
             "workspace"
           ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
           "expectPolicyEligible": true,
           "missClass": "abbreviation"
         }
@@ -1342,6 +1348,9 @@
           "expectedLabelKeys": [
             "workspace"
           ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
           "expectPolicyEligible": true,
           "missClass": "hyphenation"
         }
@@ -1387,6 +1396,9 @@
           "expectedLabelKeys": [
             "workspace"
           ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
           "expectPolicyEligible": true,
           "missClass": "hyphenation"
         }
@@ -1432,6 +1444,9 @@
           "expectedLabelKeys": [
             "workspace"
           ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
           "expectPolicyEligible": true,
           "missClass": "casing"
         }
@@ -1477,6 +1492,9 @@
           "expectedLabelKeys": [
             "workspace"
           ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
           "expectPolicyEligible": true,
           "missClass": "casing"
         }
@@ -1522,6 +1540,9 @@
           "expectedLabelKeys": [
             "workspace"
           ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
           "expectPolicyEligible": true,
           "missClass": "misspelling"
         }
@@ -1567,6 +1588,9 @@
           "expectedLabelKeys": [
             "workspace"
           ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
           "expectPolicyEligible": true,
           "missClass": "misspelling"
         }
@@ -1612,6 +1636,9 @@
           "expectedLabelKeys": [
             "workspace"
           ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
           "expectPolicyEligible": true,
           "missClass": "synonym"
         }
@@ -1657,6 +1684,9 @@
           "expectedLabelKeys": [
             "workspace"
           ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
           "expectPolicyEligible": true,
           "missClass": "synonym"
         }
@@ -1703,6 +1733,9 @@
           "expectedLabelKeys": [
             "workspace"
           ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
           "expectPolicyEligible": true,
           "missClass": "linked-record"
         }
@@ -1749,6 +1782,9 @@
           "expectedLabelKeys": [
             "workspace"
           ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
           "expectPolicyEligible": true,
           "missClass": "linked-record"
         }
@@ -1795,6 +1831,9 @@
           "expectedLabelKeys": [
             "workspace"
           ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
           "expectPolicyEligible": true,
           "missClass": "linked-record"
         }
@@ -1841,6 +1880,9 @@
           "expectedLabelKeys": [
             "workspace"
           ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
           "expectPolicyEligible": true,
           "missClass": "linked-record"
         }
@@ -1887,6 +1929,9 @@
           "expectedLabelKeys": [
             "workspace"
           ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
           "expectPolicyEligible": true,
           "missClass": "linked-record"
         }
@@ -1933,6 +1978,9 @@
           "expectedLabelKeys": [
             "workspace"
           ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
           "expectPolicyEligible": true,
           "missClass": "linked-record"
         }
@@ -1979,6 +2027,9 @@
           "expectedLabelKeys": [
             "workspace"
           ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
           "expectPolicyEligible": true,
           "missClass": "linked-record"
         }
@@ -2025,6 +2076,9 @@
           "expectedLabelKeys": [
             "workspace"
           ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
           "expectPolicyEligible": true,
           "missClass": "linked-record"
         }
