@@ -61,6 +61,13 @@ export const DEFAULT_DREAM_POLICY: DreamPolicy = Object.freeze({
   excludedAgentIds: Object.freeze(['dreamer']) as readonly string[],
 });
 
+// 015 RESERVES this exact version string against registration, which is what
+// makes "the candidate's policy version equals the effective version" imply
+// "the same policy bytes": every other version is a stored, byte-immutable row,
+// and this one can only ever be the code constant below. The SQL literal is
+// pinned against this constant by the contracts suite.
+export const RESERVED_DREAM_POLICY_VERSION: string = DEFAULT_DREAM_POLICY.policyVersion;
+
 export const DREAM_READINESS_REASONS = [
   'BRAIN_NOT_CONFIGURED',
   'NO_ELIGIBLE_EVIDENCE',

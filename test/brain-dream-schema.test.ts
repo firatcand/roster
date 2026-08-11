@@ -297,10 +297,17 @@ test('the 014 dream schema is append-only and admin-writable only', options, asy
         `TRUNCATE brain_evidence.dream_policies`,
         `UPDATE brain_evidence.dream_watermarks SET reason = 'promotion'`,
         `DELETE FROM brain_evidence.dream_watermarks`,
-        `TRUNCATE brain_evidence.dream_watermarks`,
       ]) {
         await assert.rejects(fixture.admin.query(statement), /append-only/u, statement);
       }
+      // Since #358 the decision ledger carries a foreign key to this table, and
+      // PostgreSQL refuses to truncate an FK-referenced table BEFORE the
+      // statement trigger fires. The invariant is unchanged -- the table cannot
+      // be truncated -- only which layer says so first.
+      await assert.rejects(
+        fixture.admin.query(`TRUNCATE brain_evidence.dream_watermarks`),
+        /append-only|foreign key constraint/u,
+      );
     });
 
     // B3: without the additive sequence clause this subtest fails against an

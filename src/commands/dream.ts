@@ -250,6 +250,12 @@ async function runCreate(
   const normalized = normalizeDreamCandidate(workspaceId, readinessKey, draft);
   assertLessonContentAdmissible(normalized.candidateId, draft.lessonPurpose, draft.lessonBody);
   const result = await recordDreamCandidate(pool, normalized.canonical);
+  // The same-file warning is surfaced at CREATE as well as in `list`: a host
+  // that drafts a sibling for a lesson file another candidate already targets
+  // should see it now, not after a promotion is refused. Deterministic and
+  // non-blocking -- a warning never fails a command.
+  const warnings = (await listDreamCandidates(pool, { limit: 200 }))
+    .find((row) => row.candidate_id === result.candidateId)?.warnings ?? [];
   // The draft is never echoed: it carries authored prose and up to 64 citation
   // pointers, and a candidate is reviewed through `list`, not through the write
   // verb's own output.
@@ -259,11 +265,15 @@ async function runCreate(
       status: result.status,
       candidate_id: result.candidateId,
       lesson_qualified_id: normalized.lessonQualifiedId,
+      warnings,
     }, null, 2));
   } else {
     console.log('');
     console.log(chalk.bold('roster dream candidates create'));
     console.log(`  ${chalk.green('✓')} ${result.status}  ${chalk.dim(result.candidateId)}`);
+    for (const warning of warnings) {
+      console.log(`  ${chalk.yellow('⚠')} ${warning.code} — ${warning.detail}`);
+    }
     console.log(`  ${chalk.dim('·')} target: ${normalized.lessonQualifiedId}`);
     console.log(`  ${chalk.dim('·')} present it to a human, record their decision, then promote or reject it`);
     console.log('');
