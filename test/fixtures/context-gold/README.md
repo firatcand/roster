@@ -251,12 +251,19 @@ the domain-name forms are part of it because that is exactly where
 `quartzharbor-desk` hid. Any future invented name added to this fixture
 carries the same obligation: check the general web, the marketplace
 namespaces, AND the domain forms (plain and hyphenated), record the verdict
-here UNDER THE ACCEPTANCE RULE, and prefer invented-morpheme compounds whose
-halves are not dictionary or brand words — the pattern that failed three times
-was the plausible English word pair, twice as a whole name and once
-recombining through a hyphen. The audit is point-in-time; a claimed identity
-that emerges later is treated like any other privacy finding — rename,
-regenerate the baseline, and update this table.
+here UNDER THE ACCEPTANCE RULE, and prefer invented-morpheme compounds over
+plausible English word pairs — the pattern that failed three times was the
+plausible English word pair, twice as a whole name and once recombining
+through a hyphen. That preference is a collision-likelihood heuristic, not a
+second acceptance test: the individual morphemes were not vetted as
+identity-free and need not be — `torlvesk`'s own halves each carry a claimed
+identity (the first half is an active biotechnology brand; the second has
+claimed commercial use, including a live trademark application covering a
+SaaS product) — and each verdict above rests on the full-name evidence: the
+general web, the marketplace namespaces, and the domain forms (plain and
+hyphenated). The audit is point-in-time; a claimed identity that emerges
+later is treated like any other privacy finding — rename, regenerate the
+baseline, and update this table.
 
 The only workspace-shaped identifier is `context-gold-workspace`,
 allowlisted in `test/support/context-gold.ts` (the allowlist lives with the harness,
