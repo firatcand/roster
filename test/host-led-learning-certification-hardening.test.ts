@@ -828,8 +828,23 @@ test('the recovery coherence gate rejects every way the recovery claim can be fa
   const candidate = {
     id: 'candidate-1', watermark: `sha256:${'a'.repeat(64)}`, target: 'gtm/social-manager',
   } as never;
+  const requestHash = `sha256:${'b'.repeat(64)}`;
+  // The forged run passes every persisted-query rule -- exact request-hash
+  // binding, bounded bytes, self-consistent hash, closed grammar -- so the
+  // exact-projection branch below is reached instead of short-circuiting on an
+  // incomplete run.
+  const contextQuery = 'reliable ai practitioners';
+  const completedRun = {
+    id: 'run-1',
+    request_hash: requestHash,
+    context_query: {
+      bytes: Buffer.byteLength(contextQuery, 'utf8'),
+      query: contextQuery,
+      query_sha256: `sha256:${digest(contextQuery)}`,
+    },
+  } as never;
   const state = {
-    completed_runs: [{ id: 'run-1' }],
+    completed_runs: [completedRun],
     feedback: [{ id: 'feedback-1' }],
     candidates: [candidate],
     processed_watermarks: [`sha256:${'a'.repeat(64)}`],
@@ -853,12 +868,16 @@ test('the recovery coherence gate rejects every way the recovery claim can be fa
     ['approve', 'learning.candidate-promote'],
     ['approve', 'roster.context'],
   ]);
-  const requestHash = `sha256:${'b'.repeat(64)}`;
-  // The honest log still fails on the state-read projection (this unit forges no
-  // real hash); every earlier rule must fail with its OWN message first.
+  // The request-hash validation PASSES for this run, so the honest log falsifies
+  // exactly one branch: its state-read record carries no output_sha256, which can
+  // never equal the recomputed exact-projection hash. Every later mutation must
+  // fail with its OWN earlier message first.
+  assert.doesNotThrow(() => validatePersistedContextQuery(completedRun, requestHash));
   assert.throws(
     () => assertRecoveryAdapterLogCoherence(honest, state, requestHash),
-    /persisted pending candidate projection|attested request hash/iu,
+    (error: unknown) => error instanceof Error
+      && error.name === 'CertificationError'
+      && /did not read the exact persisted pending candidate projection/iu.test(error.message),
   );
 
   const checkedTooEarly = honest.map((entry) => (
