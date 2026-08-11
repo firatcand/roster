@@ -2220,3 +2220,32 @@ test('a broken manifest cannot hide a shadow from generated validation', () => {
     fx.cleanup();
   }
 });
+
+test('a deleted mandatory primary is reported by validate and recreated by update', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'codex' }).ok, true);
+    unlinkSync(at(fx.root, CODEX_PROJECT_INSTRUCTIONS_PATH));
+    assert.ok(validateGeneratedArtifacts(fx.root).some((diagnostic) =>
+      diagnostic.path === CODEX_PROJECT_INSTRUCTIONS_PATH
+      && /does not match its manifest entry/.test(diagnostic.message)
+    ));
+    const recreated = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(recreated.ok, true);
+    assert.equal(
+      recreated.results.find((result) => result.host === 'codex')?.files
+        .find((file) => file.path === CODEX_PROJECT_INSTRUCTIONS_PATH)?.status,
+      'created',
+    );
+    assert.deepEqual(validateGeneratedArtifacts(fx.root), []);
+
+    unlinkSync(at(fx.root, 'ROSTER.md'));
+    const restored = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(restored.ok, true);
+    assert.equal(readFileSync(at(fx.root, 'ROSTER.md'), 'utf8'), renderRosterBootstrap());
+    assert.deepEqual(validateGeneratedArtifacts(fx.root), []);
+  } finally {
+    fx.cleanup();
+  }
+});
