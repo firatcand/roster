@@ -328,6 +328,7 @@ function runLiveHostToolProof(options: { host: LiveHost; env: LiveEnv; spawn: Li
       stepHint: null,
       budgetTokens: DEFAULT_CONTEXT_BUDGET_TOKENS,
       explain: false,
+      includeLegacyUnverified: false,
     });
     const toolFragment = bundle.tool_uses.find((entry) => entry.content.effective.id === 'public-lookup');
     const skillEntry = bundle.skill_refs.find((entry) => entry.content.skill_ref === skillRef);

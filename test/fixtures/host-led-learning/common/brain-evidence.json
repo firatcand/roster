@@ -3,7 +3,12 @@
   "candidates": [
     {
       "candidate_id": "brain-record-a17f",
-      "selector": "strong-examples",
+      "selectors": [
+        "strong-examples"
+      ],
+      "label_keys": [
+        "plan:gtm/social-manager#opportunity-discovery"
+      ],
       "scope": {
         "workspace": "social-manager-context",
         "function": "gtm",
@@ -14,6 +19,10 @@
       "current": true,
       "tombstoned": false,
       "privacy": "internal",
+      "trust": "brain-extract-untrusted",
+      "retrieval_modes": [
+        "lexical"
+      ],
       "retrieval_rank": 10,
       "citation": {
         "logical_source_id": "source-record-a17f",
@@ -27,7 +36,12 @@
     },
     {
       "candidate_id": "brain-record-b62c",
-      "selector": "company-positioning",
+      "selectors": [
+        "company-positioning"
+      ],
+      "label_keys": [
+        "plan:gtm/social-manager#opportunity-discovery"
+      ],
       "scope": {
         "workspace": "social-manager-context",
         "function": "gtm",
@@ -38,6 +52,10 @@
       "current": true,
       "tombstoned": false,
       "privacy": "internal",
+      "trust": "brain-extract-untrusted",
+      "retrieval_modes": [
+        "lexical"
+      ],
       "retrieval_rank": 20,
       "citation": {
         "logical_source_id": "source-record-b62c",
@@ -51,7 +69,12 @@
     },
     {
       "candidate_id": "brain-record-c04d",
-      "selector": "strong-examples",
+      "selectors": [
+        "strong-examples"
+      ],
+      "label_keys": [
+        "plan:gtm/social-manager#opportunity-discovery"
+      ],
       "scope": {
         "workspace": "social-manager-context",
         "function": "gtm",
@@ -62,6 +85,10 @@
       "current": true,
       "tombstoned": false,
       "privacy": "internal",
+      "trust": "brain-extract-untrusted",
+      "retrieval_modes": [
+        "lexical"
+      ],
       "retrieval_rank": 5,
       "citation": {
         "logical_source_id": "source-record-c04d",
@@ -75,7 +102,12 @@
     },
     {
       "candidate_id": "brain-record-d91e",
-      "selector": "company-positioning",
+      "selectors": [
+        "company-positioning"
+      ],
+      "label_keys": [
+        "plan:gtm/social-manager#opportunity-discovery"
+      ],
       "scope": {
         "workspace": "social-manager-context",
         "function": "gtm",
@@ -86,6 +118,10 @@
       "current": true,
       "tombstoned": false,
       "privacy": "internal",
+      "trust": "brain-extract-untrusted",
+      "retrieval_modes": [
+        "lexical"
+      ],
       "retrieval_rank": 30,
       "citation": {
         "logical_source_id": "source-record-d91e",

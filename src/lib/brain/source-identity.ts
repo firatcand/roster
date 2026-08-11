@@ -75,6 +75,50 @@ function immutableMetadata(normalized: NormalizedSourceIngest): SourceJsonValue 
   };
 }
 
+export const LEGACY_RECORD_DOMAIN = 'roster.brain.legacy-record.v1';
+
+export type LegacyRecordKey =
+  | Readonly<{ kind: 'entity'; entityKind: string; slug: string }>
+  | Readonly<{ kind: 'fact'; entityKind: string; slug: string; key: string }>
+  | Readonly<{ kind: 'event'; id: string }>
+  | Readonly<{
+    kind: 'edge';
+    fromKind: string;
+    fromSlug: string;
+    rel: string;
+    toKind: string;
+    toSlug: string;
+  }>;
+
+// v1 `entities.kind/.slug`, `facts.key`, and `edges.rel` are plain `text NOT
+// NULL` with no CHECK, while SourceOriginInput.stableKey is a 256-byte STABLE_KEY
+// class. Interpolation is therefore neither total nor injective. The preimage is
+// a canonical JSON ARRAY of strings — never a concatenation — so no delimiter is
+// interpretable and the 81-byte result always conforms.
+export function legacyRecordStableKey(record: LegacyRecordKey): string {
+  const tuple: readonly string[] = record.kind === 'entity'
+    ? ['entity', record.entityKind, record.slug]
+    : record.kind === 'fact'
+      ? ['fact', record.entityKind, record.slug, record.key]
+      : record.kind === 'event'
+        ? ['event', record.id]
+        : [
+          'edge',
+          record.fromKind,
+          record.fromSlug,
+          record.rel,
+          record.toKind,
+          record.toSlug,
+        ];
+  const hex = createHash('sha256')
+    .update(canonicalSourceJson({
+      domain: LEGACY_RECORD_DOMAIN,
+      value: tuple as unknown as SourceJsonValue,
+    }), 'utf8')
+    .digest('hex');
+  return `legacy.${record.kind}.v1:${hex}`;
+}
+
 export function deriveLogicalSourceId(workspaceId: string, source: SourceOrigin): string {
   return canonicalDigest(LOGICAL_SOURCE_DOMAIN, {
     workspace_id: assertWorkspaceId(workspaceId),

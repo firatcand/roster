@@ -5803,6 +5803,7 @@ function seededContext(
       stepHint: explain ? 'The harness is verifying the complete certified context.' : null,
       budgetTokens: DEFAULT_CONTEXT_BUDGET_TOKENS,
       explain,
+      includeLegacyUnverified: false,
     },
     candidates: structuredClone(evidence['candidates']) as SeedBrainCandidate[],
   });

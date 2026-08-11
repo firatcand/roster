@@ -1,3 +1,4 @@
+import type pg from 'pg';
 import type { BrainActivation } from './activation.ts';
 import { loadConfig, type BrainConfig } from './config.ts';
 
@@ -106,23 +107,35 @@ export function resolveEmbeddingProvider(
   return Object.freeze({ status: 'resolved' as const, provider: result.provider });
 }
 
-// Convenience seam for callers that already hold an activation: reads only the
-// non-secret embeddings.* configuration and keeps the never-throws contract.
-export async function loadBrainEmbeddingResolution(
-  activation: BrainActivation,
+// Transaction-client variant: retrieval must resolve the provider inside its own
+// repeatable-read snapshot, and the activation-based export opens and releases
+// its own connection. Additive — the activation-based export delegates to it.
+export async function loadBrainEmbeddingResolutionOnClient(
+  client: pg.PoolClient | pg.Client,
   deps: { adapters?: EmbeddingAdapterRegistry; env?: NodeJS.ProcessEnv } = {},
 ): Promise<EmbeddingResolution> {
   let config: BrainConfig;
+  try {
+    config = await loadConfig(client);
+  } catch {
+    return Object.freeze({ status: 'invalid-configuration' as const, reason: 'configuration-unreadable' });
+  }
+  return resolveEmbeddingProvider(config, deps);
+}
+
+// Convenience seam for callers that already hold an activation: reads only the
+// non-secret embeddings.* configuration and keeps the never-throws contract.
+export async function loadBrainEmbeddingResolution(
+  activation: Pick<BrainActivation, 'pool'>,
+  deps: { adapters?: EmbeddingAdapterRegistry; env?: NodeJS.ProcessEnv } = {},
+): Promise<EmbeddingResolution> {
   const client = await activation.pool.connect().catch(() => null);
   if (client === null) {
     return Object.freeze({ status: 'invalid-configuration' as const, reason: 'configuration-unreadable' });
   }
   try {
-    config = await loadConfig(client);
-  } catch {
-    return Object.freeze({ status: 'invalid-configuration' as const, reason: 'configuration-unreadable' });
+    return await loadBrainEmbeddingResolutionOnClient(client, deps);
   } finally {
     client.release();
   }
-  return resolveEmbeddingProvider(config, deps);
 }

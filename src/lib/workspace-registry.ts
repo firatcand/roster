@@ -15,6 +15,7 @@ import {
   addYamlMembership,
   enabledV2Hosts,
   parseAgentDefinition,
+  fingerprintBrainNamespace,
   parseChildDefinition,
   parseFunctionDefinition,
   parseMarkdownDefinition,
@@ -167,10 +168,19 @@ export const MAX_CONTEXT_MEMBERSHIP_ENTRIES = 4_096;
 
 const PREPARED_CONTEXT_SOURCE: unique symbol = Symbol('prepared-context-source');
 
+export type PreparedContextBrainAuthority = Readonly<{
+  workspaceId: string;
+  fingerprintFormatVersion: number;
+  namespaceFingerprint: string;
+}>;
+
 export type PreparedContextRegistryMetadata = {
   readonly schema_version: 2;
   readonly workspace_id: string;
   readonly brain_configured: boolean;
+  // Minted from the SAME captured registry snapshot as brain_configured, so a
+  // retrieval adapter never rereads roster.yaml to learn which Brain it may open.
+  readonly brain_authority: PreparedContextBrainAuthority | null;
   readonly enabled_hosts: readonly EnabledV2Host[];
 };
 
@@ -250,6 +260,9 @@ export function assertPreparedContextSource(
     || !Object.isFrozen(source)
     || !Object.isFrozen(source.registry_metadata)
     || !Object.isFrozen(source.registry_metadata.enabled_hosts)
+    || source.registry_metadata.brain_configured !== (source.registry_metadata.brain_authority !== null)
+    || (source.registry_metadata.brain_authority !== null
+      && !Object.isFrozen(source.registry_metadata.brain_authority))
     || !Object.isFrozen(source.counts)
     || source.counts.records !== source.snapshot.records.length
     || source.counts.content_bytes !== contentBytes) {
@@ -1352,13 +1365,24 @@ function mintPreparedContextSource(
 ): PreparedContextSource {
   const snapshot = mintCompleteWorkspaceSnapshot(collected.records);
   const registry = collected.loadedRegistry.registry;
+  const brainAuthority = registry.brain === undefined
+    ? null
+    : (() => {
+      const fingerprint = fingerprintBrainNamespace(registry.brain!);
+      return {
+        workspaceId: registry.workspace_id,
+        fingerprintFormatVersion: fingerprint.format_version,
+        namespaceFingerprint: fingerprint.fingerprint,
+      };
+    })();
   const source = {
     [PREPARED_CONTEXT_SOURCE]: true as const,
     snapshot,
     registry_metadata: {
       schema_version: registry.schema_version,
       workspace_id: registry.workspace_id,
-      brain_configured: registry.brain !== undefined,
+      brain_configured: brainAuthority !== null,
+      brain_authority: brainAuthority,
       enabled_hosts: [...enabledV2Hosts(registry)],
     },
     registry_source_hash: collected.loadedRegistry.hash,
@@ -1387,10 +1411,24 @@ function contextCapabilityFailure(reason: string): never {
   );
 }
 
-export function withContextReadCapability<T>(
-  root: string,
-  operation: (capability: ContextReadCapability) => T,
-): T {
+type ContextReadCapabilitySession = {
+  readonly capability: ContextReadCapability;
+  readonly release: () => void;
+  readonly finish: () => void;
+};
+
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return value !== null
+    && (typeof value === 'object' || typeof value === 'function')
+    && typeof (value as { then?: unknown }).then === 'function';
+}
+
+// One body, two entry points. The awaited variant holds no descriptor and no
+// cwd across the await — withAnchoredDirectory chdirs and restores inside one
+// synchronous read — and the terminal verifier re-probes root identity, the
+// stored vendor map, selected provenance, and every contributing file's identity
+// token AFTER the round trip.
+function openContextReadCapability(root: string): ContextReadCapabilitySession {
   const initialProbe = assertV2Workspace(root);
   const rootIdentity = initialProbe.session?.root;
   if (rootIdentity === undefined) contextCapabilityFailure('initial-probe-session-missing');
@@ -1484,20 +1522,49 @@ export function withContextReadCapability<T>(
   };
 
   const capability = Object.freeze({ source, selectVendorSkillMap, verify });
+  return {
+    capability,
+    release: () => {
+      callbackActive = false;
+      PREPARED_CONTEXT_SOURCES.delete(source);
+    },
+    finish: () => {
+      if (verificationCalls !== 1) contextCapabilityFailure('terminal-call-count');
+      if (!verificationSucceeded) contextCapabilityFailure('terminal-verification-failed');
+    },
+  };
+}
+
+export function withContextReadCapability<T>(
+  root: string,
+  operation: (capability: ContextReadCapability) => T,
+): T {
+  const session = openContextReadCapability(root);
   let result: T;
   try {
-    result = operation(capability);
+    result = operation(session.capability);
   } finally {
-    callbackActive = false;
-    PREPARED_CONTEXT_SOURCES.delete(source);
+    session.release();
   }
-  if (result !== null
-    && (typeof result === 'object' || typeof result === 'function')
-    && typeof (result as { then?: unknown }).then === 'function') {
-    contextCapabilityFailure('async-callback-result');
+  if (isThenable(result)) contextCapabilityFailure('async-callback-result');
+  session.finish();
+  return result;
+}
+
+export async function withAsyncContextReadCapability<T>(
+  root: string,
+  operation: (capability: ContextReadCapability) => Promise<T>,
+): Promise<T> {
+  const session = openContextReadCapability(root);
+  let result: T;
+  try {
+    const pending = operation(session.capability);
+    if (!isThenable(pending)) contextCapabilityFailure('sync-callback-result');
+    result = await pending;
+  } finally {
+    session.release();
   }
-  if (verificationCalls !== 1) contextCapabilityFailure('terminal-call-count');
-  if (!verificationSucceeded) contextCapabilityFailure('terminal-verification-failed');
+  session.finish();
   return result;
 }
 

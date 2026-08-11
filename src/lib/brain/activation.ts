@@ -1,3 +1,4 @@
+import type pg from 'pg';
 import { EXIT_ERROR, RosterError, type JsonValue } from '../errors.ts';
 import { COMPILED_ACTIVE_EXTRACTORS } from './extractors.ts';
 import type { BrainObjectReader, BrainObjectStore } from './object-store.ts';
@@ -127,30 +128,46 @@ export async function assertBrainExtractionAdmin(activation: BrainActivation): P
   }
 }
 
-const registryChecks = new WeakMap<BrainActivation, Promise<void>>();
+const registryChecks = new WeakMap<Pick<BrainActivation, 'pool'>, Promise<void>>();
 
 // Selection of current content is driven by the durable active-extractor
 // registry, so a Brain that registers different extractors than this build
 // compiles must fail closed on EVERY path that consumes or produces
 // active-version content — reads included. Read through the owner-privileged
 // brain.active_extractors projection so the runtime role can run the same check.
-export async function assertBrainExtractionRegistry(activation: BrainActivation): Promise<void> {
+// Transaction-client variant: retrieval runs every arm in ONE repeatable-read
+// snapshot, and the pool-based export acquires a second client that could
+// observe a different one. Additive — the pool-based export delegates to it.
+export async function assertBrainExtractionRegistryOnClient(
+  client: pg.PoolClient | pg.Client,
+): Promise<void> {
+  const rows = await client.query<{ extractor_name: string; active_version: number }>(
+    `SELECT extractor_name, active_version FROM brain.active_extractors ORDER BY extractor_name`,
+  );
+  const registered = rows.rows.map((row) => `${row.extractor_name}@${row.active_version}`);
+  const compiled = [...COMPILED_ACTIVE_EXTRACTORS.entries()]
+    .map(([name, version]) => `${name}@${version}`)
+    .sort();
+  if (registered.join(',') !== compiled.join(',')) {
+    throw extractionError(
+      'BRAIN_EXTRACTION_REGISTRY_DRIFT',
+      'This Brain registers different active extractors than the installed Roster build compiles.',
+      { registered, compiled },
+    );
+  }
+}
+
+export async function assertBrainExtractionRegistry(
+  activation: Pick<BrainActivation, 'pool'>,
+): Promise<void> {
   const cached = registryChecks.get(activation);
   if (cached !== undefined) return await cached;
   const check = (async () => {
-    const rows = await activation.pool.query<{ extractor_name: string; active_version: number }>(
-      `SELECT extractor_name, active_version FROM brain.active_extractors ORDER BY extractor_name`,
-    );
-    const registered = rows.rows.map((row) => `${row.extractor_name}@${row.active_version}`);
-    const compiled = [...COMPILED_ACTIVE_EXTRACTORS.entries()]
-      .map(([name, version]) => `${name}@${version}`)
-      .sort();
-    if (registered.join(',') !== compiled.join(',')) {
-      throw extractionError(
-        'BRAIN_EXTRACTION_REGISTRY_DRIFT',
-        'This Brain registers different active extractors than the installed Roster build compiles.',
-        { registered, compiled },
-      );
+    const client = await activation.pool.connect();
+    try {
+      await assertBrainExtractionRegistryOnClient(client);
+    } finally {
+      client.release();
     }
   })();
   registryChecks.set(activation, check);

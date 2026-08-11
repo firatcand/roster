@@ -159,6 +159,10 @@ export async function ensureEmbeddingSpec(
   });
 }
 
+export function embeddingVectorLiteral(vector: readonly number[], dimensions: number): string {
+  return vectorLiteral(vector, dimensions);
+}
+
 function vectorLiteral(vector: unknown, dimensions: number): string {
   if (!Array.isArray(vector)
     || vector.length !== dimensions
