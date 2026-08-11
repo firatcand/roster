@@ -25,6 +25,7 @@ import {
   isLessonLifecycleConflict,
   materializeLesson,
   preflightLessonTarget,
+  isFenceConnectionFailure,
   repairUnregisteredResidue,
   repairWrongScopeRegistration,
   renderLessonContent,
@@ -516,6 +517,7 @@ function fenceRow(overrides: Record<string, unknown> = {}): Record<string, unkno
 function stubPool(options: {
   serverVersion?: string;
   subjectCandidates?: readonly SubjectCandidate[];
+  failSubjectCandidates?: unknown;
   hold?: Record<string, unknown> | (() => never);
   verify?: (call: number) => Record<string, unknown> | null;
   onQuery?: (text: string) => void;
@@ -544,6 +546,9 @@ function stubPool(options: {
         return Promise.resolve({ rows: [row] });
       }
       if (text.includes('FROM brain_evidence.dream_candidates')) {
+        if (options.failSubjectCandidates !== undefined) {
+          return Promise.reject(options.failSubjectCandidates);
+        }
         return Promise.resolve({
           rows: (options.subjectCandidates ?? []).map((entry) => ({
             candidate_id: entry.candidateId,
@@ -1189,6 +1194,94 @@ test('an unrelated invalid record never blocks a converged materialization', asy
       // authored bytes in place for a human.
       /embedded identity|does not validate/u,
     );
+  } finally {
+    cleanup();
+  }
+});
+
+test('a lost fence and a broken query are classified apart', () => {
+  // Connection class: the transport is gone, so the phase is UNVERIFIED and a
+  // re-run converges.
+  for (const [label, error] of [
+    ['class 08', { code: '08006', message: 'connection failure' }],
+    ['08003', { code: '08003' }],
+    ['admin shutdown', { code: '57P01' }],
+    ['crash shutdown', { code: '57P02' }],
+    ['cannot connect now', { code: '57P03' }],
+    ['database dropped', { code: '57P04' }],
+    ['client-side, no SQLSTATE', { message: 'Client has encountered a connection error and is not queryable' }],
+    ['socket reset, no SQLSTATE', { message: 'read ECONNRESET' }],
+  ] as const) {
+    assert.equal(isFenceConnectionFailure(error, undefined), true, label);
+  }
+  // A captured client 'error' event is itself proof the transport failed.
+  assert.equal(isFenceConnectionFailure({ code: '42501' }, new Error('terminated')), true);
+
+  // Everything else keeps its own identity. The load-bearing vector is the
+  // last one: a SERVER error whose prose merely mentions a socket must not be
+  // softened into a lost fence just because the word appears.
+  for (const [label, error] of [
+    ['undefined relation', { code: '42P01', message: 'relation does not exist' }],
+    ['insufficient privilege', { code: '42501', message: 'permission denied' }],
+    ['a lifecycle refusal', { code: 'RBE08', message: 'the human decision is not bound' }],
+    ['server error naming a socket', {
+      code: '42501',
+      message: 'permission denied for relation socket_events',
+    }],
+    ['non-SQLSTATE code that is not five chars', { code: 'ETIMEDOUT', message: 'nope' }],
+    ['no code and no message', {}],
+  ] as const) {
+    assert.equal(isFenceConnectionFailure(error, undefined), false, label);
+  }
+});
+
+test('the fence maps a lost prefetch to UNVERIFIED and rethrows a real defect', async () => {
+  const { root, cleanup } = fixture();
+  try {
+    // The prefetch is the last database read before the phase lock. A lost
+    // connection there is the pre-phase UNVERIFIED outcome...
+    const lost = stubPool({
+      failSubjectCandidates: Object.assign(new Error('terminating connection due to administrator command'), {
+        code: '57P01',
+      }),
+    });
+    let ran = false;
+    const outcome = await withSubjectFence({
+      pool: lost.pool,
+      root,
+      candidateId: CANDIDATE_ID,
+      expectedDecision: 'promote',
+      expectedSubjectSequence: 1,
+      phase: async () => { ran = true; return 'done'; },
+    });
+    assert.equal(outcome.outcome, 'unverified');
+    assert.equal((outcome as { stage: string }).stage, 'pre-phase');
+    assert.equal(ran, false);
+    assert.deepEqual(lost.released, [true]);
+
+    // ...while a schema or permission defect keeps its own identity, because a
+    // re-run will reproduce it forever and "re-run, it converges" would be a lie.
+    const broken = stubPool({
+      failSubjectCandidates: Object.assign(new Error('permission denied for relation dream_candidates'), {
+        code: '42501',
+      }),
+    });
+    await assert.rejects(
+      withSubjectFence({
+        pool: broken.pool,
+        root,
+        candidateId: CANDIDATE_ID,
+        expectedDecision: 'promote',
+        expectedSubjectSequence: 1,
+        phase: async () => 'done',
+      }),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, '42501');
+        return true;
+      },
+    );
+    assert.deepEqual(broken.released, [true], 'the client is released on the defect path too');
+    assert.equal(existsSync(join(root, DREAM_PHASE_LOCK_PATH)), false);
   } finally {
     cleanup();
   }

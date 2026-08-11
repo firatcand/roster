@@ -366,6 +366,19 @@ type FenceRow = {
   retired_content_hashes: string[] | null;
 };
 
+// PostgreSQL SQLSTATEs are exactly five characters from [0-9A-Z], which is what
+// separates a SERVER verdict from a client-side transport failure.
+const SQLSTATE_SHAPE = /^[0-9A-Z]{5}$/u;
+
+// The termination codes a killed or shutting-down backend raises. Class 08 --
+// the connection-exception family -- is matched by prefix alongside them.
+const CONNECTION_TERMINATION_SQLSTATES: ReadonlySet<string> = new Set([
+  '57P01', // admin_shutdown
+  '57P02', // crash_shutdown
+  '57P03', // cannot_connect_now
+  '57P04', // database_dropped
+]);
+
 // A LOST FENCE and a BROKEN QUERY are different failures with different
 // remedies: the first is the UNVERIFIED contract ("re-run, it converges"), the
 // second is a schema or permission defect that a re-run will reproduce forever.
@@ -373,16 +386,17 @@ type FenceRow = {
 // the first's remediation, so only the connection classes below become
 // UNVERIFIED and everything else keeps its own identity.
 //
-// Class 08 is PostgreSQL's connection-exception family; 57P01/02/03 are the
-// admin-shutdown, crash-shutdown, and cannot-connect-now terminations a killed
-// backend raises. The message check covers node-postgres's own client-side
-// failures, which carry no SQLSTATE at all.
-function isFenceConnectionFailure(error: unknown, captured: unknown): boolean {
+// The MESSAGE heuristic is gated on the ABSENCE of a SQLSTATE, deliberately. A
+// server error already carries its own verdict, and consulting its prose would
+// soften, say, `42501 permission denied for relation socket_events` into a lost
+// fence purely because the text contains "socket". Only node-postgres's own
+// client-side failures -- which carry no SQLSTATE at all -- are classified by
+// message.
+export function isFenceConnectionFailure(error: unknown, captured: unknown): boolean {
   if (captured !== undefined) return true;
   const sqlState = (error as { code?: unknown }).code;
-  if (typeof sqlState === 'string'
-    && (sqlState.startsWith('08') || sqlState === '57P01' || sqlState === '57P02' || sqlState === '57P03')) {
-    return true;
+  if (typeof sqlState === 'string' && SQLSTATE_SHAPE.test(sqlState)) {
+    return sqlState.startsWith('08') || CONNECTION_TERMINATION_SQLSTATES.has(sqlState);
   }
   const message = (error as { message?: unknown }).message;
   return typeof message === 'string'
