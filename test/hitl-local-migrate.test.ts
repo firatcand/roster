@@ -28,8 +28,8 @@ function makeEnv(): Env {
   return { dir, opsRoot: join(dir, '.roster', 'ops'), ws: randomUUID() };
 }
 
-function ledgerOf(env: Env): LocalLedger {
-  return new LocalLedger({ opsRoot: env.opsRoot, workspaceId: env.ws });
+function ledgerOf(env: Env, now?: () => number): LocalLedger {
+  return new LocalLedger({ opsRoot: env.opsRoot, workspaceId: env.ws, ...(now ? { now } : {}) });
 }
 
 // The #318 v1 shapes, written straight into the ledger the way the v1 store did.
@@ -118,6 +118,55 @@ test('conversion: v1 history is partitioned into generations at terminal boundar
     ]);
     // A legacy row whose stored hash covers its body keeps canonicalization 1.
     assert.equal(versions[0]!.canonicalizationVersion, 1);
+  } finally {
+    rmSync(env.dir, { recursive: true, force: true });
+  }
+});
+
+test('conversion: a same-millisecond terminal decision and next same-key request resolve via ledger seq, not the clock', () => {
+  const env = makeEnv();
+  try {
+    // #395: every append is stamped with the SAME frozen clock reading, so
+    // this deterministically reproduces the millisecond tie that made the
+    // real-clock version of this scenario flaky — only the ledger's own
+    // strictly-increasing seq (requests and decisions share one stream)
+    // can resolve it.
+    const ledger = ledgerOf(env, () => 42);
+    seedV1(ledger, [{ id: 'r1', body: 'draft one' }]);
+    seedV1Decision(ledger, 'd1', 'r1', 'approved');
+    seedV1(ledger, [{ id: 'r2', body: 'draft two' }]);
+
+    const res = ensureLocalHitlV2(ledger, 1000);
+    assert.equal(res.converted, true);
+
+    const { records } = ledger.scan('hitl');
+    const versions = records.filter((r) => r.kind === HITL_VERSION_KIND).map((r) => r.payload as Record<string, unknown>);
+    const key = requestKeyOf({ functionName: 'growth', action: 'publish-post', target: 'x.com/roster' });
+    const id = requestIdOf(env.ws, key);
+    assert.deepEqual(
+      versions.filter((v) => v.requestId === id).map((v) => [v.generation, v.version]),
+      [[1, 1], [2, 1]],
+    );
+  } finally {
+    rmSync(env.dir, { recursive: true, force: true });
+  }
+});
+
+test('conversion: a genuine same-key overlap still refuses even at one frozen clock reading', () => {
+  const env = makeEnv();
+  try {
+    // Same frozen clock as above, but r2 is appended (by seq) BEFORE r1's
+    // terminal decision — a real overlap, not a tie. seq must still catch it.
+    const ledger = ledgerOf(env, () => 42);
+    seedV1(ledger, [{ id: 'r1', body: 'draft one' }]);
+    seedV1(ledger, [{ id: 'r2', body: 'draft two' }]);
+    seedV1Decision(ledger, 'd1', 'r1', 'approved');
+
+    assert.throws(
+      () => planLocalHitlConversion(env.ws, ledger.scan('hitl').records),
+      (err: unknown) => err instanceof InvalidRecordError
+        && /the generation boundary is ambiguous/.test((err as Error).message),
+    );
   } finally {
     rmSync(env.dir, { recursive: true, force: true });
   }

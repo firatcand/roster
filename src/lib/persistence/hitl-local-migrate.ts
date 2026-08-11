@@ -241,21 +241,29 @@ function preflight(requests: LegacyRequest[], decisions: LegacyDecision[]): void
     list.push(r);
     byKey.set(r.requestKey, list);
   }
-  const firstTerminalAt = new Map<string, number>();
+  // The ledger assigns one strictly increasing seq to every hitl append —
+  // requests and decisions share the same stream — so seq totally orders two
+  // events even when their millisecond-resolution createdAt ties, which is
+  // routine for synchronous back-to-back appends. seq is therefore the
+  // authoritative signal here, not createdAt (which can also read stale under
+  // real clock skew); createdAt stays in the message only for human context.
+  const firstTerminalAt = new Map<string, { createdAt: number; seq: number }>();
   for (const d of decisions) {
     if (!d.terminal) continue;
     const prior = firstTerminalAt.get(d.requestId);
-    if (prior === undefined || d.createdAt < prior) firstTerminalAt.set(d.requestId, d.createdAt);
+    if (prior === undefined || d.seq < prior.seq) {
+      firstTerminalAt.set(d.requestId, { createdAt: d.createdAt, seq: d.seq });
+    }
   }
   for (const list of byKey.values()) {
     const ordered = [...list].sort((a, b) => a.createdAt - b.createdAt || a.seq - b.seq);
     for (let i = 0; i < ordered.length - 1; i++) {
       const cur = ordered[i]!;
       const next = ordered[i + 1]!;
-      const terminalAt = firstTerminalAt.get(cur.legacyId);
-      if (terminalAt !== undefined && terminalAt >= next.createdAt) {
+      const terminal = firstTerminalAt.get(cur.legacyId);
+      if (terminal !== undefined && terminal.seq > next.seq) {
         problems.push(
-          `request_key ${cur.requestKey.slice(0, 12)}: request ${cur.legacyId} was terminally decided at ${terminalAt} but the next same-key request ${next.legacyId} already existed at ${next.createdAt} — the generation boundary is ambiguous`,
+          `request_key ${cur.requestKey.slice(0, 12)}: request ${cur.legacyId} was terminally decided at ${terminal.createdAt} (seq ${terminal.seq}) but the next same-key request ${next.legacyId} already existed at ${next.createdAt} (seq ${next.seq}) — the generation boundary is ambiguous`,
         );
       }
     }
