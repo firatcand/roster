@@ -57,6 +57,23 @@ test('every roster command the skill teaches parses through its own argv parser'
   assert.ok(dreamCommands >= 5, `expected every dream verb to be taught, saw ${dreamCommands}`);
 });
 
+test('the skill teaches the REAL decision target, read from the CLI', () => {
+  // The old text taught `target: <candidate-id>`, which the evidence contract
+  // refuses outright — a host following it could never record an acceptable
+  // decision. The e2e suite proves the taught workflow is accepted; this pins
+  // that the text itself no longer teaches the unusable spelling.
+  assert.match(SKILL, /roster dream candidates list --candidate <candidate-id> --json/u);
+  assert.match(SKILL, /decision_action/u);
+  assert.match(SKILL, /"target": "dream-candidate:/u);
+  assert.match(SKILL, /Copy that verb's `target`, `effect`, and `scope` VERBATIM/u);
+  assert.match(SKILL, /The target is NOT the raw candidate id/u);
+  assert.equal(
+    /`target: <candidate-id>`/u.test(SKILL),
+    false,
+    'the skill must not teach the raw candidate id as the decision target',
+  );
+});
+
 test('the skill states the self-evidence, privacy, and no-pasting rules', () => {
   assert.match(SKILL, /Never cite your own runs, and never cite `dreamer` runs/u);
   assert.match(SKILL, /no policy edit can relax it/u);

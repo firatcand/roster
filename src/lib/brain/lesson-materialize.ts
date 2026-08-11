@@ -613,7 +613,7 @@ export type MaterializeHooks = Readonly<{
   afterRepairMembershipRemoval?: () => void;
 }>;
 
-type RepairContext = Readonly<{
+export type RepairContext = Readonly<{
   root: string;
   paths: LessonPaths;
   lessonId: string;
@@ -632,7 +632,10 @@ type RepairContext = Readonly<{
 // committed retired governor's recorded content -- because this arm can destroy a
 // registration, and matching an arbitrary sibling's stub would prove nothing
 // about who registered this entry.
-function repairWrongScopeRegistration(
+// Exported for the failpoint matrix: the per-clause authentication tests drive
+// the REAL arm rather than a re-implementation, because the whole point of the
+// clauses is that they refuse states a re-implementation would not reproduce.
+export function repairWrongScopeRegistration(
   context: RepairContext,
   details: Record<string, unknown>,
 ): void {
@@ -730,7 +733,10 @@ function repairWrongScopeRegistration(
 // scope -- are removed and the path is recreated create-only by the proven
 // governor. Provenance strictness scales with what the mutation can destroy;
 // foreign bytes remain the human boundary.
-function repairUnregisteredResidue(context: RepairContext, details: Record<string, unknown>): void {
+export function repairUnregisteredResidue(
+  context: RepairContext,
+  details: Record<string, unknown>,
+): void {
   const { root, paths } = context;
   const conflict = (clause: string, extra: Record<string, string> = {}): never => {
     throw new LessonMaterializationConflict(

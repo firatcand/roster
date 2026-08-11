@@ -25,11 +25,15 @@ import {
   isLessonLifecycleConflict,
   materializeLesson,
   preflightLessonTarget,
+  repairUnregisteredResidue,
+  repairWrongScopeRegistration,
   renderLessonContent,
   resolveLessonPaths,
   retireLesson,
   withSubjectFence,
   type FenceContext,
+  type RepairContext,
+  type SubjectCandidate,
 } from '../src/lib/brain/lesson-materialize.ts';
 import { lessonTargetScope } from '../src/lib/brain/dream-candidate-contracts.ts';
 
@@ -511,6 +515,7 @@ function fenceRow(overrides: Record<string, unknown> = {}): Record<string, unkno
 
 function stubPool(options: {
   serverVersion?: string;
+  subjectCandidates?: readonly SubjectCandidate[];
   hold?: Record<string, unknown> | (() => never);
   verify?: (call: number) => Record<string, unknown> | null;
   onQuery?: (text: string) => void;
@@ -539,7 +544,13 @@ function stubPool(options: {
         return Promise.resolve({ rows: [row] });
       }
       if (text.includes('FROM brain_evidence.dream_candidates')) {
-        return Promise.resolve({ rows: [] });
+        return Promise.resolve({
+          rows: (options.subjectCandidates ?? []).map((entry) => ({
+            candidate_id: entry.candidateId,
+            lesson_scope_key: entry.lessonScopeKey,
+            lesson_purpose: entry.lessonPurpose,
+          })),
+        });
       }
       return Promise.resolve({ rows: [] });
     },
@@ -723,29 +734,368 @@ test('a busy dream-phase lock rolls the fence back, releases the client, and mut
 test('the phase issues no database call from inside a workspace lock', async () => {
   const { root, cleanup } = fixture();
   try {
-    let insideLock = false;
+    // Instrumenting the REAL path, not a dummy lock: withWorkspaceLock creates
+    // '.roster/state/locks/scaffold' for exactly as long as it is held, so a
+    // query issued while that directory exists IS a database call inside a
+    // workspace lock. Every wrapper the materialization takes -- scaffold's own,
+    // the repair arm's, and the read-arbitrate-replace one -- is covered by
+    // construction, because they all use the same lock path.
+    const observed: string[] = [];
     const { pool } = stubPool({
-      onQuery: () => {
-        assert.equal(insideLock, false, 'a database call was issued while a workspace lock was held');
+      subjectCandidates: [{
+        candidateId: OTHER_CANDIDATE_ID,
+        lessonScopeKey: 'plan:growth/sdr#outbound',
+        lessonPurpose: 'Sibling purpose.',
+      }],
+      onQuery: (text) => {
+        if (existsSync(join(root, '.roster/state/locks/scaffold'))) observed.push(text);
       },
     });
     const binding = candidate();
+    // A run that exercises the repair arm too, so the pin covers more than the
+    // clean path's single wrapper.
+    scaffoldWorkspace(root, {
+      kind: 'lesson',
+      id: binding.lessonId,
+      scope: 'plan:growth/sdr#outbound',
+      purpose: 'Sibling purpose.',
+    });
     await withSubjectFence({
       pool,
       root,
       candidateId: CANDIDATE_ID,
       expectedDecision: 'promote',
       expectedSubjectSequence: 1,
-      phase: async (fenceContext) => {
-        const result = await materializeLesson({ root, candidate: binding, context: fenceContext });
-        insideLock = true;
-        withWorkspaceLock(root, () => {
-          insideLock = false;
-          return null;
-        });
-        return result;
+      phase: async (fenceContext) =>
+        await materializeLesson({ root, candidate: binding, context: fenceContext }),
+    });
+    assert.deepEqual(observed, [], 'a database call was issued while a workspace lock was held');
+
+    // The instrument itself has to be able to fail: a query deliberately issued
+    // inside a wrapper is caught.
+    const control: string[] = [];
+    const { pool: controlPool } = stubPool({
+      onQuery: (text) => {
+        if (existsSync(join(root, '.roster/state/locks/scaffold'))) control.push(text);
       },
     });
+    const client = await (controlPool as unknown as { connect: () => Promise<{
+      query: (text: string) => Promise<unknown>;
+      release: () => void;
+    }> }).connect();
+    withWorkspaceLock(root, () => {
+      void client.query('SELECT 1 -- deliberately inside the lock');
+      return null;
+    });
+    client.release();
+    assert.deepEqual(control.map((text) => text.trim()), ['SELECT 1 -- deliberately inside the lock']);
+  } finally {
+    cleanup();
+  }
+});
+
+// --- the repair-authentication matrix -------------------------------------
+//
+// Every clause is driven through the REAL arm, and every refusal asserts that
+// BOTH the file and the registration survive: an arm that can delete is only
+// safe if each clause it fails leaves the workspace exactly as it found it.
+
+function repairContextFor(root: string, subjects: SubjectCandidate[] = []): RepairContext {
+  const binding = candidate();
+  return Object.freeze({
+    root,
+    paths: resolveLessonPaths(root, binding.lessonAgentKey, binding.lessonId),
+    lessonId: binding.lessonId,
+    targetScope: lessonTargetScope(binding.lessonScopeKey),
+    expectedQualifiedId: 'growth/sdr/playbook/shorter-openers',
+    governorCandidateId: CANDIDATE_ID,
+    subjectCandidates: subjects,
+    retiredContentHashes: [],
+  });
+}
+
+function wellFormedDuplicateDetails(): Record<string, unknown> {
+  return {
+    kind: 'lesson',
+    qualifiedId: 'growth/sdr/playbook/shorter-openers',
+    existingScope: { function: 'growth', agent: 'sdr', plan: 'outbound' },
+    requestedScope: { function: 'growth', agent: 'sdr' },
+  };
+}
+
+function clauseOf(run: () => void): string {
+  try {
+    run();
+  } catch (error) {
+    assert.ok(isLessonLifecycleConflict(error), String(error));
+    return (error as LessonMaterializationConflict).details.clause ?? '(none)';
+  }
+  return '(no refusal)';
+}
+
+test('every DUPLICATE_IDENTITY clause refuses on its own and preserves both sides', () => {
+  const { root, cleanup } = fixture();
+  try {
+    // The registered state the arm is allowed to repair: a PLAN-scoped
+    // registration while the governor targets AGENT scope.
+    scaffoldWorkspace(root, {
+      kind: 'lesson',
+      id: 'shorter-openers',
+      scope: 'plan:growth/sdr#outbound',
+      purpose: 'Sibling purpose.',
+    });
+    const context = repairContextFor(root);
+    const paths = context.paths;
+    const fileBefore = readWorkspaceFile(root, paths.lessonPath);
+    const agentBefore = readWorkspaceFile(root, paths.agentPath);
+    const preserved = (label: string): void => {
+      assert.deepEqual(readWorkspaceFile(root, paths.lessonPath), fileBefore, `${label}: file`);
+      assert.deepEqual(readWorkspaceFile(root, paths.agentPath), agentBefore, `${label}: membership`);
+    };
+
+    // (a) The error itself. DUPLICATE_IDENTITY has seven raise sites; only the
+    // scaffold scope-mismatch branch carries this exact four-key shape.
+    const cases: readonly [string, Record<string, unknown>, string][] = [
+      ['extra key', { ...wellFormedDuplicateDetails(), extra: 1 }, 'a:details-shape'],
+      ['missing key', { kind: 'lesson', qualifiedId: 'x' }, 'a:details-shape'],
+      ['wrong kind', { ...wellFormedDuplicateDetails(), kind: 'guideline' }, 'a:kind'],
+      ['non-string qualified id', { ...wellFormedDuplicateDetails(), qualifiedId: 7 }, 'a:qualified-id'],
+      ['foreign qualified id', { ...wellFormedDuplicateDetails(), qualifiedId: 'growth/other/playbook/x' }, 'a:qualified-id'],
+      ['requested scope mismatch', {
+        ...wellFormedDuplicateDetails(),
+        requestedScope: { function: 'growth', agent: 'other' },
+      }, 'a:requested-scope'],
+      ['absent existing scope', { ...wellFormedDuplicateDetails(), existingScope: null }, 'a:existing-scope'],
+      ['scopes equal', {
+        ...wellFormedDuplicateDetails(),
+        existingScope: { function: 'growth', agent: 'sdr' },
+      }, 'a:scopes-equal'],
+    ];
+    for (const [label, details, expected] of cases) {
+      assert.equal(clauseOf(() => repairWrongScopeRegistration(context, details)), expected, label);
+      preserved(label);
+    }
+
+    // (c) Provenance. The registered entry's own stub is not among the
+    // prefetched candidates, so nothing authenticates these bytes.
+    assert.equal(
+      clauseOf(() => repairWrongScopeRegistration(context, wellFormedDuplicateDetails())),
+      'c:provenance',
+    );
+    preserved('no provenance');
+
+    // A DIFFERENT-scope sibling's stub must be refused IN THIS ARM even though
+    // the widened membership-absent arm accepts exactly those bytes: this arm
+    // can destroy a registration, so it demands the REGISTERED scope's stub.
+    const agentScoped = repairContextFor(root, [{
+      candidateId: OTHER_CANDIDATE_ID,
+      lessonScopeKey: 'agent:growth/sdr',
+      lessonPurpose: 'Sibling purpose.',
+    }]);
+    assert.equal(
+      clauseOf(() => repairWrongScopeRegistration(agentScoped, wellFormedDuplicateDetails())),
+      'c:provenance',
+    );
+    preserved('different-scope sibling stub');
+
+    // (d) The provenance match must not name the governor itself.
+    const governorOwned = repairContextFor(root, [{
+      candidateId: CANDIDATE_ID,
+      lessonScopeKey: 'plan:growth/sdr#outbound',
+      lessonPurpose: 'Sibling purpose.',
+    }]);
+    assert.equal(
+      clauseOf(() => repairWrongScopeRegistration(governorOwned, wellFormedDuplicateDetails())),
+      'd:registrant-is-governor',
+    );
+    preserved('registrant is governor');
+
+    // (b) The re-derivation. With membership removed the arm aborts rather than
+    // acting on a state that changed between the throw and the authentication.
+    const agentText = readWorkspaceFile(root, paths.agentPath).toString('utf8');
+    replaceWorkspaceFile(
+      root,
+      paths.agentPath,
+      removeYamlMembership(agentText, paths.agentPath, 'lessons', 'shorter-openers'),
+      { expectedHash: hashWorkspaceBytes(agentBefore) },
+    );
+    assert.equal(
+      clauseOf(() => repairWrongScopeRegistration(context, wellFormedDuplicateDetails())),
+      'b:membership-absent',
+    );
+    assert.deepEqual(readWorkspaceFile(root, paths.lessonPath), fileBefore);
+  } finally {
+    cleanup();
+  }
+});
+
+test('the membership-absent arm dispatches ONLY on the publish conflict and re-proves absence', () => {
+  const { root, cleanup } = fixture();
+  try {
+    const binding = candidate();
+    const paths = resolveLessonPaths(root, binding.lessonAgentKey, binding.lessonId);
+    const stub = renderMarkdownDefinition(
+      'lesson',
+      binding.lessonId,
+      'Sibling purpose.',
+      lessonTargetScope('agent:growth/sdr'),
+    );
+    plant(root, paths.lessonPath, stub);
+    const context = repairContextFor(root, [{
+      candidateId: OTHER_CANDIDATE_ID,
+      lessonScopeKey: 'agent:growth/sdr',
+      lessonPurpose: 'Sibling purpose.',
+    }]);
+    const fileBefore = readWorkspaceFile(root, paths.lessonPath);
+
+    // scaffold raises WRITE_CONFLICT for uncertain publication, a failed parent
+    // replacement, and a changed lock owner too. None of those prove membership
+    // is absent, and the registry deliberately PRESERVES the published child
+    // when a parent commit cannot be proven — so only the publish conflict's own
+    // three-key shape at THIS path may dispatch here.
+    for (const [label, details] of [
+      ['quarantine shape', {
+        path: paths.lessonPath,
+        canonicalPath: paths.lessonPath,
+        quarantinePath: `${paths.lessonPath}.tmp`,
+        expectedHash: 'x',
+        cause: 'EIO',
+        state: 'unknown',
+      }],
+      ['parent path', { path: paths.agentPath, expectedHash: 'x', actualHash: 'y' }],
+      ['lock owner shape', { path: '.roster/state/locks/scaffold/owner.json' }],
+    ] as const) {
+      assert.equal(
+        clauseOf(() => repairUnregisteredResidue(context, details as Record<string, unknown>)),
+        label === 'parent path' ? 'x:path' : 'x:details-shape',
+        label,
+      );
+      assert.deepEqual(readWorkspaceFile(root, paths.lessonPath), fileBefore, label);
+    }
+
+    const publishConflict = {
+      path: paths.lessonPath,
+      expectedHash: `sha256:${'a'.repeat(64)}`,
+      actualHash: hashWorkspaceBytes(fileBefore),
+    };
+    // Membership PRESENT re-proves absence and refuses, even with the right
+    // shape and provably recorded-derivable bytes.
+    const agentBytes = readWorkspaceFile(root, paths.agentPath);
+    replaceWorkspaceFile(
+      root,
+      paths.agentPath,
+      addYamlMembership(agentBytes.toString('utf8'), paths.agentPath, 'lessons', binding.lessonId),
+      { expectedHash: hashWorkspaceBytes(agentBytes) },
+    );
+    assert.equal(
+      clauseOf(() => repairUnregisteredResidue(context, publishConflict)),
+      'x:membership-present',
+    );
+    assert.deepEqual(readWorkspaceFile(root, paths.lessonPath), fileBefore);
+
+    // With membership genuinely absent the same bytes ARE removed.
+    const registered = readWorkspaceFile(root, paths.agentPath);
+    replaceWorkspaceFile(
+      root,
+      paths.agentPath,
+      removeYamlMembership(registered.toString('utf8'), paths.agentPath, 'lessons', binding.lessonId),
+      { expectedHash: hashWorkspaceBytes(registered) },
+    );
+    repairUnregisteredResidue(context, publishConflict);
+    assert.equal(existsSync(join(root, paths.lessonPath)), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test('F-6a: a crash after the repair arm removes membership converges on replay', async () => {
+  const { root, cleanup } = fixture();
+  try {
+    const binding = candidate();
+    const paths = resolveLessonPaths(root, binding.lessonAgentKey, binding.lessonId);
+    scaffoldWorkspace(root, {
+      kind: 'lesson',
+      id: binding.lessonId,
+      scope: 'plan:growth/sdr#outbound',
+      purpose: 'Sibling purpose.',
+    });
+    const sibling: SubjectCandidate[] = [{
+      candidateId: OTHER_CANDIDATE_ID,
+      lessonScopeKey: 'plan:growth/sdr#outbound',
+      lessonPurpose: 'Sibling purpose.',
+    }];
+
+    // The crash: membership removed, the stale stub still on disk.
+    await assert.rejects(
+      materializeLesson({
+        root,
+        candidate: binding,
+        context: context({}, sibling),
+        hooks: { afterRepairMembershipRemoval: () => { throw new Error('F-6a: process killed'); } },
+      }),
+      /F-6a: process killed/u,
+    );
+    const agentText = readWorkspaceFile(root, paths.agentPath).toString('utf8');
+    assert.equal(agentText.includes(binding.lessonId), false, 'membership was removed');
+    assert.equal(existsSync(join(root, paths.lessonPath)), true, 'the stale stub survives the crash');
+
+    // The replay reaches the membership-absent publish conflict, the widened
+    // stub arm authenticates the residue, and the governor's content lands.
+    const result = await materializeLesson({
+      root,
+      candidate: binding,
+      context: context({}, sibling),
+    });
+    assert.deepEqual(result.repairs, ['unregistered-residue']);
+    const expected = renderLessonContent(
+      binding.lessonId,
+      binding.lessonPurpose,
+      binding.lessonBody,
+      lessonTargetScope(binding.lessonScopeKey),
+    );
+    assert.equal(hashWorkspaceBytes(readWorkspaceFile(root, result.path)), expected.contentHash);
+    assert.match(
+      readWorkspaceFile(root, paths.agentPath).toString('utf8'),
+      new RegExp(binding.lessonId, 'u'),
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('multiple skipped filesystem phases converge through the DESC retired walk', async () => {
+  const { root, cleanup } = fixture();
+  try {
+    const binding = candidate();
+    const paths = resolveLessonPaths(root, binding.lessonAgentKey, binding.lessonId);
+    const scope = lessonTargetScope(binding.lessonScopeKey);
+    // C1 and C2 both promoted and retired with their filesystem phases skipped,
+    // so the file still holds C1's bytes when C3 promotes.
+    const c1 = renderLessonContent(binding.lessonId, 'C1 purpose.', 'C1 body.', scope);
+    const c2 = renderLessonContent(binding.lessonId, 'C2 purpose.', 'C2 body.', scope);
+    plant(root, paths.lessonPath, c1.content);
+    const agentBytes = readWorkspaceFile(root, paths.agentPath);
+    replaceWorkspaceFile(
+      root,
+      paths.agentPath,
+      addYamlMembership(agentBytes.toString('utf8'), paths.agentPath, 'lessons', binding.lessonId),
+      { expectedHash: hashWorkspaceBytes(agentBytes) },
+    );
+
+    const result = await materializeLesson({
+      root,
+      candidate: binding,
+      // Newest first, exactly as the fence returns them.
+      context: context({ retiredContentHashes: [c2.contentHash, c1.contentHash] }),
+    });
+    assert.equal(result.status, 'replaced');
+    const expected = renderLessonContent(
+      binding.lessonId,
+      binding.lessonPurpose,
+      binding.lessonBody,
+      scope,
+    );
+    assert.equal(hashWorkspaceBytes(readWorkspaceFile(root, result.path)), expected.contentHash);
   } finally {
     cleanup();
   }
