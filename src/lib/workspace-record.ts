@@ -316,6 +316,33 @@ function parseEndpoint(value: unknown, path: string): string {
   return parsed!.origin;
 }
 
+// An ABSENT completeness field is an incomplete Brain ACTIVATION, not a schema
+// defect. The thrown code, message, and remedy stay exactly what they were; the
+// only addition is a typed `details` discriminator whose sole production
+// consumer is sanitizeContextFailure. A wrong-typed or bad-valued field carries
+// no discriminator and stays an ordinary YAML_INVALID for every reader.
+function brainCompletenessGaps(brain: Record<string, unknown>): string[] {
+  const missing: string[] = [];
+  if (!Object.hasOwn(brain, 'secrets_path')) missing.push('secrets_path');
+  const storage = brain['storage'];
+  if (!Object.hasOwn(brain, 'storage')) {
+    missing.push('storage');
+  } else if (storage !== null && typeof storage === 'object' && !Array.isArray(storage)) {
+    if (!Object.hasOwn(storage, 'bucket')) missing.push('storage.bucket');
+    if (!Object.hasOwn(storage, 'region')) missing.push('storage.region');
+  }
+  return missing.sort();
+}
+
+function brainIncompleteFailure(path: string, message: string, missing: readonly string[]): never {
+  throw workspaceFailure(
+    'YAML_INVALID',
+    `${path}: ${message}`,
+    'Fix the authored YAML without changing its registered identity or path.',
+    { path, brain_configuration: 'incomplete', missing: [...missing] },
+  );
+}
+
 function parseBrainConfig(value: unknown, path: string): WorkspaceBrainConfig {
   const brain = requireObject(value, path, 'brain');
   if (Object.hasOwn(brain, 'binding')) {
@@ -327,10 +354,44 @@ function parseBrainConfig(value: unknown, path: string): WorkspaceBrainConfig {
     );
   }
   assertKnownFields(brain, ['secrets_path', 'storage'], path);
-  const storage = requireObject(brain.storage, path, 'brain.storage');
-  assertKnownFields(storage, ['bucket', 'region', 'root_prefix', 'endpoint', 'force_path_style'], path);
-  if (storage.force_path_style !== undefined && typeof storage.force_path_style !== 'boolean') {
-    schemaFailure(path, "'brain.storage.force_path_style' must be a boolean");
+  const missing = brainCompletenessGaps(brain);
+
+  // PRECEDENCE: every PRESENT value is schema-validated first, so a config that
+  // is both incomplete AND malformed raises the ordinary discriminator-free
+  // YAML_INVALID. Only a purely incomplete block reaches the additive
+  // `brain_configuration` discriminator — an incomplete ACTIVATION is not a
+  // schema error, but a malformed value is, and a schema error outranks it.
+  const storageDeclared = Object.hasOwn(brain, 'storage')
+    ? requireObject(brain.storage, path, 'brain.storage')
+    : null;
+  if (storageDeclared !== null) {
+    assertKnownFields(storageDeclared, ['bucket', 'region', 'root_prefix', 'endpoint', 'force_path_style'], path);
+    if (storageDeclared.force_path_style !== undefined
+      && typeof storageDeclared.force_path_style !== 'boolean') {
+      schemaFailure(path, "'brain.storage.force_path_style' must be a boolean");
+    }
+    if (storageDeclared.bucket !== undefined) parseBucket(storageDeclared.bucket, path);
+    if (storageDeclared.region !== undefined) parseRegion(storageDeclared.region, path);
+    if (storageDeclared.root_prefix !== undefined) parseRootPrefix(storageDeclared.root_prefix, path);
+    if (storageDeclared.endpoint !== undefined) parseEndpoint(storageDeclared.endpoint, path);
+  }
+  if (brain.secrets_path !== undefined) parseSecretsPath(brain.secrets_path, path);
+
+  // Only now — with every present value proved well-formed — report the gap, in
+  // the same field order the pre-#352 parse evaluated, so the thrown code,
+  // message, and remedy stay byte-identical.
+  if (!Object.hasOwn(brain, 'storage')) {
+    brainIncompleteFailure(path, 'brain.storage must be a mapping', missing);
+  }
+  const storage = storageDeclared!;
+  if (!Object.hasOwn(brain, 'secrets_path')) {
+    brainIncompleteFailure(path, "'brain.secrets_path' must be a string", missing);
+  }
+  if (!Object.hasOwn(storage, 'bucket')) {
+    brainIncompleteFailure(path, "'brain.storage.bucket' must be a string", missing);
+  }
+  if (!Object.hasOwn(storage, 'region')) {
+    brainIncompleteFailure(path, "'brain.storage.region' must be a string", missing);
   }
   return {
     secrets_path: parseSecretsPath(brain.secrets_path, path),
@@ -339,7 +400,7 @@ function parseBrainConfig(value: unknown, path: string): WorkspaceBrainConfig {
       region: parseRegion(storage.region, path),
       ...(storage.root_prefix === undefined ? {} : { root_prefix: parseRootPrefix(storage.root_prefix, path) }),
       ...(storage.endpoint === undefined ? {} : { endpoint: parseEndpoint(storage.endpoint, path) }),
-      force_path_style: storage.force_path_style ?? false,
+      force_path_style: (storage.force_path_style as boolean | undefined) ?? false,
     },
   };
 }

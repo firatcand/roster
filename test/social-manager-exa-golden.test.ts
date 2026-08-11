@@ -63,6 +63,7 @@ test('Social Manager Exa discovery resolves one host-neutral context bundle for 
       stepHint: 'The host is preparing the discovery shortlist.',
       budgetTokens: DEFAULT_CONTEXT_BUDGET_TOKENS,
       explain: true,
+      includeLegacyUnverified: false,
     } as const;
     const claudeBundle = resolveWorkspaceContext(request);
     const codexBundle = resolveWorkspaceContext(request);

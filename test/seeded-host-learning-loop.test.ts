@@ -46,6 +46,7 @@ const REQUEST: ContextRequest = {
   stepHint: 'The host is preparing the discovery shortlist.',
   budgetTokens: DEFAULT_CONTEXT_BUDGET_TOKENS,
   explain: true,
+  includeLegacyUnverified: false,
 };
 
 function sha256Text(value: string): string {
@@ -60,7 +61,8 @@ function brainCandidate(options: {
 }): SeedBrainCandidate {
   return {
     candidate_id: options.id,
-    selector: options.selector,
+    selectors: [options.selector],
+    label_keys: ['plan:gtm/social-manager#opportunity-discovery'],
     scope: {
       workspace: 'social-manager-context',
       function: 'gtm',
@@ -71,6 +73,8 @@ function brainCandidate(options: {
     current: true,
     tombstoned: false,
     privacy: 'internal',
+    trust: 'brain-extract-untrusted',
+    retrieval_modes: ['lexical'],
     retrieval_rank: options.rank,
     citation: {
       logical_source_id: `source-${options.id}`,

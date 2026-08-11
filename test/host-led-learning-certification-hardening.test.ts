@@ -2016,7 +2016,13 @@ test('compact context log binding rejects raw, projection, and claimed-hash tamp
       brain_configured: false,
     },
     target: { function_id: 'target', agent_id: 'agent', plan_id: null },
-    request: { query: 'reliable ai practitioners', step_hint: null, budget_tokens: 1_000, explain: false },
+    request: {
+      query: 'reliable ai practitioners',
+      step_hint: null,
+      budget_tokens: 1_000,
+      explain: false,
+      include_legacy_unverified: false,
+    },
     agent: {
       function: functionFragment,
       agent: agentFragment,
@@ -2043,6 +2049,7 @@ test('compact context log binding rejects raw, projection, and claimed-hash tamp
       exclusions,
       lessons_budget_exhausted: 0,
       required_selectors_unmatched: 0,
+      required_selectors_truncated: 0,
       candidate_diagnostics_omitted: 0,
     },
     diagnostics: [],

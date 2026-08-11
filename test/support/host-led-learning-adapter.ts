@@ -138,6 +138,14 @@ const CONTEXT_TRUST_CLASSES = new Set([
   'legacy-unverified',
   'diagnostic',
 ]);
+const BRAIN_EVIDENCE_TRUST_CLASSES = [
+  'brain-structured',
+  'brain-extract-untrusted',
+  'tool-output-untrusted',
+  'host-asserted',
+  'legacy-unverified',
+] as const;
+const CONTEXT_RETRIEVAL_MODES: readonly string[] = ['structured', 'lexical', 'embedding'];
 const CONTEXT_INCLUSION_REASONS = new Set([
   'target-function',
   'target-agent',
@@ -442,11 +450,17 @@ function assertFragmentIntegrity(
 
 function assertFragmentPolicy(
   fragment: Readonly<Record<string, unknown>>,
-  expected: Readonly<{ kind: string; trust: string; reason: string | readonly string[]; required: boolean }>,
+  expected: Readonly<{
+    kind: string;
+    trust: string | readonly string[];
+    reason: string | readonly string[];
+    required: boolean;
+  }>,
   label: string,
 ): void {
   const reasons = typeof expected.reason === 'string' ? [expected.reason] : expected.reason;
-  if (fragment['kind'] !== expected.kind || fragment['trust'] !== expected.trust
+  const trusts = typeof expected.trust === 'string' ? [expected.trust] : expected.trust;
+  if (fragment['kind'] !== expected.kind || !trusts.includes(fragment['trust'] as string)
     || !reasons.includes(fragment['inclusion_reason'] as string) || fragment['required'] !== expected.required) {
     fail(`${label} has invalid collection policy metadata`);
   }
@@ -829,12 +843,25 @@ function projectToolFragment(
 
 function projectBrainEvidence(value: unknown, label: string, workspace: string): Readonly<Record<string, unknown>> {
   const fragment = assertFragmentIntegrity(value, label, [
-    ...CONTEXT_FRAGMENT_KEYS, 'privacy', 'candidate_scope', 'retrieval_reason', 'citation',
+    ...CONTEXT_FRAGMENT_KEYS, 'privacy', 'candidate_scope', 'retrieval_reason',
+    'retrieval_modes', 'citation',
   ], workspace);
+  // #352: trust is the real source-version trust class, not a hard clamp.
   assertFragmentPolicy(fragment, {
-    kind: 'brain-evidence', trust: 'brain-extract-untrusted',
+    kind: 'brain-evidence',
+    trust: BRAIN_EVIDENCE_TRUST_CLASSES,
     reason: ['selector-match', 'required-selector-match'], required: false,
   }, label);
+  const retrievalModes = fragment['retrieval_modes'];
+  if (!Array.isArray(retrievalModes)
+    || retrievalModes.length === 0
+    || retrievalModes.some((entry, index) => (
+      !CONTEXT_RETRIEVAL_MODES.includes(String(entry))
+      || (index > 0 && CONTEXT_RETRIEVAL_MODES.indexOf(String(retrievalModes[index - 1]))
+        >= CONTEXT_RETRIEVAL_MODES.indexOf(String(entry)))
+    ))) {
+    fail(`${label}.retrieval_modes is invalid`);
+  }
   const text = contextString(fragment['content'], `${label}.content`);
   if (!['public', 'internal'].includes(String(fragment['privacy']))) fail(`${label}.privacy is invalid`);
   const scope = canonicalContextScope(fragment['candidate_scope'], `${label}.candidate_scope`, workspace);
@@ -857,7 +884,9 @@ function projectBrainEvidence(value: unknown, label: string, workspace: string):
     text,
     privacy: fragment['privacy'],
     scope,
+    trust: fragment['trust'],
     retrieval_reason: fragment['retrieval_reason'],
+    retrieval_modes: [...retrievalModes],
     citation,
   });
 }
@@ -935,14 +964,27 @@ function assertTarget(value: unknown): Readonly<{
 
 function projectRequest(value: unknown): Readonly<Record<string, unknown>> {
   const request = contextObject(value, 'Roster context request');
-  assertExactContextKeys(request, ['query', 'step_hint', 'budget_tokens', 'explain'], 'Roster context request');
+  assertExactContextKeys(
+    request,
+    ['query', 'step_hint', 'budget_tokens', 'explain', 'include_legacy_unverified'],
+    'Roster context request',
+  );
   const query = contextString(request['query'], 'Roster context request.query');
   const stepHint = contextNullableString(request['step_hint'], 'Roster context request.step_hint');
   if (!Number.isSafeInteger(request['budget_tokens']) || (request['budget_tokens'] as number) <= 0) {
     fail('Roster context request.budget_tokens is invalid');
   }
   if (typeof request['explain'] !== 'boolean') fail('Roster context request.explain is invalid');
-  return compactObject({ query, step_hint: stepHint, budget_tokens: request['budget_tokens'], explain: request['explain'] });
+  if (typeof request['include_legacy_unverified'] !== 'boolean') {
+    fail('Roster context request.include_legacy_unverified is invalid');
+  }
+  return compactObject({
+    query,
+    step_hint: stepHint,
+    budget_tokens: request['budget_tokens'],
+    explain: request['explain'],
+    include_legacy_unverified: request['include_legacy_unverified'],
+  });
 }
 
 function assertJsonValue(value: unknown, label: string, depth = 0): void {
@@ -991,7 +1033,8 @@ function projectBudget(value: unknown, requestBudget: unknown): Readonly<Record<
   assertExactContextKeys(budget, [
     'estimator', 'limit_tokens', 'mandatory_bytes', 'mandatory_tokens', 'optional_bytes', 'optional_tokens',
     'reserve_bytes', 'reserve_tokens', 'total_bytes', 'total_tokens', 'remaining_tokens', 'exclusions',
-    'lessons_budget_exhausted', 'required_selectors_unmatched', 'candidate_diagnostics_omitted',
+    'lessons_budget_exhausted', 'required_selectors_unmatched', 'required_selectors_truncated',
+    'candidate_diagnostics_omitted',
   ], 'Roster context budget');
   if (contextString(budget['estimator'], 'Roster context budget.estimator') !== CONTEXT_ESTIMATOR) {
     fail('Roster context budget estimator is not the fixed host-context.v2 estimator');
@@ -1471,7 +1514,16 @@ export function compactContextForHost(value: unknown): Readonly<Record<string, u
         omissionCounts['candidate_diagnostics_omitted'] ?? 0,
       ]),
     ]),
-    diagnostics,
+    // #352: the host-visible projection is deliberately lossy — the complete
+    // diagnostic shape is validated by assertDiagnostics and covered by
+    // raw_context_sha256. An informational echo contributes only its code and
+    // severity so a bounded optional report can never crowd out policy.
+    diagnostics: Object.freeze(diagnostics.map((entry) => {
+      const diagnostic = entry as Readonly<Record<string, unknown>>;
+      return Object.freeze(diagnostic['severity'] === 'info'
+        ? [diagnostic['code'], diagnostic['severity']]
+        : [diagnostic['code'], diagnostic['severity'], diagnostic['details']]);
+    })),
     raw_context_sha256: sha256(canonicalJson(record)),
   });
   assertModelVisibleJsonCharacterLimit(result, 'Roster context host projection');
@@ -2274,6 +2326,7 @@ function runRoster(options: {
         stepHint: null,
         budgetTokens: DEFAULT_CONTEXT_BUDGET_TOKENS,
         explain: false,
+        includeLegacyUnverified: false,
       },
       candidates: contextCandidates(options.workspace),
     });

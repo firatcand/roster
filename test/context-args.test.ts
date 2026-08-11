@@ -35,6 +35,7 @@ test('context args parse exact agent and selected-plan targets with stable defau
       stepHint: null,
       budgetTokens: DEFAULT_CONTEXT_BUDGET_TOKENS,
       explain: false,
+      includeLegacyUnverified: false,
       json: true,
     },
   );
@@ -57,6 +58,7 @@ test('context args parse exact agent and selected-plan targets with stable defau
     stepHint: 'research',
     budgetTokens: DEFAULT_CONTEXT_BUDGET_TOKENS,
     explain: true,
+    includeLegacyUnverified: false,
     json: true,
   });
 });

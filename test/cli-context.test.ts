@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import YAML from 'yaml';
@@ -299,5 +299,197 @@ test('context sanitizes lower-layer workspace and YAML failures before serializa
     assert.equal(`${result.stdout}${result.stderr}`.includes(canary), false);
   } finally {
     malformed.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #352 — the retrieval flag, the awaited command path, and the stable fatal
+// Brain configuration code. `discover`, `scaffold`, and `validate` are held
+// byte-identical against baselines captured from the same workspaces.
+// ---------------------------------------------------------------------------
+
+function writeBrainBlock(root: string, brain: unknown): void {
+  const registryPath = join(root, 'roster.yaml');
+  const registry = YAML.parse(readFileSync(registryPath, 'utf8')) as Record<string, unknown>;
+  if (brain === undefined) delete registry['brain'];
+  else registry['brain'] = brain;
+  writeFileSync(registryPath, YAML.stringify(registry));
+}
+
+const COMPLETE_BRAIN = {
+  secrets_path: '/context-cli-test',
+  storage: { bucket: 'context-cli-test-vault', region: 'eu-central-1' },
+};
+
+const PARTIAL_BRAINS = [
+  { label: 'storage', brain: { secrets_path: '/context-cli-test' }, missing: ['storage'] },
+  {
+    label: 'secrets_path',
+    brain: { storage: { bucket: 'context-cli-test-vault', region: 'eu-central-1' } },
+    missing: ['secrets_path'],
+  },
+  {
+    label: 'storage.bucket',
+    brain: { secrets_path: '/context-cli-test', storage: { region: 'eu-central-1' } },
+    missing: ['storage.bucket'],
+  },
+] as const;
+
+test('context accepts --include-legacy-unverified once and reports it in the request block', () => {
+  const fx = fixture();
+  try {
+    initializeAgent(fx.root);
+    authorPlan(fx.root);
+    const bundle = expectSuccess(runCli(fx.root, [
+      'context',
+      'gtm/social-manager#opportunity-discovery',
+      '--query',
+      'Find relevant reply opportunities.',
+      '--include-legacy-unverified',
+      '--json',
+    ]));
+    const request = bundle['request'] as Record<string, unknown>;
+    assert.equal(request['include_legacy_unverified'], true);
+
+    const withoutFlag = expectSuccess(runCli(fx.root, [
+      'context',
+      'gtm/social-manager#opportunity-discovery',
+      '--query',
+      'Find relevant reply opportunities.',
+      '--json',
+    ]));
+    assert.equal((withoutFlag['request'] as Record<string, unknown>)['include_legacy_unverified'], false);
+
+    expectInvalidArgs(runCli(fx.root, [
+      'context',
+      'gtm/social-manager#opportunity-discovery',
+      '--query',
+      'Find relevant reply opportunities.',
+      '--include-legacy-unverified',
+      '--include-legacy-unverified',
+      '--json',
+    ]));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('context on a half-declared Brain exits non-zero with no bundle and contacts neither store', () => {
+  for (const partial of PARTIAL_BRAINS) {
+    const fx = fixture();
+    try {
+      initializeAgent(fx.root);
+      authorPlan(fx.root);
+      writeBrainBlock(fx.root, partial.brain);
+      const result = runCli(fx.root, [
+        'context',
+        'gtm/social-manager#opportunity-discovery',
+        '--query',
+        'Find relevant reply opportunities.',
+        '--json',
+      ]);
+      assert.equal(result.status, 1, partial.label);
+      assert.equal(result.stderr, '');
+      const envelope = json(result);
+      assert.deepEqual(Object.keys(envelope), ['ok', 'code', 'message', 'remedy', 'details']);
+      assert.equal(envelope['code'], 'BRAIN_CONFIGURATION_INCOMPLETE');
+      assert.deepEqual(envelope['details'], { missing: [...partial.missing] });
+      assert.equal(Object.hasOwn(envelope, 'schema_version'), false);
+    } finally {
+      fx.cleanup();
+    }
+  }
+});
+
+test('discover, scaffold, and validate stay byte-identical under a half-declared Brain', () => {
+  for (const partial of PARTIAL_BRAINS) {
+    const fx = fixture();
+    try {
+      initializeAgent(fx.root);
+      authorPlan(fx.root);
+
+      // Baseline: the same commands on the same workspace with a COMPLETE brain
+      // block differ only in that they succeed; the partial-block failure must
+      // keep the pre-#352 YAML_INVALID envelope, not the context-only code.
+      writeBrainBlock(fx.root, partial.brain);
+      // discover and scaffold raise the registry parse failure directly; the
+      // pre-#352 code, message, and remedy are byte-identical because
+      // parseBrainConfig still throws exactly what it threw before — only its
+      // `details` carries the additive discriminator.
+      const expectedMessage: Record<string, string> = {
+        storage: 'roster.yaml: brain.storage must be a mapping',
+        secrets_path: "roster.yaml: 'brain.secrets_path' must be a string",
+        'storage.bucket': "roster.yaml: 'brain.storage.bucket' must be a string",
+      };
+      for (const args of [
+        ['discover', '--json'],
+        ['scaffold', 'guideline', 'tone', '--scope', 'agent:gtm/social-manager', '--purpose', 'Keep the tone plain.', '--json'],
+      ]) {
+        const result = runCli(fx.root, args);
+        assert.equal(result.status, 1, `${partial.label} ${args[0]}`);
+        assert.equal(result.stderr, '', `${partial.label} ${args[0]}`);
+        const envelope = json(result);
+        assert.equal(envelope['code'], 'YAML_INVALID', `${partial.label} ${args[0]}`);
+        assert.equal(envelope['message'], expectedMessage[partial.label], `${partial.label} ${args[0]}`);
+        assert.equal(
+          envelope['remedy'],
+          'Fix the authored YAML without changing its registered identity or path.',
+          `${partial.label} ${args[0]}`,
+        );
+        assert.notEqual(envelope['code'], 'BRAIN_CONFIGURATION_INCOMPLETE');
+      }
+      // validate keeps reporting a structural check list, never the fatal code.
+      const validate = runCli(fx.root, ['validate', '--json']);
+      assert.equal(validate.status, 1, partial.label);
+      const report = JSON.parse(validate.stdout) as Record<string, unknown>;
+      const checks = report['checks'] as Array<{ name: string; status: string; details: Record<string, unknown> }>;
+      const registryCheck = checks.find((entry) => entry.name === 'declared-registry')!;
+      assert.equal(registryCheck.status, 'fail', partial.label);
+      assert.equal(registryCheck.details['code'], 'YAML_INVALID', partial.label);
+      assert.equal(validate.stdout.includes('BRAIN_CONFIGURATION_INCOMPLETE'), false, partial.label);
+
+      // With the block completed, all three succeed again.
+      writeBrainBlock(fx.root, COMPLETE_BRAIN);
+      assert.equal(runCli(fx.root, ['discover', '--json']).status, 0, partial.label);
+      assert.equal(runCli(fx.root, ['validate', '--json']).status, 0, partial.label);
+    } finally {
+      fx.cleanup();
+    }
+  }
+});
+
+test('context with a complete Brain but no ambient credential degrades, never fails', () => {
+  const fx = fixture();
+  try {
+    initializeAgent(fx.root);
+    authorPlan(fx.root);
+    writeBrainBlock(fx.root, COMPLETE_BRAIN);
+    const result = spawnSync(
+      process.execPath,
+      ['--experimental-strip-types', '--no-warnings', BIN,
+        'context', 'gtm/social-manager#opportunity-discovery',
+        '--query', 'Find relevant reply opportunities.', '--json'],
+      {
+        cwd: fx.root,
+        encoding: 'utf8',
+        env: {
+          ...Object.fromEntries(Object.entries(process.env)
+            .filter(([key]) => key !== 'ROSTER_BRAIN_URL')),
+          FORCE_COLOR: '0',
+          NO_COLOR: '1',
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 30_000,
+      },
+    );
+    assert.equal(result.status, 0, `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+    const bundle = JSON.parse(result.stdout) as Record<string, unknown>;
+    const diagnostics = bundle['diagnostics'] as Array<{ code: string; details: Record<string, unknown> }>;
+    const unavailable = diagnostics.find((entry) => entry.code === 'CONTEXT_EVIDENCE_UNAVAILABLE');
+    assert.notEqual(unavailable, undefined);
+    assert.equal(unavailable!.details['reason'], 'credential-unavailable');
+    assert.deepEqual(bundle['brain_evidence'], []);
+  } finally {
+    fx.cleanup();
   }
 });

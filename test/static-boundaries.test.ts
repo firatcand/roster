@@ -418,10 +418,23 @@ test('tool-use and vendor-skill boundary modules depend only on inert validation
     join(PROJECT_ROOT, 'src/lib/internal/workspace-update-lock.ts'),
     ...vendorFiles,
   ];
+  // #352: `src/commands/context.ts` is the composition root that wires the Brain
+  // retrieval adapter into the pure assembler. Exactly ONE allowlisted triple;
+  // every other ban still applies to it, and `src/lib/workspace-context.ts`
+  // stays in the forbidden set with zero exceptions.
+  const allowedBrainEdges = [{
+    file: 'src/commands/context.ts',
+    module: '../lib/brain/context-retrieval.ts',
+    imported: 'retrieveBrainContextEvidence',
+  }];
+  const allowedBrainEdge = (edge: { file: string; module: string; imported: string }): boolean =>
+    allowedBrainEdges.some((allowed) => allowed.file === edge.file
+      && allowed.module === edge.module
+      && allowed.imported === edge.imported);
   const violations: string[] = [];
   for (const path of files) {
     for (const edge of moduleEdges(path)) {
-      if (forbiddenBoundaryDependency(edge.module)) {
+      if (forbiddenBoundaryDependency(edge.module) && !allowedBrainEdge(edge)) {
         violations.push(`${edge.file}: forbidden ${edge.kind} '${edge.module}'`);
       }
       if (edge.kind === 'import' && edge.imported === 'hashSkillDir') {
@@ -438,6 +451,22 @@ test('tool-use and vendor-skill boundary modules depend only on inert validation
     }
   }
   assert.deepEqual(violations, []);
+
+  // The composition root is the retriever module's SOLE production importer.
+  assert.deepEqual(
+    typescriptFiles('src')
+      .flatMap((path) => moduleEdges(path))
+      .filter((edge) => moduleMatches(edge.module, 'brain/context-retrieval'))
+      .map(({ file, imported }) => ({ file, imported })),
+    [{ file: 'src/commands/context.ts', imported: 'retrieveBrainContextEvidence' }],
+  );
+  // The pure assembler keeps zero forbidden edges, allowlist or not.
+  assert.deepEqual(
+    moduleEdges(join(PROJECT_ROOT, 'src/lib/workspace-context.ts'))
+      .filter((edge) => forbiddenBoundaryDependency(edge.module))
+      .map(({ module }) => module),
+    [],
+  );
 });
 
 test('complete workspace snapshots have one internal mint and one registry-owned importer', () => {
@@ -486,8 +515,10 @@ test('prepared context sources and their read capability have one production and
   const registryModule = 'workspace-registry';
   const registryPath = join(PROJECT_ROOT, 'src/lib/workspace-registry.ts');
   const capability = 'withContextReadCapability';
+  const asyncCapability = 'withAsyncContextReadCapability';
   const protectedNames = new Set([
     capability,
+    asyncCapability,
     'assertPreparedContextSource',
     'PreparedContextSource',
     'PreparedContextRegistryMetadata',
@@ -499,6 +530,15 @@ test('prepared context sources and their read capability have one production and
   assert.deepEqual(declaringFiles(sourceFiles, capability), [
     'src/lib/workspace-registry.ts',
   ]);
+  // #352: the awaited entry point shares one body with the synchronous one and
+  // is pinned to the same single production importer.
+  assert.deepEqual(declaringFiles(sourceFiles, asyncCapability), [
+    'src/lib/workspace-registry.ts',
+  ]);
+  assert.deepEqual(importers(sourceFiles, registryModule, asyncCapability), [{
+    file: 'src/lib/workspace-context.ts',
+    local: asyncCapability,
+  }]);
   assert.deepEqual(declaringFiles(sourceFiles, 'PREPARED_CONTEXT_SOURCE'), [
     'src/lib/workspace-registry.ts',
   ]);

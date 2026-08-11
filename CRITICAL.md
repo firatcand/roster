@@ -59,6 +59,11 @@ src/lib/brain/extractors.ts
 src/lib/brain/embedding-index.ts
 src/lib/brain/embedding-provider.ts
 
+# Cited company Brain retrieval (#352) — the label-correlated eligibility SQL,
+# the one-snapshot transaction order, and the required-coverage report every
+# context bundle's authority and scope confinement rests on.
+src/lib/brain/context-retrieval.ts
+
 # Portable work evidence (#356) — append-only durable runs, artifacts, feedback,
 # and action-digest-bound human decisions, plus the single evidence -> semantic
 # promotion path. A bug here forges a decision record or leaks operational

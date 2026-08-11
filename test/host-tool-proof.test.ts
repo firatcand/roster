@@ -303,6 +303,7 @@ function contextRequestFor(root: string, spec: ProofCase) {
     stepHint: 'The host is preparing one tool invocation.',
     budgetTokens: DEFAULT_CONTEXT_BUDGET_TOKENS,
     explain: true,
+    includeLegacyUnverified: false,
   } as const;
 }
 

@@ -29,6 +29,7 @@ export type ParsedContextArgs =
       stepHint: string | null;
       budgetTokens: number;
       explain: boolean;
+      includeLegacyUnverified: boolean;
       json: true;
     }
   | {
@@ -114,15 +115,17 @@ export function parseContextArgs(args: readonly string[]): ParsedContextArgs {
   let budgetTokens = DEFAULT_CONTEXT_BUDGET_TOKENS;
   let explain = false;
   let json = false;
+  let includeLegacyUnverified = false;
   const seen = new Set<string>();
 
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]!;
-    if (arg === '--explain' || arg === '--json') {
+    if (arg === '--explain' || arg === '--json' || arg === '--include-legacy-unverified') {
       if (seen.has(arg)) return parseError(`${arg} may be provided only once`);
       seen.add(arg);
       if (arg === '--explain') explain = true;
-      else json = true;
+      else if (arg === '--json') json = true;
+      else includeLegacyUnverified = true;
       continue;
     }
     if (arg === '--query' || arg === '--step' || arg === '--budget') {
@@ -181,6 +184,7 @@ export function parseContextArgs(args: readonly string[]): ParsedContextArgs {
     stepHint,
     budgetTokens,
     explain,
+    includeLegacyUnverified,
     json: true,
   };
 }

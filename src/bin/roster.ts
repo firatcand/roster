@@ -201,6 +201,7 @@ function printHelp(version: string): void {
     `  --step <hint>                ${chalk.dim('Add an optional host-supplied context ranking hint')}`,
     `  --budget <tokens>            ${chalk.dim('Set the context token budget (default: 12000; maximum: 128000)')}`,
     `  --explain                    ${chalk.dim('Include bounded context provenance explanations')}`,
+    `  --include-legacy-unverified  ${chalk.dim('Admit legacy-unverified Brain evidence, floored below every verified candidate')}`,
     `  --yes, -y                    ${chalk.dim('Skip prompts; use safe defaults (install)')}`,
     `  --tool <name>                ${chalk.dim('Required scheduler tool: claude | codex (schedule install)')}`,
     `  --json                       ${chalk.dim('Emit machine-readable JSON (install/scaffold/discover/validate/context/update/doctor and supported legacy commands)')}`,
@@ -601,18 +602,19 @@ function runValidate(args: readonly string[]): number {
   });
 }
 
-function runContext(args: readonly string[]): number {
+async function runContext(args: readonly string[]): Promise<number> {
   const parsed = parseContextArgs(args);
   if (parsed.kind === 'err') {
     return commandParseError('context', parsed.message, args.includes('--json'), parsed.details);
   }
-  return executeContext({
+  return await executeContext({
     root: process.cwd(),
     target: parsed.target,
     query: parsed.query,
     stepHint: parsed.stepHint,
     budgetTokens: parsed.budgetTokens,
     explain: parsed.explain,
+    includeLegacyUnverified: parsed.includeLegacyUnverified,
   });
 }
 
@@ -1167,7 +1169,7 @@ async function main(): Promise<number> {
       printHelp(version);
       return EXIT_OK;
     }
-    return runContext(rest);
+    return await runContext(rest);
   }
 
   if (args.includes('--help') || args.includes('-h')) {
