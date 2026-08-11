@@ -1,0 +1,1367 @@
+{
+  "schema_version": 1,
+  "kind": "context_quality_manifest",
+  "generated_at": "2026-08-11T20:32:47.664Z",
+  "authoritative": true,
+  "git": {
+    "commit": "22515970df5d1b31a99106c35ff75a9cf9283c37",
+    "dirty": false
+  },
+  "fixture": {
+    "files": {
+      "tasks.json": "sha256:4fbdbf57aa9a771d05960c1cfb0f7b2f5ecb8e489b304adec50c8b90b7340960",
+      "brain-seeds.json": "sha256:3d5832231d58739aa0282188d772846100934d34c3149b4b481d225bab21a4f2",
+      "eager-baseline.json": "sha256:84242a65419a8752c861a71db3b52b66764f87db57d9a75fe97364a70139c70f"
+    },
+    "sha256": "sha256:058560f2eb34d4653a9d40ebef535ef69659333b6dc47ec1e557ffd6a4259e46"
+  },
+  "workspace_fixture": {
+    "files": {
+      "functions/gtm/agents/content-writer/agent.yaml": "sha256:54dbef46c55e54bfada69a7006deb8b91fa8637ae18853cff799e5bb5046c13a",
+      "functions/gtm/agents/content-writer/guidelines/distribution-policy.md": "sha256:ad28591f46b00c757c2bde7fb9acdf61af504203598f9c685e4bc73d8b40a072",
+      "functions/gtm/agents/content-writer/guidelines/evidence-standards.md": "sha256:9ef3b903569e0afef5f28404386424f82d46ecba511be4061c705e1756b3f1c3",
+      "functions/gtm/agents/content-writer/guidelines/glossary-terms.md": "sha256:3c9ddb2bc8e7e8b361c9f8c880ca788986c4980a54339144f2043131f0c88626",
+      "functions/gtm/agents/content-writer/guidelines/imagery-standards.md": "sha256:3ad97465af99f9abbc72a06ab7d44a39f0af4ba8930a09b2e8731b7825365671",
+      "functions/gtm/agents/content-writer/guidelines/newsletter-charter.md": "sha256:c96776d5954b0779fb09fa8961238bfbb3d8ed26cb2ba6a412e159bd6dd920a6",
+      "functions/gtm/agents/content-writer/guidelines/review-etiquette.md": "sha256:c8d688429c3f1cd5f8187a3c3f45b341f4490fee45b927631d01debfaa4ec85b",
+      "functions/gtm/agents/content-writer/guidelines/sourcing-interviews.md": "sha256:694491cf02b5132cc6882bdf04b65cf29df52272623739a7ab72fec15ec5dd5c",
+      "functions/gtm/agents/content-writer/guidelines/writing-style.md": "sha256:34bb81c1d3bab8a0abca53b753fdb6c602f2e28b1472c8ac5e51511f6cd3a94e",
+      "functions/gtm/agents/content-writer/plans/archive-refresh.yaml": "sha256:ede8c402d884614a7d8556b7ae2741ac758264bd0245d4a21eb0df361d45a332",
+      "functions/gtm/agents/content-writer/plans/case-studies.yaml": "sha256:4e99de8f79a350eee164ac0200d03a113bfc17478e9f6f5d3f79904e4cad5b1b",
+      "functions/gtm/agents/content-writer/plans/draft-posts.yaml": "sha256:a0ab8a6c74e3a38e04d6643007e162618ff4a714546e996b344fab5a3a65d4dc",
+      "functions/gtm/agents/content-writer/plans/localization-pass.yaml": "sha256:b5a97b60ee5104b0624ccf40047742d59d40bbb84bb081c86ee207773bdaad31",
+      "functions/gtm/agents/content-writer/plans/metrics-monthly.yaml": "sha256:141144eb6e99c70f62da1d1076ff5927b7eefa335003e99749183f778bd7f7e2",
+      "functions/gtm/agents/content-writer/plans/newsletter-cycle.yaml": "sha256:d9557ec87c0ad9e87649cd055efd7175d473b2eaf6befe448d717488c08c86ef",
+      "functions/gtm/agents/content-writer/plans/press-briefs.yaml": "sha256:06d1b3c907fbed92c15f149b92c606aee1449758e5b03b280e5f42869d597e81",
+      "functions/gtm/agents/content-writer/plans/revise-drafts.yaml": "sha256:8ebc7593a5a5cf7253f098222662ed9a67d5a126439ce669473a62552c9cb8da",
+      "functions/gtm/agents/content-writer/playbook/case-study-prior.md": "sha256:f1bc3dfd9686e4e73639582a6a52ff17e16f42287c40864a15a27cb43102937c",
+      "functions/gtm/agents/content-writer/playbook/interview-prior.md": "sha256:db8655abff00d8b92f849ad011b16be48a557e46557ba8aeea74cc880819c86d",
+      "functions/gtm/agents/content-writer/playbook/writing-prior.md": "sha256:9a4ca217aa2be961bc1218af0dba684e00a8f603a18b27a5e3875d6b7b776338",
+      "functions/gtm/agents/social-manager/agent.yaml": "sha256:c5494249f32abf219a620264c787c42b811662c814d5af67d5c9e9b315bb011f",
+      "functions/gtm/agents/social-manager/guidelines/crisis-protocol.md": "sha256:fd6c644405cfeb3da38882fdc35887dbeb807e1a07cc6f782866a5136fd09700",
+      "functions/gtm/agents/social-manager/guidelines/discovery-policy.md": "sha256:0832d486c00990157aec9711f6bad330e8dc1ab5fb0a0c409517462d0f7f9123",
+      "functions/gtm/agents/social-manager/guidelines/engagement-boundaries.md": "sha256:f43424cd6ecf62fe9c4fa656cb5ac71801f4745d62a549d3c048dc7dc686fe5c",
+      "functions/gtm/agents/social-manager/guidelines/platform-etiquette.md": "sha256:dadb4c512e78b344302f7a347f176fef114007bbdeca1180af479d5fb50816bc",
+      "functions/gtm/agents/social-manager/guidelines/source-quality.md": "sha256:ebd1f52ccd0922c429f120cdc5b411a57b6d6be800ff8dd3deb7e46fc9c034ce",
+      "functions/gtm/agents/social-manager/plans/competitor-watch.yaml": "sha256:751c0e88fe454ed0605d765abfe7f23702ab693e1bb7f3a0db4ac46aeb1733bf",
+      "functions/gtm/agents/social-manager/plans/listening-report.yaml": "sha256:632fdd3d0eaa7bc42cb658f3d4edfe00d922ee76de91766236d2661e6f45b825",
+      "functions/gtm/agents/social-manager/plans/opportunity-discovery.yaml": "sha256:471a24c012c0693d79b7366b1ed4cdceddfa781bf0efa160773bca6e8379fa89",
+      "functions/gtm/agents/social-manager/plans/opportunity-discovery/tools/signal-scan.yaml": "sha256:10d5935d81a9ae283bd056d78f9b70a0ca7a8a12c28d938bc920cd5ee01e000d",
+      "functions/gtm/agents/social-manager/plans/scan-linkedin.yaml": "sha256:36358f0302de08041f9363d6444cb7b0f823b7cd93f0e635174f495ec1e5a7b2",
+      "functions/gtm/agents/social-manager/plans/scan-web.yaml": "sha256:9fd551547d3f477d2f96536af768a82677b2eaacdd0b7f094c61cc451338474c",
+      "functions/gtm/agents/social-manager/plans/scan-web/tools/channel-drafts.yaml": "sha256:1705708adf8026ed62e07cf62126a0564282a68a34f93765c4aa9a2d7c95311c",
+      "functions/gtm/agents/social-manager/plans/sibling-review.yaml": "sha256:4bdf5a29c41b363bce53e40727e52535d6a3fcf2e7aaae4540e4571ed0104bc3",
+      "functions/gtm/agents/social-manager/plans/weekly-recap.yaml": "sha256:d0a202d93ea4f015aac13dfef2d80351f16ef586d07592dcfa04e3aab2e3ebc2",
+      "functions/gtm/agents/social-manager/playbook/closure-prior.md": "sha256:1576e621ddd5a5b61725342e2f7f2a089a17b9e0f5c08be435489113ef8171ae",
+      "functions/gtm/agents/social-manager/playbook/competitor-prior.md": "sha256:e04e8c87a2087a8dfc035bf6ac112a07918049c60219806d19a1d838d2524ea0",
+      "functions/gtm/agents/social-manager/playbook/duplicate-brief.md": "sha256:6a2012af8906dd93aeda1ff3a2a8101595a3596e555d59bef099e697e0c0d923",
+      "functions/gtm/agents/social-manager/playbook/duplicate-verbose.md": "sha256:88af1cfff7505ecbe8100b561e16e4d01f9508d4d6626910f80f1dcba54838ac",
+      "functions/gtm/agents/social-manager/playbook/general-prior.md": "sha256:cb9b43f26b8b459b92332a7ec9d0dbbe6929f6c5b5a55c9ecf9b815c5dc3792d",
+      "functions/gtm/agents/social-manager/playbook/nested-prior.md": "sha256:6ff48b4aea89592017b03f785d804a0a8a160f8305296dbf684544915b1f2144",
+      "functions/gtm/agents/social-manager/playbook/recap-prior.md": "sha256:3cc967470d38b50c35c1e15b51166b120f1a6dad113d0f3d93059dca145b3ab7",
+      "functions/gtm/agents/social-manager/playbook/sibling-prior.md": "sha256:f21b7c6d0c85888cf4ab0c3eb3e1ce484b88b08dc85233729bc7c8e758d030fb",
+      "functions/gtm/agents/social-manager/tools/channel-drafts.yaml": "sha256:3d32b6fc6f04700507e291b3bbf5e1739f91690904fa6526800d6afd91da2c1f",
+      "functions/gtm/agents/social-manager/tools/signal-scan.yaml": "sha256:f7fd3935a73dc68d0986cf90ab7ac811e56afbd7542ea704be15231e496b6593",
+      "functions/gtm/function.yaml": "sha256:5a0c5dfe353ad05d140290cd218de228e6fd313e9186a7788699a7a61a762078",
+      "functions/gtm/guidelines/audience-map.md": "sha256:dfbf49b8f3c505982d93acfaaaecb10f97199506b307db564efb4bb328ef6a7a",
+      "functions/gtm/guidelines/brand-voice.md": "sha256:7052a3d2593e2b56ec0b3d3c7e805bb2a2830e40fe500f886cd8dcf2ec5c2098",
+      "functions/gtm/guidelines/channel-map.md": "sha256:b97ac372bbfea20f653b460cf553cbbb5915e3421505f7df0aaef0874def1a50",
+      "functions/gtm/guidelines/faq-bank.md": "sha256:afb3c4e3836b9c2ede2e345dbd62c47b68f2cd92562ad2a861a6573159dfd398",
+      "functions/gtm/guidelines/launch-checklist.md": "sha256:3e603143bd62fb113db344f4985bf0dfe21d4283739b23fd6b955d029efe05ac",
+      "functions/gtm/guidelines/measurement-map.md": "sha256:db2a6ff97f6cfa6ac5ac5f852ca6096e147998ed5558004fd65cf82fa6a5aa60",
+      "functions/gtm/tools/signal-scan.yaml": "sha256:e3289f544b9c9b5f1d51824e1d9767778482e09ddfcadd2bbbf618c3e472ac87",
+      "functions/ops/agents/vendor-support/agent.yaml": "sha256:743cd9b5fbbc5abddb372f1d89f5586dd60b255c5db4f0c79f07247d7fced126",
+      "functions/ops/agents/vendor-support/guidelines/communication-templates.md": "sha256:d7969cb38e4128c5b858ec177b9b6708e6639323bcfe4e76801df24aa3b300b7",
+      "functions/ops/agents/vendor-support/guidelines/data-handling.md": "sha256:0f35e896133312ae1060f82cf8714099cf26c511056953f8f40794c043231e59",
+      "functions/ops/agents/vendor-support/guidelines/intake-standards.md": "sha256:2bcf7697d54c250684296864ba1b3af1f6e6ec0f8750e7bf057a1a28e3b8c02c",
+      "functions/ops/agents/vendor-support/guidelines/queue-hygiene.md": "sha256:f304795e6a3a84bd4476e183e030e7ee7a70e9a34c9cc56341b6ccbb92695a60",
+      "functions/ops/agents/vendor-support/guidelines/tooling-access.md": "sha256:84b506a09a0676838c74ea0129f89cf1817e0be7786545919c7ccc4017f22b56",
+      "functions/ops/agents/vendor-support/guidelines/triage-policy.md": "sha256:69d5e22c707910f3ff7b3dc99759bffa261fe6f47941a20f896e9933ad2190df",
+      "functions/ops/agents/vendor-support/guidelines/vendor-meetings.md": "sha256:a3468c58b5e36e834502346d720140260a3c3c96a5a2bba6e9fb24a9d1b556bc",
+      "functions/ops/agents/vendor-support/plans/incident-follow-up.yaml": "sha256:9918fb453533c4ae760cedf4140d01c2c290289458b3ef5db456ff46da418eb0",
+      "functions/ops/agents/vendor-support/plans/knowledge-base-sync.yaml": "sha256:b531b6c7b53eb196318b794088094b7fbcd3f3fd6c554580882e183dbbc125ff",
+      "functions/ops/agents/vendor-support/plans/quarterly-scorecard.yaml": "sha256:3f638f621f8463656c79afab7e8e552eb48595d98d6d96d95c8832897e64633c",
+      "functions/ops/agents/vendor-support/plans/renewal-review.yaml": "sha256:9d5c2eb741333cea4b7a32b81a3bf6789612a7bb35720eb88269ec0bfb0507fa",
+      "functions/ops/agents/vendor-support/plans/ticket-triage.yaml": "sha256:70e86757082d734134104ab037e4df3b73796ae289aa04c77fbef65322592c43",
+      "functions/ops/agents/vendor-support/plans/ticket-triage/tools/ticket-search.yaml": "sha256:8833abf0f4905d18ba34d32ec9989e5baba36a2c891e0fdc73378aec594e9c65",
+      "functions/ops/agents/vendor-support/plans/vendor-onboarding.yaml": "sha256:e99e9ea4bd779ae0e4b62f2a3fd40aef651ebe992dbf87a0a9c9010588a72bf4",
+      "functions/ops/agents/vendor-support/plans/weekly-audit.yaml": "sha256:3713fa7b92b02a988624044e9e53e9512507eafb1408c29b33aee0dfa8ce3ed8",
+      "functions/ops/agents/vendor-support/playbook/audit-prior.md": "sha256:1359df2c1d357c0aa88043ffa19779c90a7767dcaea4636cefdc3fa30f6f036c",
+      "functions/ops/agents/vendor-support/playbook/notice-prior.md": "sha256:2188e9d058d17ac58e1610d368e5e2425d34514144aa504200009e18623d7d45",
+      "functions/ops/agents/vendor-support/playbook/onboarding-prior.md": "sha256:fedfc8f86be2c95d83ea8622117e997b8ab068e5f61a81f63e8ab9c0e676f1f5",
+      "functions/ops/agents/vendor-support/playbook/renewal-prior.md": "sha256:cf53816faaf21a7b67ca6adbc919f8180869f81fe942d45709f8b7b261a35343",
+      "functions/ops/agents/vendor-support/playbook/scorecard-prior.md": "sha256:9741b22ecc6dd98f00417f12f14105ddf7957c0643d149c295196f6887813053",
+      "functions/ops/agents/vendor-support/playbook/triage-prior.md": "sha256:f67b499dad578f6098a5fc75b2a04eea3f2f08a3059bebab77835fb941ec9c6e",
+      "functions/ops/agents/vendor-support/tools/ticket-search.yaml": "sha256:0822aaad040a8e06b66110a933c5b906e3bbf4c09ad494b7be6d432ed4aa643c",
+      "functions/ops/function.yaml": "sha256:b9efb0df1e2b7b68003a3000581dec00602de9d82fce5cb8c73864a5f1048bc8",
+      "functions/ops/guidelines/access-reviews.md": "sha256:bd96ef2a6c8cd7854bcb012d7cc4cfb1ba24fb00bcced308b4e1e61d9b000c21",
+      "functions/ops/guidelines/continuity-runbook.md": "sha256:12d2fc78e431d57ff33088caa561f5524194225d1133a9adb435a9e67c239cb9",
+      "functions/ops/guidelines/escalation-policy.md": "sha256:79955bf5f2992e6802b5f27541c94b98f734667689e99ef66d7855ebb8c25196",
+      "functions/ops/guidelines/incident-comms.md": "sha256:3da3add09ade9300ba9d1c1cfce6db811a378f10f6fc957b7bf64e8bcf89ed94",
+      "functions/ops/guidelines/intake-routing.md": "sha256:e668b927ae6cf8b25e6508dc6d8580663af333d94ee773c72fdade87d6a8328d",
+      "functions/ops/guidelines/spend-policy.md": "sha256:28946c97dc173f3aac1ea3cbc700cee6b8efcfa03868014200a3acf7336a5119",
+      "functions/ops/guidelines/vendor-directory.md": "sha256:b20c3862d5b7371991002ed58bb3d4a1c0dbbed6a814d130217e0314968e63dc",
+      "functions/ops/tools/ticket-search.yaml": "sha256:98a11c773c78019ad8d7b7d7f0c2e020a795b8eee6c0102508c364e180fade86",
+      "tools/atlas-crawl.yaml": "sha256:68b749288e48324465af1241e2b34ccc9d4d2b27c84178edf751818b8e098f6e",
+      "tools/channel-drafts.yaml": "sha256:0e8fa03e089006cb25e1bfce70cc1ef7a9e3a673149675657ab3983d082ff091",
+      "tools/signal-scan.yaml": "sha256:200fd052e3a4fbc772fc95bc7e7e704a8828ae73041b0e4f127efd51ac643ab1",
+      "tools/ticket-search.yaml": "sha256:b3c10079e8d85cb0b65d23a5ba8a041d207b52984c4e0919d705173fb5abc84b"
+    },
+    "sha256": "sha256:1bd951b36403d3c3b7829bff6910b6aee3c448c148a6aa53bf4f54c998dc3365"
+  },
+  "harness": {
+    "test/support/privacy-lint.ts": "sha256:c00107ea012ea689c595bae8c514bee8f6d5bea1f5cf8bc825468c0a96796eaa",
+    "test/support/context-gold.ts": "sha256:b07828361b1f9cdeba4131a2c893a25ed9318b4e1777d44df0db81b7055d7f33",
+    "test/support/context-eval-runner.ts": "sha256:90f62c07c43d88ce49f34c333b382312e00cc6a96081a75a3ce890c268ed30c5",
+    "test/fixtures/context-gold-workspace/_setup.ts": "sha256:450c2fabcfdbeeacf831bea6aa4ab8458da8d2a6ba27a452837d5405e5db8b0a",
+    "scripts/context-eval-report.ts": "sha256:a5fff990db4c29a1c4ce41f1725248ee3ea67a042fc2b4e3bc8cda0a25491001"
+  },
+  "config": {
+    "estimator": "utf8-bytes-ceil-div-4/context-canonical-json-v1",
+    "default_budget_tokens": 12000,
+    "reduction_threshold": 0.4,
+    "baseline_tokens": 30594,
+    "ratio_gated_tasks": [
+      "L1-full-closure-recall",
+      "L2-agent-only-target",
+      "L3-duplicate-lesson-exclusion",
+      "L4-sibling-scope-exclusion",
+      "L5-cross-function-isolation",
+      "L6-lesson-budget-exhaustion",
+      "L9-sparse-agent-coverage",
+      "B6-representative-full-task"
+    ]
+  },
+  "environment": {
+    "node": "v26.6.0",
+    "os": "darwin-arm64",
+    "kind": "dev",
+    "postgres": "16.14 (Homebrew)",
+    "physical_store": "in-memory"
+  },
+  "comparison_exclusions": [
+    "/generated_at",
+    "/environment",
+    "/timings",
+    "/tiers/local/timings",
+    "/tiers/brain/timings"
+  ],
+  "tiers": {
+    "local": {
+      "tier": "local",
+      "physical_store": "none",
+      "postgres": null,
+      "tasks": [
+        {
+          "id": "L1-full-closure-recall",
+          "family": "recall",
+          "tier": "local",
+          "registry_variant": "local",
+          "exit_status": 0,
+          "bundle_tokens": 9065,
+          "baseline_tokens": 30594,
+          "reduction": 0.7037,
+          "ratio_gated": true,
+          "gates": [
+            {
+              "name": "cli-contract",
+              "ok": true,
+              "detail": "exit 0, empty stderr, one-line JSON bundle"
+            },
+            {
+              "name": "recall",
+              "ok": true,
+              "detail": "15 mandatory fragments present with their declared inclusion reasons"
+            },
+            {
+              "name": "exclusion",
+              "ok": true,
+              "detail": "6 forbidden refs absent through their declared closed surfaces"
+            },
+            {
+              "name": "budget-accounting",
+              "ok": true,
+              "detail": "budget counters and exclusion accounting match the declared expectations exactly"
+            },
+            {
+              "name": "diagnostics",
+              "ok": true,
+              "detail": "distinct diagnostic codes exactly [BRAIN_NOT_CONFIGURED, CONTEXT_LESSON_EXCLUDED]"
+            },
+            {
+              "name": "explanations",
+              "ok": true,
+              "detail": "every provenance entry carries the canonical explanation for its inclusion reason"
+            },
+            {
+              "name": "trust-separation",
+              "ok": true,
+              "detail": "every fragment kind carries its structural trust class"
+            },
+            {
+              "name": "host-structure",
+              "ok": true,
+              "detail": "every skill-ref carries exactly {claude, codex} with deep-equal host-native locators"
+            },
+            {
+              "name": "determinism",
+              "ok": true,
+              "detail": "two consecutive invocations are byte-identical"
+            },
+            {
+              "name": "host-equivalence",
+              "ok": true,
+              "detail": "claude-shaped and codex-shaped environments produce byte-identical output"
+            },
+            {
+              "name": "reduction",
+              "ok": true,
+              "detail": "9065 bundle tokens vs 30594 eager tokens — 70.4 % reduction (gate ≥ 60 %)"
+            }
+          ]
+        },
+        {
+          "id": "L2-agent-only-target",
+          "family": "coverage",
+          "tier": "local",
+          "registry_variant": "local",
+          "exit_status": 0,
+          "bundle_tokens": 2958,
+          "baseline_tokens": 30594,
+          "reduction": 0.9033,
+          "ratio_gated": true,
+          "gates": [
+            {
+              "name": "cli-contract",
+              "ok": true,
+              "detail": "exit 0, empty stderr, one-line JSON bundle"
+            },
+            {
+              "name": "recall",
+              "ok": true,
+              "detail": "5 mandatory fragments present with their declared inclusion reasons"
+            },
+            {
+              "name": "exclusion",
+              "ok": true,
+              "detail": "6 forbidden refs absent through their declared closed surfaces"
+            },
+            {
+              "name": "budget-accounting",
+              "ok": true,
+              "detail": "budget counters and exclusion accounting match the declared expectations exactly"
+            },
+            {
+              "name": "diagnostics",
+              "ok": true,
+              "detail": "distinct diagnostic codes exactly [BRAIN_NOT_CONFIGURED, CONTEXT_LESSON_EXCLUDED]"
+            },
+            {
+              "name": "explanations",
+              "ok": true,
+              "detail": "every provenance entry carries the canonical explanation for its inclusion reason"
+            },
+            {
+              "name": "trust-separation",
+              "ok": true,
+              "detail": "every fragment kind carries its structural trust class"
+            },
+            {
+              "name": "host-structure",
+              "ok": true,
+              "detail": "every skill-ref carries exactly {claude, codex} with deep-equal host-native locators"
+            },
+            {
+              "name": "determinism",
+              "ok": true,
+              "detail": "two consecutive invocations are byte-identical"
+            },
+            {
+              "name": "host-equivalence",
+              "ok": true,
+              "detail": "claude-shaped and codex-shaped environments produce byte-identical output"
+            },
+            {
+              "name": "reduction",
+              "ok": true,
+              "detail": "2958 bundle tokens vs 30594 eager tokens — 90.3 % reduction (gate ≥ 60 %)"
+            }
+          ]
+        },
+        {
+          "id": "L3-duplicate-lesson-exclusion",
+          "family": "exclusion",
+          "tier": "local",
+          "registry_variant": "local",
+          "exit_status": 0,
+          "bundle_tokens": 9065,
+          "baseline_tokens": 30594,
+          "reduction": 0.7037,
+          "ratio_gated": true,
+          "gates": [
+            {
+              "name": "cli-contract",
+              "ok": true,
+              "detail": "exit 0, empty stderr, one-line JSON bundle"
+            },
+            {
+              "name": "recall",
+              "ok": true,
+              "detail": "2 mandatory fragments present with their declared inclusion reasons"
+            },
+            {
+              "name": "exclusion",
+              "ok": true,
+              "detail": "1 forbidden refs absent through their declared closed surfaces"
+            },
+            {
+              "name": "budget-accounting",
+              "ok": true,
+              "detail": "budget counters and exclusion accounting match the declared expectations exactly"
+            },
+            {
+              "name": "diagnostics",
+              "ok": true,
+              "detail": "distinct diagnostic codes exactly [BRAIN_NOT_CONFIGURED, CONTEXT_LESSON_EXCLUDED]"
+            },
+            {
+              "name": "explanations",
+              "ok": true,
+              "detail": "every provenance entry carries the canonical explanation for its inclusion reason"
+            },
+            {
+              "name": "trust-separation",
+              "ok": true,
+              "detail": "every fragment kind carries its structural trust class"
+            },
+            {
+              "name": "host-structure",
+              "ok": true,
+              "detail": "every skill-ref carries exactly {claude, codex} with deep-equal host-native locators"
+            },
+            {
+              "name": "determinism",
+              "ok": true,
+              "detail": "two consecutive invocations are byte-identical"
+            },
+            {
+              "name": "host-equivalence",
+              "ok": true,
+              "detail": "claude-shaped and codex-shaped environments produce byte-identical output"
+            },
+            {
+              "name": "reduction",
+              "ok": true,
+              "detail": "9065 bundle tokens vs 30594 eager tokens — 70.4 % reduction (gate ≥ 60 %)"
+            }
+          ]
+        },
+        {
+          "id": "L4-sibling-scope-exclusion",
+          "family": "exclusion",
+          "tier": "local",
+          "registry_variant": "local",
+          "exit_status": 0,
+          "bundle_tokens": 9064,
+          "baseline_tokens": 30594,
+          "reduction": 0.7037,
+          "ratio_gated": true,
+          "gates": [
+            {
+              "name": "cli-contract",
+              "ok": true,
+              "detail": "exit 0, empty stderr, one-line JSON bundle"
+            },
+            {
+              "name": "recall",
+              "ok": true,
+              "detail": "2 mandatory fragments present with their declared inclusion reasons"
+            },
+            {
+              "name": "exclusion",
+              "ok": true,
+              "detail": "3 forbidden refs absent through their declared closed surfaces"
+            },
+            {
+              "name": "budget-accounting",
+              "ok": true,
+              "detail": "budget counters and exclusion accounting match the declared expectations exactly"
+            },
+            {
+              "name": "diagnostics",
+              "ok": true,
+              "detail": "distinct diagnostic codes exactly [BRAIN_NOT_CONFIGURED, CONTEXT_LESSON_EXCLUDED]"
+            },
+            {
+              "name": "explanations",
+              "ok": true,
+              "detail": "every provenance entry carries the canonical explanation for its inclusion reason"
+            },
+            {
+              "name": "trust-separation",
+              "ok": true,
+              "detail": "every fragment kind carries its structural trust class"
+            },
+            {
+              "name": "host-structure",
+              "ok": true,
+              "detail": "every skill-ref carries exactly {claude, codex} with deep-equal host-native locators"
+            },
+            {
+              "name": "determinism",
+              "ok": true,
+              "detail": "two consecutive invocations are byte-identical"
+            },
+            {
+              "name": "host-equivalence",
+              "ok": true,
+              "detail": "claude-shaped and codex-shaped environments produce byte-identical output"
+            },
+            {
+              "name": "reduction",
+              "ok": true,
+              "detail": "9064 bundle tokens vs 30594 eager tokens — 70.4 % reduction (gate ≥ 60 %)"
+            }
+          ]
+        },
+        {
+          "id": "L5-cross-function-isolation",
+          "family": "exclusion",
+          "tier": "local",
+          "registry_variant": "local",
+          "exit_status": 0,
+          "bundle_tokens": 9063,
+          "baseline_tokens": 30594,
+          "reduction": 0.7038,
+          "ratio_gated": true,
+          "gates": [
+            {
+              "name": "cli-contract",
+              "ok": true,
+              "detail": "exit 0, empty stderr, one-line JSON bundle"
+            },
+            {
+              "name": "recall",
+              "ok": true,
+              "detail": "2 mandatory fragments present with their declared inclusion reasons"
+            },
+            {
+              "name": "exclusion",
+              "ok": true,
+              "detail": "12 forbidden refs absent through their declared closed surfaces"
+            },
+            {
+              "name": "budget-accounting",
+              "ok": true,
+              "detail": "budget counters and exclusion accounting match the declared expectations exactly"
+            },
+            {
+              "name": "diagnostics",
+              "ok": true,
+              "detail": "distinct diagnostic codes exactly [BRAIN_NOT_CONFIGURED, CONTEXT_LESSON_EXCLUDED]"
+            },
+            {
+              "name": "explanations",
+              "ok": true,
+              "detail": "every provenance entry carries the canonical explanation for its inclusion reason"
+            },
+            {
+              "name": "trust-separation",
+              "ok": true,
+              "detail": "every fragment kind carries its structural trust class"
+            },
+            {
+              "name": "host-structure",
+              "ok": true,
+              "detail": "every skill-ref carries exactly {claude, codex} with deep-equal host-native locators"
+            },
+            {
+              "name": "determinism",
+              "ok": true,
+              "detail": "two consecutive invocations are byte-identical"
+            },
+            {
+              "name": "host-equivalence",
+              "ok": true,
+              "detail": "claude-shaped and codex-shaped environments produce byte-identical output"
+            },
+            {
+              "name": "reduction",
+              "ok": true,
+              "detail": "9063 bundle tokens vs 30594 eager tokens — 70.4 % reduction (gate ≥ 60 %)"
+            }
+          ]
+        },
+        {
+          "id": "L6-lesson-budget-exhaustion",
+          "family": "budget",
+          "tier": "local",
+          "registry_variant": "local",
+          "exit_status": 0,
+          "bundle_tokens": 7393,
+          "baseline_tokens": 30594,
+          "reduction": 0.7584,
+          "ratio_gated": true,
+          "gates": [
+            {
+              "name": "cli-contract",
+              "ok": true,
+              "detail": "exit 0, empty stderr, one-line JSON bundle"
+            },
+            {
+              "name": "recall",
+              "ok": true,
+              "detail": "11 mandatory fragments present with their declared inclusion reasons"
+            },
+            {
+              "name": "exclusion",
+              "ok": true,
+              "detail": "2 forbidden refs absent through their declared closed surfaces"
+            },
+            {
+              "name": "budget-accounting",
+              "ok": true,
+              "detail": "budget counters and exclusion accounting match the declared expectations exactly"
+            },
+            {
+              "name": "diagnostics",
+              "ok": true,
+              "detail": "distinct diagnostic codes exactly [BRAIN_NOT_CONFIGURED, CONTEXT_LESSON_EXCLUDED]"
+            },
+            {
+              "name": "explanations",
+              "ok": true,
+              "detail": "every provenance entry carries the canonical explanation for its inclusion reason"
+            },
+            {
+              "name": "trust-separation",
+              "ok": true,
+              "detail": "every fragment kind carries its structural trust class"
+            },
+            {
+              "name": "host-structure",
+              "ok": true,
+              "detail": "every skill-ref carries exactly {claude, codex} with deep-equal host-native locators"
+            },
+            {
+              "name": "determinism",
+              "ok": true,
+              "detail": "two consecutive invocations are byte-identical"
+            },
+            {
+              "name": "host-equivalence",
+              "ok": true,
+              "detail": "claude-shaped and codex-shaped environments produce byte-identical output"
+            },
+            {
+              "name": "reduction",
+              "ok": true,
+              "detail": "7393 bundle tokens vs 30594 eager tokens — 75.8 % reduction (gate ≥ 60 %)"
+            }
+          ]
+        },
+        {
+          "id": "L7-explain-toggle-contract",
+          "family": "contract",
+          "tier": "local",
+          "registry_variant": "local",
+          "exit_status": 0,
+          "bundle_tokens": 9065,
+          "baseline_tokens": 30594,
+          "reduction": 0.7037,
+          "ratio_gated": false,
+          "gates": [
+            {
+              "name": "cli-contract",
+              "ok": true,
+              "detail": "exit 0, empty stderr, one-line JSON bundle"
+            },
+            {
+              "name": "recall",
+              "ok": true,
+              "detail": "3 mandatory fragments present with their declared inclusion reasons"
+            },
+            {
+              "name": "exclusion",
+              "ok": true,
+              "detail": "1 forbidden refs absent through their declared closed surfaces"
+            },
+            {
+              "name": "budget-accounting",
+              "ok": true,
+              "detail": "budget counters and exclusion accounting match the declared expectations exactly"
+            },
+            {
+              "name": "diagnostics",
+              "ok": true,
+              "detail": "distinct diagnostic codes exactly [BRAIN_NOT_CONFIGURED, CONTEXT_LESSON_EXCLUDED]"
+            },
+            {
+              "name": "explanations",
+              "ok": true,
+              "detail": "every provenance entry carries the canonical explanation for its inclusion reason"
+            },
+            {
+              "name": "trust-separation",
+              "ok": true,
+              "detail": "every fragment kind carries its structural trust class"
+            },
+            {
+              "name": "host-structure",
+              "ok": true,
+              "detail": "every skill-ref carries exactly {claude, codex} with deep-equal host-native locators"
+            },
+            {
+              "name": "determinism",
+              "ok": true,
+              "detail": "two consecutive invocations are byte-identical"
+            },
+            {
+              "name": "host-equivalence",
+              "ok": true,
+              "detail": "claude-shaped and codex-shaped environments produce byte-identical output"
+            },
+            {
+              "name": "explain-toggle",
+              "ok": true,
+              "detail": "explain mode changes explanation bytes and their derived size accounting, and nothing else"
+            }
+          ]
+        },
+        {
+          "id": "L8-step-hint-contract",
+          "family": "contract",
+          "tier": "local",
+          "registry_variant": "local",
+          "exit_status": 0,
+          "bundle_tokens": 9164,
+          "baseline_tokens": 30594,
+          "reduction": 0.7005,
+          "ratio_gated": false,
+          "gates": [
+            {
+              "name": "cli-contract",
+              "ok": true,
+              "detail": "exit 0, empty stderr, one-line JSON bundle"
+            },
+            {
+              "name": "recall",
+              "ok": true,
+              "detail": "4 mandatory fragments present with their declared inclusion reasons"
+            },
+            {
+              "name": "exclusion",
+              "ok": true,
+              "detail": "1 forbidden refs absent through their declared closed surfaces"
+            },
+            {
+              "name": "budget-accounting",
+              "ok": true,
+              "detail": "budget counters and exclusion accounting match the declared expectations exactly"
+            },
+            {
+              "name": "diagnostics",
+              "ok": true,
+              "detail": "distinct diagnostic codes exactly [BRAIN_NOT_CONFIGURED, CONTEXT_LESSON_EXCLUDED]"
+            },
+            {
+              "name": "explanations",
+              "ok": true,
+              "detail": "every provenance entry carries the canonical explanation for its inclusion reason"
+            },
+            {
+              "name": "trust-separation",
+              "ok": true,
+              "detail": "every fragment kind carries its structural trust class"
+            },
+            {
+              "name": "host-structure",
+              "ok": true,
+              "detail": "every skill-ref carries exactly {claude, codex} with deep-equal host-native locators"
+            },
+            {
+              "name": "determinism",
+              "ok": true,
+              "detail": "two consecutive invocations are byte-identical"
+            },
+            {
+              "name": "host-equivalence",
+              "ok": true,
+              "detail": "claude-shaped and codex-shaped environments produce byte-identical output"
+            },
+            {
+              "name": "step-hint",
+              "ok": true,
+              "detail": "fragment set identical; lesson ordering changed (disclosed as ordering-only)"
+            }
+          ]
+        },
+        {
+          "id": "L9-sparse-agent-coverage",
+          "family": "coverage",
+          "tier": "local",
+          "registry_variant": "local",
+          "exit_status": 0,
+          "bundle_tokens": 3283,
+          "baseline_tokens": 30594,
+          "reduction": 0.8927,
+          "ratio_gated": true,
+          "gates": [
+            {
+              "name": "cli-contract",
+              "ok": true,
+              "detail": "exit 0, empty stderr, one-line JSON bundle"
+            },
+            {
+              "name": "recall",
+              "ok": true,
+              "detail": "6 mandatory fragments present with their declared inclusion reasons"
+            },
+            {
+              "name": "exclusion",
+              "ok": true,
+              "detail": "5 forbidden refs absent through their declared closed surfaces"
+            },
+            {
+              "name": "budget-accounting",
+              "ok": true,
+              "detail": "budget counters and exclusion accounting match the declared expectations exactly"
+            },
+            {
+              "name": "diagnostics",
+              "ok": true,
+              "detail": "distinct diagnostic codes exactly [BRAIN_NOT_CONFIGURED, CONTEXT_LESSON_EXCLUDED]"
+            },
+            {
+              "name": "explanations",
+              "ok": true,
+              "detail": "every provenance entry carries the canonical explanation for its inclusion reason"
+            },
+            {
+              "name": "trust-separation",
+              "ok": true,
+              "detail": "every fragment kind carries its structural trust class"
+            },
+            {
+              "name": "host-structure",
+              "ok": true,
+              "detail": "every skill-ref carries exactly {claude, codex} with deep-equal host-native locators"
+            },
+            {
+              "name": "determinism",
+              "ok": true,
+              "detail": "two consecutive invocations are byte-identical"
+            },
+            {
+              "name": "host-equivalence",
+              "ok": true,
+              "detail": "claude-shaped and codex-shaped environments produce byte-identical output"
+            },
+            {
+              "name": "reduction",
+              "ok": true,
+              "detail": "3283 bundle tokens vs 30594 eager tokens — 89.3 % reduction (gate ≥ 60 %)"
+            }
+          ]
+        },
+        {
+          "id": "L10-partial-registry-fatal",
+          "family": "contract",
+          "tier": "local",
+          "registry_variant": "partial",
+          "exit_status": 1,
+          "bundle_tokens": null,
+          "baseline_tokens": 30594,
+          "reduction": null,
+          "ratio_gated": false,
+          "gates": [
+            {
+              "name": "cli-contract",
+              "ok": true,
+              "detail": "nonzero exit with the closed BRAIN_CONFIGURATION_INCOMPLETE envelope (missing: [\"storage\"])"
+            },
+            {
+              "name": "determinism",
+              "ok": true,
+              "detail": "two consecutive invocations are byte-identical"
+            },
+            {
+              "name": "host-equivalence",
+              "ok": true,
+              "detail": "claude-shaped and codex-shaped environments produce byte-identical output"
+            }
+          ]
+        },
+        {
+          "id": "L11-anyof-alternatives",
+          "family": "recall",
+          "tier": "local",
+          "registry_variant": "local",
+          "exit_status": 0,
+          "bundle_tokens": 7784,
+          "baseline_tokens": 30594,
+          "reduction": 0.7456,
+          "ratio_gated": false,
+          "gates": [
+            {
+              "name": "cli-contract",
+              "ok": true,
+              "detail": "exit 0, empty stderr, one-line JSON bundle"
+            },
+            {
+              "name": "recall",
+              "ok": true,
+              "detail": "4 mandatory fragments present with their declared inclusion reasons"
+            },
+            {
+              "name": "exclusion",
+              "ok": true,
+              "detail": "2 forbidden refs absent through their declared closed surfaces"
+            },
+            {
+              "name": "budget-accounting",
+              "ok": true,
+              "detail": "budget counters and exclusion accounting match the declared expectations exactly"
+            },
+            {
+              "name": "diagnostics",
+              "ok": true,
+              "detail": "distinct diagnostic codes exactly [BRAIN_NOT_CONFIGURED, CONTEXT_LESSON_EXCLUDED]"
+            },
+            {
+              "name": "explanations",
+              "ok": true,
+              "detail": "every provenance entry carries the canonical explanation for its inclusion reason"
+            },
+            {
+              "name": "trust-separation",
+              "ok": true,
+              "detail": "every fragment kind carries its structural trust class"
+            },
+            {
+              "name": "host-structure",
+              "ok": true,
+              "detail": "every skill-ref carries exactly {claude, codex} with deep-equal host-native locators"
+            },
+            {
+              "name": "determinism",
+              "ok": true,
+              "detail": "two consecutive invocations are byte-identical"
+            },
+            {
+              "name": "host-equivalence",
+              "ok": true,
+              "detail": "claude-shaped and codex-shaped environments produce byte-identical output"
+            }
+          ]
+        }
+      ],
+      "tier_gates": [
+        {
+          "name": "explanation-vocabulary",
+          "ok": true,
+          "detail": "observed inclusion reasons are a subset of the closed thirteen-reason vocabulary (11 observed)"
+        },
+        {
+          "name": "local-reason-subset",
+          "ok": true,
+          "detail": "no Brain-only inclusion reason observed on the local tier"
+        },
+        {
+          "name": "independent-rebuild",
+          "ok": true,
+          "detail": "two independent materialize+seed+measure cycles agree on every task row"
+        }
+      ],
+      "timings": {
+        "evaluation_ms": 6384
+      }
+    },
+    "brain": {
+      "tier": "brain",
+      "physical_store": "in-memory",
+      "postgres": "16.14 (Homebrew)",
+      "tasks": [
+        {
+          "id": "B1-required-selector-recall",
+          "family": "recall",
+          "tier": "brain",
+          "registry_variant": "brain",
+          "exit_status": 0,
+          "bundle_tokens": 11921,
+          "baseline_tokens": 30594,
+          "reduction": 0.6103,
+          "ratio_gated": false,
+          "gates": [
+            {
+              "name": "cli-contract",
+              "ok": true,
+              "detail": "exit 0, empty stderr, one-line JSON bundle"
+            },
+            {
+              "name": "recall",
+              "ok": true,
+              "detail": "6 mandatory fragments present with their declared inclusion reasons"
+            },
+            {
+              "name": "exclusion",
+              "ok": true,
+              "detail": "1 forbidden refs absent through their declared closed surfaces"
+            },
+            {
+              "name": "budget-accounting",
+              "ok": true,
+              "detail": "budget counters and exclusion accounting match the declared expectations exactly"
+            },
+            {
+              "name": "diagnostics",
+              "ok": true,
+              "detail": "distinct diagnostic codes exactly [CONTEXT_EVIDENCE_FILTERED, CONTEXT_LESSON_EXCLUDED]"
+            },
+            {
+              "name": "explanations",
+              "ok": true,
+              "detail": "every provenance entry carries the canonical explanation for its inclusion reason"
+            },
+            {
+              "name": "trust-separation",
+              "ok": true,
+              "detail": "every fragment kind carries its structural trust class"
+            },
+            {
+              "name": "host-structure",
+              "ok": true,
+              "detail": "every skill-ref carries exactly {claude, codex} with deep-equal host-native locators"
+            },
+            {
+              "name": "citation",
+              "ok": true,
+              "detail": "every delivered candidate carries the seven-field envelope and re-verifies sha256(content)"
+            },
+            {
+              "name": "embedding-optional",
+              "ok": true,
+              "detail": "embedding mode surfaced as 'disabled' with every gate passing"
+            },
+            {
+              "name": "determinism",
+              "ok": true,
+              "detail": "two consecutive invocations are byte-identical"
+            },
+            {
+              "name": "host-equivalence",
+              "ok": true,
+              "detail": "claude-shaped and codex-shaped environments produce byte-identical output"
+            }
+          ]
+        },
+        {
+          "id": "B2-exclusion-sweep",
+          "family": "exclusion",
+          "tier": "brain",
+          "registry_variant": "brain",
+          "exit_status": 0,
+          "bundle_tokens": 11921,
+          "baseline_tokens": 30594,
+          "reduction": 0.6103,
+          "ratio_gated": false,
+          "gates": [
+            {
+              "name": "cli-contract",
+              "ok": true,
+              "detail": "exit 0, empty stderr, one-line JSON bundle"
+            },
+            {
+              "name": "recall",
+              "ok": true,
+              "detail": "2 mandatory fragments present with their declared inclusion reasons"
+            },
+            {
+              "name": "exclusion",
+              "ok": true,
+              "detail": "4 forbidden refs absent through their declared closed surfaces"
+            },
+            {
+              "name": "budget-accounting",
+              "ok": true,
+              "detail": "budget counters and exclusion accounting match the declared expectations exactly"
+            },
+            {
+              "name": "diagnostics",
+              "ok": true,
+              "detail": "distinct diagnostic codes exactly [CONTEXT_EVIDENCE_FILTERED, CONTEXT_LESSON_EXCLUDED]"
+            },
+            {
+              "name": "explanations",
+              "ok": true,
+              "detail": "every provenance entry carries the canonical explanation for its inclusion reason"
+            },
+            {
+              "name": "trust-separation",
+              "ok": true,
+              "detail": "every fragment kind carries its structural trust class"
+            },
+            {
+              "name": "host-structure",
+              "ok": true,
+              "detail": "every skill-ref carries exactly {claude, codex} with deep-equal host-native locators"
+            },
+            {
+              "name": "citation",
+              "ok": true,
+              "detail": "every delivered candidate carries the seven-field envelope and re-verifies sha256(content)"
+            },
+            {
+              "name": "embedding-optional",
+              "ok": true,
+              "detail": "embedding mode surfaced as 'disabled' with every gate passing"
+            },
+            {
+              "name": "determinism",
+              "ok": true,
+              "detail": "two consecutive invocations are byte-identical"
+            },
+            {
+              "name": "host-equivalence",
+              "ok": true,
+              "detail": "claude-shaped and codex-shaped environments produce byte-identical output"
+            }
+          ]
+        },
+        {
+          "id": "B3-legacy-optin-pair",
+          "family": "contract",
+          "tier": "brain",
+          "registry_variant": "brain",
+          "exit_status": 0,
+          "bundle_tokens": 12387,
+          "baseline_tokens": 30594,
+          "reduction": 0.5951,
+          "ratio_gated": false,
+          "gates": [
+            {
+              "name": "cli-contract",
+              "ok": true,
+              "detail": "exit 0, empty stderr, one-line JSON bundle"
+            },
+            {
+              "name": "recall",
+              "ok": true,
+              "detail": "2 mandatory fragments present with their declared inclusion reasons"
+            },
+            {
+              "name": "exclusion",
+              "ok": true,
+              "detail": "1 forbidden refs absent through their declared closed surfaces"
+            },
+            {
+              "name": "budget-accounting",
+              "ok": true,
+              "detail": "budget counters and exclusion accounting match the declared expectations exactly"
+            },
+            {
+              "name": "diagnostics",
+              "ok": true,
+              "detail": "distinct diagnostic codes exactly [CONTEXT_EVIDENCE_FILTERED, CONTEXT_LESSON_EXCLUDED]"
+            },
+            {
+              "name": "explanations",
+              "ok": true,
+              "detail": "every provenance entry carries the canonical explanation for its inclusion reason"
+            },
+            {
+              "name": "trust-separation",
+              "ok": true,
+              "detail": "every fragment kind carries its structural trust class"
+            },
+            {
+              "name": "host-structure",
+              "ok": true,
+              "detail": "every skill-ref carries exactly {claude, codex} with deep-equal host-native locators"
+            },
+            {
+              "name": "citation",
+              "ok": true,
+              "detail": "every delivered candidate carries the seven-field envelope and re-verifies sha256(content)"
+            },
+            {
+              "name": "embedding-optional",
+              "ok": true,
+              "detail": "embedding mode surfaced as 'disabled' with every gate passing"
+            },
+            {
+              "name": "determinism",
+              "ok": true,
+              "detail": "two consecutive invocations are byte-identical"
+            },
+            {
+              "name": "host-equivalence",
+              "ok": true,
+              "detail": "claude-shaped and codex-shaped environments produce byte-identical output"
+            },
+            {
+              "name": "legacy-optin",
+              "ok": true,
+              "detail": "absent without the flag; returned floored with its trust class retained under it"
+            }
+          ]
+        },
+        {
+          "id": "B4-evidence-budget-exhaustion",
+          "family": "budget",
+          "tier": "brain",
+          "registry_variant": "brain",
+          "exit_status": 0,
+          "bundle_tokens": 11156,
+          "baseline_tokens": 30594,
+          "reduction": 0.6354,
+          "ratio_gated": false,
+          "gates": [
+            {
+              "name": "cli-contract",
+              "ok": true,
+              "detail": "exit 0, empty stderr, one-line JSON bundle"
+            },
+            {
+              "name": "recall",
+              "ok": true,
+              "detail": "3 mandatory fragments present with their declared inclusion reasons"
+            },
+            {
+              "name": "exclusion",
+              "ok": true,
+              "detail": "1 forbidden refs absent through their declared closed surfaces"
+            },
+            {
+              "name": "budget-accounting",
+              "ok": true,
+              "detail": "budget counters and exclusion accounting match the declared expectations exactly"
+            },
+            {
+              "name": "diagnostics",
+              "ok": true,
+              "detail": "distinct diagnostic codes exactly [CONTEXT_EVIDENCE_EXCLUDED, CONTEXT_EVIDENCE_FILTERED, CONTEXT_LESSON_EXCLUDED]"
+            },
+            {
+              "name": "explanations",
+              "ok": true,
+              "detail": "every provenance entry carries the canonical explanation for its inclusion reason"
+            },
+            {
+              "name": "trust-separation",
+              "ok": true,
+              "detail": "every fragment kind carries its structural trust class"
+            },
+            {
+              "name": "host-structure",
+              "ok": true,
+              "detail": "every skill-ref carries exactly {claude, codex} with deep-equal host-native locators"
+            },
+            {
+              "name": "citation",
+              "ok": true,
+              "detail": "every delivered candidate carries the seven-field envelope and re-verifies sha256(content)"
+            },
+            {
+              "name": "embedding-optional",
+              "ok": true,
+              "detail": "embedding mode surfaced as 'disabled' with every gate passing"
+            },
+            {
+              "name": "determinism",
+              "ok": true,
+              "detail": "two consecutive invocations are byte-identical"
+            },
+            {
+              "name": "host-equivalence",
+              "ok": true,
+              "detail": "claude-shaped and codex-shaped environments produce byte-identical output"
+            }
+          ]
+        },
+        {
+          "id": "B5-required-selector-missing",
+          "family": "coverage",
+          "tier": "brain",
+          "registry_variant": "brain",
+          "exit_status": 0,
+          "bundle_tokens": 7378,
+          "baseline_tokens": 30594,
+          "reduction": 0.7588,
+          "ratio_gated": false,
+          "gates": [
+            {
+              "name": "cli-contract",
+              "ok": true,
+              "detail": "exit 0, empty stderr, one-line JSON bundle"
+            },
+            {
+              "name": "recall",
+              "ok": true,
+              "detail": "8 mandatory fragments present with their declared inclusion reasons"
+            },
+            {
+              "name": "exclusion",
+              "ok": true,
+              "detail": "3 forbidden refs absent through their declared closed surfaces"
+            },
+            {
+              "name": "budget-accounting",
+              "ok": true,
+              "detail": "budget counters and exclusion accounting match the declared expectations exactly"
+            },
+            {
+              "name": "diagnostics",
+              "ok": true,
+              "detail": "distinct diagnostic codes exactly [CONTEXT_EVIDENCE_FILTERED, CONTEXT_LESSON_EXCLUDED, CONTEXT_REQUIRED_EVIDENCE_MISSING]"
+            },
+            {
+              "name": "explanations",
+              "ok": true,
+              "detail": "every provenance entry carries the canonical explanation for its inclusion reason"
+            },
+            {
+              "name": "trust-separation",
+              "ok": true,
+              "detail": "every fragment kind carries its structural trust class"
+            },
+            {
+              "name": "host-structure",
+              "ok": true,
+              "detail": "every skill-ref carries exactly {claude, codex} with deep-equal host-native locators"
+            },
+            {
+              "name": "citation",
+              "ok": true,
+              "detail": "every delivered candidate carries the seven-field envelope and re-verifies sha256(content)"
+            },
+            {
+              "name": "embedding-optional",
+              "ok": true,
+              "detail": "embedding mode surfaced as 'disabled' with every gate passing"
+            },
+            {
+              "name": "determinism",
+              "ok": true,
+              "detail": "two consecutive invocations are byte-identical"
+            },
+            {
+              "name": "host-equivalence",
+              "ok": true,
+              "detail": "claude-shaped and codex-shaped environments produce byte-identical output"
+            }
+          ]
+        },
+        {
+          "id": "B6-representative-full-task",
+          "family": "recall",
+          "tier": "brain",
+          "registry_variant": "brain",
+          "exit_status": 0,
+          "bundle_tokens": 11921,
+          "baseline_tokens": 30594,
+          "reduction": 0.6103,
+          "ratio_gated": true,
+          "gates": [
+            {
+              "name": "cli-contract",
+              "ok": true,
+              "detail": "exit 0, empty stderr, one-line JSON bundle"
+            },
+            {
+              "name": "recall",
+              "ok": true,
+              "detail": "16 mandatory fragments present with their declared inclusion reasons"
+            },
+            {
+              "name": "exclusion",
+              "ok": true,
+              "detail": "6 forbidden refs absent through their declared closed surfaces"
+            },
+            {
+              "name": "budget-accounting",
+              "ok": true,
+              "detail": "budget counters and exclusion accounting match the declared expectations exactly"
+            },
+            {
+              "name": "diagnostics",
+              "ok": true,
+              "detail": "distinct diagnostic codes exactly [CONTEXT_EVIDENCE_FILTERED, CONTEXT_LESSON_EXCLUDED]"
+            },
+            {
+              "name": "explanations",
+              "ok": true,
+              "detail": "every provenance entry carries the canonical explanation for its inclusion reason"
+            },
+            {
+              "name": "trust-separation",
+              "ok": true,
+              "detail": "every fragment kind carries its structural trust class"
+            },
+            {
+              "name": "host-structure",
+              "ok": true,
+              "detail": "every skill-ref carries exactly {claude, codex} with deep-equal host-native locators"
+            },
+            {
+              "name": "citation",
+              "ok": true,
+              "detail": "every delivered candidate carries the seven-field envelope and re-verifies sha256(content)"
+            },
+            {
+              "name": "embedding-optional",
+              "ok": true,
+              "detail": "embedding mode surfaced as 'disabled' with every gate passing"
+            },
+            {
+              "name": "determinism",
+              "ok": true,
+              "detail": "two consecutive invocations are byte-identical"
+            },
+            {
+              "name": "host-equivalence",
+              "ok": true,
+              "detail": "claude-shaped and codex-shaped environments produce byte-identical output"
+            },
+            {
+              "name": "reduction",
+              "ok": true,
+              "detail": "11921 bundle tokens vs 30594 eager tokens — 61.0 % reduction (gate ≥ 60 %)"
+            }
+          ]
+        }
+      ],
+      "tier_gates": [
+        {
+          "name": "explanation-vocabulary",
+          "ok": true,
+          "detail": "observed inclusion reasons are a subset of the closed thirteen-reason vocabulary (12 observed)"
+        },
+        {
+          "name": "brain-reasons-observed",
+          "ok": true,
+          "detail": "both selector-match and required-selector-match observed on the brain tier"
+        },
+        {
+          "name": "independent-rebuild",
+          "ok": true,
+          "detail": "two independent materialize+seed+measure cycles agree on every task row"
+        }
+      ],
+      "timings": {
+        "evaluation_ms": 6373
+      }
+    }
+  },
+  "timings": {
+    "wall_clock_ms": 12757
+  },
+  "corpus": {
+    "seeds": 8,
+    "revisions": 9,
+    "tasks": {
+      "local": 11,
+      "brain": 6
+    }
+  }
+}
