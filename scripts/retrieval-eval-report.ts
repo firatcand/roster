@@ -64,7 +64,10 @@ function familyTable(tier: TierResult): string {
 
 function aliasTable(tier: TierResult): string {
   return table(
-    ['query', 'miss class', 'alias expansions', 'baseline joint Recall@64', 'oracle joint Recall@64', 'delta'],
+    [
+      'query', 'miss class', 'alias expansions', 'baseline joint Recall@64',
+      'oracle joint Recall@64', 'delta', 'truncated', 'within arm cap',
+    ],
     tier.alias_oracle.map((row) => [
       row.query,
       row.miss_class,
@@ -72,6 +75,8 @@ function aliasTable(tier: TierResult): string {
       percent(row.baseline_joint_recall_at_64),
       percent(row.oracle_joint_recall_at_64),
       percent(row.delta),
+      row.truncated,
+      row.within_arm_limit ? 'yes' : 'NO',
     ]),
   );
 }
@@ -181,7 +186,9 @@ and cannot repair a membership miss.
 **What was measured.** (a) Baseline membership recall — what embeddings cannot improve today (baseline family Recall@64 = ${percent(tier.families.find((family) => family.family === 'baseline')!.recall_at['64']!)}, and every alias/linked-record miss stays a miss under any rescorer). (b) Ordering headroom on the ordering families: mean Recall@8 ${percent(ordering.recall8)} against a perfect reorderer's ceiling, leaving **${percent(ordering.headroom8)}** of headroom at k = 8, with mean NDCG@10 ${ordering.ndcg.toFixed(3)}. (c) One hermetic fake-adapter run measuring the arm's *mechanics* only: \`${mechanics.status}\`, ${mechanics.stored_vectors} stored vectors, ${mechanics.embed_invocations} embed invocation(s), ${mechanics.bytes_embedded} bytes embedded, ${mechanics.embedding_arm_rows} embedding arm rows, delivered-set changed **${mechanics.delivered_set_changed}** at \`truncated = ${mechanics.truncated}\`.
 
 The delivered-set result is the empirical confirmation of the architectural fact: with
-nothing truncated, adding the embedding arm changed the ORDER and not the SET.
+nothing truncated, adding the embedding arm left the delivered SET unchanged
+(\`delivered_set_changed = ${mechanics.delivered_set_changed}\`) while the delivered ORDER
+changed: \`delivered_order_changed = ${mechanics.delivered_order_changed}\`.
 
 **What was NOT measured (named).** Semantic ordering quality — synthetic vectors measure
 mechanics, not meaning; real-provider embedding quality on a representative corpus; index
@@ -206,7 +213,7 @@ suite passes with the adapter registry empty.
 **Question.** Would one-hop expansion over authored edges recover evidence reachable only
 by following a relation?
 
-**Substrate status.** The cited engine hard-codes \`graph: { status: 'unavailable', reasons: ['no-cited-edge-relation', 'unmeasured'] }\` (\`src/lib/brain/context-retrieval.ts:169\` and \`:922\`) — confirmed for **every** gold query in this run (\`graph_unavailable_everywhere = ${tier.graph_unavailable_everywhere}\`).
+**Substrate status.** The cited engine hard-codes \`graph: { status: 'unavailable', reasons: ['no-cited-edge-relation', 'unmeasured'] }\` (\`src/lib/brain/context-retrieval.ts:169\` and \`:922\`). **Measured as evidence, never asserted:** ${tier.graph_evidence.unavailable} of ${tier.graph_evidence.queries} gold queries reported graph expansion unavailable and ${tier.graph_evidence.available} reported it available, carrying the reason pair(s) ${tier.graph_evidence.reason_pairs.map((pair) => `\`${pair}\``).join(', ') || '(none)'}. The suite does **not** gate on unavailability — a future citable graph arm must be able to ship without failing this suite. The one assertion here is envelope-internal: a query that DOES report the capability unavailable must carry that closed reason pair.
 \`brain.edges\` carries no \`source_version_id\` (\`data/brain/schema/001_init.sql:41-48\`), so an
 expanded row could not be cited. A one-hop expansion *implementation* does already exist
 in the legacy pre-#352 surface (\`src/lib/brain/search.ts:147-173\`, consuming
@@ -326,7 +333,7 @@ Citations: ${tier.citations.complete}/${tier.citations.delivered} delivered cand
 
 ${gateTable(tier)}
 
-Deterministic statement cost per retrieval, on each family's representative query: ${Object.entries(tier.statements_per_family).map(([family, count]) => `${family} ${count}`).join(', ')}. Warm max-of-five \`transactionMs + embedMs\` per family: ${Object.entries(tier.timings.per_family_max_of_five_ms).map(([family, ms]) => `${family} ${ms} ms`).join(', ')}; report-only p95 over ${tier.timings.p95_samples} warm runs of one representative query: ${tier.timings.p95_transaction_ms} ms.`)
+Deterministic statement cost per retrieval, on each family's representative query: ${Object.entries(tier.statements_per_family).map(([family, count]) => `${family} ${count}`).join(', ')}. Warm max-of-five \`transactionMs + embedMs\` per family: ${Object.entries(tier.timings.per_family_max_of_five_ms).map(([family, ms]) => `${family} ${ms} ms`).join(', ')}; report-only p95 over ${tier.timings.p95_sample_ms.length} warm runs of one representative query: ${tier.timings.p95_transaction_ms} ms.`)
     .join('\n\n');
 
   return `# Brain retrieval quality — ${date}
@@ -338,6 +345,7 @@ ground truth; this document is prose and tables derived from it.
 - fixture: \`${(manifest.fixture as { sha256: string }).sha256}\`
 - environment: node ${String(environment.node)}, ${String(environment.os)}, PostgreSQL ${String(environment.postgres)}, pgvector ${String(environment.pgvector ?? 'absent')}, tiers ${String(environment.s3_tier)}
 - corpus: ${corpus.sources} sources / ${corpus.revisions} revisions / ${corpus.queries} queries
+- effective retrieval config: rrf_k ${String((manifest.config as Record<string, unknown>).rrf_k)} (read from the Brain's own \`brain_meta.config\`), candidate cap ${String((manifest.config as Record<string, unknown>).total_candidate_limit)}, per-selector arm cap ${String((manifest.config as Record<string, unknown>).per_selector_arm_limit)}
 
 ## Scope boundary
 

@@ -54,7 +54,15 @@ lives in `createBrainObjectStore`, which this path deliberately does not call.
 
 **Gates** (assertions; a failure fails the suite): baseline recall, exclusion exactness,
 precedence/label correctness, citation completeness, determinism, the latency bound, privacy,
-the authoring self-check, and the independent rebuild.
+the authoring self-check, the alias-oracle boundedness check, and the independent rebuild.
+
+**Graph availability is EVIDENCE, never a gate.** The manifest records how many queries
+reported graph expansion unavailable and which reason pairs they carried, and nothing
+asserts unavailability — a future citable graph arm must be able to ship without failing
+this suite, which is what acceptance criterion 5 requires. The single graph assertion is
+envelope-internal: a query that *does* report the capability unavailable must carry the
+closed reason pair `['no-cited-edge-relation', 'unmeasured']`, and that assertion is
+vacuous the day the arm exists.
 
 **Measurements** (reported numbers, never assertions): the alias-variant, multi-record,
 ordering and paraphrase-ordering families, the alias-expansion oracle delta, the one-hop
@@ -98,8 +106,9 @@ misses; `X(q)` is the expected-excluded set.
   `roster-structured` the region `object` spanning the whole document plus a proof that the
   immutable object bytes hash to `object_id` itself — divided by `returned`. **Gate:** 1.0,
   in both tiers.
-- **Determinism** = two consecutive retrievals produce deep-equal evidence (telemetry
-  excluded). **Gate**, on every gold query.
+- **Determinism** = two consecutive retrievals produce **structurally deep-equal** evidence
+  (`node:util` `isDeepStrictEqual`, telemetry excluded), AND the metric pipeline computed
+  twice over one evidence set produces a deep-equal result. **Gate**, on every gold query.
 - **Independent rebuild** = two full ingest+measure cycles from scratch (fresh database, and
   a fresh bucket in the MinIO tier) produce identical result manifests under the declared
   comparison projection. **Gate**, per tier. Strictly stronger than same-snapshot
@@ -113,7 +122,13 @@ misses; `X(q)` is the expected-excluded set.
   invocations, stored vectors and bytes embedded. All byte-identical across the rebuild gate.
 - **Privacy** (gates): zero `secret` candidates in any delivery, zero `legacy-unverified`
   candidates without the opt-in, and the hermetic lint over the fixtures **and** these
-  generated artifacts.
+  generated artifacts. Inside JSON the lint's digest exemption is pointer-scoped, so a
+  digest-shaped token at an undeclared position is reported as `unexpected-digest`. Two
+  documented boundaries: outside JSON the exemption is shape-only, and bare-hostname
+  detection uses a closed TLD list (the artifacts legitimately contain file paths and SQL
+  identifiers a general rule cannot tell apart from hostnames). The URL and email rules are
+  TLD-independent. Both boundaries are pinned by tests in `test/retrieval-gold-set.test.ts`
+  and restated in `test/fixtures/retrieval-gold/README.md`.
 
 ## Manifest schema (`schema_version: 1`)
 
@@ -122,10 +137,10 @@ misses; `X(q)` is the expected-excluded set.
 | `git.commit`, `git.dirty`, `authoritative` | the code identity; a dirty tree marks the run NON-AUTHORITATIVE in its own header and the generated Markdown says so |
 | `fixture.files`, `fixture.sha256` | per-file and combined digests over the canonicalised fixture JSON |
 | `harness` | per-file SHA-256 of the runner, the gold/lint/metric module, the MinIO transport and the report script **as read at run time**, so uncommitted harness code is identified exactly |
-| `config` | `rrf_k`, `total_candidate_limit`, `per_selector_arm_limit`, the k values, the token budget, the latency budget |
+| `config` | `rrf_k` **read from the Brain's own `brain_meta.config`** by the retrieval transaction (never a constant restated by the harness), `total_candidate_limit`, `per_selector_arm_limit`, the k values, the token budget, the latency budget |
 | `environment` | node, os, ci/dev, PostgreSQL `server_version`, pgvector `extversion`, the tiers that ran |
 | `tiers.<tier>` | per-tier ingest counts, per-query and per-family metric rows, citation and privacy counters, the alias oracle, the one-hop rows, the embedding mechanics, the self-check rows and the gate records |
-| `timings`, `tiers.<tier>.timings` | raw wall-clock samples |
+| `timings`, `tiers.<tier>.timings` | wall-clock data: the per-family five-run sample **arrays**, the thirty-run array behind the p95, the connect samples, and the ingest/evaluation totals |
 | `comparison_exclusions` | the declared JSON-pointer list the rebuild gate removes before comparing |
 
 The rebuild comparison projection removes exactly `/generated_at`, `/environment`,
