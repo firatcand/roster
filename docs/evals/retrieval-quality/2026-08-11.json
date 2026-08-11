@@ -1,24 +1,24 @@
 {
   "schema_version": 1,
   "kind": "retrieval_quality_manifest",
-  "generated_at": "2026-08-11T17:11:02.417Z",
+  "generated_at": "2026-08-11T17:50:54.444Z",
   "authoritative": true,
   "git": {
-    "commit": "05a88e9a1720af602e556b36fa9a7bbc411bd7e6",
+    "commit": "a0f91f950dbde47cdd3b3afe91fd8db111aee37f",
     "dirty": false
   },
   "fixture": {
     "files": {
       "corpus.json": "sha256:93ce3d1c9cab76253bed7adc40806912f55bb53c11b4c62370830f957bd79c8c",
-      "queries.json": "sha256:0c9b004a970606ec33f30a47a515259d4cd638668198752e0651add72abc8096"
+      "queries.json": "sha256:b725627073118806a009d043b2cb69eb89340aec301351cec0f43c56a1e163a6"
     },
-    "sha256": "sha256:e3b45c1d4d2c2df9905de604c689022c520036ec72593f234ec731accdac0120"
+    "sha256": "sha256:6e35cc3d16f008301be58d37ac9d3e9395ea46da8a06749f75952a1d3b9d85b8"
   },
   "harness": {
-    "test/support/retrieval-gold.ts": "sha256:6fc5179f112ecde0aa48352a99b2394aa91b58294da86cf71db04ae5b81c5d6f",
-    "test/support/retrieval-eval-runner.ts": "sha256:24f10f9a6d99abd6bcf14782fe71bf4ef1718875f488f664dfe1dbaa8d4bdd5d",
+    "test/support/retrieval-gold.ts": "sha256:a478db18e41df8e2300ea6c85cccc5f13616a98a39a981ccf365fe5b63b47be5",
+    "test/support/retrieval-eval-runner.ts": "sha256:584057464b45f7d2c012ac11b6e89a8b0e8493f2e75157d5ef8cd35a17364832",
     "test/support/minio-brain-object-store.ts": "sha256:3834ace7e3393b97a14a4ba075c6121834650804ce46f249cc8ee135fb5a8d2e",
-    "scripts/retrieval-eval-report.ts": "sha256:d126e342cc278a20a1c5d81ba12945f83b53792f6bf69da6678f4c8a7e3967cd"
+    "scripts/retrieval-eval-report.ts": "sha256:24352cb149d1c945f24dadc686dd82decaf2cf14ecb474dd7890e9ea12dab0c8"
   },
   "config": {
     "rrf_k": 60,
@@ -50,6 +50,7 @@
   "tiers": {
     "memory": {
       "tier": "memory",
+      "effective_rrf_k": 60,
       "ingest": {
         "logical_sources": 122,
         "versions": 123,
@@ -115,6 +116,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -172,6 +174,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -229,6 +232,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -286,6 +290,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -343,6 +348,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -400,6 +406,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -457,6 +464,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -514,6 +522,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -571,6 +580,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -628,6 +638,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -685,6 +696,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -742,6 +754,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -799,6 +812,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -856,6 +870,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -913,6 +928,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -970,6 +986,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -1027,6 +1044,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -1084,6 +1102,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -1141,6 +1160,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -1198,6 +1218,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -1255,6 +1276,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -1312,6 +1334,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -1369,6 +1392,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -1426,6 +1450,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -1483,6 +1508,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -1540,6 +1566,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -1597,6 +1624,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -1654,6 +1682,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -1711,6 +1740,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -1768,6 +1798,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -1825,6 +1856,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -1882,6 +1914,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -1939,6 +1972,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -1996,6 +2030,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -2053,6 +2088,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -2110,6 +2146,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -2167,6 +2204,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -2224,6 +2262,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -2281,6 +2320,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -2338,6 +2378,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -2395,6 +2436,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -2452,6 +2494,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -2509,6 +2552,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -2566,6 +2610,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -2623,6 +2668,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -2680,6 +2726,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -2737,6 +2784,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -2794,6 +2842,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -2851,6 +2900,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -2908,6 +2958,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -2965,6 +3016,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -3022,6 +3074,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -3079,6 +3132,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -3136,6 +3190,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -3193,6 +3248,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         }
       ],
@@ -3405,7 +3461,14 @@
         "secret_candidates": 0,
         "legacy_unverified_without_optin": 0
       },
-      "graph_unavailable_everywhere": true,
+      "graph_evidence": {
+        "queries": 55,
+        "unavailable": 55,
+        "available": 0,
+        "reason_pairs": [
+          "[\"no-cited-edge-relation\",\"unmeasured\"]"
+        ]
+      },
       "statements_per_family": {
         "baseline": 10,
         "exclusion": 10,
@@ -3423,7 +3486,9 @@
           "baseline_joint_recall_at_64": 0.5,
           "oracle_joint_recall_at_64": 1,
           "delta": 0.5,
-          "recovered": true
+          "recovered": true,
+          "truncated": 0,
+          "within_arm_limit": true
         },
         {
           "query": "alias-meridian-freight",
@@ -3432,7 +3497,9 @@
           "baseline_joint_recall_at_64": 0.5,
           "oracle_joint_recall_at_64": 1,
           "delta": 0.5,
-          "recovered": true
+          "recovered": true,
+          "truncated": 0,
+          "within_arm_limit": true
         },
         {
           "query": "alias-longview-systems",
@@ -3441,7 +3508,9 @@
           "baseline_joint_recall_at_64": 0.5,
           "oracle_joint_recall_at_64": 1,
           "delta": 0.5,
-          "recovered": true
+          "recovered": true,
+          "truncated": 0,
+          "within_arm_limit": true
         },
         {
           "query": "alias-bluewater-labs",
@@ -3450,7 +3519,9 @@
           "baseline_joint_recall_at_64": 0.5,
           "oracle_joint_recall_at_64": 1,
           "delta": 0.5,
-          "recovered": true
+          "recovered": true,
+          "truncated": 0,
+          "within_arm_limit": true
         },
         {
           "query": "alias-larkfield-ops",
@@ -3459,7 +3530,9 @@
           "baseline_joint_recall_at_64": 0.5,
           "oracle_joint_recall_at_64": 1,
           "delta": 0.5,
-          "recovered": true
+          "recovered": true,
+          "truncated": 0,
+          "within_arm_limit": true
         },
         {
           "query": "alias-harborpoint-media",
@@ -3468,7 +3541,9 @@
           "baseline_joint_recall_at_64": 0.5,
           "oracle_joint_recall_at_64": 1,
           "delta": 0.5,
-          "recovered": true
+          "recovered": true,
+          "truncated": 0,
+          "within_arm_limit": true
         },
         {
           "query": "alias-pinecrest-group",
@@ -3477,7 +3552,9 @@
           "baseline_joint_recall_at_64": 0.5,
           "oracle_joint_recall_at_64": 1,
           "delta": 0.5,
-          "recovered": true
+          "recovered": true,
+          "truncated": 0,
+          "within_arm_limit": true
         },
         {
           "query": "alias-silverbrook-holdings",
@@ -3486,7 +3563,9 @@
           "baseline_joint_recall_at_64": 0.5,
           "oracle_joint_recall_at_64": 1,
           "delta": 0.5,
-          "recovered": true
+          "recovered": true,
+          "truncated": 0,
+          "within_arm_limit": true
         },
         {
           "query": "alias-procurement-lead",
@@ -3495,7 +3574,9 @@
           "baseline_joint_recall_at_64": 0.5,
           "oracle_joint_recall_at_64": 1,
           "delta": 0.5,
-          "recovered": true
+          "recovered": true,
+          "truncated": 0,
+          "within_arm_limit": true
         },
         {
           "query": "alias-renewal-exposure",
@@ -3504,7 +3585,9 @@
           "baseline_joint_recall_at_64": 0.5,
           "oracle_joint_recall_at_64": 0.5,
           "delta": 0,
-          "recovered": false
+          "recovered": false,
+          "truncated": 0,
+          "within_arm_limit": true
         }
       ],
       "multi_record": [
@@ -3564,6 +3647,7 @@
         "bytes_embedded": 71,
         "embedding_arm_rows": 64,
         "delivered_set_changed": false,
+        "delivered_order_changed": true,
         "truncated": 0
       },
       "self_check": [
@@ -3950,14 +4034,19 @@
           "detail": "244/244 delivered citations verified"
         },
         {
-          "name": "graph/unavailable-in-every-query",
+          "name": "graph/unavailable-reasons-are-the-closed-pair",
           "ok": true,
-          "detail": "the cited engine reports graph unavailable with exactly [no-cited-edge-relation, unmeasured] for every gold query"
+          "detail": "55 query/queries reported graph unavailable, each carrying exactly [no-cited-edge-relation, unmeasured]; availability itself is evidence, not a gate"
         },
         {
           "name": "families/gates-and-contracts",
           "ok": true,
           "detail": "every gated family assertion holds"
+        },
+        {
+          "name": "alias-oracle/counterfactual-is-bounded",
+          "ok": true,
+          "detail": "every alias-oracle run stayed inside the per-arm cap with nothing truncated"
         },
         {
           "name": "latency/warm-max-of-five-under-remote-budget",
@@ -3969,52 +4058,38 @@
         "per_family_max_of_five_ms": {
           "baseline": 16,
           "exclusion": 15,
-          "precedence": 22,
+          "precedence": 23,
           "alias-variant": 15,
           "multi-record": 15,
           "ordering": 23,
-          "paraphrase-ordering": 23
+          "paraphrase-ordering": 24
         },
         "connect_ms_samples": [
-          4,
-          3,
-          3,
           3,
           4,
           3,
           4,
-          3,
           4,
           3,
           4,
           3,
           3,
-          3,
-          3,
+          4,
           3,
           4,
           3,
-          3,
-          3,
-          3,
-          3,
           4,
-          4,
-          4,
-          4,
-          3,
-          5,
-          4,
-          5,
-          4,
-          5,
-          5,
-          4,
-          5,
           3,
           4,
           4,
           3,
+          4,
+          4,
+          4,
+          3,
+          3,
+          4,
+          4,
           4,
           3,
           3,
@@ -4025,23 +4100,120 @@
           4,
           3,
           3,
-          4,
           3,
           4,
           4,
           4,
-          4
+          4,
+          3,
+          4,
+          3,
+          4,
+          3,
+          4,
+          3,
+          4,
+          3,
+          3,
+          3,
+          3,
+          3,
+          4,
+          3
         ],
-        "ingest_ms": 739,
-        "evaluation_ms": 2409,
-        "embedding_arm_total_ms": 35,
+        "ingest_ms": 735,
+        "evaluation_ms": 2320,
+        "embedding_arm_total_ms": 32,
         "embedding_embed_ms": 0,
         "p95_transaction_ms": 16,
-        "p95_samples": 30
+        "per_family_samples_ms": {
+          "baseline": [
+            16,
+            16,
+            16,
+            15,
+            15
+          ],
+          "exclusion": [
+            14,
+            14,
+            15,
+            14,
+            14
+          ],
+          "precedence": [
+            22,
+            21,
+            22,
+            23,
+            23
+          ],
+          "alias-variant": [
+            14,
+            15,
+            15,
+            15,
+            14
+          ],
+          "multi-record": [
+            15,
+            15,
+            15,
+            14,
+            14
+          ],
+          "ordering": [
+            23,
+            23,
+            23,
+            23,
+            23
+          ],
+          "paraphrase-ordering": [
+            24,
+            23,
+            23,
+            23,
+            23
+          ]
+        },
+        "p95_sample_ms": [
+          15,
+          16,
+          15,
+          15,
+          15,
+          15,
+          15,
+          16,
+          15,
+          15,
+          16,
+          15,
+          16,
+          15,
+          15,
+          15,
+          16,
+          16,
+          16,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          16
+        ]
       }
     },
     "minio": {
       "tier": "minio",
+      "effective_rrf_k": 60,
       "ingest": {
         "logical_sources": 122,
         "versions": 123,
@@ -4107,6 +4279,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -4164,6 +4337,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -4221,6 +4395,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -4278,6 +4453,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -4335,6 +4511,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -4392,6 +4569,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -4449,6 +4627,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -4506,6 +4685,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -4563,6 +4743,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -4620,6 +4801,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -4677,6 +4859,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -4734,6 +4917,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -4791,6 +4975,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -4848,6 +5033,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -4905,6 +5091,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -4962,6 +5149,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -5019,6 +5207,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -5076,6 +5265,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -5133,6 +5323,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -5190,6 +5381,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -5247,6 +5439,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -5304,6 +5497,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -5361,6 +5555,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -5418,6 +5613,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -5475,6 +5671,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -5532,6 +5729,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -5589,6 +5787,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -5646,6 +5845,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -5703,6 +5903,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -5760,6 +5961,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -5817,6 +6019,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -5874,6 +6077,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -5931,6 +6135,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -5988,6 +6193,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -6045,6 +6251,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -6102,6 +6309,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -6159,6 +6367,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -6216,6 +6425,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -6273,6 +6483,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -6330,6 +6541,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -6387,6 +6599,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -6444,6 +6657,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -6501,6 +6715,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -6558,6 +6773,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -6615,6 +6831,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -6672,6 +6889,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -6729,6 +6947,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -6786,6 +7005,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -6843,6 +7063,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -6900,6 +7121,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -6957,6 +7179,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -7014,6 +7237,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -7071,6 +7295,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -7128,6 +7353,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         },
         {
@@ -7185,6 +7411,7 @@
           },
           "exclusion_correct": true,
           "deterministic": true,
+          "metrics_stable": true,
           "contract_violations": []
         }
       ],
@@ -7397,7 +7624,14 @@
         "secret_candidates": 0,
         "legacy_unverified_without_optin": 0
       },
-      "graph_unavailable_everywhere": true,
+      "graph_evidence": {
+        "queries": 55,
+        "unavailable": 55,
+        "available": 0,
+        "reason_pairs": [
+          "[\"no-cited-edge-relation\",\"unmeasured\"]"
+        ]
+      },
       "statements_per_family": {
         "baseline": 10,
         "exclusion": 10,
@@ -7415,7 +7649,9 @@
           "baseline_joint_recall_at_64": 0.5,
           "oracle_joint_recall_at_64": 1,
           "delta": 0.5,
-          "recovered": true
+          "recovered": true,
+          "truncated": 0,
+          "within_arm_limit": true
         },
         {
           "query": "alias-meridian-freight",
@@ -7424,7 +7660,9 @@
           "baseline_joint_recall_at_64": 0.5,
           "oracle_joint_recall_at_64": 1,
           "delta": 0.5,
-          "recovered": true
+          "recovered": true,
+          "truncated": 0,
+          "within_arm_limit": true
         },
         {
           "query": "alias-longview-systems",
@@ -7433,7 +7671,9 @@
           "baseline_joint_recall_at_64": 0.5,
           "oracle_joint_recall_at_64": 1,
           "delta": 0.5,
-          "recovered": true
+          "recovered": true,
+          "truncated": 0,
+          "within_arm_limit": true
         },
         {
           "query": "alias-bluewater-labs",
@@ -7442,7 +7682,9 @@
           "baseline_joint_recall_at_64": 0.5,
           "oracle_joint_recall_at_64": 1,
           "delta": 0.5,
-          "recovered": true
+          "recovered": true,
+          "truncated": 0,
+          "within_arm_limit": true
         },
         {
           "query": "alias-larkfield-ops",
@@ -7451,7 +7693,9 @@
           "baseline_joint_recall_at_64": 0.5,
           "oracle_joint_recall_at_64": 1,
           "delta": 0.5,
-          "recovered": true
+          "recovered": true,
+          "truncated": 0,
+          "within_arm_limit": true
         },
         {
           "query": "alias-harborpoint-media",
@@ -7460,7 +7704,9 @@
           "baseline_joint_recall_at_64": 0.5,
           "oracle_joint_recall_at_64": 1,
           "delta": 0.5,
-          "recovered": true
+          "recovered": true,
+          "truncated": 0,
+          "within_arm_limit": true
         },
         {
           "query": "alias-pinecrest-group",
@@ -7469,7 +7715,9 @@
           "baseline_joint_recall_at_64": 0.5,
           "oracle_joint_recall_at_64": 1,
           "delta": 0.5,
-          "recovered": true
+          "recovered": true,
+          "truncated": 0,
+          "within_arm_limit": true
         },
         {
           "query": "alias-silverbrook-holdings",
@@ -7478,7 +7726,9 @@
           "baseline_joint_recall_at_64": 0.5,
           "oracle_joint_recall_at_64": 1,
           "delta": 0.5,
-          "recovered": true
+          "recovered": true,
+          "truncated": 0,
+          "within_arm_limit": true
         },
         {
           "query": "alias-procurement-lead",
@@ -7487,7 +7737,9 @@
           "baseline_joint_recall_at_64": 0.5,
           "oracle_joint_recall_at_64": 1,
           "delta": 0.5,
-          "recovered": true
+          "recovered": true,
+          "truncated": 0,
+          "within_arm_limit": true
         },
         {
           "query": "alias-renewal-exposure",
@@ -7496,7 +7748,9 @@
           "baseline_joint_recall_at_64": 0.5,
           "oracle_joint_recall_at_64": 0.5,
           "delta": 0,
-          "recovered": false
+          "recovered": false,
+          "truncated": 0,
+          "within_arm_limit": true
         }
       ],
       "multi_record": [
@@ -7556,6 +7810,7 @@
         "bytes_embedded": 71,
         "embedding_arm_rows": 64,
         "delivered_set_changed": false,
+        "delivered_order_changed": true,
         "truncated": 0
       },
       "self_check": [
@@ -7942,14 +8197,19 @@
           "detail": "244/244 delivered citations verified"
         },
         {
-          "name": "graph/unavailable-in-every-query",
+          "name": "graph/unavailable-reasons-are-the-closed-pair",
           "ok": true,
-          "detail": "the cited engine reports graph unavailable with exactly [no-cited-edge-relation, unmeasured] for every gold query"
+          "detail": "55 query/queries reported graph unavailable, each carrying exactly [no-cited-edge-relation, unmeasured]; availability itself is evidence, not a gate"
         },
         {
           "name": "families/gates-and-contracts",
           "ok": true,
           "detail": "every gated family assertion holds"
+        },
+        {
+          "name": "alias-oracle/counterfactual-is-bounded",
+          "ok": true,
+          "detail": "every alias-oracle run stayed inside the per-arm cap with nothing truncated"
         },
         {
           "name": "latency/warm-max-of-five-under-remote-budget",
@@ -7959,82 +8219,164 @@
       ],
       "timings": {
         "per_family_max_of_five_ms": {
-          "baseline": 17,
-          "exclusion": 16,
+          "baseline": 16,
+          "exclusion": 15,
           "precedence": 23,
           "alias-variant": 16,
-          "multi-record": 17,
-          "ordering": 25,
-          "paraphrase-ordering": 25
+          "multi-record": 15,
+          "ordering": 26,
+          "paraphrase-ordering": 27
         },
         "connect_ms_samples": [
           4,
           3,
-          3,
-          4,
-          3,
-          3,
-          3,
-          3,
-          3,
-          4,
-          4,
-          4,
-          3,
-          4,
-          6,
-          4,
-          4,
-          4,
-          4,
-          4,
           4,
           4,
           3,
           4,
           4,
-          4,
-          4,
-          7,
-          4,
-          4,
           3,
           3,
-          14,
-          4,
-          4,
           3,
-          4,
-          4,
-          7,
+          3,
+          3,
           3,
           3,
           3,
           4,
           3,
           4,
-          4,
           3,
           4,
           3,
           4,
           4,
+          10,
+          3,
+          4,
+          4,
+          3,
+          3,
+          3,
           4,
           4,
           4,
+          3,
+          4,
+          4,
+          4,
+          4,
+          3,
+          4,
+          4,
+          4,
+          3,
+          4,
+          4,
+          4,
+          3,
+          4,
+          3,
+          4,
+          3,
+          4,
+          4,
+          3,
           4
         ],
-        "ingest_ms": 943,
-        "evaluation_ms": 2679,
-        "embedding_arm_total_ms": 34,
+        "ingest_ms": 940,
+        "evaluation_ms": 2523,
+        "embedding_arm_total_ms": 31,
         "embedding_embed_ms": 0,
-        "p95_transaction_ms": 17,
-        "p95_samples": 30
+        "p95_transaction_ms": 16,
+        "per_family_samples_ms": {
+          "baseline": [
+            15,
+            15,
+            15,
+            15,
+            16
+          ],
+          "exclusion": [
+            14,
+            15,
+            15,
+            15,
+            14
+          ],
+          "precedence": [
+            23,
+            22,
+            21,
+            22,
+            22
+          ],
+          "alias-variant": [
+            15,
+            15,
+            14,
+            15,
+            16
+          ],
+          "multi-record": [
+            14,
+            15,
+            15,
+            15,
+            15
+          ],
+          "ordering": [
+            26,
+            24,
+            23,
+            23,
+            23
+          ],
+          "paraphrase-ordering": [
+            23,
+            27,
+            24,
+            23,
+            23
+          ]
+        },
+        "p95_sample_ms": [
+          15,
+          15,
+          15,
+          16,
+          16,
+          15,
+          15,
+          16,
+          16,
+          15,
+          15,
+          15,
+          15,
+          15,
+          16,
+          15,
+          16,
+          17,
+          15,
+          16,
+          16,
+          15,
+          15,
+          16,
+          16,
+          15,
+          15,
+          15,
+          15,
+          15
+        ]
       }
     }
   },
   "timings": {
-    "wall_clock_ms": 6770
+    "wall_clock_ms": 6518
   },
   "corpus": {
     "sources": 122,
