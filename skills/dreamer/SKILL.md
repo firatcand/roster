@@ -194,7 +194,7 @@ again with the same arguments.
 
 ## What this skill never does
 
-No schedule, no cron, no nightly job, no queue, no polling, no background daemon.
-You are invoked; you do one pass; you exit. Roster owns no approval state and no
-`pending/` directory — the human decides in the conversation, and the decision is
-recorded as portable evidence.
+Nothing here is timed, queued, polled, or run in the background, and Roster ships
+no verb that would let you build one. You are invoked; you do one pass; you exit.
+Roster owns no approval state and no approval queue — the human decides in the
+conversation, and their decision is recorded as portable evidence.
