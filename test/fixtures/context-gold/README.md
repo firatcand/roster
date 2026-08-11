@@ -187,34 +187,60 @@ domains.
 
 ### Invented-name audit
 
-Round-1 review found that an earlier vendor name (`ledgerdesk`) collided with a
-real software/services business, falsifying the synthetic-only claim. Every
-invented proper name in the fixture was then audited against the live web and
-replaced where any real-world business or claimed product surfaced — including
-near-collisions and crowded namespaces. The verdicts:
+Round-1 review found that an earlier vendor name (`ledgerdesk`) denoted a real
+software/services business, and round 2 found its successor for another role
+(`finchglass`) was an active Fiverr seller identity — so every invented proper
+name in this fixture is audited, and the audit's acceptance rule is stated
+precisely rather than as an absolute nobody can verify.
 
-| name | role | audit verdict |
+**Acceptance rule (narrowed in round 3).** A fixture name is acceptable iff it
+denotes **no active claimed commercial or personal identity** — no business,
+product, service, brand, or marketplace/username identity (the
+`ledgerdesk` / `harborline` / `beacon-post` / `finchglass` failure class) — in
+software, services, or any adjacent commercial domain. Incidental non-identity
+string coincidences — place names, cultivar/pedigree registry entries,
+name-generator output, machine-translated content-mill pages — are RECORDED and
+ACCEPTED, because they create no privacy exposure, no endorsement implication,
+and no confusion with a real vendor. Literal zero-web-presence is deliberately
+NOT the standard: it is unfalsifiable for any pronounceable string.
+
+**What was checked, and when.** General web search plus the Fiverr, GitHub,
+npm, Etsy, X and Instagram marketplace/username namespaces, during review
+rounds one and two (August 2026); round three then re-audited every surviving
+name under the rule above, folding in the incidental string coincidences that
+round's review located. The exact source URLs for every verdict below live in
+the round-3 review record rather than here, because this directory's own
+privacy lint — correctly — refuses real hostnames anywhere inside it. The
+verdicts:
+
+| name | role | verdict under the rule |
 |---|---|---|
-| `Vantmoor Analytics` | the fictional company | no real-world match found (replaced `Harborlight Analytics`, a near-collision with a real analytics consultancy and several "Harbor Light" technology businesses) |
-| `sorquith` (`sorquith:search`) | search vendor | no real-world match found in general web search AND no marketplace/username-namespace match (fiverr/github/npm-style identities). Third name for this role: `harborline` fell in round 1 (a real lending platform / PE firm / trading business) and its replacement `finchglass` fell in round 2 (an active Fiverr seller identity offering company-registration services) |
-| `spilloak` (`spilloak:queue`) | staging-queue vendor | no real-world match found (replaced `beacon-post`, a real UK delivery business) |
-| `quartzharbor-desk` (`quartzharbor-desk:tickets`) | ticket-archive vendor | no real-world match found (replaced `ledgerdesk`, a real software/services business) |
-| `wrenlatch-crawl` (`wrenlatch-crawl:extract`) | catalog-only crawler vendor | no real-world match found (replaced `atlas-crawl`; no exact match existed, but the Atlas namespace is crowded with real crawler products — the tool id also renamed to the descriptive `site-crawl`) |
+| `Vantmoor Analytics` | the fictional company | **accepted** — no claimed identity found; incidental coincidence recorded: "Vantmoor" appears in a Bavarian state agricultural research center's barley pedigree catalogue — a registry entry, not an identity. Replaced `Harborlight Analytics` (round 1: near-collision with a real analytics consultancy and several "Harbor Light" technology businesses) |
+| `sorquith` (`sorquith:search`) | search vendor | **accepted** — no claimed identity found; incidental coincidence recorded: appears as a place name in a 2022 machine-translated travel article on a content-mill site. Third name for this role: `harborline` fell in round 1 (a real lending platform / PE firm / trading business) and `finchglass` fell in round 2 (an active Fiverr seller identity offering company-registration services) |
+| `spilloak` (`spilloak:queue`) | staging-queue vendor | **accepted** — no match of any kind found in the checked scope. Replaced `beacon-post` (round 1: a real UK delivery business) |
+| `quartzharbor-desk` (`quartzharbor-desk:tickets`) | ticket-archive vendor | **accepted** — no claimed identity found; incidental coincidence recorded: "QuartzHarbor" appears verbatim in a business-name generator's automated output — generator suggestions are proposals, not claimed identities. Replaced `ledgerdesk` (round 1: a real software/services business) |
+| `wrenlatch-crawl` (`wrenlatch-crawl:extract`) | catalog-only crawler vendor | **accepted** — no match of any kind found in the checked scope. Replaced `atlas-crawl` (round 1: no exact match existed, but the Atlas namespace is crowded with real crawler products; the tool id was also renamed to the descriptive `site-crawl`) |
 
-Candidate names that DID surface anywhere were rejected during the audit (for
-example `mothgrid`, which belongs to a published fictional universe, and
-`velquorn`, which embeds a real food brand as a morpheme). Round 2 widened the
-check beyond general web search to marketplace/username namespaces
-(fiverr/github/npm-style identities), because that is exactly where
-`finchglass` — clean in general search — turned out to be a live seller
-identity; the four earlier survivors (`quartzharbor`, `wrenlatch`, `spilloak`,
-`Vantmoor`) were re-verified clean under the widened check. Any future invented
-name added to this fixture carries the same obligation: search the general web
-AND the marketplace namespaces first, record the verdict here, and prefer
-invented-morpheme compounds with no dictionary-word or brand overlap — the
-pattern that failed twice was the plausible English word pair. The audit is
-point-in-time; a collision that emerges later is treated like any other privacy
-finding — rename, regenerate the baseline, and update this table. The only workspace-shaped identifier is `context-gold-workspace`,
+The fixture's remaining identifiers — the tool ids (`signal-scan`,
+`channel-drafts`, `ticket-search`, `site-crawl`) and the workspace id
+`context-gold-workspace` — are descriptive strings, not invented proper names,
+and sit outside this audit's subject (the workspace id is separately
+allowlisted by the lint, below).
+
+Candidate names rejected during selection: `mothgrid` (a published fictional
+universe's term) and `velquorn` (embeds a real food brand as a morpheme) —
+avoidable adjacencies the selection declined even where the rule might have
+tolerated them. Round 2's lesson is folded into the method: the
+marketplace/username namespaces are part of the standing check, because that is
+exactly where `finchglass` — with no general-web presence — was a live seller
+identity. Any future invented name added to this fixture carries the same
+obligation: check the general web AND the marketplace namespaces, record the
+verdict here UNDER THE ACCEPTANCE RULE, and prefer invented-morpheme compounds —
+the pattern that failed twice was the plausible English word pair. The audit is
+point-in-time; a claimed identity that emerges later is treated like any other
+privacy finding — rename, regenerate the baseline, and update this table.
+
+The only workspace-shaped identifier is `context-gold-workspace`,
 allowlisted in `test/support/context-gold.ts` (the allowlist lives with the harness,
 not in the fixture, so a leaked identity cannot bless itself). No real hostnames,
 emails, filesystem paths, or credentials anywhere.
