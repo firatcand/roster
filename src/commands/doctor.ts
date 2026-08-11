@@ -58,6 +58,7 @@ import {
   HOST_ADAPTER_LIFECYCLE_CAPABILITIES,
   inspectGeneratedAdapterMetadata,
   inspectGeneratedActivationState,
+  isBlockingGeneratedShadow,
   resolveCurrentHostActivationCapability,
   resolveCurrentHostActivationAssurance,
   type GeneratedAdapterMetadataInspection,
@@ -877,6 +878,7 @@ function readV2GeneratedMetadata(cwd: string): GeneratedAdapterMetadataInspectio
       paths: [],
       shared_bootstrap_canonical: false,
       redundant_activations: [],
+      shadows: [],
       manifest: { state: 'invalid', value: null },
     };
   }
@@ -915,7 +917,11 @@ export function deriveV2DoctorHosts(options: {
     const headerSummary = currentManifest.hosts[host];
     const hostPaths = generatedMetadata.paths.filter((entry) => entry.host === host);
     const pathDrift = hostPaths.some((entry) =>
-      entry.state === 'noncanonical-generated' || entry.state === 'unsafe'
+      entry.state === 'noncanonical-generated'
+      || entry.state === 'stale-generated'
+      || entry.state === 'unsafe'
+    ) || generatedMetadata.shadows.some((shadow) =>
+      shadow.surface_host === host && isBlockingGeneratedShadow(shadow)
     );
     let activationCapability: HostAdapterCapabilityStatus;
     if (pathDrift || generatedMetadata.redundant_activations.includes(host)) {
@@ -1029,6 +1035,21 @@ async function executeV2Doctor(opts: DoctorOptions): Promise<number> {
   const currentHosts = enabledHosts === null
     ? {}
     : deriveV2DoctorHosts({ enabledHosts, generatedMetadata, currentManifest, hostVersions });
+  const recordedGeneratorVersions = [...new Set([
+    ...generatedMetadata.paths
+      .filter((entry) => entry.state === 'canonical-generated' || entry.state === 'stale-generated')
+      .map((entry) => entry.recorded_generator_version)
+      .filter((version): version is string => version !== null),
+    ...(generatedMetadata.manifest.value === null
+      ? []
+      : [generatedMetadata.manifest.value.generator_version]),
+  ])].sort((left, right) => left.localeCompare(right, 'en'));
+  const generatedVersions = {
+    generator_version: getPackageVersion(),
+    protocol_version: 2,
+    recorded_generator_versions: recordedGeneratorVersions,
+    mixed: recordedGeneratorVersions.length > 1,
+  };
   const dreamerActivation = deriveDreamerActivation({
     brain: classifyWorkspaceBrainDeclaration(opts.cwd),
     // Deliberately NOT `structural.ok`: the `generated-artifacts` check fails on
@@ -1070,8 +1091,10 @@ async function executeV2Doctor(opts: DoctorOptions): Promise<number> {
       structural,
       generated: {
         manifest_status: manifestStatus,
+        versions: generatedVersions,
         lifecycle_capabilities: HOST_ADAPTER_LIFECYCLE_CAPABILITIES,
         hosts: currentHosts,
+        shadows: generatedMetadata.shadows,
         files: currentManifest?.files ?? [],
       },
       dreamer_activation: dreamerActivation,
@@ -1104,6 +1127,17 @@ async function executeV2Doctor(opts: DoctorOptions): Promise<number> {
         + chalk.dim(` (assurance: ${activation.activation_assurance})`),
       );
     }
+    if (generatedVersions.mixed) {
+      console.log(`  ${chalk.red('!')} generated versions: mixed (${recordedGeneratorVersions.join(', ')})`);
+    }
+    for (const shadow of generatedMetadata.shadows) {
+      const mark = isBlockingGeneratedShadow(shadow) ? chalk.red('!') : chalk.yellow('⚠');
+      console.log(`  ${mark} shadow ${shadow.kind} at ${shadow.path} (${shadow.surface_host})`);
+    }
+    console.log(chalk.dim(
+      '  shadow scan: CLAUDE.md, CLAUDE.local.md, GEMINI.md, AGENTS.override.md, .claude/rules/**'
+      + ' — Codex configured fallback filenames and nested-directory host files are not scanned',
+    ));
     for (const line of renderDreamerActivationLines(dreamerActivation)) console.log(line);
     for (const line of renderSafetySection(safety)) console.log(line);
     for (const line of renderSecretsSection(secrets)) console.log(line);

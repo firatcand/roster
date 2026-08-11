@@ -648,6 +648,10 @@ test('v2 doctor audits structural and generated activation without legacy projec
     assert.equal(doc.status, 0, `stderr: ${doc.stderr}\nstdout: ${doc.stdout}`);
     assert.match(doc.stdout, /Roster v2 workspace/);
     assert.match(doc.stdout, /claude activation: advisory \(assurance: advisory-manual\)/);
+    assert.match(
+      doc.stdout,
+      /shadow scan: .*\.claude\/rules\/\*\* — Codex configured fallback filenames and nested-directory host files are not scanned/,
+    );
     assert.doesNotMatch(doc.stdout, /Install scope|Shadow collisions|Scheduling/);
   } finally {
     h.cleanup();
@@ -702,9 +706,17 @@ test('v2 doctor --json includes structural, generated assurance, and not-applica
       workspace: { kind: string };
       structural: { ok: boolean };
       generated: {
+        versions: {
+          generator_version: string;
+          protocol_version: number;
+          recorded_generator_versions: string[];
+          mixed: boolean;
+        };
         lifecycle_capabilities: Array<{ id: string; status: string }>;
         hosts: { claude?: { activation_assurance: string; activation_capability: string } };
+        shadows: unknown[];
       };
+      rosterVersion: string;
       not_applicable: Record<string, { status: string }>;
     };
     assert.equal(payload.workspace.kind, 'v2');
@@ -712,6 +724,11 @@ test('v2 doctor --json includes structural, generated assurance, and not-applica
     assert.equal(payload.generated.hosts.claude?.activation_assurance, 'advisory-manual');
     assert.equal(payload.generated.hosts.claude?.activation_capability, 'advisory');
     assert.deepEqual(payload.generated.lifecycle_capabilities, HOST_ADAPTER_LIFECYCLE_CAPABILITIES);
+    assert.equal(payload.generated.versions.generator_version, payload.rosterVersion);
+    assert.equal(payload.generated.versions.protocol_version, 2);
+    assert.deepEqual(payload.generated.versions.recorded_generator_versions, [payload.rosterVersion]);
+    assert.equal(payload.generated.versions.mixed, false);
+    assert.deepEqual(payload.generated.shadows, []);
     assert.equal(payload.not_applicable.scheduling?.status, 'not-applicable');
   } finally {
     h.cleanup();
@@ -969,6 +986,241 @@ test('v2 doctor reports redundant Claude generated activations as drifted', () =
       generated: { hosts: { claude?: { activation_capability: string } } };
     };
     assert.equal(payload.generated.hosts.claude?.activation_capability, 'drifted');
+  } finally {
+    h.cleanup();
+  }
+});
+
+// #365: versions and shadows in the generated block, and their composition
+// through the #359 dreamer truth table (which is consumed unchanged).
+
+function rehashOldVersion(text: string, version: string): string {
+  const parsed = parseGeneratedMarkdown(text)!;
+  const { content_hash: _contentHash, ...header } = parsed.header;
+  return renderGeneratedMarkdown({ ...header, generator_version: version }, parsed.body, parsed.prefix);
+}
+
+function syncManifestFileHashes(ws: string): void {
+  const manifestPath = join(ws, GENERATED_MANIFEST_PATH);
+  const manifest = parseGeneratedManifest(readFileSync(manifestPath, 'utf8'))!;
+  const { manifest_hash: _manifestHash, ...draft } = manifest;
+  writeFileSync(manifestPath, renderGeneratedManifest(createGeneratedManifest({
+    ...draft,
+    files: draft.files.map((entry) => {
+      const parsed = parseGeneratedMarkdown(readFileSync(join(ws, ...entry.path.split('/')), 'utf8'))!;
+      return { ...entry, content_hash: parsed.header.content_hash };
+    }),
+  })));
+}
+
+type V2DoctorPayload = {
+  structural: { ok: boolean };
+  generated: {
+    versions: { recorded_generator_versions: string[]; mixed: boolean };
+    hosts: Record<string, { activation_capability: string } | undefined>;
+    shadows: Array<{ path: string; surface_host: string; kind: string }>;
+  };
+  rosterVersion: string;
+  dreamer_activation: Record<string, unknown> & { verdict: string };
+};
+
+function v2Doctor(h: Homes, ws: string): { status: number; payload: V2DoctorPayload } {
+  const doc = runCliInCwd(['doctor', '--json'], { ...envFor(h), PATH: '/usr/bin:/bin' }, ws);
+  return { status: doc.status, payload: JSON.parse(doc.stdout) as V2DoctorPayload };
+}
+
+test('v2 doctor reports mixed generator versions and isolates drift to the stale host', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    assert.equal(installV2ProjectActivation({ root: ws, host: 'claude' }).ok, true);
+    assert.equal(installV2ProjectActivation({ root: ws, host: 'codex' }).ok, true);
+    const agentsPath = join(ws, CODEX_PROJECT_INSTRUCTIONS_PATH);
+    writeFileSync(agentsPath, rehashOldVersion(readFileSync(agentsPath, 'utf8'), '0.0.0-prior'));
+    syncManifestFileHashes(ws);
+
+    const { status, payload } = v2Doctor(h, ws);
+    assert.equal(status, 1);
+    assert.equal(payload.generated.versions.mixed, true);
+    assert.deepEqual(
+      payload.generated.versions.recorded_generator_versions,
+      ['0.0.0-prior', payload.rosterVersion],
+    );
+    assert.equal(payload.generated.hosts.codex?.activation_capability, 'drifted');
+    assert.equal(payload.generated.hosts.claude?.activation_capability, 'advisory');
+    assert.equal(payload.dreamer_activation.verdict, 'drifted');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor composes a stale file alone to drifted, never blocked', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    assert.equal(installV2ProjectActivation({ root: ws, host: 'claude' }).ok, true);
+    const activationPath = join(ws, CLAUDE_PROJECT_INSTRUCTIONS_PATH);
+    writeFileSync(activationPath, rehashOldVersion(readFileSync(activationPath, 'utf8'), '0.0.0-prior'));
+    syncManifestFileHashes(ws);
+
+    const { status, payload } = v2Doctor(h, ws);
+    assert.equal(status, 1);
+    assert.equal(payload.generated.hosts.claude?.activation_capability, 'drifted');
+    assert.deepEqual(payload.generated.shadows, []);
+    assert.equal(payload.dreamer_activation.verdict, 'drifted');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor composes a shadow alone to drifted without duplicating it in dreamer_activation', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    assert.equal(installV2ProjectActivation({ root: ws, host: 'claude' }).ok, true);
+    writeFileSync(join(ws, 'CLAUDE.md'), readFileSync(join(ws, CLAUDE_PROJECT_INSTRUCTIONS_PATH)));
+
+    const { status, payload } = v2Doctor(h, ws);
+    assert.equal(status, 1);
+    assert.equal(payload.structural.ok, false);
+    assert.equal(payload.generated.hosts.claude?.activation_capability, 'drifted');
+    assert.deepEqual(
+      payload.generated.shadows.map((shadow) => [shadow.path, shadow.kind, shadow.surface_host]),
+      [['CLAUDE.md', 'duplicate', 'claude']],
+    );
+    assert.equal(payload.dreamer_activation.verdict, 'drifted');
+    assert.equal('shadows' in payload.dreamer_activation, false);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor fails structural on a GEMINI.md shadow without drifting either host', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    assert.equal(installV2ProjectActivation({ root: ws, host: 'claude' }).ok, true);
+    writeFileSync(join(ws, 'GEMINI.md'), readFileSync(join(ws, 'ROSTER.md')));
+
+    const { status, payload } = v2Doctor(h, ws);
+    assert.equal(status, 1);
+    assert.equal(payload.structural.ok, false);
+    assert.equal(payload.generated.hosts.claude?.activation_capability, 'advisory');
+    assert.deepEqual(
+      payload.generated.shadows.map((shadow) => [shadow.path, shadow.kind, shadow.surface_host]),
+      [['GEMINI.md', 'unsupported-host', 'gemini']],
+    );
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor keeps an enabled host intact when the shadow surface host is disabled', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    assert.equal(installV2ProjectActivation({ root: ws, host: 'claude' }).ok, true);
+    writeFileSync(join(ws, 'AGENTS.override.md'), readFileSync(join(ws, CLAUDE_PROJECT_INSTRUCTIONS_PATH)));
+
+    const { status, payload } = v2Doctor(h, ws);
+    assert.equal(status, 1);
+    assert.equal(payload.structural.ok, false);
+    assert.equal(payload.generated.hosts.claude?.activation_capability, 'advisory');
+    assert.equal('codex' in payload.generated.hosts, false);
+    assert.deepEqual(
+      payload.generated.shadows.map((shadow) => [shadow.path, shadow.surface_host]),
+      [['AGENTS.override.md', 'codex']],
+    );
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor keeps the inactive dreamer verdict ahead of drift in a no-host workspace', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    runCliInCwd(['update', '--json'], { ...envFor(h), PATH: '' }, ws);
+    writeFileSync(join(ws, 'CLAUDE.md'), readFileSync(join(ws, 'ROSTER.md')));
+
+    const { status, payload } = v2Doctor(h, ws);
+    assert.equal(status, 1);
+    assert.equal(payload.structural.ok, false);
+    assert.equal(payload.generated.shadows.length, 1);
+    assert.equal(payload.dreamer_activation.verdict, 'inactive');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor reports a diverted rules root as a blocking shadow, never empty metadata', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    assert.equal(installV2ProjectActivation({ root: ws, host: 'claude' }).ok, true);
+    const outsideDir = join(h.root, 'outside-rules');
+    mkdirSync(outsideDir, { recursive: true });
+    writeFileSync(join(outsideDir, 'injected.md'), '# injected rule\n');
+    symlinkSync(outsideDir, join(ws, '.claude', 'rules'));
+
+    const { status, payload } = v2Doctor(h, ws);
+    assert.equal(status, 1);
+    assert.deepEqual(
+      payload.generated.shadows.map((shadow) => [shadow.path, shadow.kind, shadow.surface_host]),
+      [['.claude/rules', 'unreadable', 'claude']],
+    );
+    assert.equal(payload.generated.hosts.claude?.activation_capability, 'drifted');
+    assert.ok(
+      payload.generated.versions.recorded_generator_versions.length > 0,
+      'metadata inspection did not collapse to the empty fallback',
+    );
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor reports zero shadows for authored host memory files', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    assert.equal(installV2ProjectActivation({ root: ws, host: 'claude' }).ok, true);
+    const authored = '# My project memory\n';
+    const quoting = '# Docs\n\nRoster stamps `<!-- roster:generated` on generated files.\n';
+    writeFileSync(join(ws, 'CLAUDE.md'), authored);
+    writeFileSync(join(ws, 'CLAUDE.local.md'), quoting);
+
+    const { status, payload } = v2Doctor(h, ws);
+    assert.equal(status, 0);
+    assert.deepEqual(payload.generated.shadows, []);
+    assert.equal(payload.generated.hosts.claude?.activation_capability, 'advisory');
+    assert.equal(readFileSync(join(ws, 'CLAUDE.md'), 'utf8'), authored);
+    assert.equal(readFileSync(join(ws, 'CLAUDE.local.md'), 'utf8'), quoting);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor drifts a host on unreadable auto-load paths at error severity only', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    assert.equal(installV2ProjectActivation({ root: ws, host: 'claude' }).ok, true);
+    const decoy = join(h.root, 'decoy-memory.md');
+    writeFileSync(decoy, '# decoy\n');
+
+    symlinkSync(decoy, join(ws, 'CLAUDE.local.md'));
+    const localOnly = v2Doctor(h, ws);
+    assert.equal(localOnly.status, 0);
+    assert.equal(localOnly.payload.generated.hosts.claude?.activation_capability, 'advisory');
+    assert.deepEqual(
+      localOnly.payload.generated.shadows.map((shadow) => [shadow.path, shadow.kind]),
+      [['CLAUDE.local.md', 'unreadable']],
+    );
+
+    symlinkSync(decoy, join(ws, 'CLAUDE.md'));
+    const both = v2Doctor(h, ws);
+    assert.equal(both.status, 1);
+    assert.equal(both.payload.generated.hosts.claude?.activation_capability, 'drifted');
   } finally {
     h.cleanup();
   }

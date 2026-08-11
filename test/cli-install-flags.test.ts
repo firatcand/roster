@@ -1,10 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, mkdirSync, existsSync, lstatSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, existsSync, lstatSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { renderRosterBootstrap } from '../src/lib/generated-artifacts.ts';
+import {
+  parseGeneratedMarkdown,
+  renderClaudeProjectInstructions,
+  renderGeneratedMarkdown,
+  renderRosterBootstrap,
+  resolveActivationAssurance,
+} from '../src/lib/generated-artifacts.ts';
 
 const BIN = resolve('src/bin/roster.ts');
 
@@ -299,6 +305,39 @@ test('install --scope project from a v2 workspace writes minimal generated activ
     assert.ok(existsSync(join(ws, '.roster', 'generated-manifest.json')), 'generated manifest written');
     assert.ok(!existsSync(join(ws, '.claude', 'agents')), 'legacy agent forest not written');
     assert.ok(!existsSync(join(h.claude, 'skills')), 'user-scope claude NOT touched');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('project install is refused and rolled back while a stale generated shadow exists', () => {
+  const h = makeHomes(['claude']);
+  try {
+    const ws = makeWorkspace(h.root);
+    const canonical = renderClaudeProjectInstructions(
+      'claude-project-instructions',
+      resolveActivationAssurance({ host: 'claude', artifact: 'claude-project-instructions' }),
+    );
+    const parsed = parseGeneratedMarkdown(canonical)!;
+    const { content_hash: _contentHash, ...header } = parsed.header;
+    const shadowBytes = renderGeneratedMarkdown(
+      { ...header, generator_version: '0.0.0-prior' },
+      parsed.body,
+      parsed.prefix,
+    );
+    writeFileSync(join(ws, 'CLAUDE.md'), shadowBytes);
+    const registryBefore = readFileSync(join(ws, 'roster.yaml'), 'utf8');
+
+    const r = runCli(['install', '--tool', 'claude', '--scope', 'project', '--yes', '--silent'], {
+      ROSTER_CLAUDE_HOME: h.claude,
+      ROSTER_CODEX_HOME: h.codex,
+      ROSTER_GEMINI_HOME: h.gemini,
+    }, ws);
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /GENERATED_SHADOW|stale Roster-generated contract/);
+    assert.equal(existsSync(join(ws, '.claude', 'CLAUDE.md')), false, 'own writes rolled back');
+    assert.equal(readFileSync(join(ws, 'roster.yaml'), 'utf8'), registryBefore);
+    assert.equal(readFileSync(join(ws, 'CLAUDE.md'), 'utf8'), shadowBytes, 'shadow bytes untouched');
   } finally {
     h.cleanup();
   }

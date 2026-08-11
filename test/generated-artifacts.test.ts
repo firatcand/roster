@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -11,11 +11,13 @@ import {
   CODEX_PROJECT_INSTRUCTIONS_PATH,
   CODEX_ROSTER_SKILL_PATH,
   createGeneratedManifest,
+  detectGeneratedShadows,
   GENERATED_MANIFEST_PATH,
   HOST_ADAPTER_LIFECYCLE_CAPABILITIES,
   installV2ProjectActivation,
   inspectGeneratedAdapterMetadata,
   inspectGeneratedActivationState,
+  isBlockingGeneratedShadow,
   parseGeneratedMarkdown,
   parseGeneratedManifest,
   renderClaudeProjectInstructions,
@@ -41,6 +43,7 @@ import {
 } from '../src/lib/workspace-diagnostics.ts';
 import { parseWorkspaceRegistry } from '../src/lib/workspace-record.ts';
 import { realWorkspaceDurabilityFs } from '../src/lib/workspace-io.ts';
+import { getPackageVersion } from '../src/lib/paths.ts';
 
 const passed: HostActivationAttestation = {
   schema_version: 1,
@@ -262,7 +265,7 @@ test('generated adapter metadata exposes canonical path and manifest states with
     const forgedMetadata = inspectGeneratedAdapterMetadata(fx.root).paths.find((entry) =>
       entry.path === CODEX_PROJECT_INSTRUCTIONS_PATH
     );
-    assert.equal(forgedMetadata?.state, 'noncanonical-generated');
+    assert.equal(forgedMetadata?.state, 'stale-generated');
     assert.equal(forgedMetadata?.activation_assurance, null);
     assert.equal(forgedMetadata?.supported_host_versions, null);
     assert.equal(forgedMetadata?.attestation_fixture, null);
@@ -300,16 +303,22 @@ test('doctor-only capability fields never enter generated headers or manifest sc
   try {
     assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
     const manifestText = readFileSync(at(fx.root, GENERATED_MANIFEST_PATH), 'utf8');
-    assert.doesNotMatch(manifestText, /activation_capability|lifecycle_capabilities/);
+    assert.doesNotMatch(
+      manifestText,
+      /"activation_capability"|"lifecycle_capabilities"|"recorded_generator_version"|"shadows"|"versions"/,
+    );
     const manifest = parseGeneratedManifest(manifestText);
     assert.equal(manifest?.schema_version, 1);
     assert.equal(manifest?.protocol_version, 2);
     for (const entry of manifest?.files ?? []) {
-      const parsed = parseGeneratedMarkdown(readFileSync(at(fx.root, entry.path), 'utf8'));
+      const fileText = readFileSync(at(fx.root, entry.path), 'utf8');
+      assert.doesNotMatch(fileText, /recorded_generator_version|lifecycle_capabilities/);
+      const parsed = parseGeneratedMarkdown(fileText);
       assert.equal(parsed?.header.schema_version, '1');
       assert.equal(parsed?.header.protocol_version, '2');
       assert.equal('activation_capability' in (parsed?.header ?? {}), false);
       assert.equal('lifecycle_capabilities' in (parsed?.header ?? {}), false);
+      assert.equal('recorded_generator_version' in (parsed?.header ?? {}), false);
     }
   } finally {
     fx.cleanup();
@@ -1476,37 +1485,358 @@ test('v2 update preserves edited disabled-host bytes and reports the stale activ
   }
 });
 
-test('v2 update preserves a self-hashed noncanonical disabled-host shadow', () => {
+// #365 disclosed behavior change: a hash-valid old-version disabled-host
+// artifact is Roster-owned unedited content (the C3 premise) and is removed
+// like its current-canonical sibling -- leaving it was a stale auto-loaded
+// contract. The removal compare-and-swaps against the OBSERVED stale bytes,
+// so a concurrent edit is refused, never clobbered; a hash-BROKEN disabled
+// artifact keeps the preserve + GENERATED_FILE_EDITED path pinned above.
+test('v2 update removes a hash-valid stale disabled-host artifact', () => {
   const fx = fixture();
   try {
     assert.equal(installV2ProjectActivation({ root: fx.root, host: 'codex' }).ok, true);
     const artifactPath = at(fx.root, CODEX_PROJECT_INSTRUCTIONS_PATH);
-    const parsed = parseGeneratedMarkdown(readFileSync(artifactPath, 'utf8'));
-    assert.ok(parsed?.valid);
-    const { content_hash: _contentHash, ...header } = parsed.header;
-    const stale = renderGeneratedMarkdown(
-      { ...header, generator_version: '0.0.0-prior' },
-      parsed.body,
-      parsed.prefix,
-    );
+    const stale = rehashWithVersion(readFileSync(artifactPath, 'utf8'), '0.0.0-prior');
     writeFileSync(artifactPath, stale);
     disableAllHosts(fx.root);
 
     const updated = updateV2ProjectActivations({ root: fx.root });
-    assert.equal(updated.ok, false);
-    assert.equal(readFileSync(artifactPath, 'utf8'), stale);
+    assert.equal(updated.ok, true);
+    assert.equal(existsSync(artifactPath), false);
     assert.equal(existsSync(at(fx.root, CODEX_ROSTER_SKILL_PATH)), false);
-    assert.ok(updated.manifest?.files.some((entry) =>
-      entry.path === CODEX_PROJECT_INSTRUCTIONS_PATH && entry.host === 'codex'
+    assert.deepEqual(updated.manifest?.hosts, {});
+    assert.equal(updated.manifest?.files.some((entry) => entry.host === 'codex'), false);
+    assert.deepEqual(validateGeneratedArtifacts(fx.root), []);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// #365 characterization: the five canonical paths are governed by TWO sync
+// policies, not one. Mandatory-primary paths (ROSTER.md, .claude/CLAUDE.md,
+// AGENTS.md, .agents/skills/roster/SKILL.md) are always synchronized;
+// .claude/rules/roster.md is a conditional fallback that is synchronized only
+// when the Claude primary cannot be generated. Authored files conflict at
+// ROSTER.md and the Codex skill, and are preserved at both host primaries.
+// These pins hold the CURRENT matrix steady underneath the taxonomy split.
+
+function enableHosts(root: string, hosts: readonly ('claude' | 'codex')[]): void {
+  writeFileSync(at(root, 'roster.yaml'), [
+    'schema_version: 2',
+    'workspace_id: generated-test',
+    'tool_uses: []',
+    'functions: {}',
+    ...(hosts.length === 0 ? ['hosts: {}'] : ['hosts:', ...hosts.map((host) => `  ${host}: enabled`)]),
+    '',
+  ].join('\n'));
+}
+
+function rehashWithVersion(content: string, generatorVersion: string): string {
+  const parsed = parseGeneratedMarkdown(content);
+  assert.ok(parsed?.valid);
+  const { content_hash: _contentHash, ...header } = parsed.header;
+  const forged = renderGeneratedMarkdown(
+    { ...header, generator_version: generatorVersion },
+    parsed.body,
+    parsed.prefix,
+  );
+  assert.ok(parseGeneratedMarkdown(forged)?.valid);
+  return forged;
+}
+
+test('characterization: authored files conflict at ROSTER.md and the Codex skill', () => {
+  const fx = fixture();
+  try {
+    const authoredBootstrap = '# Authored workspace notes\n';
+    writeFileSync(at(fx.root, 'ROSTER.md'), authoredBootstrap);
+    const bootstrapUpdate = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(bootstrapUpdate.ok, false);
+    assert.equal(readFileSync(at(fx.root, 'ROSTER.md'), 'utf8'), authoredBootstrap);
+    assert.ok(bootstrapUpdate.diagnostics.some((diagnostic) =>
+      diagnostic.code === 'GENERATED_FILE_EDITED' && diagnostic.path === 'ROSTER.md'
     ));
+
+    writeFileSync(at(fx.root, 'ROSTER.md'), renderRosterBootstrap());
+    enableHosts(fx.root, ['codex']);
+    mkdirSync(at(fx.root, '.agents/skills/roster'), { recursive: true });
+    const authoredSkill = '# Authored skill\n';
+    writeFileSync(at(fx.root, CODEX_ROSTER_SKILL_PATH), authoredSkill);
+    const skillUpdate = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(skillUpdate.ok, false);
+    assert.equal(readFileSync(at(fx.root, CODEX_ROSTER_SKILL_PATH), 'utf8'), authoredSkill);
+    const codexFiles = skillUpdate.results.find((result) => result.host === 'codex')?.files;
+    assert.equal(codexFiles?.find((file) => file.path === CODEX_ROSTER_SKILL_PATH)?.status, 'conflict');
+    assert.equal(codexFiles?.find((file) => file.path === CODEX_PROJECT_INSTRUCTIONS_PATH)?.status, 'created');
+    assert.ok(skillUpdate.diagnostics.some((diagnostic) =>
+      diagnostic.code === 'GENERATED_FILE_EDITED' && diagnostic.path === CODEX_ROSTER_SKILL_PATH
+    ));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('characterization: authored host primaries are preserved and their fallbacks engage', () => {
+  const fx = fixture();
+  try {
+    enableHosts(fx.root, ['claude', 'codex']);
+    mkdirSync(at(fx.root, '.claude'), { recursive: true });
+    const authoredClaude = '# My Claude policy\n';
+    const authoredCodex = '# Company Codex policy\n';
+    writeFileSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH), authoredClaude);
+    writeFileSync(at(fx.root, CODEX_PROJECT_INSTRUCTIONS_PATH), authoredCodex);
+
+    const updated = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(updated.ok, true);
+    assert.equal(readFileSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH), 'utf8'), authoredClaude);
+    assert.equal(readFileSync(at(fx.root, CODEX_PROJECT_INSTRUCTIONS_PATH), 'utf8'), authoredCodex);
+    const claudeFiles = updated.results.find((result) => result.host === 'claude')?.files;
+    assert.equal(
+      claudeFiles?.find((file) => file.path === CLAUDE_PROJECT_INSTRUCTIONS_PATH)?.status,
+      'preserved-authored',
+    );
+    assert.equal(claudeFiles?.find((file) => file.path === CLAUDE_PROJECT_RULE_PATH)?.status, 'created');
+    const codexFiles = updated.results.find((result) => result.host === 'codex')?.files;
+    assert.equal(
+      codexFiles?.find((file) => file.path === CODEX_PROJECT_INSTRUCTIONS_PATH)?.status,
+      'preserved-authored',
+    );
+    assert.equal(codexFiles?.find((file) => file.path === CODEX_ROSTER_SKILL_PATH)?.status, 'created');
+    assert.equal(updated.results.find((result) => result.host === 'codex')?.assurance, 'advisory-manual');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('characterization: the Claude rule path is a conditional fallback, not a peer', () => {
+  const fx = fixture();
+  try {
+    enableHosts(fx.root, ['claude']);
+    assert.equal(updateV2ProjectActivations({ root: fx.root }).ok, true);
+    const rulePath = at(fx.root, CLAUDE_PROJECT_RULE_PATH);
+    const canonicalRule = renderClaudeProjectInstructions(
+      'claude-project-rule',
+      resolveActivationAssurance({ host: 'claude', artifact: 'claude-project-rule' }),
+    );
+    mkdirSync(at(fx.root, '.claude/rules'), { recursive: true });
+
+    writeFileSync(rulePath, canonicalRule);
+    const redundant = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(redundant.ok, true);
+    assert.equal(existsSync(rulePath), false);
+    assert.equal(redundant.results[0]?.files.some((file) =>
+      file.path === CLAUDE_PROJECT_RULE_PATH && file.status === 'removed'
+    ), true);
+
+    const staleRule = rehashWithVersion(canonicalRule, '0.0.0-prior');
+    writeFileSync(rulePath, staleRule);
+    const stale = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(stale.ok, false);
+    assert.equal(readFileSync(rulePath, 'utf8'), staleRule);
+    assert.ok(stale.diagnostics.some((diagnostic) =>
+      diagnostic.code === 'GENERATED_FILE_STALE' &&
+      diagnostic.path === CLAUDE_PROJECT_RULE_PATH &&
+      /Redundant Claude fallback/.test(diagnostic.message)
+    ));
+
+    const editedRule = `${canonicalRule}edited\n`;
+    writeFileSync(rulePath, editedRule);
+    const edited = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(edited.ok, false);
+    assert.equal(readFileSync(rulePath, 'utf8'), editedRule);
+    assert.ok(edited.diagnostics.some((diagnostic) =>
+      diagnostic.code === 'GENERATED_FILE_EDITED' && diagnostic.path === CLAUDE_PROJECT_RULE_PATH
+    ));
+
+    const authoredRule = '# My own Claude rule\n';
+    writeFileSync(rulePath, authoredRule);
+    const authored = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(authored.ok, true);
+    assert.equal(readFileSync(rulePath, 'utf8'), authoredRule);
+    assert.equal(authored.diagnostics.some((diagnostic) =>
+      diagnostic.path === CLAUDE_PROJECT_RULE_PATH
+    ), false);
+
+    unlinkSync(rulePath);
+    unlinkSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH));
+    writeFileSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH), '# My Claude policy\n');
+    const fallback = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(fallback.ok, true);
+    assert.equal(fallback.results[0]?.files.find((file) =>
+      file.path === CLAUDE_PROJECT_RULE_PATH
+    )?.status, 'created');
+    assert.ok(parseGeneratedMarkdown(readFileSync(rulePath, 'utf8'))?.valid);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+const MANDATORY_PRIMARY_PATHS = [
+  'ROSTER.md',
+  CLAUDE_PROJECT_INSTRUCTIONS_PATH,
+  CODEX_PROJECT_INSTRUCTIONS_PATH,
+  CODEX_ROSTER_SKILL_PATH,
+] as const;
+
+function forgeManifestFileHashes(root: string, generatorVersion?: string): void {
+  const manifestPath = at(root, GENERATED_MANIFEST_PATH);
+  const manifest = parseGeneratedManifest(readFileSync(manifestPath, 'utf8'));
+  assert.ok(manifest);
+  const { manifest_hash: _manifestHash, ...draft } = manifest;
+  writeFileSync(manifestPath, renderGeneratedManifest(createGeneratedManifest({
+    ...draft,
+    ...(generatorVersion === undefined ? {} : { generator_version: generatorVersion }),
+    files: draft.files.map((entry) => {
+      const parsed = parseGeneratedMarkdown(readFileSync(at(root, entry.path), 'utf8'));
+      assert.ok(parsed?.valid);
+      return { ...entry, content_hash: parsed.header.content_hash };
+    }),
+  })));
+}
+
+test('an old-generator workspace classifies stale-generated everywhere and update converges', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'codex' }).ok, true);
+    for (const path of MANDATORY_PRIMARY_PATHS) {
+      writeFileSync(
+        at(fx.root, path),
+        rehashWithVersion(readFileSync(at(fx.root, path), 'utf8'), '0.0.0-stale'),
+      );
+    }
+    forgeManifestFileHashes(fx.root, '0.0.0-stale');
+
+    const metadata = inspectGeneratedAdapterMetadata(fx.root);
+    for (const path of MANDATORY_PRIMARY_PATHS) {
+      const entry = metadata.paths.find((candidate) => candidate.path === path);
+      assert.equal(entry?.state, 'stale-generated');
+      assert.equal(entry?.recorded_generator_version, '0.0.0-stale');
+    }
+    assert.equal(metadata.manifest.state, 'stale-version');
+
+    const diagnostics = validateGeneratedArtifacts(fx.root);
+    for (const path of MANDATORY_PRIMARY_PATHS) {
+      const diagnostic = diagnostics.find((candidate) =>
+        candidate.code === 'GENERATED_FILE_STALE' && candidate.path === path
+      );
+      assert.ok(diagnostic, `missing stale diagnostic for ${path}`);
+      assert.equal(diagnostic.severity, 'error');
+      assert.equal(diagnostic.details['reason'], 'generator-version');
+      assert.equal(diagnostic.details['recordedGeneratorVersion'], '0.0.0-stale');
+      assert.equal(diagnostic.details['expectedGeneratorVersion'], getPackageVersion());
+    }
+    assert.ok(diagnostics.some((diagnostic) =>
+      diagnostic.code === 'GENERATED_FILE_STALE' && diagnostic.path === GENERATED_MANIFEST_PATH
+    ));
+    assert.equal(diagnostics.some((diagnostic) => diagnostic.code === 'GENERATED_FILE_EDITED'), false);
+
+    const updated = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(updated.ok, true);
+    assert.deepEqual(validateGeneratedArtifacts(fx.root), []);
+    const second = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(second.ok, true);
+    assert.ok(second.results.flatMap((result) => result.files)
+      .every((file) => file.status === 'unchanged'));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('mixed generator versions classify only the stale path and reconverge on update', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'codex' }).ok, true);
+    const agentsPath = at(fx.root, CODEX_PROJECT_INSTRUCTIONS_PATH);
+    writeFileSync(agentsPath, rehashWithVersion(readFileSync(agentsPath, 'utf8'), '0.0.0-prior'));
+    forgeManifestFileHashes(fx.root);
+
+    const metadata = inspectGeneratedAdapterMetadata(fx.root);
+    assert.equal(
+      metadata.paths.find((entry) => entry.path === CODEX_PROJECT_INSTRUCTIONS_PATH)?.state,
+      'stale-generated',
+    );
+    assert.equal(
+      metadata.paths.find((entry) => entry.path === CODEX_PROJECT_INSTRUCTIONS_PATH)
+        ?.recorded_generator_version,
+      '0.0.0-prior',
+    );
+    for (const path of MANDATORY_PRIMARY_PATHS.filter((candidate) =>
+      candidate !== CODEX_PROJECT_INSTRUCTIONS_PATH
+    )) {
+      const entry = metadata.paths.find((candidate) => candidate.path === path);
+      assert.equal(entry?.state, 'canonical-generated');
+      assert.equal(entry?.recorded_generator_version, getPackageVersion());
+    }
+    const recorded = new Set([
+      ...metadata.paths
+        .filter((entry) =>
+          entry.state === 'canonical-generated' || entry.state === 'stale-generated')
+        .map((entry) => entry.recorded_generator_version),
+      metadata.manifest.value?.generator_version,
+    ]);
+    assert.deepEqual([...recorded].sort(), ['0.0.0-prior', getPackageVersion()].sort());
+
     const diagnostics = validateGeneratedArtifacts(fx.root);
     assert.ok(diagnostics.some((diagnostic) =>
-      diagnostic.message === `Generated activation '${CODEX_PROJECT_INSTRUCTIONS_PATH}' remains for disabled host 'codex'.`
+      diagnostic.code === 'GENERATED_FILE_STALE'
+      && diagnostic.path === CODEX_PROJECT_INSTRUCTIONS_PATH
+      && diagnostic.details['reason'] === 'generator-version'
     ));
-    assert.ok(diagnostics.some((diagnostic) =>
-      diagnostic.path === CODEX_PROJECT_INSTRUCTIONS_PATH &&
-      /current canonical renderer or attestation/.test(diagnostic.message)
-    ));
+
+    const updated = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(updated.ok, true);
+    assert.equal(
+      updated.results.find((result) => result.host === 'codex')?.files
+        .find((file) => file.path === CODEX_PROJECT_INSTRUCTIONS_PATH)?.status,
+      'updated',
+    );
+    assert.deepEqual(validateGeneratedArtifacts(fx.root), []);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('characterization: stale mandatory primaries are replaced and hash-broken edits refused', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'codex' }).ok, true);
+    const primaries = [
+      'ROSTER.md',
+      CLAUDE_PROJECT_INSTRUCTIONS_PATH,
+      CODEX_PROJECT_INSTRUCTIONS_PATH,
+      CODEX_ROSTER_SKILL_PATH,
+    ] as const;
+    const canonical = new Map(primaries.map((path) => [path, readFileSync(at(fx.root, path), 'utf8')]));
+    for (const path of primaries) {
+      writeFileSync(at(fx.root, path), rehashWithVersion(canonical.get(path)!, '0.0.0-prior'));
+    }
+
+    const replaced = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(replaced.ok, true);
+    for (const path of primaries) {
+      assert.equal(readFileSync(at(fx.root, path), 'utf8'), canonical.get(path));
+    }
+    const replacedStatuses = replaced.results.flatMap((result) => result.files);
+    for (const path of primaries.filter((candidate) => candidate !== 'ROSTER.md')) {
+      assert.equal(replacedStatuses.find((file) => file.path === path)?.status, 'updated');
+    }
+    const idempotent = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(idempotent.ok, true);
+    assert.ok(idempotent.results.flatMap((result) => result.files)
+      .every((file) => file.status === 'unchanged'));
+
+    const edits = new Map(primaries.map((path) => [path, `${canonical.get(path)!}edited\n`]));
+    for (const path of primaries) writeFileSync(at(fx.root, path), edits.get(path)!);
+    const refused = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(refused.ok, false);
+    for (const path of primaries) {
+      assert.equal(readFileSync(at(fx.root, path), 'utf8'), edits.get(path));
+      assert.ok(refused.diagnostics.some((diagnostic) =>
+        diagnostic.code === 'GENERATED_FILE_EDITED' && diagnostic.path === path
+      ));
+    }
   } finally {
     fx.cleanup();
   }
@@ -1540,6 +1870,505 @@ test('v2 update refuses manifest reconstruction when any claimed generated heade
     assert.ok(updated.diagnostics.some((diagnostic) =>
       diagnostic.code === 'GENERATED_FILE_EDITED' && diagnostic.path === CODEX_ROSTER_SKILL_PATH
     ));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// #365 shadow detection: a Roster-generated contract copied to a host
+// auto-load path outside the five canonical paths is auto-loaded by the host
+// and was invisible to update, validate, and doctor. One detector feeds all
+// three surfaces; Roster never writes or deletes at a shadow path.
+
+function claudeInstructionsRender(): string {
+  return renderClaudeProjectInstructions(
+    'claude-project-instructions',
+    resolveActivationAssurance({ host: 'claude', artifact: 'claude-project-instructions' }),
+  );
+}
+
+test('shadow detection classifies duplicate, stale, edited, and unsupported-host copies', () => {
+  const fx = fixture();
+  try {
+    assert.deepEqual(detectGeneratedShadows(fx.root).shadows, []);
+
+    writeFileSync(at(fx.root, 'CLAUDE.md'), claudeInstructionsRender());
+    writeFileSync(
+      at(fx.root, 'CLAUDE.local.md'),
+      rehashWithVersion(claudeInstructionsRender(), '0.0.0-prior'),
+    );
+    writeFileSync(at(fx.root, 'GEMINI.md'), readFileSync(at(fx.root, 'ROSTER.md')));
+    writeFileSync(
+      at(fx.root, 'AGENTS.override.md'),
+      `${renderCodexProjectInstructions(resolveActivationAssurance({
+        host: 'codex',
+        artifact: 'codex-project-instructions',
+      }))}edited\n`,
+    );
+
+    const detected = detectGeneratedShadows(fx.root);
+    assert.deepEqual(detected.shadows.map((shadow) => [shadow.path, shadow.kind, shadow.surface_host]), [
+      ['AGENTS.override.md', 'edited', 'codex'],
+      ['CLAUDE.local.md', 'stale', 'claude'],
+      ['CLAUDE.md', 'duplicate', 'claude'],
+      ['GEMINI.md', 'unsupported-host', 'gemini'],
+    ]);
+    assert.equal(
+      detected.shadows.find((shadow) => shadow.path === 'CLAUDE.local.md')?.recorded_generator_version,
+      '0.0.0-prior',
+    );
+    assert.equal(
+      detected.shadows.find((shadow) => shadow.path === 'CLAUDE.md')?.artifact,
+      'claude-project-instructions',
+    );
+    assert.ok(detected.shadows.every(isBlockingGeneratedShadow));
+    assert.ok(detected.diagnostics.every((diagnostic) =>
+      diagnostic.code === 'GENERATED_SHADOW' && diagnostic.severity === 'error'
+    ));
+    const gemini = detected.diagnostics.find((diagnostic) => diagnostic.path === 'GEMINI.md');
+    assert.match(gemini?.message ?? '', /Gemini has no v2 activation contract/);
+    assert.equal(gemini?.details['surfaceHost'], 'gemini');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('shadow detection sees a bounded-prefix copy and a bootstrap copy as duplicates', () => {
+  const fx = fixture();
+  try {
+    const skill = renderCodexRosterSkill(resolveActivationAssurance({
+      host: 'codex',
+      artifact: 'codex-roster-skill',
+    }));
+    assert.match(skill, /^---\n/);
+    writeFileSync(at(fx.root, 'CLAUDE.md'), skill);
+    const skillCopy = detectGeneratedShadows(fx.root).shadows;
+    assert.deepEqual(skillCopy.map((shadow) => [shadow.path, shadow.kind, shadow.artifact]), [
+      ['CLAUDE.md', 'duplicate', 'codex-roster-skill'],
+    ]);
+
+    writeFileSync(at(fx.root, 'CLAUDE.md'), readFileSync(at(fx.root, 'ROSTER.md')));
+    const bootstrapCopy = detectGeneratedShadows(fx.root).shadows;
+    assert.deepEqual(bootstrapCopy.map((shadow) => [shadow.path, shadow.kind, shadow.artifact]), [
+      ['CLAUDE.md', 'duplicate', 'roster-bootstrap'],
+    ]);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('shadow detection never flags authored host memory files', () => {
+  const fx = fixture();
+  try {
+    const authored = '# My project memory\n\nAuthored notes.\n';
+    const quoting = '# Docs\n\nRoster stamps `<!-- roster:generated` on generated files.\n';
+    writeFileSync(at(fx.root, 'CLAUDE.md'), authored);
+    writeFileSync(at(fx.root, 'CLAUDE.local.md'), quoting);
+    mkdirSync(at(fx.root, '.claude/rules'), { recursive: true });
+    writeFileSync(at(fx.root, '.claude/rules/style.md'), authored);
+    assert.deepEqual(detectGeneratedShadows(fx.root).shadows, []);
+
+    const install = installV2ProjectActivation({ root: fx.root, host: 'claude' });
+    assert.equal(install.ok, true);
+    assert.equal(readFileSync(at(fx.root, 'CLAUDE.md'), 'utf8'), authored);
+    assert.equal(readFileSync(at(fx.root, 'CLAUDE.local.md'), 'utf8'), quoting);
+    assert.equal(readFileSync(at(fx.root, '.claude/rules/style.md'), 'utf8'), authored);
+    assert.equal(updateV2ProjectActivations({ root: fx.root }).ok, true);
+    assert.equal(validateGeneratedArtifacts(fx.root).length, 0);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('unreadable auto-load paths block everywhere except the personal CLAUDE.local.md', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    const outside = join(fx.root, '..', `roster-shadow-decoy-${Date.now()}`);
+    writeFileSync(outside, '# decoy\n');
+    try {
+      symlinkSync(outside, at(fx.root, 'CLAUDE.local.md'));
+      const localOnly = detectGeneratedShadows(fx.root);
+      assert.deepEqual(localOnly.shadows.map((shadow) => [shadow.path, shadow.kind]), [
+        ['CLAUDE.local.md', 'unreadable'],
+      ]);
+      assert.equal(isBlockingGeneratedShadow(localOnly.shadows[0]!), false);
+      assert.equal(localOnly.diagnostics[0]?.severity, 'warning');
+      assert.equal(updateV2ProjectActivations({ root: fx.root }).ok, true);
+      assert.equal(validateGeneratedArtifacts(fx.root).some((diagnostic) =>
+        diagnostic.severity === 'error'
+      ), false);
+
+      symlinkSync(outside, at(fx.root, 'CLAUDE.md'));
+      const both = detectGeneratedShadows(fx.root);
+      const rootShadow = both.shadows.find((shadow) => shadow.path === 'CLAUDE.md');
+      assert.equal(rootShadow?.kind, 'unreadable');
+      assert.equal(isBlockingGeneratedShadow(rootShadow!), true);
+      const updated = updateV2ProjectActivations({ root: fx.root });
+      assert.equal(updated.ok, false);
+      assert.ok(updated.diagnostics.some((diagnostic) =>
+        diagnostic.code === 'GENERATED_SHADOW'
+        && diagnostic.path === 'CLAUDE.md'
+        && diagnostic.severity === 'error'
+      ));
+      assert.ok(validateGeneratedArtifacts(fx.root).some((diagnostic) =>
+        diagnostic.code === 'GENERATED_SHADOW' && diagnostic.path === 'CLAUDE.md'
+      ));
+    } finally {
+      rmSync(outside, { force: true });
+    }
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('the recursive rules scan finds copies, skips the canonical rule, and flags symlinks', () => {
+  const fx = fixture();
+  try {
+    mkdirSync(at(fx.root, '.claude/rules/team/deep'), { recursive: true });
+    const rule = renderClaudeProjectInstructions(
+      'claude-project-rule',
+      resolveActivationAssurance({ host: 'claude', artifact: 'claude-project-rule' }),
+    );
+    writeFileSync(at(fx.root, CLAUDE_PROJECT_RULE_PATH), rule);
+    writeFileSync(at(fx.root, '.claude/rules/extra.md'), rule);
+    writeFileSync(at(fx.root, '.claude/rules/team/deep/nested.md'), claudeInstructionsRender());
+    writeFileSync(at(fx.root, '.claude/rules/notes.txt'), claudeInstructionsRender());
+    const outside = join(fx.root, '..', `roster-rules-decoy-${Date.now()}`);
+    writeFileSync(outside, '# decoy rule\n');
+    try {
+      symlinkSync(outside, at(fx.root, '.claude/rules/team/link.md'));
+
+      const detected = detectGeneratedShadows(fx.root);
+      assert.deepEqual(
+        detected.shadows.map((shadow) => [shadow.path, shadow.kind, shadow.surface_host]),
+        [
+          ['.claude/rules/extra.md', 'duplicate', 'claude'],
+          ['.claude/rules/team/deep/nested.md', 'duplicate', 'claude'],
+          ['.claude/rules/team/link.md', 'unreadable', 'claude'],
+        ],
+      );
+      assert.ok(detected.shadows.every(isBlockingGeneratedShadow));
+    } finally {
+      rmSync(outside, { force: true });
+    }
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('both rules budget dimensions block at their boundary, never silently truncate', () => {
+  const depthPath = (levels: number): string =>
+    ['.claude/rules', ...Array.from({ length: levels }, (_, index) => `d${index + 1}`)].join('/');
+
+  const atDepthLimit = fixture();
+  try {
+    mkdirSync(at(atDepthLimit.root, depthPath(8)), { recursive: true });
+    writeFileSync(at(atDepthLimit.root, `${depthPath(8)}/leaf.md`), '# rule\n');
+    assert.deepEqual(detectGeneratedShadows(atDepthLimit.root).shadows, []);
+  } finally {
+    atDepthLimit.cleanup();
+  }
+
+  const beyondDepthLimit = fixture();
+  try {
+    mkdirSync(at(beyondDepthLimit.root, depthPath(9)), { recursive: true });
+    const detected = detectGeneratedShadows(beyondDepthLimit.root);
+    assert.deepEqual(detected.shadows.map((shadow) => [shadow.path, shadow.kind]), [
+      [depthPath(9), 'unreadable'],
+    ]);
+    assert.equal(detected.diagnostics[0]?.severity, 'error');
+    assert.match(detected.diagnostics[0]?.message ?? '', /depth exceeds 8/);
+    assert.match(detected.diagnostics[0]?.message ?? '', /d9/);
+  } finally {
+    beyondDepthLimit.cleanup();
+  }
+
+  const atEntryBudget = fixture();
+  try {
+    mkdirSync(at(atEntryBudget.root, '.claude/rules'), { recursive: true });
+    for (let index = 0; index < 256; index++) {
+      writeFileSync(at(atEntryBudget.root, `.claude/rules/r${String(index).padStart(3, '0')}.md`), '# rule\n');
+    }
+    assert.deepEqual(detectGeneratedShadows(atEntryBudget.root).shadows, []);
+  } finally {
+    atEntryBudget.cleanup();
+  }
+
+  const beyondEntryBudget = fixture();
+  try {
+    mkdirSync(at(beyondEntryBudget.root, '.claude/rules'), { recursive: true });
+    for (let index = 0; index < 257; index++) {
+      writeFileSync(at(beyondEntryBudget.root, `.claude/rules/r${String(index).padStart(3, '0')}.md`), '# rule\n');
+    }
+    const detected = detectGeneratedShadows(beyondEntryBudget.root);
+    assert.deepEqual(detected.shadows.map((shadow) => [shadow.path, shadow.kind]), [
+      ['.claude/rules', 'unreadable'],
+    ]);
+    assert.equal(detected.diagnostics[0]?.severity, 'error');
+    assert.match(detected.diagnostics[0]?.message ?? '', /256-entry budget/);
+  } finally {
+    beyondEntryBudget.cleanup();
+  }
+});
+
+test('a diverted rules root is the blocking diagnostic on update, validate, and inspection', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    unlinkSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH));
+    const outsideDir = join(fx.root, '..', `roster-rules-root-decoy-${Date.now()}`);
+    mkdirSync(outsideDir, { recursive: true });
+    writeFileSync(join(outsideDir, 'injected.md'), claudeInstructionsRender());
+    try {
+      mkdirSync(at(fx.root, '.claude'), { recursive: true });
+      symlinkSync(outsideDir, at(fx.root, '.claude/rules'));
+
+      const updated = updateV2ProjectActivations({ root: fx.root });
+      assert.equal(updated.ok, false);
+      assert.ok(updated.diagnostics.some((diagnostic) =>
+        diagnostic.code === 'GENERATED_SHADOW'
+        && diagnostic.path === '.claude/rules'
+        && diagnostic.severity === 'error'
+      ));
+      assert.ok(parseGeneratedMarkdown(
+        readFileSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH), 'utf8'),
+      )?.valid);
+
+      const diagnostics = validateGeneratedArtifacts(fx.root);
+      assert.ok(diagnostics.some((diagnostic) =>
+        diagnostic.code === 'GENERATED_SHADOW' && diagnostic.path === '.claude/rules'
+      ));
+
+      const metadata = inspectGeneratedAdapterMetadata(fx.root);
+      assert.deepEqual(metadata.shadows.map((shadow) => [shadow.path, shadow.kind]), [
+        ['.claude/rules', 'unreadable'],
+      ]);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('update repairs canonical files but fails loudly while a shadow exists', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    const shadowBytes = claudeInstructionsRender();
+    writeFileSync(at(fx.root, 'CLAUDE.md'), shadowBytes);
+    unlinkSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH));
+
+    const updated = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(updated.ok, false);
+    assert.ok(parseGeneratedMarkdown(
+      readFileSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH), 'utf8'),
+    )?.valid);
+    assert.equal(readFileSync(at(fx.root, 'CLAUDE.md'), 'utf8'), shadowBytes);
+    assert.ok(updated.diagnostics.some((diagnostic) =>
+      diagnostic.code === 'GENERATED_SHADOW' && diagnostic.path === 'CLAUDE.md'
+    ));
+
+    const secondRun = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(secondRun.ok, false);
+    assert.equal(readFileSync(at(fx.root, 'CLAUDE.md'), 'utf8'), shadowBytes);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('project install refuses and rolls back its own writes while a shadow exists', () => {
+  const fx = fixture();
+  try {
+    const shadowBytes = rehashWithVersion(claudeInstructionsRender(), '0.0.0-prior');
+    writeFileSync(at(fx.root, 'CLAUDE.md'), shadowBytes);
+
+    const install = installV2ProjectActivation({ root: fx.root, host: 'claude' });
+    assert.equal(install.ok, false);
+    assert.equal(install.registryUpdated, false);
+    assert.equal(existsSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH)), false);
+    assert.deepEqual(Object.keys(parseWorkspaceRegistry(
+      readFileSync(at(fx.root, 'roster.yaml'), 'utf8'),
+    ).hosts), []);
+    assert.equal(readFileSync(at(fx.root, 'CLAUDE.md'), 'utf8'), shadowBytes);
+    assert.ok(install.diagnostics.some((diagnostic) =>
+      diagnostic.code === 'GENERATED_SHADOW'
+      && diagnostic.path === 'CLAUDE.md'
+      && diagnostic.details['kind'] === 'stale'
+    ));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('a broken manifest cannot hide a shadow from generated validation', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    writeFileSync(at(fx.root, 'CLAUDE.md'), claudeInstructionsRender());
+    writeFileSync(at(fx.root, GENERATED_MANIFEST_PATH), 'not json\n');
+
+    const diagnostics = validateGeneratedArtifacts(fx.root);
+    assert.ok(diagnostics.some((diagnostic) =>
+      diagnostic.code === 'GENERATED_SHADOW' && diagnostic.path === 'CLAUDE.md'
+    ));
+    assert.ok(diagnostics.some((diagnostic) =>
+      diagnostic.code === 'GENERATED_FILE_EDITED' && diagnostic.path === GENERATED_MANIFEST_PATH
+    ));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('a deleted mandatory primary is reported by validate and recreated by update', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'codex' }).ok, true);
+    unlinkSync(at(fx.root, CODEX_PROJECT_INSTRUCTIONS_PATH));
+    assert.ok(validateGeneratedArtifacts(fx.root).some((diagnostic) =>
+      diagnostic.path === CODEX_PROJECT_INSTRUCTIONS_PATH
+      && /does not match its manifest entry/.test(diagnostic.message)
+    ));
+    const recreated = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(recreated.ok, true);
+    assert.equal(
+      recreated.results.find((result) => result.host === 'codex')?.files
+        .find((file) => file.path === CODEX_PROJECT_INSTRUCTIONS_PATH)?.status,
+      'created',
+    );
+    assert.deepEqual(validateGeneratedArtifacts(fx.root), []);
+
+    unlinkSync(at(fx.root, 'ROSTER.md'));
+    const restored = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(restored.ok, true);
+    assert.equal(readFileSync(at(fx.root, 'ROSTER.md'), 'utf8'), renderRosterBootstrap());
+    assert.deepEqual(validateGeneratedArtifacts(fx.root), []);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// #365 review round 1, blocker 2: §5 promised "delete manifest + one host
+// file → refusal", misreading where hasMissingClaim fires. The host sync
+// recreates recreatable files BEFORE syncGeneratedManifest evaluates the
+// missing claim (ordering pre-existing on main 9e63154), so the honest
+// contract -- pinned here -- is: update SELF-HEALS the absent-manifest +
+// absent-host-file state; the read-only surface reports the absent manifest
+// and stops; the hasMissingClaim refusal fires exactly when reconstruction
+// is attempted while an enabled activation cannot be regenerated.
+
+test('an absent manifest with an absent host file blocks read-only and converges on update', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    unlinkSync(at(fx.root, GENERATED_MANIFEST_PATH));
+    unlinkSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH));
+
+    const readOnly = validateGeneratedArtifacts(fx.root);
+    assert.equal(readOnly.length, 1);
+    assert.equal(readOnly[0]?.code, 'GENERATED_FILE_EDITED');
+    assert.equal(readOnly[0]?.severity, 'error');
+    assert.equal(readOnly[0]?.path, GENERATED_MANIFEST_PATH);
+    assert.match(readOnly[0]?.message ?? '', /Enabled hosts require/);
+    assert.equal(readOnly.some((diagnostic) =>
+      diagnostic.path === CLAUDE_PROJECT_INSTRUCTIONS_PATH
+    ), false);
+
+    const updated = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(updated.ok, true);
+    assert.equal(
+      updated.results.find((result) => result.host === 'claude')?.files
+        .find((file) => file.path === CLAUDE_PROJECT_INSTRUCTIONS_PATH)?.status,
+      'created',
+    );
+    assert.ok(parseGeneratedManifest(readFileSync(at(fx.root, GENERATED_MANIFEST_PATH), 'utf8')));
+    assert.deepEqual(validateGeneratedArtifacts(fx.root), []);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('manifest reconstruction refuses while an enabled activation cannot be regenerated', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    unlinkSync(at(fx.root, GENERATED_MANIFEST_PATH));
+    const authoredBootstrap = '# Authored workspace notes\n';
+    writeFileSync(at(fx.root, 'ROSTER.md'), authoredBootstrap);
+
+    const updated = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(updated.ok, false);
+    assert.equal(existsSync(at(fx.root, GENERATED_MANIFEST_PATH)), false);
+    assert.equal(readFileSync(at(fx.root, 'ROSTER.md'), 'utf8'), authoredBootstrap);
+    assert.ok(updated.diagnostics.some((diagnostic) =>
+      diagnostic.path === GENERATED_MANIFEST_PATH
+      && /cannot be reconstructed while an enabled host activation is missing/.test(diagnostic.message)
+    ));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// Sibling of the fixture above: ROSTER.md stays canonical, so this pins the
+// OTHER hasMissingClaim arm -- an enabled host whose activation_assurance is
+// 'missing'. Both Claude activation paths must be AUTHORED: an authored
+// primary makes the rule the fallback, and syncClaudeArtifacts regenerates an
+// absent rule, so only an authored rule leaves the host with no regenerable
+// activation.
+test('manifest reconstruction refuses when the enabled host has no regenerable activation', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    unlinkSync(at(fx.root, GENERATED_MANIFEST_PATH));
+    const authoredPrimary = '# Authored Claude instructions\n';
+    const authoredRule = '# Authored Claude rule\n';
+    writeFileSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH), authoredPrimary);
+    mkdirSync(at(fx.root, '.claude/rules'), { recursive: true });
+    writeFileSync(at(fx.root, CLAUDE_PROJECT_RULE_PATH), authoredRule);
+
+    const updated = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(updated.ok, false);
+    assert.equal(updated.manifest, null);
+    assert.equal(existsSync(at(fx.root, GENERATED_MANIFEST_PATH)), false);
+    assert.equal(readFileSync(at(fx.root, 'ROSTER.md'), 'utf8'), renderRosterBootstrap());
+    assert.equal(readFileSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH), 'utf8'), authoredPrimary);
+    assert.equal(readFileSync(at(fx.root, CLAUDE_PROJECT_RULE_PATH), 'utf8'), authoredRule);
+    const refusal = updated.diagnostics.find((diagnostic) =>
+      diagnostic.path === GENERATED_MANIFEST_PATH
+      && /cannot be reconstructed while an enabled host activation is missing/.test(diagnostic.message)
+    );
+    assert.ok(refusal);
+    assert.equal(refusal.code, 'GENERATED_FILE_EDITED');
+    assert.equal(refusal.severity, 'error');
+    assert.deepEqual(refusal.details['missingHosts'], ['claude']);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// DEVIATIONS entry 3 exercised directly: S4 precedence at GEMINI.md covers
+// the invalid-marker (S3) cell too -- both the unparseable-header and the
+// hash-broken variants classify unsupported-host, never edited.
+test('an invalid offset-0 marker at GEMINI.md keeps the unsupported-host classification', () => {
+  const fx = fixture();
+  try {
+    writeFileSync(at(fx.root, 'GEMINI.md'), '<!-- roster:generated\nnot a header\n-->\nBody.\n');
+    const unparseable = detectGeneratedShadows(fx.root);
+    assert.deepEqual(
+      unparseable.shadows.map((shadow) => [shadow.path, shadow.kind, shadow.surface_host, shadow.artifact]),
+      [['GEMINI.md', 'unsupported-host', 'gemini', null]],
+    );
+    assert.match(unparseable.diagnostics[0]?.message ?? '', /Gemini has no v2 activation contract/);
+    assert.equal(unparseable.diagnostics[0]?.severity, 'error');
+
+    writeFileSync(at(fx.root, 'GEMINI.md'), `${readFileSync(at(fx.root, 'ROSTER.md'), 'utf8')}edited\n`);
+    const hashBroken = detectGeneratedShadows(fx.root);
+    assert.deepEqual(
+      hashBroken.shadows.map((shadow) => [shadow.path, shadow.kind, shadow.artifact]),
+      [['GEMINI.md', 'unsupported-host', 'roster-bootstrap']],
+    );
   } finally {
     fx.cleanup();
   }

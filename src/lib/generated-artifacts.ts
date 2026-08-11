@@ -5,6 +5,7 @@ import {
   ensureRosterStateRoot,
   ensureWorkspaceDirectory,
   hashWorkspaceBytes,
+  inspectWorkspaceDirectory,
   publishCreateOnly,
   readWorkspaceText,
   removeManagedWorkspaceFileIfHash,
@@ -17,6 +18,7 @@ import {
 } from './workspace-io.ts';
 import {
   workspaceDiagnostic,
+  type JsonValue,
   type WorkspaceDiagnostic,
 } from './workspace-diagnostics.ts';
 import { addWorkspaceHost, enabledV2Hosts, parseWorkspaceRegistry } from './workspace-record.ts';
@@ -253,6 +255,7 @@ export type GeneratedActivationPathInspectionState =
   | 'absent'
   | 'authored'
   | 'canonical-generated'
+  | 'stale-generated'
   | 'noncanonical-generated'
   | 'unsafe';
 
@@ -264,6 +267,7 @@ export type GeneratedActivationPathInspection = Readonly<{
   activation_assurance: ActivationAssurance | null;
   supported_host_versions: string | null;
   attestation_fixture: string | null;
+  recorded_generator_version: string | null;
 }>;
 
 export type GeneratedManifestInspectionState =
@@ -277,6 +281,7 @@ export type GeneratedAdapterMetadataInspection = Readonly<{
   paths: readonly GeneratedActivationPathInspection[];
   shared_bootstrap_canonical: boolean;
   redundant_activations: readonly Exclude<GeneratedArtifactHost, 'neutral'>[];
+  shadows: readonly GeneratedShadowInspection[];
   manifest: Readonly<{
     state: GeneratedManifestInspectionState;
     value: GeneratedArtifactManifest | null;
@@ -1045,12 +1050,15 @@ function syncExpectedGeneratedFile(
   }
 }
 
-function inspectGeneratedPath(root: string, path: string): {
+type GeneratedPathInspection = {
   status: 'absent' | 'generated' | 'authored' | 'edited-generated' | 'unsafe';
   entry?: GeneratedManifestEntry;
   content?: string;
+  header?: GeneratedArtifactHeader;
   diagnostic?: WorkspaceDiagnostic;
-} {
+};
+
+function inspectGeneratedPath(root: string, path: string): GeneratedPathInspection {
   let bytes: Buffer | null;
   try {
     bytes = tryReadWorkspaceFile(root, path);
@@ -1060,10 +1068,278 @@ function inspectGeneratedPath(root: string, path: string): {
   if (bytes === null) return { status: 'absent' };
   const text = bytes.toString('utf8');
   const entry = entryFromGeneratedContent(path, text);
-  if (entry !== null) return { status: 'generated', entry, content: text };
+  const header = parseGeneratedMarkdown(text)?.header;
+  if (entry !== null) {
+    return { status: 'generated', entry, content: text, ...(header === undefined ? {} : { header }) };
+  }
   return hasGeneratedHeaderAtOwnedPosition(path, text)
-    ? { status: 'edited-generated' }
+    ? { status: 'edited-generated', ...(header === undefined ? {} : { header }) }
     : { status: 'authored' };
+}
+
+// The ONE stale-vs-edited boundary. The hash chain is the split: a valid
+// header whose recomputed hash matches is Roster-owned unedited content
+// whatever version rendered it ('stale' when it diverges from the current
+// render -- byte-equality stays each caller's own check); a broken hash or
+// invalid header is a user edit ('edited'); a file without an owned marker is
+// no divergence at all (null -- absent/authored/unsafe stay sync-policy
+// cells, not divergence classes). A forged body re-hashed at the current
+// version is indistinguishable from an old renderer's genuine output, so both
+// classify 'stale' and share the regenerate remedy. Every site that treats
+// hash-valid divergence differently from an edit routes through this
+// function; none may re-derive the boundary from `status` directly.
+function classifyGeneratedDivergence(
+  inspected: Pick<GeneratedPathInspection, 'status'>,
+): 'stale' | 'edited' | null {
+  if (inspected.status === 'generated') return 'stale';
+  if (inspected.status === 'edited-generated') return 'edited';
+  return null;
+}
+
+function staleGeneratedDetails(header: GeneratedArtifactHeader | undefined): Record<string, JsonValue> {
+  const recorded = header?.generator_version ?? null;
+  const expected = getPackageVersion();
+  return {
+    recordedGeneratorVersion: recorded,
+    expectedGeneratorVersion: expected,
+    reason: recorded !== null && recorded !== expected ? 'generator-version' : 'content',
+  };
+}
+
+function staleGeneratedDiagnostic(
+  path: string,
+  message: string,
+  header: GeneratedArtifactHeader | undefined,
+  remedy = 'Run roster update to regenerate this stale Roster-owned artifact.',
+): WorkspaceDiagnostic {
+  return workspaceDiagnostic('GENERATED_FILE_STALE', message, {
+    path,
+    remedy,
+    details: staleGeneratedDetails(header),
+  });
+}
+
+export type GeneratedShadowKind = 'duplicate' | 'stale' | 'edited' | 'unsupported-host' | 'unreadable';
+
+export type GeneratedShadowInspection = Readonly<{
+  path: string;
+  surface_host: 'claude' | 'codex' | 'gemini';
+  kind: GeneratedShadowKind;
+  artifact: GeneratedArtifactHeader['artifact'] | null;
+  recorded_generator_version: string | null;
+}>;
+
+const SHADOW_FIXED_PATHS = [
+  { path: 'CLAUDE.md', host: 'claude' },
+  { path: 'CLAUDE.local.md', host: 'claude' },
+  { path: 'GEMINI.md', host: 'gemini' },
+  { path: 'AGENTS.override.md', host: 'codex' },
+] as const satisfies readonly { path: string; host: GeneratedShadowInspection['surface_host'] }[];
+
+const SHADOW_RULES_ROOT = '.claude/rules';
+const SHADOW_RULES_ENTRY_BUDGET = 256;
+const SHADOW_RULES_MAX_DEPTH = 8;
+
+// Every shadow blocks except an unreadable CLAUDE.local.md: that path is
+// explicitly personal and gitignored by convention, so a symlinked local
+// memory file stays a named warning instead of failing the workspace.
+export function isBlockingGeneratedShadow(shadow: GeneratedShadowInspection): boolean {
+  return !(shadow.kind === 'unreadable' && shadow.path === 'CLAUDE.local.md');
+}
+
+function shadowRecord(
+  path: string,
+  host: GeneratedShadowInspection['surface_host'],
+  kind: GeneratedShadowKind,
+  header: GeneratedArtifactHeader | null,
+): GeneratedShadowInspection {
+  return Object.freeze({
+    path,
+    surface_host: host,
+    kind,
+    artifact: header?.artifact ?? null,
+    recorded_generator_version: header?.generator_version ?? null,
+  });
+}
+
+function renderCanonicalForShadowHeader(header: GeneratedArtifactHeader): string | null {
+  return renderCanonicalGeneratedEntry({
+    path: header.artifact === 'roster-bootstrap' ? 'ROSTER.md' : 'shadow.md',
+    artifact: header.artifact,
+    host: header.host,
+    activation_assurance: header.activation_assurance,
+    supported_host_versions: header.supported_host_versions,
+    attestation_fixture: header.attestation_fixture === 'none' ? null : header.attestation_fixture,
+    content_hash: header.content_hash,
+  });
+}
+
+// A VALID hash-valid header anywhere in the parser's bounded prefix window is
+// proof of Roster ownership regardless of position (the hash covers prefix and
+// body). The offset-0 marker rule defends only the invalid-marker cell: a
+// quoted marker in authored prose is not a shadow.
+function classifyShadowContent(
+  path: string,
+  host: GeneratedShadowInspection['surface_host'],
+  text: string,
+): GeneratedShadowInspection | null {
+  const parsed = parseGeneratedMarkdown(text);
+  if (parsed !== null && parsed.valid) {
+    const kind: GeneratedShadowKind = host === 'gemini'
+      ? 'unsupported-host'
+      : renderCanonicalForShadowHeader(parsed.header) === text ? 'duplicate' : 'stale';
+    return shadowRecord(path, host, kind, parsed.header);
+  }
+  if (normalizeLf(text).startsWith(`${HEADER_START}\n`)) {
+    return shadowRecord(path, host, host === 'gemini' ? 'unsupported-host' : 'edited', parsed?.header ?? null);
+  }
+  return null;
+}
+
+function describeShadow(shadow: GeneratedShadowInspection): { message: string; remedy: string } {
+  const removalRemedy = 'Remove the copied file; Roster never writes or deletes at this path.';
+  switch (shadow.kind) {
+    case 'duplicate':
+      return {
+        message: `A Roster-generated contract is duplicated at '${shadow.path}'; the ${shadow.surface_host} host auto-loads it beside the canonical activation.`,
+        remedy: removalRemedy,
+      };
+    case 'stale':
+      return {
+        message: `A stale Roster-generated contract at '${shadow.path}' lets the ${shadow.surface_host} host silently run a different contract than the canonical activation.`,
+        remedy: removalRemedy,
+      };
+    case 'edited':
+      return {
+        message: `An edited Roster-generated marker at '${shadow.path}' shadows the canonical activation.`,
+        remedy: removalRemedy,
+      };
+    case 'unsupported-host':
+      return {
+        message: `'${shadow.path}' carries a Roster-generated contract, but Gemini has no v2 activation contract.`,
+        remedy: 'Remove the file; use project activation only for claude or codex.',
+      };
+    case 'unreadable':
+      return {
+        message: `Auto-loaded path '${shadow.path}' cannot be inspected; the ${shadow.surface_host} host may follow it to content Roster cannot verify.`,
+        remedy: 'Replace the symlink, special file, or oversized file with a regular readable file, or remove it.',
+      };
+  }
+}
+
+function shadowDiagnostic(
+  shadow: GeneratedShadowInspection,
+  message: string,
+  remedy: string,
+): WorkspaceDiagnostic {
+  return workspaceDiagnostic('GENERATED_SHADOW', message, {
+    severity: isBlockingGeneratedShadow(shadow) ? 'error' : 'warning',
+    path: shadow.path,
+    remedy,
+    details: {
+      surfaceHost: shadow.surface_host,
+      kind: shadow.kind,
+      artifact: shadow.artifact,
+      recordedGeneratorVersion: shadow.recorded_generator_version,
+    },
+  });
+}
+
+type ShadowFinding = { shadow: GeneratedShadowInspection; message: string; remedy: string };
+
+// Both budget dimensions and every walk failure are BLOCKING findings: Claude's
+// recursive rules loader reads what Roster could not inspect, so partial
+// knowledge must never scan silent-green.
+function scanShadowRules(root: string, push: (finding: ShadowFinding) => void): void {
+  const budgetRemedy = `Reduce '${SHADOW_RULES_ROOT}' to at most ${SHADOW_RULES_ENTRY_BUDGET} entries and ${SHADOW_RULES_MAX_DEPTH} directory levels so Roster can inspect every auto-loaded rule.`;
+  let remaining = SHADOW_RULES_ENTRY_BUDGET;
+  const queue: Array<{ path: string; depth: number }> = [{ path: SHADOW_RULES_ROOT, depth: 0 }];
+  while (queue.length > 0) {
+    const { path: directoryPath, depth } = queue.shift()!;
+    let inspection: ReturnType<typeof inspectWorkspaceDirectory>;
+    try {
+      inspection = inspectWorkspaceDirectory(root, directoryPath, { maxEntries: remaining });
+    } catch {
+      push({
+        shadow: shadowRecord(directoryPath, 'claude', 'unreadable', null),
+        message: `Rules directory '${directoryPath}' cannot be inspected; the claude host may load rules Roster cannot verify.`,
+        remedy: 'Replace the symlink or non-directory with a regular directory, or remove it.',
+      });
+      continue;
+    }
+    if (inspection.truncated) {
+      push({
+        shadow: shadowRecord(directoryPath, 'claude', 'unreadable', null),
+        message: `Shadow scan of '${SHADOW_RULES_ROOT}' exhausted its ${SHADOW_RULES_ENTRY_BUDGET}-entry budget at '${directoryPath}'; uninspected rules may shadow the canonical activation.`,
+        remedy: budgetRemedy,
+      });
+      return;
+    }
+    remaining -= inspection.entries.length;
+    for (const entry of inspection.entries) {
+      const entryPath = posix.join(directoryPath, entry.name);
+      if (entry.kind === 'directory') {
+        if (depth + 1 > SHADOW_RULES_MAX_DEPTH) {
+          push({
+            shadow: shadowRecord(entryPath, 'claude', 'unreadable', null),
+            message: `Shadow scan of '${SHADOW_RULES_ROOT}' stopped at '${entryPath}': directory depth exceeds ${SHADOW_RULES_MAX_DEPTH}, and deeper rules stay uninspected.`,
+            remedy: budgetRemedy,
+          });
+        } else {
+          queue.push({ path: entryPath, depth: depth + 1 });
+        }
+        continue;
+      }
+      if (entry.kind === 'symlink' || entry.kind === 'other') {
+        const shadow = shadowRecord(entryPath, 'claude', 'unreadable', null);
+        push({ shadow, ...describeShadow(shadow) });
+        continue;
+      }
+      if (!entry.name.endsWith('.md') || entryPath === CLAUDE_PROJECT_RULE_PATH) continue;
+      let bytes: Buffer | null;
+      try {
+        bytes = tryReadWorkspaceFile(root, entryPath);
+      } catch {
+        const shadow = shadowRecord(entryPath, 'claude', 'unreadable', null);
+        push({ shadow, ...describeShadow(shadow) });
+        continue;
+      }
+      if (bytes === null) continue;
+      const shadow = classifyShadowContent(entryPath, 'claude', bytes.toString('utf8'));
+      if (shadow !== null) push({ shadow, ...describeShadow(shadow) });
+    }
+  }
+}
+
+export function detectGeneratedShadows(root: string): {
+  shadows: readonly GeneratedShadowInspection[];
+  diagnostics: WorkspaceDiagnostic[];
+} {
+  const findings: ShadowFinding[] = [];
+  const push = (finding: ShadowFinding): void => {
+    findings.push(finding);
+  };
+  for (const fixed of SHADOW_FIXED_PATHS) {
+    let bytes: Buffer | null;
+    try {
+      bytes = tryReadWorkspaceFile(root, fixed.path);
+    } catch {
+      const shadow = shadowRecord(fixed.path, fixed.host, 'unreadable', null);
+      push({ shadow, ...describeShadow(shadow) });
+      continue;
+    }
+    if (bytes === null) continue;
+    const shadow = classifyShadowContent(fixed.path, fixed.host, bytes.toString('utf8'));
+    if (shadow !== null) push({ shadow, ...describeShadow(shadow) });
+  }
+  scanShadowRules(root, push);
+  findings.sort((left, right) => left.shadow.path.localeCompare(right.shadow.path, 'en'));
+  return {
+    shadows: Object.freeze(findings.map((finding) => finding.shadow)),
+    diagnostics: findings.map((finding) =>
+      shadowDiagnostic(finding.shadow, finding.message, finding.remedy)
+    ),
+  };
 }
 
 function hasRedundantGeneratedActivation(
@@ -1078,18 +1354,22 @@ function hasRedundantGeneratedActivation(
 export function inspectGeneratedAdapterMetadata(root: string): GeneratedAdapterMetadataInspection {
   const paths = Object.entries(GENERATED_PATH_IDENTITIES).map(([path, identity]) => {
     const inspected = inspectGeneratedPath(root, path);
+    const divergence = classifyGeneratedDivergence(inspected);
     let state: GeneratedActivationPathInspectionState;
-    if (inspected.status === 'generated') {
+    if (divergence === 'stale') {
       const canonical = inspected.entry === undefined || inspected.content === undefined
         ? null
         : renderCanonicalGeneratedEntry(inspected.entry);
       state = canonical !== null && inspected.content === canonical
         ? 'canonical-generated'
-        : 'noncanonical-generated';
-    } else if (inspected.status === 'edited-generated') {
+        : 'stale-generated';
+    } else if (divergence === 'edited') {
       state = 'noncanonical-generated';
     } else {
-      state = inspected.status;
+      state = inspected.status as Exclude<
+        GeneratedPathInspection['status'],
+        'generated' | 'edited-generated'
+      >;
     }
     return Object.freeze({
       path,
@@ -1105,14 +1385,18 @@ export function inspectGeneratedAdapterMetadata(root: string): GeneratedAdapterM
       attestation_fixture: state === 'canonical-generated'
         ? inspected.entry?.attestation_fixture ?? null
         : null,
+      recorded_generator_version: inspected.header?.generator_version ?? null,
     });
   });
   const generatedPaths = paths.filter((entry) =>
-    entry.state === 'canonical-generated' || entry.state === 'noncanonical-generated'
+    entry.state === 'canonical-generated'
+    || entry.state === 'stale-generated'
+    || entry.state === 'noncanonical-generated'
   );
   const redundantActivations = (['claude', 'codex'] as const).filter((host) =>
     hasRedundantGeneratedActivation(generatedPaths, host)
   );
+  const shadows = detectGeneratedShadows(root).shadows;
 
   let manifestBytes: Buffer | null;
   try {
@@ -1124,6 +1408,7 @@ export function inspectGeneratedAdapterMetadata(root: string): GeneratedAdapterM
         entry.path === 'ROSTER.md' && entry.state === 'canonical-generated'
       ),
       redundant_activations: Object.freeze(redundantActivations),
+      shadows,
       manifest: Object.freeze({ state: 'invalid', value: null }),
     });
   }
@@ -1150,6 +1435,7 @@ export function inspectGeneratedAdapterMetadata(root: string): GeneratedAdapterM
       entry.path === 'ROSTER.md' && entry.state === 'canonical-generated'
     ),
     redundant_activations: Object.freeze(redundantActivations),
+    shadows,
     manifest: Object.freeze({ state: manifestState, value: manifest }),
   });
 }
@@ -1214,18 +1500,10 @@ function deactivateDisabledHostArtifacts(
       if (inspected.diagnostic !== undefined) diagnostics.push(inspected.diagnostic);
       continue;
     }
-    const expected = inspected.entry === undefined
-      ? null
-      : renderCanonicalGeneratedEntry(inspected.entry);
-    if (
-      inspected.status !== 'generated' ||
-      inspected.content === undefined ||
-      expected === null ||
-      inspected.content !== expected
-    ) {
+    if (classifyGeneratedDivergence(inspected) !== 'stale' || inspected.content === undefined) {
       diagnostics.push(workspaceDiagnostic(
         'GENERATED_FILE_EDITED',
-        `Disabled host artifact '${path}' has authored or noncanonical generated edits and was preserved.`,
+        `Disabled host artifact '${path}' has edited or invalid generated bytes and was preserved.`,
         {
           path,
           remedy: `Keep the file as authored, or restore its canonical generated bytes and rerun roster update to deactivate '${identity.host}'.`,
@@ -1235,7 +1513,7 @@ function deactivateDisabledHostArtifacts(
       continue;
     }
     try {
-      if (!removeManagedWorkspaceFileIfHash(root, path, hashWorkspaceBytes(expected))) {
+      if (!removeManagedWorkspaceFileIfHash(root, path, hashWorkspaceBytes(inspected.content))) {
         diagnostics.push(workspaceDiagnostic(
           'WRITE_CONFLICT',
           `Disabled host artifact '${path}' changed before it could be deactivated.`,
@@ -1269,7 +1547,7 @@ function syncClaudeArtifacts(options: {
     ...(options.hostVersion === undefined ? {} : { hostVersion: options.hostVersion }),
     ...(options.attestations === undefined ? {} : { attestations: options.attestations }),
   });
-  if (rootState.status === 'absent' || rootState.status === 'generated') {
+  if (rootState.status === 'absent' || classifyGeneratedDivergence(rootState) === 'stale') {
     const synced = syncExpectedGeneratedFile(
       options.root,
       CLAUDE_PROJECT_INSTRUCTIONS_PATH,
@@ -1281,22 +1559,21 @@ function syncClaudeArtifacts(options: {
     if (succeeded) {
       const fallbackState = inspectGeneratedPath(options.root, CLAUDE_PROJECT_RULE_PATH);
       if (fallbackState.diagnostic !== undefined) diagnostics.push(fallbackState.diagnostic);
-      if (fallbackState.status === 'edited-generated') {
+      const fallbackDivergence = classifyGeneratedDivergence(fallbackState);
+      if (fallbackDivergence === 'edited') {
         diagnostics.push(editedGeneratedDiagnostic(CLAUDE_PROJECT_RULE_PATH));
       } else if (
-        fallbackState.status === 'generated' &&
+        fallbackDivergence === 'stale' &&
         fallbackState.entry !== undefined &&
         fallbackState.content !== undefined
       ) {
         const expectedFallback = renderCanonicalGeneratedEntry(fallbackState.entry);
         if (expectedFallback === null || fallbackState.content !== expectedFallback) {
-          diagnostics.push(workspaceDiagnostic(
-            'GENERATED_FILE_EDITED',
-            `Redundant Claude fallback '${CLAUDE_PROJECT_RULE_PATH}' is noncanonical and was preserved.`,
-            {
-              path: CLAUDE_PROJECT_RULE_PATH,
-              remedy: 'Restore its canonical generated bytes and rerun roster update, or keep it as authored policy without a Roster ownership header.',
-            },
+          diagnostics.push(staleGeneratedDiagnostic(
+            CLAUDE_PROJECT_RULE_PATH,
+            `Redundant Claude fallback '${CLAUDE_PROJECT_RULE_PATH}' is stale and was preserved.`,
+            fallbackState.header,
+            'Restore its canonical generated bytes so roster update can remove the redundant fallback, or delete the file manually.',
           ));
         } else {
           try {
@@ -1345,7 +1622,7 @@ function syncClaudeArtifacts(options: {
     artifact: 'claude-project-instructions',
     status: rootState.status === 'authored' ? 'preserved-authored' : 'conflict',
   });
-  if (rootState.status === 'edited-generated') {
+  if (classifyGeneratedDivergence(rootState) === 'edited') {
     diagnostics.push(editedGeneratedDiagnostic(CLAUDE_PROJECT_INSTRUCTIONS_PATH));
   }
 
@@ -1387,7 +1664,7 @@ function syncCodexArtifacts(options: {
     ...(options.attestations === undefined ? {} : { attestations: options.attestations }),
   });
   let generatedRoot = false;
-  if (rootState.status === 'absent' || rootState.status === 'generated') {
+  if (rootState.status === 'absent' || classifyGeneratedDivergence(rootState) === 'stale') {
     const synced = syncExpectedGeneratedFile(
       options.root,
       CODEX_PROJECT_INSTRUCTIONS_PATH,
@@ -1402,7 +1679,7 @@ function syncCodexArtifacts(options: {
       artifact: 'codex-project-instructions',
       status: rootState.status === 'authored' ? 'preserved-authored' : 'conflict',
     });
-    if (rootState.status === 'edited-generated') {
+    if (classifyGeneratedDivergence(rootState) === 'edited') {
       diagnostics.push(editedGeneratedDiagnostic(CODEX_PROJECT_INSTRUCTIONS_PATH));
     }
   }
@@ -1423,7 +1700,8 @@ function syncCodexArtifacts(options: {
   const skillSucceeded = skill.result.status !== 'conflict' && skill.result.status !== 'missing';
   const assurance: ActivationAssurance = generatedRoot
     ? rootAssurance.assurance
-    : skillSucceeded && (rootState.status === 'authored' || rootState.status === 'edited-generated')
+    : skillSucceeded
+        && (rootState.status === 'authored' || classifyGeneratedDivergence(rootState) === 'edited')
       ? 'advisory-manual'
       : 'missing';
   return { host: 'codex', assurance, files, diagnostics };
@@ -1454,8 +1732,9 @@ function scanGeneratedEntries(root: string): {
     CODEX_ROSTER_SKILL_PATH,
   ]) {
     const inspected = inspectGeneratedPath(root, path);
-    if (inspected.status === 'generated' && inspected.entry !== undefined) entries.push(inspected.entry);
-    if (inspected.status === 'edited-generated') diagnostics.push(editedGeneratedDiagnostic(path));
+    const divergence = classifyGeneratedDivergence(inspected);
+    if (divergence === 'stale' && inspected.entry !== undefined) entries.push(inspected.entry);
+    if (divergence === 'edited') diagnostics.push(editedGeneratedDiagnostic(path));
     if (inspected.diagnostic !== undefined) diagnostics.push(inspected.diagnostic);
   }
   entries.sort((left, right) => left.path.localeCompare(right.path, 'en'));
@@ -1490,8 +1769,9 @@ function actualHostEntry(
     };
   }
   const skillEntry = hostEntries.find((entry) => entry.path === CODEX_ROSTER_SKILL_PATH);
-  const rootStatus = inspectGeneratedPath(root, CODEX_PROJECT_INSTRUCTIONS_PATH).status;
-  const preservedRoot = rootStatus === 'authored' || rootStatus === 'edited-generated';
+  const codexRoot = inspectGeneratedPath(root, CODEX_PROJECT_INSTRUCTIONS_PATH);
+  const preservedRoot = codexRoot.status === 'authored'
+    || classifyGeneratedDivergence(codexRoot) === 'edited';
   return {
     status: 'enabled',
     activation_assurance: skillEntry !== undefined && preservedRoot ? 'advisory-manual' : 'missing',
@@ -1543,19 +1823,25 @@ export function inspectGeneratedActivationState(root: string): {
   const canonicalEntries = scanned.entries.filter((entry) => {
     const inspected = inspectGeneratedPath(root, entry.path);
     const expected = renderCanonicalGeneratedEntry(entry);
-    const canonical = inspected.status === 'generated'
+    const canonical = classifyGeneratedDivergence(inspected) === 'stale'
       && inspected.content !== undefined
       && expected !== null
       && inspected.content === expected;
     if (!canonical) {
-      diagnostics.push(workspaceDiagnostic(
-        'GENERATED_FILE_EDITED',
-        `Generated artifact '${entry.path}' does not match its current canonical renderer or attestation.`,
-        {
-          path: entry.path,
-          remedy: 'Run roster update after reconciling authored or edited generated bytes.',
-        },
-      ));
+      diagnostics.push(classifyGeneratedDivergence(inspected) === 'stale'
+        ? staleGeneratedDiagnostic(
+            entry.path,
+            `Generated artifact '${entry.path}' does not match its current canonical renderer or attestation.`,
+            inspected.header,
+          )
+        : workspaceDiagnostic(
+            'GENERATED_FILE_EDITED',
+            `Generated artifact '${entry.path}' does not match its current canonical renderer or attestation.`,
+            {
+              path: entry.path,
+              remedy: 'Run roster update after reconciling authored or edited generated bytes.',
+            },
+          ));
     }
     return canonical;
   });
@@ -1669,6 +1955,7 @@ export function synchronizeGeneratedActivations(options: {
   const manifest = syncGeneratedManifest(options.root, options.enabledHosts);
   if (manifest.diagnostic !== undefined) diagnostics.push(manifest.diagnostic);
   for (const result of results) result.manifest = manifest.manifest;
+  diagnostics.push(...detectGeneratedShadows(options.root).diagnostics);
   return { results, diagnostics };
 }
 
@@ -1858,9 +2145,10 @@ export function validateGeneratedArtifacts(root: string): WorkspaceDiagnostic[] 
     diagnostics.push(diagnosticForPathFailure(error, 'roster.yaml'));
     return diagnostics;
   }
+  diagnostics.push(...detectGeneratedShadows(root).diagnostics);
 
   const bootstrap = inspectGeneratedPath(root, 'ROSTER.md');
-  if (bootstrap.status !== 'generated' || bootstrap.entry?.artifact !== 'roster-bootstrap') {
+  if (classifyGeneratedDivergence(bootstrap) !== 'stale' || bootstrap.entry?.artifact !== 'roster-bootstrap') {
     diagnostics.push(
       bootstrap.diagnostic ?? workspaceDiagnostic(
         'GENERATED_FILE_EDITED',
@@ -1873,13 +2161,10 @@ export function validateGeneratedArtifacts(root: string): WorkspaceDiagnostic[] 
       ),
     );
   } else if (bootstrap.content !== renderRosterBootstrap()) {
-    diagnostics.push(workspaceDiagnostic(
-      'GENERATED_FILE_EDITED',
+    diagnostics.push(staleGeneratedDiagnostic(
+      'ROSTER.md',
       'Generated file \'ROSTER.md\' does not match the current canonical renderer.',
-      {
-        path: 'ROSTER.md',
-        remedy: 'Run roster update to restore the current generated bootstrap bytes.',
-      },
+      bootstrap.header,
     ));
   }
 
@@ -1924,7 +2209,7 @@ export function validateGeneratedArtifacts(root: string): WorkspaceDiagnostic[] 
   }
   if (manifest.generator_version !== getPackageVersion()) {
     diagnostics.push(workspaceDiagnostic(
-      'GENERATED_FILE_EDITED',
+      'GENERATED_FILE_STALE',
       `Generated manifest was produced by version '${manifest.generator_version}', not '${getPackageVersion()}'.`,
       {
         path: GENERATED_MANIFEST_PATH,
@@ -1977,7 +2262,7 @@ export function validateGeneratedArtifacts(root: string): WorkspaceDiagnostic[] 
     }
     const inspected = inspectGeneratedPath(root, entry.path);
     if (
-      inspected.status !== 'generated' ||
+      classifyGeneratedDivergence(inspected) !== 'stale' ||
       inspected.entry === undefined ||
       inspected.entry.artifact !== entry.artifact ||
       inspected.entry.host !== entry.host ||
@@ -2001,19 +2286,10 @@ export function validateGeneratedArtifacts(root: string): WorkspaceDiagnostic[] 
     }
     const expectedContent = renderCanonicalGeneratedEntry(entry);
     if (expectedContent === null || inspected.content !== expectedContent) {
-      diagnostics.push(workspaceDiagnostic(
-        'GENERATED_FILE_EDITED',
+      diagnostics.push(staleGeneratedDiagnostic(
+        entry.path,
         `Generated artifact '${entry.path}' does not match its current canonical renderer or attestation.`,
-        {
-          path: entry.path,
-          remedy: 'Preserve authored bytes, or run roster update to restore a fixture-backed generated artifact.',
-          details: {
-            artifact: entry.artifact,
-            host: entry.host,
-            assurance: entry.activation_assurance,
-            attestationFixture: entry.attestation_fixture,
-          },
-        },
+        inspected.header,
       ));
     }
   }
