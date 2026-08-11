@@ -34,7 +34,7 @@ export function buildContextGoldWorkspace(
   options: Readonly<{ registry?: ContextGoldRegistryVariant }> = {},
 ): ContextGoldWorkspaceFixture {
   const registry = options.registry ?? 'local';
-  const root = mkdtempSync(join(tmpdir(), 'roster-context-gold-workspace-'));
+  const root = mkdtempSync(join(tmpdir(), 'roster-context-gold-ws-'));
   for (const entry of ['ROSTER.md', 'functions', 'tools']) {
     cpSync(join(sourceRoot, entry), join(root, entry), { recursive: true });
   }

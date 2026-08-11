@@ -523,6 +523,8 @@ const CONTEXT_SCHEMA_VOCABULARY: ReadonlySet<string> = new Set([
   'lessons_scope_ineligible',
   'retrieval_report_omitted',
   'context_quality_manifest',
+  'L6-lesson-budget-exhaustion',
+  'B4-evidence-budget-exhaustion',
 ]);
 
 export const CONTEXT_GOLD_LINT_TABLES: PrivacyLintTables = Object.freeze({
