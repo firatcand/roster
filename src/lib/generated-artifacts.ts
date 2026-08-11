@@ -5,6 +5,7 @@ import {
   ensureRosterStateRoot,
   ensureWorkspaceDirectory,
   hashWorkspaceBytes,
+  inspectWorkspaceDirectory,
   publishCreateOnly,
   readWorkspaceText,
   removeManagedWorkspaceFileIfHash,
@@ -280,6 +281,7 @@ export type GeneratedAdapterMetadataInspection = Readonly<{
   paths: readonly GeneratedActivationPathInspection[];
   shared_bootstrap_canonical: boolean;
   redundant_activations: readonly Exclude<GeneratedArtifactHost, 'neutral'>[];
+  shadows: readonly GeneratedShadowInspection[];
   manifest: Readonly<{
     state: GeneratedManifestInspectionState;
     value: GeneratedArtifactManifest | null;
@@ -1109,6 +1111,229 @@ function staleGeneratedDiagnostic(
   });
 }
 
+export type GeneratedShadowKind = 'duplicate' | 'stale' | 'edited' | 'unsupported-host' | 'unreadable';
+
+export type GeneratedShadowInspection = Readonly<{
+  path: string;
+  surface_host: 'claude' | 'codex' | 'gemini';
+  kind: GeneratedShadowKind;
+  artifact: GeneratedArtifactHeader['artifact'] | null;
+  recorded_generator_version: string | null;
+}>;
+
+const SHADOW_FIXED_PATHS = [
+  { path: 'CLAUDE.md', host: 'claude' },
+  { path: 'CLAUDE.local.md', host: 'claude' },
+  { path: 'GEMINI.md', host: 'gemini' },
+  { path: 'AGENTS.override.md', host: 'codex' },
+] as const satisfies readonly { path: string; host: GeneratedShadowInspection['surface_host'] }[];
+
+const SHADOW_RULES_ROOT = '.claude/rules';
+const SHADOW_RULES_ENTRY_BUDGET = 256;
+const SHADOW_RULES_MAX_DEPTH = 8;
+
+// Every shadow blocks except an unreadable CLAUDE.local.md: that path is
+// explicitly personal and gitignored by convention, so a symlinked local
+// memory file stays a named warning instead of failing the workspace.
+export function isBlockingGeneratedShadow(shadow: GeneratedShadowInspection): boolean {
+  return !(shadow.kind === 'unreadable' && shadow.path === 'CLAUDE.local.md');
+}
+
+function shadowRecord(
+  path: string,
+  host: GeneratedShadowInspection['surface_host'],
+  kind: GeneratedShadowKind,
+  header: GeneratedArtifactHeader | null,
+): GeneratedShadowInspection {
+  return Object.freeze({
+    path,
+    surface_host: host,
+    kind,
+    artifact: header?.artifact ?? null,
+    recorded_generator_version: header?.generator_version ?? null,
+  });
+}
+
+function renderCanonicalForShadowHeader(header: GeneratedArtifactHeader): string | null {
+  return renderCanonicalGeneratedEntry({
+    path: header.artifact === 'roster-bootstrap' ? 'ROSTER.md' : 'shadow.md',
+    artifact: header.artifact,
+    host: header.host,
+    activation_assurance: header.activation_assurance,
+    supported_host_versions: header.supported_host_versions,
+    attestation_fixture: header.attestation_fixture === 'none' ? null : header.attestation_fixture,
+    content_hash: header.content_hash,
+  });
+}
+
+// A VALID hash-valid header anywhere in the parser's bounded prefix window is
+// proof of Roster ownership regardless of position (the hash covers prefix and
+// body). The offset-0 marker rule defends only the invalid-marker cell: a
+// quoted marker in authored prose is not a shadow.
+function classifyShadowContent(
+  path: string,
+  host: GeneratedShadowInspection['surface_host'],
+  text: string,
+): GeneratedShadowInspection | null {
+  const parsed = parseGeneratedMarkdown(text);
+  if (parsed !== null && parsed.valid) {
+    const kind: GeneratedShadowKind = host === 'gemini'
+      ? 'unsupported-host'
+      : renderCanonicalForShadowHeader(parsed.header) === text ? 'duplicate' : 'stale';
+    return shadowRecord(path, host, kind, parsed.header);
+  }
+  if (normalizeLf(text).startsWith(`${HEADER_START}\n`)) {
+    return shadowRecord(path, host, host === 'gemini' ? 'unsupported-host' : 'edited', parsed?.header ?? null);
+  }
+  return null;
+}
+
+function describeShadow(shadow: GeneratedShadowInspection): { message: string; remedy: string } {
+  const removalRemedy = 'Remove the copied file; Roster never writes or deletes at this path.';
+  switch (shadow.kind) {
+    case 'duplicate':
+      return {
+        message: `A Roster-generated contract is duplicated at '${shadow.path}'; the ${shadow.surface_host} host auto-loads it beside the canonical activation.`,
+        remedy: removalRemedy,
+      };
+    case 'stale':
+      return {
+        message: `A stale Roster-generated contract at '${shadow.path}' lets the ${shadow.surface_host} host silently run a different contract than the canonical activation.`,
+        remedy: removalRemedy,
+      };
+    case 'edited':
+      return {
+        message: `An edited Roster-generated marker at '${shadow.path}' shadows the canonical activation.`,
+        remedy: removalRemedy,
+      };
+    case 'unsupported-host':
+      return {
+        message: `'${shadow.path}' carries a Roster-generated contract, but Gemini has no v2 activation contract.`,
+        remedy: 'Remove the file; use project activation only for claude or codex.',
+      };
+    case 'unreadable':
+      return {
+        message: `Auto-loaded path '${shadow.path}' cannot be inspected; the ${shadow.surface_host} host may follow it to content Roster cannot verify.`,
+        remedy: 'Replace the symlink, special file, or oversized file with a regular readable file, or remove it.',
+      };
+  }
+}
+
+function shadowDiagnostic(
+  shadow: GeneratedShadowInspection,
+  message: string,
+  remedy: string,
+): WorkspaceDiagnostic {
+  return workspaceDiagnostic('GENERATED_SHADOW', message, {
+    severity: isBlockingGeneratedShadow(shadow) ? 'error' : 'warning',
+    path: shadow.path,
+    remedy,
+    details: {
+      surfaceHost: shadow.surface_host,
+      kind: shadow.kind,
+      artifact: shadow.artifact,
+      recordedGeneratorVersion: shadow.recorded_generator_version,
+    },
+  });
+}
+
+type ShadowFinding = { shadow: GeneratedShadowInspection; message: string; remedy: string };
+
+// Both budget dimensions and every walk failure are BLOCKING findings: Claude's
+// recursive rules loader reads what Roster could not inspect, so partial
+// knowledge must never scan silent-green.
+function scanShadowRules(root: string, push: (finding: ShadowFinding) => void): void {
+  const budgetRemedy = `Reduce '${SHADOW_RULES_ROOT}' to at most ${SHADOW_RULES_ENTRY_BUDGET} entries and ${SHADOW_RULES_MAX_DEPTH} directory levels so Roster can inspect every auto-loaded rule.`;
+  let remaining = SHADOW_RULES_ENTRY_BUDGET;
+  const queue: Array<{ path: string; depth: number }> = [{ path: SHADOW_RULES_ROOT, depth: 0 }];
+  while (queue.length > 0) {
+    const { path: directoryPath, depth } = queue.shift()!;
+    let inspection: ReturnType<typeof inspectWorkspaceDirectory>;
+    try {
+      inspection = inspectWorkspaceDirectory(root, directoryPath, { maxEntries: remaining });
+    } catch {
+      push({
+        shadow: shadowRecord(directoryPath, 'claude', 'unreadable', null),
+        message: `Rules directory '${directoryPath}' cannot be inspected; the claude host may load rules Roster cannot verify.`,
+        remedy: 'Replace the symlink or non-directory with a regular directory, or remove it.',
+      });
+      continue;
+    }
+    if (inspection.truncated) {
+      push({
+        shadow: shadowRecord(directoryPath, 'claude', 'unreadable', null),
+        message: `Shadow scan of '${SHADOW_RULES_ROOT}' exhausted its ${SHADOW_RULES_ENTRY_BUDGET}-entry budget at '${directoryPath}'; uninspected rules may shadow the canonical activation.`,
+        remedy: budgetRemedy,
+      });
+      return;
+    }
+    remaining -= inspection.entries.length;
+    for (const entry of inspection.entries) {
+      const entryPath = posix.join(directoryPath, entry.name);
+      if (entry.kind === 'directory') {
+        if (depth + 1 > SHADOW_RULES_MAX_DEPTH) {
+          push({
+            shadow: shadowRecord(entryPath, 'claude', 'unreadable', null),
+            message: `Shadow scan of '${SHADOW_RULES_ROOT}' stopped at '${entryPath}': directory depth exceeds ${SHADOW_RULES_MAX_DEPTH}, and deeper rules stay uninspected.`,
+            remedy: budgetRemedy,
+          });
+        } else {
+          queue.push({ path: entryPath, depth: depth + 1 });
+        }
+        continue;
+      }
+      if (entry.kind === 'symlink' || entry.kind === 'other') {
+        const shadow = shadowRecord(entryPath, 'claude', 'unreadable', null);
+        push({ shadow, ...describeShadow(shadow) });
+        continue;
+      }
+      if (!entry.name.endsWith('.md') || entryPath === CLAUDE_PROJECT_RULE_PATH) continue;
+      let bytes: Buffer | null;
+      try {
+        bytes = tryReadWorkspaceFile(root, entryPath);
+      } catch {
+        const shadow = shadowRecord(entryPath, 'claude', 'unreadable', null);
+        push({ shadow, ...describeShadow(shadow) });
+        continue;
+      }
+      if (bytes === null) continue;
+      const shadow = classifyShadowContent(entryPath, 'claude', bytes.toString('utf8'));
+      if (shadow !== null) push({ shadow, ...describeShadow(shadow) });
+    }
+  }
+}
+
+export function detectGeneratedShadows(root: string): {
+  shadows: readonly GeneratedShadowInspection[];
+  diagnostics: WorkspaceDiagnostic[];
+} {
+  const findings: ShadowFinding[] = [];
+  const push = (finding: ShadowFinding): void => {
+    findings.push(finding);
+  };
+  for (const fixed of SHADOW_FIXED_PATHS) {
+    let bytes: Buffer | null;
+    try {
+      bytes = tryReadWorkspaceFile(root, fixed.path);
+    } catch {
+      const shadow = shadowRecord(fixed.path, fixed.host, 'unreadable', null);
+      push({ shadow, ...describeShadow(shadow) });
+      continue;
+    }
+    if (bytes === null) continue;
+    const shadow = classifyShadowContent(fixed.path, fixed.host, bytes.toString('utf8'));
+    if (shadow !== null) push({ shadow, ...describeShadow(shadow) });
+  }
+  scanShadowRules(root, push);
+  findings.sort((left, right) => left.shadow.path.localeCompare(right.shadow.path, 'en'));
+  return {
+    shadows: Object.freeze(findings.map((finding) => finding.shadow)),
+    diagnostics: findings.map((finding) =>
+      shadowDiagnostic(finding.shadow, finding.message, finding.remedy)
+    ),
+  };
+}
+
 function hasRedundantGeneratedActivation(
   entries: readonly Readonly<{ path: string; host: GeneratedArtifactHost }>[],
   host: Exclude<GeneratedArtifactHost, 'neutral'>,
@@ -1159,6 +1384,7 @@ export function inspectGeneratedAdapterMetadata(root: string): GeneratedAdapterM
   const redundantActivations = (['claude', 'codex'] as const).filter((host) =>
     hasRedundantGeneratedActivation(generatedPaths, host)
   );
+  const shadows = detectGeneratedShadows(root).shadows;
 
   let manifestBytes: Buffer | null;
   try {
@@ -1170,6 +1396,7 @@ export function inspectGeneratedAdapterMetadata(root: string): GeneratedAdapterM
         entry.path === 'ROSTER.md' && entry.state === 'canonical-generated'
       ),
       redundant_activations: Object.freeze(redundantActivations),
+      shadows,
       manifest: Object.freeze({ state: 'invalid', value: null }),
     });
   }
@@ -1196,6 +1423,7 @@ export function inspectGeneratedAdapterMetadata(root: string): GeneratedAdapterM
       entry.path === 'ROSTER.md' && entry.state === 'canonical-generated'
     ),
     redundant_activations: Object.freeze(redundantActivations),
+    shadows,
     manifest: Object.freeze({ state: manifestState, value: manifest }),
   });
 }
@@ -1711,6 +1939,7 @@ export function synchronizeGeneratedActivations(options: {
   const manifest = syncGeneratedManifest(options.root, options.enabledHosts);
   if (manifest.diagnostic !== undefined) diagnostics.push(manifest.diagnostic);
   for (const result of results) result.manifest = manifest.manifest;
+  diagnostics.push(...detectGeneratedShadows(options.root).diagnostics);
   return { results, diagnostics };
 }
 
@@ -1900,6 +2129,7 @@ export function validateGeneratedArtifacts(root: string): WorkspaceDiagnostic[] 
     diagnostics.push(diagnosticForPathFailure(error, 'roster.yaml'));
     return diagnostics;
   }
+  diagnostics.push(...detectGeneratedShadows(root).diagnostics);
 
   const bootstrap = inspectGeneratedPath(root, 'ROSTER.md');
   if (bootstrap.status !== 'generated' || bootstrap.entry?.artifact !== 'roster-bootstrap') {

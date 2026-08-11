@@ -12,6 +12,13 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import {
+  createGeneratedManifest,
+  parseGeneratedManifest,
+  parseGeneratedMarkdown,
+  renderGeneratedManifest,
+  renderGeneratedMarkdown,
+} from '../src/lib/generated-artifacts.ts';
 
 const BIN = resolve('src/bin/roster.ts');
 
@@ -122,6 +129,89 @@ test('update: a symlinked vendor map target fails before activation and preserve
     assert.deepEqual(readFileSync(activationPath), activationBefore);
     assert.deepEqual(readFileSync(manifestPath), manifestBefore);
     assert.equal(readFileSync(outside, 'utf8'), sentinel);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('update: converges an old-generator workspace and is idempotent afterwards', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-update-upgrade-'));
+  const claudeHome = join(root, '.h-claude');
+  const fakeHome = join(root, '.home');
+  mkdirSync(claudeHome, { recursive: true });
+  mkdirSync(fakeHome, { recursive: true });
+  try {
+    const env = { HOME: fakeHome, ROSTER_CLAUDE_HOME: claudeHome };
+    assert.equal(runCli(['init', 'tw', '--silent'], root, env).status, 0);
+    assert.equal(
+      runCli(['install', '--tool', 'claude', '--scope', 'project', '--yes', '--silent'], root, env).status,
+      0,
+    );
+    const paths = [join(root, 'ROSTER.md'), join(root, '.claude', 'CLAUDE.md')];
+    const canonical = paths.map((path) => readFileSync(path, 'utf8'));
+    for (const path of paths) {
+      const parsed = parseGeneratedMarkdown(readFileSync(path, 'utf8'))!;
+      const { content_hash: _contentHash, ...header } = parsed.header;
+      writeFileSync(path, renderGeneratedMarkdown(
+        { ...header, generator_version: '0.0.0-stale' },
+        parsed.body,
+        parsed.prefix,
+      ));
+    }
+    const manifestPath = join(root, '.roster', 'generated-manifest.json');
+    const manifest = parseGeneratedManifest(readFileSync(manifestPath, 'utf8'))!;
+    const { manifest_hash: _manifestHash, ...draft } = manifest;
+    writeFileSync(manifestPath, renderGeneratedManifest(createGeneratedManifest({
+      ...draft,
+      generator_version: '0.0.0-stale',
+      files: draft.files.map((entry) => {
+        const parsed = parseGeneratedMarkdown(
+          readFileSync(join(root, ...entry.path.split('/')), 'utf8'),
+        )!;
+        return { ...entry, content_hash: parsed.header.content_hash };
+      }),
+    })));
+
+    const first = runCli(['update'], root, env);
+    assert.equal(first.status, 0, first.stderr);
+    paths.forEach((path, index) => {
+      assert.equal(readFileSync(path, 'utf8'), canonical[index]);
+    });
+    const second = runCli(['update', '--json'], root, env);
+    assert.equal(second.status, 0, second.stderr);
+    const payload = JSON.parse(second.stdout) as {
+      results: Array<{ files: Array<{ status: string }> }>;
+    };
+    assert.ok(payload.results.flatMap((result) => result.files)
+      .every((file) => file.status === 'unchanged'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('update: a generated-contract shadow exits 1 while canonical files are still synced', () => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-update-shadow-'));
+  const claudeHome = join(root, '.h-claude');
+  const fakeHome = join(root, '.home');
+  mkdirSync(claudeHome, { recursive: true });
+  mkdirSync(fakeHome, { recursive: true });
+  try {
+    const env = { HOME: fakeHome, ROSTER_CLAUDE_HOME: claudeHome };
+    assert.equal(runCli(['init', 'tw', '--silent'], root, env).status, 0);
+    assert.equal(
+      runCli(['install', '--tool', 'claude', '--scope', 'project', '--yes', '--silent'], root, env).status,
+      0,
+    );
+    const activationPath = join(root, '.claude', 'CLAUDE.md');
+    const shadowBytes = readFileSync(activationPath);
+    writeFileSync(join(root, 'CLAUDE.md'), shadowBytes);
+    rmSync(activationPath);
+
+    const result = runCli(['update'], root, env);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /GENERATED_SHADOW/);
+    assert.ok(existsSync(activationPath), 'canonical activation is still recreated');
+    assert.deepEqual(readFileSync(join(root, 'CLAUDE.md')), shadowBytes);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

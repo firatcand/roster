@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -11,11 +11,13 @@ import {
   CODEX_PROJECT_INSTRUCTIONS_PATH,
   CODEX_ROSTER_SKILL_PATH,
   createGeneratedManifest,
+  detectGeneratedShadows,
   GENERATED_MANIFEST_PATH,
   HOST_ADAPTER_LIFECYCLE_CAPABILITIES,
   installV2ProjectActivation,
   inspectGeneratedAdapterMetadata,
   inspectGeneratedActivationState,
+  isBlockingGeneratedShadow,
   parseGeneratedMarkdown,
   parseGeneratedManifest,
   renderClaudeProjectInstructions,
@@ -1867,6 +1869,352 @@ test('v2 update refuses manifest reconstruction when any claimed generated heade
     assert.equal(existsSync(at(fx.root, GENERATED_MANIFEST_PATH)), false);
     assert.ok(updated.diagnostics.some((diagnostic) =>
       diagnostic.code === 'GENERATED_FILE_EDITED' && diagnostic.path === CODEX_ROSTER_SKILL_PATH
+    ));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// #365 shadow detection: a Roster-generated contract copied to a host
+// auto-load path outside the five canonical paths is auto-loaded by the host
+// and was invisible to update, validate, and doctor. One detector feeds all
+// three surfaces; Roster never writes or deletes at a shadow path.
+
+function claudeInstructionsRender(): string {
+  return renderClaudeProjectInstructions(
+    'claude-project-instructions',
+    resolveActivationAssurance({ host: 'claude', artifact: 'claude-project-instructions' }),
+  );
+}
+
+test('shadow detection classifies duplicate, stale, edited, and unsupported-host copies', () => {
+  const fx = fixture();
+  try {
+    assert.deepEqual(detectGeneratedShadows(fx.root).shadows, []);
+
+    writeFileSync(at(fx.root, 'CLAUDE.md'), claudeInstructionsRender());
+    writeFileSync(
+      at(fx.root, 'CLAUDE.local.md'),
+      rehashWithVersion(claudeInstructionsRender(), '0.0.0-prior'),
+    );
+    writeFileSync(at(fx.root, 'GEMINI.md'), readFileSync(at(fx.root, 'ROSTER.md')));
+    writeFileSync(
+      at(fx.root, 'AGENTS.override.md'),
+      `${renderCodexProjectInstructions(resolveActivationAssurance({
+        host: 'codex',
+        artifact: 'codex-project-instructions',
+      }))}edited\n`,
+    );
+
+    const detected = detectGeneratedShadows(fx.root);
+    assert.deepEqual(detected.shadows.map((shadow) => [shadow.path, shadow.kind, shadow.surface_host]), [
+      ['AGENTS.override.md', 'edited', 'codex'],
+      ['CLAUDE.local.md', 'stale', 'claude'],
+      ['CLAUDE.md', 'duplicate', 'claude'],
+      ['GEMINI.md', 'unsupported-host', 'gemini'],
+    ]);
+    assert.equal(
+      detected.shadows.find((shadow) => shadow.path === 'CLAUDE.local.md')?.recorded_generator_version,
+      '0.0.0-prior',
+    );
+    assert.equal(
+      detected.shadows.find((shadow) => shadow.path === 'CLAUDE.md')?.artifact,
+      'claude-project-instructions',
+    );
+    assert.ok(detected.shadows.every(isBlockingGeneratedShadow));
+    assert.ok(detected.diagnostics.every((diagnostic) =>
+      diagnostic.code === 'GENERATED_SHADOW' && diagnostic.severity === 'error'
+    ));
+    const gemini = detected.diagnostics.find((diagnostic) => diagnostic.path === 'GEMINI.md');
+    assert.match(gemini?.message ?? '', /Gemini has no v2 activation contract/);
+    assert.equal(gemini?.details['surfaceHost'], 'gemini');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('shadow detection sees a bounded-prefix copy and a bootstrap copy as duplicates', () => {
+  const fx = fixture();
+  try {
+    const skill = renderCodexRosterSkill(resolveActivationAssurance({
+      host: 'codex',
+      artifact: 'codex-roster-skill',
+    }));
+    assert.match(skill, /^---\n/);
+    writeFileSync(at(fx.root, 'CLAUDE.md'), skill);
+    const skillCopy = detectGeneratedShadows(fx.root).shadows;
+    assert.deepEqual(skillCopy.map((shadow) => [shadow.path, shadow.kind, shadow.artifact]), [
+      ['CLAUDE.md', 'duplicate', 'codex-roster-skill'],
+    ]);
+
+    writeFileSync(at(fx.root, 'CLAUDE.md'), readFileSync(at(fx.root, 'ROSTER.md')));
+    const bootstrapCopy = detectGeneratedShadows(fx.root).shadows;
+    assert.deepEqual(bootstrapCopy.map((shadow) => [shadow.path, shadow.kind, shadow.artifact]), [
+      ['CLAUDE.md', 'duplicate', 'roster-bootstrap'],
+    ]);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('shadow detection never flags authored host memory files', () => {
+  const fx = fixture();
+  try {
+    const authored = '# My project memory\n\nAuthored notes.\n';
+    const quoting = '# Docs\n\nRoster stamps `<!-- roster:generated` on generated files.\n';
+    writeFileSync(at(fx.root, 'CLAUDE.md'), authored);
+    writeFileSync(at(fx.root, 'CLAUDE.local.md'), quoting);
+    mkdirSync(at(fx.root, '.claude/rules'), { recursive: true });
+    writeFileSync(at(fx.root, '.claude/rules/style.md'), authored);
+    assert.deepEqual(detectGeneratedShadows(fx.root).shadows, []);
+
+    const install = installV2ProjectActivation({ root: fx.root, host: 'claude' });
+    assert.equal(install.ok, true);
+    assert.equal(readFileSync(at(fx.root, 'CLAUDE.md'), 'utf8'), authored);
+    assert.equal(readFileSync(at(fx.root, 'CLAUDE.local.md'), 'utf8'), quoting);
+    assert.equal(readFileSync(at(fx.root, '.claude/rules/style.md'), 'utf8'), authored);
+    assert.equal(updateV2ProjectActivations({ root: fx.root }).ok, true);
+    assert.equal(validateGeneratedArtifacts(fx.root).length, 0);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('unreadable auto-load paths block everywhere except the personal CLAUDE.local.md', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    const outside = join(fx.root, '..', `roster-shadow-decoy-${Date.now()}`);
+    writeFileSync(outside, '# decoy\n');
+    try {
+      symlinkSync(outside, at(fx.root, 'CLAUDE.local.md'));
+      const localOnly = detectGeneratedShadows(fx.root);
+      assert.deepEqual(localOnly.shadows.map((shadow) => [shadow.path, shadow.kind]), [
+        ['CLAUDE.local.md', 'unreadable'],
+      ]);
+      assert.equal(isBlockingGeneratedShadow(localOnly.shadows[0]!), false);
+      assert.equal(localOnly.diagnostics[0]?.severity, 'warning');
+      assert.equal(updateV2ProjectActivations({ root: fx.root }).ok, true);
+      assert.equal(validateGeneratedArtifacts(fx.root).some((diagnostic) =>
+        diagnostic.severity === 'error'
+      ), false);
+
+      symlinkSync(outside, at(fx.root, 'CLAUDE.md'));
+      const both = detectGeneratedShadows(fx.root);
+      const rootShadow = both.shadows.find((shadow) => shadow.path === 'CLAUDE.md');
+      assert.equal(rootShadow?.kind, 'unreadable');
+      assert.equal(isBlockingGeneratedShadow(rootShadow!), true);
+      const updated = updateV2ProjectActivations({ root: fx.root });
+      assert.equal(updated.ok, false);
+      assert.ok(updated.diagnostics.some((diagnostic) =>
+        diagnostic.code === 'GENERATED_SHADOW'
+        && diagnostic.path === 'CLAUDE.md'
+        && diagnostic.severity === 'error'
+      ));
+      assert.ok(validateGeneratedArtifacts(fx.root).some((diagnostic) =>
+        diagnostic.code === 'GENERATED_SHADOW' && diagnostic.path === 'CLAUDE.md'
+      ));
+    } finally {
+      rmSync(outside, { force: true });
+    }
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('the recursive rules scan finds copies, skips the canonical rule, and flags symlinks', () => {
+  const fx = fixture();
+  try {
+    mkdirSync(at(fx.root, '.claude/rules/team/deep'), { recursive: true });
+    const rule = renderClaudeProjectInstructions(
+      'claude-project-rule',
+      resolveActivationAssurance({ host: 'claude', artifact: 'claude-project-rule' }),
+    );
+    writeFileSync(at(fx.root, CLAUDE_PROJECT_RULE_PATH), rule);
+    writeFileSync(at(fx.root, '.claude/rules/extra.md'), rule);
+    writeFileSync(at(fx.root, '.claude/rules/team/deep/nested.md'), claudeInstructionsRender());
+    writeFileSync(at(fx.root, '.claude/rules/notes.txt'), claudeInstructionsRender());
+    const outside = join(fx.root, '..', `roster-rules-decoy-${Date.now()}`);
+    writeFileSync(outside, '# decoy rule\n');
+    try {
+      symlinkSync(outside, at(fx.root, '.claude/rules/team/link.md'));
+
+      const detected = detectGeneratedShadows(fx.root);
+      assert.deepEqual(
+        detected.shadows.map((shadow) => [shadow.path, shadow.kind, shadow.surface_host]),
+        [
+          ['.claude/rules/extra.md', 'duplicate', 'claude'],
+          ['.claude/rules/team/deep/nested.md', 'duplicate', 'claude'],
+          ['.claude/rules/team/link.md', 'unreadable', 'claude'],
+        ],
+      );
+      assert.ok(detected.shadows.every(isBlockingGeneratedShadow));
+    } finally {
+      rmSync(outside, { force: true });
+    }
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('both rules budget dimensions block at their boundary, never silently truncate', () => {
+  const depthPath = (levels: number): string =>
+    ['.claude/rules', ...Array.from({ length: levels }, (_, index) => `d${index + 1}`)].join('/');
+
+  const atDepthLimit = fixture();
+  try {
+    mkdirSync(at(atDepthLimit.root, depthPath(8)), { recursive: true });
+    writeFileSync(at(atDepthLimit.root, `${depthPath(8)}/leaf.md`), '# rule\n');
+    assert.deepEqual(detectGeneratedShadows(atDepthLimit.root).shadows, []);
+  } finally {
+    atDepthLimit.cleanup();
+  }
+
+  const beyondDepthLimit = fixture();
+  try {
+    mkdirSync(at(beyondDepthLimit.root, depthPath(9)), { recursive: true });
+    const detected = detectGeneratedShadows(beyondDepthLimit.root);
+    assert.deepEqual(detected.shadows.map((shadow) => [shadow.path, shadow.kind]), [
+      [depthPath(9), 'unreadable'],
+    ]);
+    assert.equal(detected.diagnostics[0]?.severity, 'error');
+    assert.match(detected.diagnostics[0]?.message ?? '', /depth exceeds 8/);
+    assert.match(detected.diagnostics[0]?.message ?? '', /d9/);
+  } finally {
+    beyondDepthLimit.cleanup();
+  }
+
+  const atEntryBudget = fixture();
+  try {
+    mkdirSync(at(atEntryBudget.root, '.claude/rules'), { recursive: true });
+    for (let index = 0; index < 256; index++) {
+      writeFileSync(at(atEntryBudget.root, `.claude/rules/r${String(index).padStart(3, '0')}.md`), '# rule\n');
+    }
+    assert.deepEqual(detectGeneratedShadows(atEntryBudget.root).shadows, []);
+  } finally {
+    atEntryBudget.cleanup();
+  }
+
+  const beyondEntryBudget = fixture();
+  try {
+    mkdirSync(at(beyondEntryBudget.root, '.claude/rules'), { recursive: true });
+    for (let index = 0; index < 257; index++) {
+      writeFileSync(at(beyondEntryBudget.root, `.claude/rules/r${String(index).padStart(3, '0')}.md`), '# rule\n');
+    }
+    const detected = detectGeneratedShadows(beyondEntryBudget.root);
+    assert.deepEqual(detected.shadows.map((shadow) => [shadow.path, shadow.kind]), [
+      ['.claude/rules', 'unreadable'],
+    ]);
+    assert.equal(detected.diagnostics[0]?.severity, 'error');
+    assert.match(detected.diagnostics[0]?.message ?? '', /256-entry budget/);
+  } finally {
+    beyondEntryBudget.cleanup();
+  }
+});
+
+test('a diverted rules root is the blocking diagnostic on update, validate, and inspection', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    unlinkSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH));
+    const outsideDir = join(fx.root, '..', `roster-rules-root-decoy-${Date.now()}`);
+    mkdirSync(outsideDir, { recursive: true });
+    writeFileSync(join(outsideDir, 'injected.md'), claudeInstructionsRender());
+    try {
+      mkdirSync(at(fx.root, '.claude'), { recursive: true });
+      symlinkSync(outsideDir, at(fx.root, '.claude/rules'));
+
+      const updated = updateV2ProjectActivations({ root: fx.root });
+      assert.equal(updated.ok, false);
+      assert.ok(updated.diagnostics.some((diagnostic) =>
+        diagnostic.code === 'GENERATED_SHADOW'
+        && diagnostic.path === '.claude/rules'
+        && diagnostic.severity === 'error'
+      ));
+      assert.ok(parseGeneratedMarkdown(
+        readFileSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH), 'utf8'),
+      )?.valid);
+
+      const diagnostics = validateGeneratedArtifacts(fx.root);
+      assert.ok(diagnostics.some((diagnostic) =>
+        diagnostic.code === 'GENERATED_SHADOW' && diagnostic.path === '.claude/rules'
+      ));
+
+      const metadata = inspectGeneratedAdapterMetadata(fx.root);
+      assert.deepEqual(metadata.shadows.map((shadow) => [shadow.path, shadow.kind]), [
+        ['.claude/rules', 'unreadable'],
+      ]);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('update repairs canonical files but fails loudly while a shadow exists', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    const shadowBytes = claudeInstructionsRender();
+    writeFileSync(at(fx.root, 'CLAUDE.md'), shadowBytes);
+    unlinkSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH));
+
+    const updated = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(updated.ok, false);
+    assert.ok(parseGeneratedMarkdown(
+      readFileSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH), 'utf8'),
+    )?.valid);
+    assert.equal(readFileSync(at(fx.root, 'CLAUDE.md'), 'utf8'), shadowBytes);
+    assert.ok(updated.diagnostics.some((diagnostic) =>
+      diagnostic.code === 'GENERATED_SHADOW' && diagnostic.path === 'CLAUDE.md'
+    ));
+
+    const secondRun = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(secondRun.ok, false);
+    assert.equal(readFileSync(at(fx.root, 'CLAUDE.md'), 'utf8'), shadowBytes);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('project install refuses and rolls back its own writes while a shadow exists', () => {
+  const fx = fixture();
+  try {
+    const shadowBytes = rehashWithVersion(claudeInstructionsRender(), '0.0.0-prior');
+    writeFileSync(at(fx.root, 'CLAUDE.md'), shadowBytes);
+
+    const install = installV2ProjectActivation({ root: fx.root, host: 'claude' });
+    assert.equal(install.ok, false);
+    assert.equal(install.registryUpdated, false);
+    assert.equal(existsSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH)), false);
+    assert.deepEqual(Object.keys(parseWorkspaceRegistry(
+      readFileSync(at(fx.root, 'roster.yaml'), 'utf8'),
+    ).hosts), []);
+    assert.equal(readFileSync(at(fx.root, 'CLAUDE.md'), 'utf8'), shadowBytes);
+    assert.ok(install.diagnostics.some((diagnostic) =>
+      diagnostic.code === 'GENERATED_SHADOW'
+      && diagnostic.path === 'CLAUDE.md'
+      && diagnostic.details['kind'] === 'stale'
+    ));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('a broken manifest cannot hide a shadow from generated validation', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    writeFileSync(at(fx.root, 'CLAUDE.md'), claudeInstructionsRender());
+    writeFileSync(at(fx.root, GENERATED_MANIFEST_PATH), 'not json\n');
+
+    const diagnostics = validateGeneratedArtifacts(fx.root);
+    assert.ok(diagnostics.some((diagnostic) =>
+      diagnostic.code === 'GENERATED_SHADOW' && diagnostic.path === 'CLAUDE.md'
+    ));
+    assert.ok(diagnostics.some((diagnostic) =>
+      diagnostic.code === 'GENERATED_FILE_EDITED' && diagnostic.path === GENERATED_MANIFEST_PATH
     ));
   } finally {
     fx.cleanup();

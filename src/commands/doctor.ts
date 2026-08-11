@@ -877,6 +877,7 @@ function readV2GeneratedMetadata(cwd: string): GeneratedAdapterMetadataInspectio
       paths: [],
       shared_bootstrap_canonical: false,
       redundant_activations: [],
+      shadows: [],
       manifest: { state: 'invalid', value: null },
     };
   }
