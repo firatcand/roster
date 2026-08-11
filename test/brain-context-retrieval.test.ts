@@ -5,6 +5,7 @@ import pg from 'pg';
 import {
   BRAIN_LABEL_PROJECTION_SQL,
   BRAIN_RUNTIME_URL_ENV,
+  FILTER_ACCOUNTING_SQL,
   PER_SELECTOR_ARM_LIMIT,
   TOTAL_CANDIDATE_LIMIT,
   retrieveBrainContextEvidence,
@@ -25,7 +26,11 @@ import { mergeEntities } from '../src/lib/brain/merge.ts';
 import { deriveLogicalSourceId, legacyRecordStableKey } from '../src/lib/brain/source-identity.ts';
 import { tombstoneBrainSource } from '../src/lib/brain/source-lifecycle.ts';
 import { VerifiedBrainPool, createVerifiedBrainPool } from '../src/lib/brain/workspace-authority.ts';
-import { compareUnicodeCodePoints, type ContextRetrievalRequest } from '../src/lib/workspace-context.ts';
+import {
+  MAX_CONTEXT_SELECTORS,
+  compareUnicodeCodePoints,
+  type ContextRetrievalRequest,
+} from '../src/lib/workspace-context.ts';
 import { HAS_DB } from './brain-helpers.ts';
 import {
   RETRIEVAL_WORKSPACE_ID,
@@ -115,7 +120,7 @@ test('acceptance 1 — retrieval returns only current, in-scope, non-secret, ver
 
     await t.test('the eligible source is the only candidate', async () => {
       const evidence = await retrieveBrainContextEvidence(request(corpus), { env: env(corpus) });
-      assert.equal(evidence.status, 'seeded');
+      assert.equal(evidence.status, 'available');
       assert.deepEqual(
         evidence.candidates.map((entry) => entry.citation.source_version_id),
         [eligible.sourceVersionId],
@@ -230,7 +235,7 @@ test('acceptance 3 — lexical and structured retrieval need no embedding provid
 
     await t.test('embedding disabled is a closed mode status, not a failure', async () => {
       const evidence = await retrieveBrainContextEvidence(request(corpus), { env: env(corpus) });
-      assert.equal(evidence.status, 'seeded');
+      assert.equal(evidence.status, 'available');
       assert.deepEqual(evidence.report.modes.embedding, { status: 'disabled' });
       assert.deepEqual(evidence.report.modes.lexical, { status: 'used' });
       assert.deepEqual(evidence.report.modes.structured, { status: 'used' });
@@ -777,7 +782,7 @@ test('one snapshot also serves the registry check, rrf_k, and the embedding reso
     // The registry check passed inside the snapshot, so the retrieval completes
     // with evidence instead of registry-drift, and the embedding mode reflects
     // the PRE-flip configuration the snapshot pinned.
-    assert.equal(evidence.status, 'seeded');
+    assert.equal(evidence.status, 'available');
     assert.equal(evidence.report.unavailable_reason, null);
     assert.equal(evidence.candidates.length, 1);
     assert.deepEqual(evidence.report.modes.embedding, { status: 'disabled' });
@@ -928,7 +933,7 @@ test('authority mismatches stop before any company-content read', options, async
       request(corpus),
       { env: env(corpus), createPool: acceptedSpy.createPool },
     );
-    assert.equal(accepted.status, 'seeded');
+    assert.equal(accepted.status, 'available');
     assert.equal(acceptedSpy.companyQueries.length > 0, true, 'the spy must observe the accepted path');
     assert.equal(acceptedSpy.verificationQueries.length > 0, true);
 
@@ -1000,7 +1005,7 @@ test('an arm with nothing to run reports disabled, never used', options, async (
       request(corpus, { selectors: [] }),
       { env: env(corpus) },
     );
-    assert.equal(evidence.status, 'seeded');
+    assert.equal(evidence.status, 'available');
     assert.deepEqual(evidence.report.modes.structured, { status: 'disabled' });
     assert.deepEqual(evidence.report.modes.lexical, { status: 'disabled' });
     assert.deepEqual(evidence.candidates, []);
@@ -1041,7 +1046,7 @@ test('the runtime credential retrieves an identical bundle and writes nothing', 
     const readOnly = await retrieveBrainContextEvidence(request(corpus), {
       env: { [BRAIN_RUNTIME_URL_ENV]: runtimeUrlFor(corpus) },
     });
-    assert.equal(readOnly.status, 'seeded');
+    assert.equal(readOnly.status, 'available');
     const afterCounts = await snapshot();
     assert.deepEqual(afterCounts, before, 'retrieval mutated durable state');
 
@@ -1736,7 +1741,7 @@ test('embedding parity — the adapter arm agrees with the TypeScript oracle', o
         status: 'invalid-configuration',
         reason: 'spec-changed-in-snapshot',
       });
-      assert.equal(evidence.status, 'seeded');
+      assert.equal(evidence.status, 'available');
       assert.equal(evidence.candidates.length > 0, true, 'the other arms proceed');
       assert.equal(
         evidence.candidates.every((entry) => !entry.retrieval_modes.includes('embedding')),
@@ -1759,7 +1764,7 @@ test('embedding parity — the adapter arm agrees with the TypeScript oracle', o
         adapters,
       });
       assert.deepEqual(disabled.report.modes.embedding, { status: 'disabled' });
-      assert.equal(disabled.status, 'seeded');
+      assert.equal(disabled.status, 'available');
       assert.equal(disabled.candidates.length > 0, true, 'the other arms proceed');
       assert.deepEqual(disabled.report.modes.lexical, { status: 'used' });
       assert.deepEqual(disabled.report.modes.structured, { status: 'used' });
@@ -1860,7 +1865,7 @@ test('embedding parity — the adapter arm agrees with the TypeScript oracle', o
           entry.name,
         );
         // The whole result must NOT collapse: lexical and structured proceed.
-        assert.equal(evidence.status, 'seeded', entry.name);
+        assert.equal(evidence.status, 'available', entry.name);
         assert.equal(evidence.report.unavailable_reason, null, entry.name);
         assert.equal(evidence.candidates.length > 0, true, entry.name);
         assert.deepEqual(evidence.report.modes.lexical, { status: 'used' }, entry.name);
@@ -1872,6 +1877,355 @@ test('embedding parity — the adapter arm agrees with the TypeScript oracle', o
         );
       }
     });
+  } finally {
+    await corpus.close();
+  }
+});
+
+// #355 D8 — the exact accounting. The pre-#355 statement scanned at most 512
+// pre-filter rows through ONE globally joined text predicate, so its counts were
+// truncated, blind to structured-only matches, and over-approximated by folding
+// the request text into membership. The replacement mirrors the arms' own
+// per-selector / per-jsonpath membership under a deduplicating UNION.
+//
+// Each subtest below is built to FAIL against the old bounded form. That takes
+// care, because two obvious constructions do not discriminate at all:
+//   * a "structured-only" row whose structured identity IS a selector id also
+//     matches LEXICALLY, because the structured renderer writes that identity
+//     into the chunk text and lexical membership includes the selector id;
+//   * a matching selector at the HEAD of a 4,096-entry catalog survives the old
+//     global rebounding, because `boundedText` halves by taking a PREFIX.
+test('acceptance 9 — pre-filter accounting is exact, deduplicated, and selector-complete', options, async (t) => {
+  const corpus = await createRetrievalCorpus();
+  try {
+    const inScope = [{
+      workspace: RETRIEVAL_WORKSPACE_ID,
+      function: TARGET.functionId,
+      agent: TARGET.agentId,
+      plan: TARGET.planId,
+    }] as const;
+
+    const tombstone = async (sourceId: string, key: string): Promise<void> => {
+      await tombstoneBrainSource(corpus.adminPool, {
+        sourceId,
+        requestKey: key,
+        actor: { actorId: 'retrieval-corpus', assurance: 'host-attested', host: 'codex', sessionId: 'x' },
+        reason: 'fixture tombstone',
+        provenance: { fixture: 'brain-context-retrieval' },
+      });
+    };
+
+    // (a) A GENUINELY structured-only row. `the` is an English stop word, so
+    // `websearch_to_tsquery('english', 'the')` is the EMPTY query and matches
+    // no row whatsoever — the selector's lexical membership is therefore
+    // provably incapable of reaching this source, and only the structured
+    // jsonpath `$.identity ? (@ == "the")` can. Its prose is nonsense words so
+    // no OTHER selector's membership (nor the old form's folded-in request
+    // text) can reach it either.
+    const structuredOnly = await ingestCorpusSource(corpus, {
+      stableKey: 'accounting-structured-only',
+      body: structuredRecordBody('fact', { note: 'zzqqxx yyppww vvnnmm' }, 'the'),
+      labels: [...inScope],
+      structured: true,
+    });
+    await tombstone(structuredOnly.sourceId, 'tombstone-structured-only');
+
+    // (b) A row matching BOTH arms: its structured `identity` equals a selector
+    // AND its prose carries that selector's membership words.
+    const bothArms = await ingestCorpusSource(corpus, {
+      stableKey: 'accounting-both-arms',
+      body: structuredRecordBody(
+        'fact',
+        { note: 'Successful replies and strong examples in one record.' },
+        'company-positioning',
+      ),
+      labels: [...inScope],
+      structured: true,
+    });
+    await tombstone(bothArms.sourceId, 'tombstone-both-arms');
+
+    // (c) A LEXICAL-ONLY row for the tail-selector test: plain inline text, so
+    // it has no structured extraction at all and the structured branch cannot
+    // mask a lost lexical selector. `zzqtail` appears nowhere else.
+    const tailOnly = await ingestCorpusSource(corpus, {
+      stableKey: 'accounting-tail-only',
+      body: 'zzqtail marker prose, deliberately unrelated to every other fixture selector.',
+      labels: [...inScope],
+    });
+    await tombstone(tailOnly.sourceId, 'tombstone-tail-only');
+
+    // Pin the two discriminators at the DATABASE level, so a future change to
+    // the ingest helper or the extractor cannot quietly hollow this proof out
+    // while every assertion below still passes.
+    //
+    // A row that produced no chunks would make its "counted exactly" assertion
+    // vacuously true at zero, and the tail row's whole job is to be
+    // LEXICAL-ONLY — if it ever gained a structured extraction, the structured
+    // branch could cover for a lost tail selector and the test would stop
+    // discriminating.
+    assert.equal(structuredOnly.chunkIds.length > 0, true, 'the structured-only row produced no chunks');
+    assert.equal(tailOnly.chunkIds.length > 0, true, 'the tail-only row produced no chunks');
+    const shapes = await corpus.adminPool.query<{ tail_structured: number; structured_present: number }>(
+      `SELECT count(*) FILTER (WHERE source_version_id = $1 AND structured IS NOT NULL)::int AS tail_structured,
+              count(*) FILTER (WHERE source_version_id = $2 AND structured IS NOT NULL)::int AS structured_present
+         FROM brain.source_extractions`,
+      [tailOnly.sourceVersionId, structuredOnly.sourceVersionId],
+    );
+    assert.equal(shapes.rows[0]!.tail_structured, 0, 'the tail row gained a structured extraction');
+    assert.equal(shapes.rows[0]!.structured_present > 0, true, 'the structured-only row has no structured extraction');
+
+    const STOP_WORD_SELECTOR = {
+      selector: 'the',
+      origins: ['plan-selector'] as const,
+      required: false,
+      descriptions: [] as readonly string[],
+    };
+    const TAIL_SELECTOR = {
+      selector: 'tail-selector',
+      origins: ['plan-selector'] as const,
+      required: false,
+      descriptions: ['zzqtail'] as readonly string[],
+    };
+
+    await t.test('a stop-word selector proves lexical membership cannot reach the structured row', async () => {
+      // The discriminator itself, asserted rather than assumed: the empty
+      // tsquery matches nothing, so any count attributable to `the` came from
+      // the STRUCTURED branch alone.
+      const probe = await corpus.adminPool.query<{ empty: boolean; reachable: string }>(
+        `SELECT websearch_to_tsquery('english', 'the') = ''::tsquery AS empty,
+                (SELECT count(*)::text FROM brain.source_chunks
+                  WHERE tsv @@ websearch_to_tsquery('english', 'the')) AS reachable`,
+      );
+      assert.equal(probe.rows[0]!.empty, true);
+      assert.equal(probe.rows[0]!.reachable, '0');
+    });
+
+    await t.test('a structured-only match is counted and a both-arms match counts exactly once', async () => {
+      // Baseline: the two authored selectors alone reach ONLY the both-arms
+      // row. EXACT, not `> 0` — that row is reachable through the lexical
+      // membership AND through two structured jsonpaths, so a UNION ALL (or a
+      // per-arm sum) would report it two or three times over.
+      const baseline = await retrieveBrainContextEvidence(request(corpus), { env: env(corpus) });
+      assert.equal(baseline.status, 'available');
+      assert.equal(baseline.report.filtered.tombstoned, bothArms.chunkIds.length);
+
+      // Adding the stop-word selector adds EXACTLY the structured-only row.
+      // Under any lexical-only membership this delta is zero.
+      const widened = await retrieveBrainContextEvidence(
+        request(corpus, {
+          selectors: [...request(corpus).selectors, STOP_WORD_SELECTOR],
+        }),
+        { env: env(corpus) },
+      );
+      assert.equal(
+        widened.report.filtered.tombstoned,
+        bothArms.chunkIds.length + structuredOnly.chunkIds.length,
+      );
+    });
+
+    await t.test('the union deduplicates across selectors as well as across arms', async () => {
+      // The same chunk is reachable from BOTH catalog selectors' membership
+      // text. Deduplication is on chunk identity, so the count does not move.
+      const evidence = await retrieveBrainContextEvidence(
+        request(corpus, {
+          selectors: [
+            {
+              selector: 'strong-examples',
+              origins: ['plan-selector'],
+              required: true,
+              descriptions: ['Successful replies and strong examples in one record.'],
+            },
+            {
+              selector: 'company-positioning',
+              origins: ['plan-selector'],
+              required: false,
+              descriptions: ['Successful replies and strong examples in one record.'],
+            },
+          ],
+        }),
+        { env: env(corpus) },
+      );
+      assert.equal(evidence.report.filtered.tombstoned, bothArms.chunkIds.length);
+    });
+
+    await t.test('a MAX_CONTEXT_SELECTORS catalog loses no selector, including the last', async () => {
+      // The per-selector `unnest` formulation must lose no selector. The single
+      // globally joined membership string of the old form silently drops them:
+      // `boundedText` HALVES any string over MAX_QUERY_TEXT_BYTES by taking a
+      // PREFIX, and 4,096 selector ids are far past that bound.
+      //
+      // So the discriminating selector sits at the very END of the catalog,
+      // where a prefix-preserving rebound cannot retain it, and the row it
+      // reaches is LEXICAL-ONLY so the structured branch cannot cover for it.
+      const selectors = Array.from({ length: MAX_CONTEXT_SELECTORS }, (_unused, index) => {
+        if (index === 0) {
+          return {
+            selector: 'strong-examples',
+            origins: ['plan-selector'] as const,
+            required: true,
+            descriptions: ['Successful replies and strong examples in one record.'],
+          };
+        }
+        if (index === MAX_CONTEXT_SELECTORS - 1) return TAIL_SELECTOR;
+        return {
+          selector: `filler-selector-${index}`,
+          origins: ['plan-selector'] as const,
+          required: false,
+          descriptions: [] as readonly string[],
+        };
+      });
+      assert.equal(selectors.at(-1)!.selector, TAIL_SELECTOR.selector);
+
+      const evidence = await retrieveBrainContextEvidence(
+        request(corpus, { selectors }),
+        { env: env(corpus) },
+      );
+      assert.equal(evidence.status, 'available');
+      assert.equal(
+        evidence.report.filtered.tombstoned,
+        bothArms.chunkIds.length + tailOnly.chunkIds.length,
+      );
+    });
+  } finally {
+    await corpus.close();
+  }
+});
+
+// #355 R8 — the cost claim becomes EVIDENCE. Removing the 512-row LIMIT makes
+// accounting proportional to everything either membership predicate matches, so
+// the query must stay index-backed and inside the remote budget.
+test('acceptance 10 — exact accounting stays index-backed and inside the remote budget', options, async () => {
+  const corpus = await createRetrievalCorpus();
+  try {
+    const inScope = [{
+      workspace: RETRIEVAL_WORKSPACE_ID,
+      function: TARGET.functionId,
+      agent: TARGET.agentId,
+      plan: TARGET.planId,
+    }] as const;
+    // A SCALED, SELECTIVE corpus: thousands of chunks of which only a handful
+    // match either membership predicate. Selectivity is the condition under
+    // which an index scan is the correct plan at all — over a 45-row table the
+    // planner rightly prefers a sequential scan and would prove nothing. The
+    // markdown extractor starts a new chunk at each heading, so one source with
+    // 60 headings is 60 small chunks.
+    // Both membership branches must be scaled, and they scale on DIFFERENT
+    // tables: the lexical branch on `source_chunks`, the structured branch on
+    // `source_extractions`. One extraction per source, so the noise is many
+    // small sources rather than a few large ones.
+    for (let batch = 0; batch < 1_600; batch += 1) {
+      await ingestCorpusSource(corpus, {
+        stableKey: `scale-noise-${batch}`,
+        body: [
+          `## Filler section ${batch}`,
+          '',
+          `Unrelated prose about quarterly logistics scheduling and warehouse rotation ${batch}.`,
+          '',
+          `## Filler appendix ${batch}`,
+          '',
+          `Continued rotation notes and depot inventory counts ${batch}.`,
+        ].join('\n'),
+        labels: [...inScope],
+      });
+    }
+    for (let batch = 0; batch < 3; batch += 1) {
+      await ingestCorpusSource(corpus, {
+        stableKey: `scale-match-${batch}`,
+        body: `${EVIDENCE_TEXT} Scaled fixture ${batch}.`,
+        labels: [...inScope],
+      });
+      await ingestCorpusSource(corpus, {
+        stableKey: `scale-structured-${batch}`,
+        body: structuredRecordBody('fact', { note: `scaled ${batch}` }, 'strong-examples'),
+        labels: [...inScope],
+        structured: true,
+      });
+    }
+    const scale = await corpus.adminPool.query<{ chunks: string; extractions: string }>(
+      `SELECT (SELECT count(*) FROM brain.source_chunks)::text AS chunks,
+              (SELECT count(*) FROM brain.source_extractions)::text AS extractions`,
+    );
+    assert.equal(Number(scale.rows[0]!.chunks) > 3_000, true, `chunks not scaled: ${scale.rows[0]!.chunks}`);
+    assert.equal(
+      Number(scale.rows[0]!.extractions) > 1_500,
+      true,
+      `extractions not scaled: ${scale.rows[0]!.extractions}`,
+    );
+    await corpus.adminPool.query('ANALYZE brain.source_chunks');
+    await corpus.adminPool.query('ANALYZE brain.source_extractions');
+
+    const membership = ['strong examples or successful replies'];
+    const paths = ['$.identity ? (@ == "strong-examples")'];
+    const params = [['workspace'], membership, paths, false];
+
+    const version = await corpus.adminPool.query<{ num: string }>(
+      "SELECT current_setting('server_version_num') AS num",
+    );
+    const major = Math.floor(Number(version.rows[0]!.num) / 10_000);
+
+    if (major === 16) {
+      // Plan shape is optimizer- and statistics-dependent, so it is pinned ONLY
+      // to the PostgreSQL major CI tests (ci.yml:17). Any other major degrades
+      // to the structural indexability proof below.
+      const explained = await corpus.adminPool.query<{ 'QUERY PLAN': unknown }>(
+        `EXPLAIN (FORMAT JSON) ${FILTER_ACCOUNTING_SQL}`,
+        params,
+      );
+      const planText = JSON.stringify(explained.rows[0]!['QUERY PLAN']);
+      assert.match(planText, /source_chunks_tsv_idx/);
+      assert.match(planText, /source_extractions_structured_gin/);
+      assert.equal(
+        /"Node Type":"Seq Scan","Parallel Aware":(?:true|false),"Async Capable":(?:true|false),"Relation Name":"source_chunks"/
+          .test(planText),
+        false,
+        `accounting fell back to a sequential scan over source_chunks: ${planText}`,
+      );
+    } else {
+      // Structural indexability: each membership operator is a member of its
+      // index's operator class, so the planner MAY choose the index even where
+      // this version's statistics lead it elsewhere.
+      const indexable = await corpus.adminPool.query<{ index_name: string; operator: string }>(
+        `SELECT cls.relname AS index_name, op.oprname AS operator
+           FROM pg_index idx
+           JOIN pg_class cls ON cls.oid = idx.indexrelid
+           JOIN pg_opclass opc ON opc.oid = idx.indclass[0]
+           JOIN pg_amop amop ON amop.amopfamily = opc.opcfamily
+           JOIN pg_operator op ON op.oid = amop.amopopr
+          WHERE cls.relname IN ('source_chunks_tsv_idx', 'source_extractions_structured_gin')
+            AND op.oprname IN ('@@', '@?')`,
+      );
+      assert.equal(
+        indexable.rows.some((row) => row.index_name === 'source_chunks_tsv_idx' && row.operator === '@@'),
+        true,
+      );
+      assert.equal(
+        indexable.rows.some((row) => (
+          row.index_name === 'source_extractions_structured_gin' && row.operator === '@?'
+        )),
+        true,
+      );
+    }
+
+    // REPEATED WARM measurements with the assertion on the MAXIMUM: a max-of-5
+    // bound is a stricter statement than one sample, and is the honest
+    // CI-shaped proxy for SPEC.md:828's 2 s remote p95, which a single CI run
+    // cannot literally establish. SPEC.md:827's 500 ms gate is the LOCAL
+    // target and explicitly excludes remote Brain work.
+    const durations: number[] = [];
+    for (let run = 0; run < 6; run += 1) {
+      const telemetry = await retrieveBrainContextEvidenceWithTelemetry(
+        request(corpus),
+        { env: env(corpus) },
+      );
+      assert.equal(telemetry.evidence.status, 'available');
+      if (run > 0) durations.push(telemetry.telemetry.transactionMs);
+    }
+    assert.equal(durations.length, 5);
+    assert.equal(
+      Math.max(...durations) < 2_000,
+      true,
+      `max warm transactionMs was ${Math.max(...durations)}`,
+    );
   } finally {
     await corpus.close();
   }

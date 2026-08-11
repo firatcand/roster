@@ -330,6 +330,11 @@ function rawContextFixture(): Record<string, unknown> {
       required_selectors_unmatched: 0,
       required_selectors_truncated: 0,
       candidate_diagnostics_omitted: 0,
+      lessons_scope_ineligible: 0,
+      lessons_duplicate: 0,
+      lesson_diagnostics_omitted: 0,
+      evidence_prefiltered: 0,
+      retrieval_report_omitted: 0,
     },
     diagnostics: [{ code: 'CONTEXT_EVIDENCE_EXCLUDED', severity: 'info', message: 'One unsafe candidate was excluded.', details: { reason: 'low-trust' } }],
   };
@@ -409,7 +414,7 @@ test('compact context retains actionable policy, flattened scope, and closed pro
     field_sources: rawTool['field_sources'],
   }).slice('sha256:'.length));
   assert.deepEqual((compact['skills'] as readonly (readonly unknown[])[])[0]!.slice(0, 2), ['exa:search', '1']);
-  assert.deepEqual(compact['budget'], [12_000, 40, 11_960, [['low-trust', 1]], [0, 0, 0]]);
+  assert.deepEqual(compact['budget'], [12_000, 40, 11_960, [['low-trust', 1]], [0, 0, 0, 0, 0, 0, 0, 0]]);
   assert.equal(compact['raw_context_sha256'], canonicalSha256(raw));
 
   const changedOmittedProvenance = structuredClone(raw);

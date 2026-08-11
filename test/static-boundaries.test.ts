@@ -391,8 +391,16 @@ test('legacy Brain access stays behind the finite pre-#383 production boundary',
     'brain doctor must construct no object-storage client',
   );
 
-  // #355 reuses this predicate for `roster context`, so it must stay free of
-  // every client the context boundary classifier forbids.
+  // #355 EVALUATED reusing this predicate for `roster context` and DECLINED it:
+  // the helper performs its own unsnapshotted `readRegistryText`, outside the
+  // context read capability's session and outside `capability.verify`, which
+  // would reintroduce a TOCTOU window between the activation decision and the
+  // bundle's `workspace.source_hash`. The two paths also implement opposite
+  // precedence rules on purpose (structural probe first vs. strict parse
+  // first), pinned as a six-row conformance matrix in
+  // `test/workspace-context.test.ts`. The predicate must still stay free of
+  // every client the context boundary classifier forbids — both paths refuse a
+  // partial declaration before contacting any store.
   assert.deepEqual(
     moduleEdges(join(PROJECT_ROOT, 'src/lib/brain-activation-config.ts'))
       .filter((edge) => edge.module === 'pg'

@@ -46,9 +46,21 @@ export type RetrievalCorpus = Readonly<{
   close: () => Promise<void>;
 }>;
 
-export async function createRetrievalCorpus(): Promise<RetrievalCorpus> {
+// The defaults preserve the pre-#355 identity exactly, so every existing
+// retrieval suite is untouched. #355 passes the identity a real workspace's
+// `roster.yaml` derives, which is what pins the registry↔authority join.
+export type RetrievalCorpusOptions = Readonly<{
+  workspaceId?: string;
+  brainConfig?: WorkspaceBrainConfig;
+}>;
+
+export async function createRetrievalCorpus(
+  options: RetrievalCorpusOptions = {},
+): Promise<RetrievalCorpus> {
+  const workspaceId = options.workspaceId ?? RETRIEVAL_WORKSPACE_ID;
+  const brainConfig = options.brainConfig ?? retrievalBrainConfig();
   const db = await createFreshDb();
-  const authority = deriveBrainWorkspaceAuthority(RETRIEVAL_WORKSPACE_ID, retrievalBrainConfig());
+  const authority = deriveBrainWorkspaceAuthority(workspaceId, brainConfig);
   const bootstrapPool = createBrainPool('admin', db.url);
   const runtimePassword = `Aa0_${randomBytes(32).toString('base64url')}-A1_`;
   const bootstrap = await bootstrapBrainWorkspaceAuthority(bootstrapPool, authority, {

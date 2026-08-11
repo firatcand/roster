@@ -66,8 +66,8 @@ export const MAX_CONTEXT_SELECTORS = 4_096;
 export const MAX_CONTEXT_MANDATORY_DIAGNOSTICS = 8;
 export const MAX_CONTEXT_OPTIONAL_DIAGNOSTICS = 64;
 export const MAX_CANDIDATE_LABEL_KEYS = 64;
-export const BUDGET_BLOCK_RESERVE_BYTES = 776;
-export const BUDGET_BLOCK_RESERVE_TOKENS = 194;
+export const BUDGET_BLOCK_RESERVE_BYTES = 928;
+export const BUDGET_BLOCK_RESERVE_TOKENS = 232;
 export const MIN_CONTEXT_BUDGET_TOKENS = BUDGET_BLOCK_RESERVE_TOKENS + 1;
 
 export const CONTEXT_EXCLUSION_REASONS = [
@@ -290,6 +290,15 @@ export type ContextBudget = {
   required_selectors_unmatched: number;
   required_selectors_truncated: number;
   candidate_diagnostics_omitted: number;
+  lessons_scope_ineligible: number;
+  lessons_duplicate: number;
+  lesson_diagnostics_omitted: number;
+  // Authoritative exact total of pre-candidate rows retrieval filtered, WHEN
+  // retrieval was available. Otherwise 0-by-absence, disclosed by the mandatory
+  // BRAIN_NOT_CONFIGURED / CONTEXT_EVIDENCE_UNAVAILABLE warning — the budget
+  // block never fabricates a count it did not receive.
+  evidence_prefiltered: number;
+  retrieval_report_omitted: 0 | 1;
 };
 
 export type WorkspaceContext = {
@@ -330,7 +339,7 @@ export type WorkspaceContext = {
   diagnostics: readonly WorkspaceDiagnostic[];
 };
 
-export type SeedBrainCandidate = {
+export type ContextBrainCandidate = {
   candidate_id: string;
   // Every authored selector this chunk matched, code-point sorted, at least one.
   selectors: readonly string[];
@@ -355,8 +364,8 @@ export type SeedBrainCandidate = {
 };
 
 export type ContextEvidenceInput = {
-  status: 'seeded' | 'unavailable';
-  candidates: readonly SeedBrainCandidate[];
+  status: 'available' | 'unavailable';
+  candidates: readonly ContextBrainCandidate[];
   report: ContextRetrievalReport;
 };
 
@@ -598,6 +607,11 @@ type ResolvedLocalContext = {
   plans: readonly StructuredPlan[];
   guidelineRecords: readonly { record: WorkspaceDiscoveryRecord; definition: MarkdownDefinition; reason: ContextInclusionReason }[];
   lessonRecords: readonly { record: WorkspaceDiscoveryRecord; definition: MarkdownDefinition; scopeRank: number }[];
+  // Target-agent lessons whose authored plan scope lies outside the resolved
+  // closure: valid policy for another plan, neither stale nor conflicting. Built
+  // from RECORD fields only, so a malformed out-of-closure lesson can never
+  // introduce a new fatal parse path into a resolution that does not use it.
+  scopeIneligibleLessons: readonly { qualifiedId: string; plan: string; path: string }[];
   tools: readonly ResolvedToolUse[];
   selectors: readonly ContextSelectorCatalogEntry[];
   selection: ContextVendorSkillSelection;
@@ -689,12 +703,27 @@ function resolveLocalContext(source: PreparedContextSource, request: ContextRequ
     });
 
   const closureQualifiedPlanIds = new Set(plans.map((plan) => plan.qualified_id));
-  const lessonRecords = source.snapshot.records
+  // A lesson owned by ANOTHER function or agent is not a candidate at all and is
+  // never counted: `spec/SPEC.md:389` — a same-named plan owned by another agent
+  // grants no scope.
+  const targetAgentLessons = source.snapshot.records
     .filter((record) => record.kind === 'lesson'
       && record.scope.function === functionId
-      && record.scope.agent === agentId
-      && (record.scope.plan === undefined
-        || closureQualifiedPlanIds.has(`${functionId}/${agentId}#${record.scope.plan}`)))
+      && record.scope.agent === agentId);
+  const lessonInClosure = (record: WorkspaceDiscoveryRecord): boolean => (
+    record.scope.plan === undefined
+    || closureQualifiedPlanIds.has(`${functionId}/${agentId}#${record.scope.plan}`)
+  );
+  const scopeIneligibleLessons = targetAgentLessons
+    .filter((record) => !lessonInClosure(record))
+    .map((record) => ({
+      qualifiedId: record.qualified_id,
+      plan: record.scope.plan!,
+      path: record.path,
+    }))
+    .sort((left, right) => compareUnicodeCodePoints(left.qualifiedId, right.qualifiedId));
+  const lessonRecords = targetAgentLessons
+    .filter((record) => lessonInClosure(record))
     .map((record) => {
       const definition = parseMarkdownDefinition(record.content!, record.path);
       const scopeRank = definition.scope.plan === planId
@@ -807,6 +836,9 @@ function resolveLocalContext(source: PreparedContextSource, request: ContextRequ
     ...plans.map((plan) => plan.path),
     ...guidelineRecords.map((entry) => entry.record.path),
     ...lessonRecords.map((entry) => entry.record.path),
+    // Terminal revalidation must cover every record the bundle now REPORTS on,
+    // not only the ones it includes (`spec/SPEC.md:394`).
+    ...scopeIneligibleLessons.map((entry) => entry.path),
     ...tools.flatMap((tool) => tool.content.contributors.map((entry) => entry.path)),
   ])].sort(compareUnicodeCodePoints);
   return {
@@ -820,6 +852,7 @@ function resolveLocalContext(source: PreparedContextSource, request: ContextRequ
     plans,
     guidelineRecords,
     lessonRecords,
+    scopeIneligibleLessons,
     tools,
     selectors,
     selection,
@@ -1493,7 +1526,12 @@ function boundedCount(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
-function validateRetrievalReport(report: unknown): asserts report is ContextRetrievalReport {
+export const MAX_CONTEXT_EVIDENCE_PREFILTERED = 99_999_999;
+
+function validateRetrievalReport(
+  report: unknown,
+  status: ContextEvidenceInput['status'],
+): asserts report is ContextRetrievalReport {
   if (report === null || typeof report !== 'object' || Array.isArray(report)) {
     evidenceFailure({ reason: 'report-shape' });
   }
@@ -1548,6 +1586,20 @@ function validateRetrievalReport(report: unknown): asserts report is ContextRetr
     ))) {
     evidenceFailure({ reason: 'report-filtered' });
   }
+  // Status/report consistency: retrieval that never ran measured nothing, so an
+  // unavailable envelope claiming filtered rows is refused rather than summed
+  // into an authoritative-looking total.
+  const filteredSum = CONTEXT_RETRIEVAL_FILTER_REASONS
+    .reduce((total, entry) => total + ((filtered as Record<string, number>)[entry] ?? 0), 0);
+  if (status !== 'available' && filteredSum > 0) {
+    evidenceFailure({ reason: 'report-filtered' });
+  }
+  // The cap is what makes the budget-block reserve arithmetic exact: it is the
+  // widest value `evidence_prefiltered` can ever carry, so the pinned reserve
+  // covers the FULL accepted numeric domain rather than a chosen convention.
+  if (filteredSum > MAX_CONTEXT_EVIDENCE_PREFILTERED) {
+    evidenceFailure({ reason: 'report-filtered' });
+  }
   if (!boundedCount(record['considered'])
     || !boundedCount(record['returned'])
     || !boundedCount(record['truncated'])) {
@@ -1576,13 +1628,13 @@ function validateEvidenceEnvelope(input: ContextEvidenceInput, local: ResolvedLo
   if (input === null || typeof input !== 'object' || !isDeepFrozen(input)) {
     evidenceFailure({ reason: 'not-recursively-frozen' });
   }
-  if ((input.status !== 'seeded' && input.status !== 'unavailable')
+  if ((input.status !== 'available' && input.status !== 'unavailable')
     || !Array.isArray(input.candidates)
     || Object.keys(input).length !== 3
     || !Object.hasOwn(input, 'report')) {
     evidenceFailure({ reason: 'envelope-shape' });
   }
-  validateRetrievalReport(input.report);
+  validateRetrievalReport(input.report, input.status);
   const matched = new Set(input.report.required_selectors_with_matches);
   const requiredSelectors = new Set(local.selectors
     .filter((entry) => entry.required)
@@ -1593,8 +1645,8 @@ function validateEvidenceEnvelope(input: ContextEvidenceInput, local: ResolvedLo
       evidenceFailure({ reason: 'report-required-selector-unknown' });
     }
   }
-  // V4 — a non-seeded envelope claims no coverage at all.
-  if (input.status !== 'seeded' && matched.size > 0) {
+  // V4 — an unavailable envelope claims no coverage at all.
+  if (input.status !== 'available' && matched.size > 0) {
     evidenceFailure({ reason: 'report-required-selectors-status' });
   }
   // V3 — coverage containment: every required selector carried by a
@@ -1606,7 +1658,7 @@ function validateEvidenceEnvelope(input: ContextEvidenceInput, local: ResolvedLo
   // under-check, never false-positive.
   for (const candidate of input.candidates as readonly unknown[]) {
     if (candidateMalformed(candidate)) continue;
-    for (const entry of (candidate as SeedBrainCandidate).selectors) {
+    for (const entry of (candidate as ContextBrainCandidate).selectors) {
       if (requiredSelectors.has(entry) && !matched.has(entry)) {
         evidenceFailure({ reason: 'report-required-selector-contradiction' });
       }
@@ -1705,7 +1757,7 @@ function validCitation(value: unknown): value is ContextBrainCitation {
   return true;
 }
 
-function validScope(value: unknown): value is SeedBrainCandidate['scope'] {
+function validScope(value: unknown): value is ContextBrainCandidate['scope'] {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   const scope = value as Record<string, unknown>;
   if (!safeSeedId(scope['workspace'])) return false;
@@ -1790,7 +1842,7 @@ function narrowestEligibleLabel(
 
 function sameCandidateScope(
   derived: DerivedLabelScope,
-  claimed: SeedBrainCandidate['scope'],
+  claimed: ContextBrainCandidate['scope'],
 ): boolean {
   return derived.function === claimed.function
     && derived.agent === claimed.agent
@@ -1798,7 +1850,7 @@ function sameCandidateScope(
 }
 
 type CandidateEvaluation = {
-  candidate: SeedBrainCandidate | null;
+  candidate: ContextBrainCandidate | null;
   candidateKey: string;
   candidateId: string | null;
   reason: Exclude<ContextExclusionReason, 'budget-exhausted'> | null;
@@ -1824,7 +1876,7 @@ function termOverlap(requestTerms: ReadonlySet<string>, content: string): number
   return overlap;
 }
 
-function candidateMalformed(value: unknown): value is SeedBrainCandidate {
+function candidateMalformed(value: unknown): value is ContextBrainCandidate {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return true;
   const candidate = value as Record<string, unknown>;
   const citation = candidate['citation'];
@@ -1921,7 +1973,7 @@ function evaluateCandidates(
       stable = 'sha256:invalid';
     }
     const malformed = candidateMalformed(raw);
-    const candidate = malformed ? null : raw as SeedBrainCandidate;
+    const candidate = malformed ? null : raw as ContextBrainCandidate;
     const candidateId = candidate === null
       ? (raw !== null && typeof raw === 'object' && safeSeedId((raw as Record<string, unknown>)['candidate_id'])
           ? (raw as Record<string, unknown>)['candidate_id'] as string
@@ -2039,6 +2091,38 @@ function candidateDiagnostic(evaluation: CandidateEvaluation, reason: ContextExc
   );
 }
 
+type LessonExclusion =
+  | { qualifiedId: string; reason: 'scope-ineligible'; plan: string }
+  | {
+    qualifiedId: string;
+    reason: 'duplicate';
+    duplicateOf: string;
+    comparator: 'scope-rank' | 'term-overlap' | 'lexicographic';
+  };
+
+function lessonDiagnostic(exclusion: LessonExclusion): WorkspaceDiagnostic {
+  return workspaceDiagnostic(
+    'CONTEXT_LESSON_EXCLUDED',
+    exclusion.reason === 'scope-ineligible'
+      ? 'A lesson scoped to a plan outside the resolved closure was excluded.'
+      : 'A body-identical duplicate lesson was excluded from the optional bundle.',
+    {
+      severity: 'info',
+      remedy: exclusion.reason === 'scope-ineligible'
+        ? 'Select the owning plan, or rescope the lesson, if it should apply here.'
+        : 'Retire the redundant lesson, or differentiate its guidance, at the authored source.',
+      details: exclusion.reason === 'scope-ineligible'
+        ? { lesson_id: exclusion.qualifiedId, reason: exclusion.reason, plan: exclusion.plan }
+        : {
+          lesson_id: exclusion.qualifiedId,
+          reason: exclusion.reason,
+          duplicate_of: exclusion.duplicateOf,
+          comparator: exclusion.comparator,
+        },
+    },
+  );
+}
+
 // `legacy-unverified` is floored below every non-legacy candidate regardless of
 // required intent (spec/SPEC.md:559 — never accepted authority); within
 // non-legacy, required intent dominates, then the shared trust-class order.
@@ -2065,7 +2149,7 @@ function retrievalReportDiagnostic(
   const requiredCoverage = { with_matches: withMatches, covered };
   // `graph` is a fixed deferral in this ticket, so it is never a reason to emit;
   // otherwise the "non-default fields only" rule would be vacuous and the zero-
-  // I/O empty-seeded path would stop being byte-identical to the retrieval path.
+  // I/O empty-evidence path would stop being byte-identical to the retrieval path.
   const informative = Object.keys(filtered).length > 0
     || Object.keys(modes).length > 0
     || counts.considered > 0
@@ -2396,6 +2480,11 @@ function buildBudget(options: {
   requiredSelectorsUnmatched: number;
   requiredSelectorsTruncated: number;
   candidateDiagnosticsOmitted: number;
+  lessonsScopeIneligible: number;
+  lessonsDuplicate: number;
+  lessonDiagnosticsOmitted: number;
+  evidencePrefiltered: number;
+  retrievalReportOmitted: 0 | 1;
 }): ContextBudget {
   const mandatoryTokens = estimatedTokens(options.mandatoryBytes);
   const finalTokens = estimatedTokens(options.finalBytes);
@@ -2420,6 +2509,11 @@ function buildBudget(options: {
     required_selectors_unmatched: options.requiredSelectorsUnmatched,
     required_selectors_truncated: options.requiredSelectorsTruncated,
     candidate_diagnostics_omitted: options.candidateDiagnosticsOmitted,
+    lessons_scope_ineligible: options.lessonsScopeIneligible,
+    lessons_duplicate: options.lessonsDuplicate,
+    lesson_diagnostics_omitted: options.lessonDiagnosticsOmitted,
+    evidence_prefiltered: options.evidencePrefiltered,
+    retrieval_report_omitted: options.retrievalReportOmitted,
   };
 }
 
@@ -2437,7 +2531,7 @@ function assembleResolvedContext(
   if (brainConfigured) {
     validateEvidenceEnvelope(evidenceInput, local);
     evidenceStatus = evidenceInput.status;
-    if (evidenceInput.status === 'seeded') {
+    if (evidenceInput.status === 'available') {
       evaluations = evaluateCandidates(
         evidenceInput,
         local,
@@ -2455,7 +2549,7 @@ function assembleResolvedContext(
   for (const evaluation of eligible) {
     for (const selector of evaluation.candidate!.selectors) bundleCoverage.add(selector);
   }
-  const accountRequiredCoverage = brainConfigured && evidenceStatus === 'seeded';
+  const accountRequiredCoverage = brainConfigured && evidenceStatus === 'available';
   const missingRequired = accountRequiredCoverage
     ? local.selectors
       .filter((selector) => selector.required && !bundleCoverage.has(selector.selector))
@@ -2500,7 +2594,42 @@ function assembleResolvedContext(
     || right.overlap - left.overlap
     || compareUnicodeCodePoints(left.lesson.record.qualified_id, right.lesson.record.qualified_id)
   ));
-  for (const { lesson } of rankedLessons) {
+  const lessonExclusions: LessonExclusion[] = local.scopeIneligibleLessons.map((entry) => ({
+    qualifiedId: entry.qualifiedId,
+    reason: 'scope-ineligible' as const,
+    plan: entry.plan,
+  }));
+  // Body-identical lessons are the same guidance under two identities. The hash
+  // target is the BODY alone: `projectMarkdown` embeds id/kind/purpose/scope and
+  // could therefore never collide across identities, and a reworded one-line
+  // purpose must not defeat dedup. The first occurrence in the already-pinned
+  // rankedLessons order survives; every later one is excluded BEFORE budget
+  // admission, so a duplicate is never also counted budget-exhausted.
+  const lessonWinners = new Map<string, (typeof rankedLessons)[number]>();
+  const admissibleLessons: typeof rankedLessons = [];
+  for (const entry of rankedLessons) {
+    const bodyHash = sha256(entry.lesson.definition.body);
+    const winner = lessonWinners.get(bodyHash);
+    if (winner === undefined) {
+      lessonWinners.set(bodyHash, entry);
+      admissibleLessons.push(entry);
+      continue;
+    }
+    lessonExclusions.push({
+      qualifiedId: entry.lesson.record.qualified_id,
+      reason: 'duplicate',
+      duplicateOf: winner.lesson.record.qualified_id,
+      // The comparison that ACTUALLY decided, read at the point of decision.
+      // Total: qualified ids are registry-unique, so lexicographic never ties.
+      comparator: winner.lesson.scopeRank !== entry.lesson.scopeRank
+        ? 'scope-rank'
+        : winner.overlap !== entry.overlap
+          ? 'term-overlap'
+          : 'lexicographic',
+    });
+  }
+  const lessonsDuplicate = lessonExclusions.filter((entry) => entry.reason === 'duplicate').length;
+  for (const { lesson } of admissibleLessons) {
     const fragment = makeFragment({
       fragmentId: `lesson:${lesson.record.qualified_id}`,
       kind: 'lesson',
@@ -2557,14 +2686,35 @@ function assembleResolvedContext(
       [...matchedInPool].filter((selector) => bundleCoverage.has(selector)).length,
     )
     : null;
+  let retrievalReportOmitted: 0 | 1 = 0;
   if (retrievalDiagnostic !== null) {
     instrumentation && (instrumentation.optional_content_serializations += 1);
     const marginal = utf8Bytes(retrievalDiagnostic) + (diagnostics.length === 0 ? 0 : 1);
     if (estimatedTokens(domainBytes + marginal) + BUDGET_BLOCK_RESERVE_TOKENS <= request.budgetTokens) {
       diagnostics.push(retrievalDiagnostic);
       domainBytes += marginal;
+    } else {
+      retrievalReportOmitted = 1;
     }
   }
+  // The lesson family is capped INDEPENDENTLY of the candidate family, so a
+  // large candidate rejection set can never silence lesson accounting.
+  const lessonDiagnosticList = lessonExclusions
+    .sort((left, right) => compareUnicodeCodePoints(left.qualifiedId, right.qualifiedId)
+      || compareUnicodeCodePoints(left.reason, right.reason))
+    .map((exclusion) => lessonDiagnostic(exclusion));
+  let admittedLessonDiagnostics = 0;
+  for (const diagnostic of lessonDiagnosticList) {
+    if (admittedLessonDiagnostics >= MAX_CONTEXT_OPTIONAL_DIAGNOSTICS) break;
+    instrumentation && (instrumentation.optional_content_serializations += 1);
+    const marginal = utf8Bytes(diagnostic) + (diagnostics.length === 0 ? 0 : 1);
+    if (estimatedTokens(domainBytes + marginal) + BUDGET_BLOCK_RESERVE_TOKENS <= request.budgetTokens) {
+      diagnostics.push(diagnostic);
+      domainBytes += marginal;
+      admittedLessonDiagnostics += 1;
+    }
+  }
+  const lessonDiagnosticsOmitted = lessonDiagnosticList.length - admittedLessonDiagnostics;
   const candidateDiagnostics = rejected
     .sort((left, right) => compareUnicodeCodePoints(left.evaluation.candidateKey, right.evaluation.candidateKey)
       || compareUnicodeCodePoints(left.reason, right.reason))
@@ -2609,6 +2759,17 @@ function assembleResolvedContext(
     requiredSelectorsUnmatched,
     requiredSelectorsTruncated,
     candidateDiagnosticsOmitted,
+    lessonsScopeIneligible: local.scopeIneligibleLessons.length,
+    lessonsDuplicate,
+    lessonDiagnosticsOmitted,
+    // Computed ONLY from an available live report. An unavailable or
+    // unconfigured Brain leaves it 0-by-absence beside its mandatory warning —
+    // never an unconditional sum over an envelope that measured nothing.
+    evidencePrefiltered: accountRequiredCoverage
+      ? CONTEXT_RETRIEVAL_FILTER_REASONS
+        .reduce((total, reason) => total + evidenceInput.report.filtered[reason], 0)
+      : 0,
+    retrievalReportOmitted,
   });
   if (budget.total_tokens > request.budgetTokens) {
     throw workspaceFailure(
@@ -2692,6 +2853,10 @@ export function assembleWorkspaceContext(
   );
 }
 
+// The all-zero `filtered` record here is ABSENCE, not measurement: no statement
+// ran. `evidence_prefiltered` is therefore only ever summed from an AVAILABLE
+// live report, and the unavailable case is disclosed by its own mandatory
+// warning rather than by an indistinguishable zero.
 function emptyRetrievalReport(
   unavailableReason: ContextRetrievalUnavailableReason | null,
 ): ContextRetrievalReport {
@@ -2711,7 +2876,7 @@ function emptyRetrievalReport(
 
 export function emptyContextEvidenceInput(): ContextEvidenceInput {
   return cloneAndFreeze({
-    status: 'seeded' as const,
+    status: 'available' as const,
     candidates: [],
     report: emptyRetrievalReport(null),
   });

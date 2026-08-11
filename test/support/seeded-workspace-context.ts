@@ -9,7 +9,7 @@ import {
   type ContextRequest,
   type ContextRetrievalReport,
   type ContextSelectorCatalogEntry,
-  type SeedBrainCandidate,
+  type ContextBrainCandidate,
   type WorkspaceContext,
 } from '../../src/lib/workspace-context.ts';
 import { withContextReadCapability } from '../../src/lib/workspace-registry.ts';
@@ -17,7 +17,7 @@ import { withContextReadCapability } from '../../src/lib/workspace-registry.ts';
 export type SeededWorkspaceContextOptions = {
   root: string;
   request: ContextRequest;
-  candidates: readonly SeedBrainCandidate[];
+  candidates: readonly ContextBrainCandidate[];
 };
 
 function deepFreeze<T>(value: T): T {
@@ -32,7 +32,7 @@ function deepFreeze<T>(value: T): T {
 // candidates. That is the smallest M that satisfies V2 and V3, so an honest
 // fixture never trips the coverage-containment check.
 export function seededRetrievalReport(
-  candidates: readonly SeedBrainCandidate[],
+  candidates: readonly ContextBrainCandidate[],
   selectors: readonly ContextSelectorCatalogEntry[],
   overrides: Partial<ContextRetrievalReport> = {},
 ): ContextRetrievalReport {
@@ -65,8 +65,8 @@ export function resolveSeededWorkspaceContext(
     const selection = deriveContextVendorSkillSelection(capability.source, options.request);
     const catalog = deriveContextSelectorCatalog(capability.source, options.request);
     const evidence = deepFreeze({
-      status: 'seeded' as const,
-      candidates: structuredClone(options.candidates) as SeedBrainCandidate[],
+      status: 'available' as const,
+      candidates: structuredClone(options.candidates) as ContextBrainCandidate[],
       report: seededRetrievalReport(options.candidates, catalog),
     }) satisfies ContextEvidenceInput;
     const projection = capability.selectVendorSkillMap(selection);

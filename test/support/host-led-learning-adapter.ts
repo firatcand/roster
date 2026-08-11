@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_CONTEXT_BUDGET_TOKENS } from '../../src/lib/context-args.ts';
 import {
   CONTEXT_ESTIMATOR,
-  type SeedBrainCandidate,
+  type ContextBrainCandidate,
 } from '../../src/lib/workspace-context.ts';
 import {
   hashSeededLearningValue,
@@ -1034,7 +1034,8 @@ function projectBudget(value: unknown, requestBudget: unknown): Readonly<Record<
     'estimator', 'limit_tokens', 'mandatory_bytes', 'mandatory_tokens', 'optional_bytes', 'optional_tokens',
     'reserve_bytes', 'reserve_tokens', 'total_bytes', 'total_tokens', 'remaining_tokens', 'exclusions',
     'lessons_budget_exhausted', 'required_selectors_unmatched', 'required_selectors_truncated',
-    'candidate_diagnostics_omitted',
+    'candidate_diagnostics_omitted', 'lessons_scope_ineligible', 'lessons_duplicate',
+    'lesson_diagnostics_omitted', 'evidence_prefiltered', 'retrieval_report_omitted',
   ], 'Roster context budget');
   if (contextString(budget['estimator'], 'Roster context budget.estimator') !== CONTEXT_ESTIMATOR) {
     fail('Roster context budget estimator is not the fixed host-context.v2 estimator');
@@ -1058,12 +1059,21 @@ function projectBudget(value: unknown, requestBudget: unknown): Readonly<Record<
     'lessons_budget_exhausted',
     'required_selectors_unmatched',
     'candidate_diagnostics_omitted',
+    'lessons_scope_ineligible',
+    'lessons_duplicate',
+    'lesson_diagnostics_omitted',
+    'evidence_prefiltered',
+    'retrieval_report_omitted',
   ].filter((key) => budget[key] !== 0).map((key) => [key, budget[key]]));
   return Object.freeze({
     limit_tokens: budget['limit_tokens'],
     total_tokens: budget['total_tokens'],
     remaining_tokens: budget['remaining_tokens'],
     exclusions: Object.freeze({ default: 0, counts: nonzeroExclusions }),
+    // Contract: the eight post-exclusion counters of ContextBudget, in type
+    // order. Deliberately NOT "every flat accounting scalar" — that would sweep
+    // in the limit/byte/token fields. `evidence_prefiltered` is an accounting
+    // total rather than an omission and rides here for shape, not for naming.
     omission_counts: Object.freeze({ default: 0, counts: nonzeroOmissions }),
   });
 }
@@ -1512,6 +1522,11 @@ export function compactContextForHost(value: unknown): Readonly<Record<string, u
         omissionCounts['lessons_budget_exhausted'] ?? 0,
         omissionCounts['required_selectors_unmatched'] ?? 0,
         omissionCounts['candidate_diagnostics_omitted'] ?? 0,
+        omissionCounts['lessons_scope_ineligible'] ?? 0,
+        omissionCounts['lessons_duplicate'] ?? 0,
+        omissionCounts['lesson_diagnostics_omitted'] ?? 0,
+        omissionCounts['evidence_prefiltered'] ?? 0,
+        omissionCounts['retrieval_report_omitted'] ?? 0,
       ]),
     ]),
     // #352: the host-visible projection is deliberately lossy — the complete
@@ -2126,12 +2141,12 @@ function readFixtureSearchInput(workspace: string): unknown {
   }
 }
 
-function contextCandidates(workspace: string): readonly SeedBrainCandidate[] {
+function contextCandidates(workspace: string): readonly ContextBrainCandidate[] {
   const value = readJson(workspace, '.fixture/input/brain-evidence.json', 'Brain input');
   if (value === null || typeof value !== 'object' || Array.isArray(value)) fail('Brain input is invalid');
   const candidates = (value as Record<string, unknown>)['candidates'];
   if (!Array.isArray(candidates)) fail('Brain candidates are invalid');
-  return structuredClone(candidates) as SeedBrainCandidate[];
+  return structuredClone(candidates) as ContextBrainCandidate[];
 }
 
 function expandedRosterArgv(

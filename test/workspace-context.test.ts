@@ -13,6 +13,8 @@ import {
   CONTEXT_EXCLUSION_REASONS,
   MAX_CONTEXT_BUDGET_TOKENS,
   MAX_CONTEXT_EVIDENCE_CANDIDATES,
+  MAX_CONTEXT_EVIDENCE_PREFILTERED,
+  MAX_CONTEXT_OPTIONAL_DIAGNOSTICS,
   assembleWorkspaceContext,
   compareUnicodeCodePoints,
   deriveContextVendorSkillSelection,
@@ -28,7 +30,7 @@ import {
   type ContextRetrievalReport,
   type ContextRetrievalRequest,
   type ContextSelectorCatalogEntry,
-  type SeedBrainCandidate,
+  type ContextBrainCandidate,
   type WorkspaceContext,
 } from '../src/lib/workspace-context.ts';
 import { isWorkspaceFailure, type WorkspaceRosterError } from '../src/lib/workspace-diagnostics.ts';
@@ -78,8 +80,8 @@ function deepFreeze<T>(value: T): T {
 
 function candidate(
   candidateId: string,
-  overrides: Partial<SeedBrainCandidate> = {},
-): SeedBrainCandidate {
+  overrides: Partial<ContextBrainCandidate> = {},
+): ContextBrainCandidate {
   const content = `Evidence ${candidateId} about reliable company operations.`;
   return {
     candidate_id: candidateId,
@@ -117,8 +119,8 @@ function candidate(
 function candidateWithContent(
   candidateId: string,
   content: string,
-  overrides: Partial<SeedBrainCandidate> = {},
-): SeedBrainCandidate {
+  overrides: Partial<ContextBrainCandidate> = {},
+): ContextBrainCandidate {
   const seeded = candidate(candidateId, { ...overrides, content });
   return {
     ...seeded,
@@ -131,7 +133,7 @@ function candidateWithContent(
 
 // label_keys carry the ONE label that implies the claimed scope, so scope
 // derivation reproduces the pre-#352 eligibility semantics exactly.
-function labelKeysForScope(scope: SeedBrainCandidate['scope']): string[] {
+function labelKeysForScope(scope: ContextBrainCandidate['scope']): string[] {
   if (scope.function === undefined) return ['workspace'];
   if (scope.agent === undefined) return [`function:${scope.function}`];
   if (scope.plan === undefined) return [`agent:${scope.function}/${scope.agent}`];
@@ -142,7 +144,7 @@ function labelKeysForScope(scope: SeedBrainCandidate['scope']): string[] {
 // the candidates. `assemble` re-derives it against the REAL catalog unless the
 // envelope is registered as raw, so a test can still ship a deliberately wrong M.
 function honestMatchedRequired(
-  candidates: readonly SeedBrainCandidate[],
+  candidates: readonly ContextBrainCandidate[],
   catalog: readonly ContextSelectorCatalogEntry[] | null,
 ): string[] {
   const required = catalog === null
@@ -166,7 +168,7 @@ function rawEvidence(evidence: ContextEvidenceInput): ContextEvidenceInput {
 }
 
 function reportFor(
-  candidates: readonly SeedBrainCandidate[],
+  candidates: readonly ContextBrainCandidate[],
   overrides: Partial<ContextRetrievalReport> = {},
 ): ContextRetrievalReport {
   const matched = honestMatchedRequired(candidates, null);
@@ -181,11 +183,11 @@ function reportFor(
 }
 
 function frozenEvidence(
-  candidates: readonly SeedBrainCandidate[],
+  candidates: readonly ContextBrainCandidate[],
   overrides: Partial<ContextRetrievalReport> = {},
 ): ContextEvidenceInput {
   return deepFreeze({
-    status: 'seeded' as const,
+    status: 'available' as const,
     candidates: [...candidates],
     report: reportFor(candidates, overrides),
   });
@@ -200,7 +202,7 @@ function assemble(
   return withContextReadCapability(root, (capability) => {
     const selection = deriveContextVendorSkillSelection(capability.source, request);
     const catalog = deriveContextSelectorCatalog(capability.source, request);
-    const resolved = evidence.status === 'seeded' && !RAW_EVIDENCE.has(evidence)
+    const resolved = evidence.status === 'available' && !RAW_EVIDENCE.has(evidence)
       ? deepFreeze({
         ...evidence,
         report: {
@@ -361,7 +363,13 @@ test('representative context has the exact flat response shape and complete Opti
       result.lessons.map((entry) => entry.content.id),
       ['root-prior', 'nested-prior', 'general-prior'],
     );
+    // #355 D4.1: `sibling-prior` is scoped to a plan outside the resolved
+    // closure. It is still absent from the bundle, but no longer SILENTLY —
+    // it is counted and explained instead of dropped.
     assert.equal(result.lessons.some((entry) => entry.content.id === 'sibling-prior'), false);
+    assert.equal(result.budget.lessons_scope_ineligible, 1);
+    assert.equal(result.budget.lessons_duplicate, 0);
+    assert.equal(result.budget.lesson_diagnostics_omitted, 0);
     assert.equal(result.tool_uses.length, 1);
     assert.deepEqual(
       result.tool_uses[0]!.content.contributors.map((entry) => entry.qualified_id),
@@ -393,11 +401,18 @@ test('representative context has the exact flat response shape and complete Opti
     assert.equal(Object.isFrozen(result), true);
     assert.equal(Object.isFrozen(result.plan.definitions), true);
     assert.equal(Object.isFrozen(result.tool_uses[0]!.content.effective), true);
-    // The retrieval echo is the only optional diagnostic a clean seeded bundle
-    // carries; both required-coverage counters ride the budget block instead.
+    // The retrieval echo and the one out-of-closure lesson are the only optional
+    // diagnostics a clean bundle carries; both required-coverage counters ride
+    // the budget block instead.
     assert.deepEqual(result.diagnostics.map((entry) => [entry.code, entry.severity]), [
       ['CONTEXT_EVIDENCE_FILTERED', 'info'],
+      ['CONTEXT_LESSON_EXCLUDED', 'info'],
     ]);
+    assert.deepEqual(result.diagnostics[1]!.details, {
+      lesson_id: 'gtm/social-manager/playbook/sibling-prior',
+      reason: 'scope-ineligible',
+      plan: 'sibling-review',
+    });
     assert.deepEqual(result.diagnostics[0]!.details['counts'], {
       considered: 3,
       returned: 3,
@@ -592,9 +607,17 @@ test('missing Brain is one nonfatal warning and unavailable evidence stays optio
     assert.deepEqual(unbound.brain_evidence, []);
     assert.deepEqual(unbound.diagnostics.map((entry) => [entry.code, entry.severity]), [
       ['BRAIN_NOT_CONFIGURED', 'warning'],
+      ['CONTEXT_LESSON_EXCLUDED', 'info'],
     ]);
     assert.equal(unbound.budget.required_selectors_unmatched, 0);
     assert.equal(Object.values(unbound.budget.exclusions).every((count) => count === 0), true);
+    // D3 #4 pairing, asserted as a PAIR: the scalar is 0-by-absence only
+    // alongside the mandatory warning that says retrieval never ran.
+    assert.equal(unbound.budget.evidence_prefiltered, 0);
+    assert.equal(
+      unbound.diagnostics.some((entry) => entry.code === 'BRAIN_NOT_CONFIGURED'),
+      true,
+    );
 
     writeFileSync(registryPath, YAML.stringify({
       ...registry,
@@ -609,6 +632,7 @@ test('missing Brain is one nonfatal warning and unavailable evidence stays optio
     assert.deepEqual(unavailable.diagnostics.map((entry) => [entry.code, entry.severity]), [
       ['CONTEXT_EVIDENCE_UNAVAILABLE', 'warning'],
       ['CONTEXT_EVIDENCE_FILTERED', 'info'],
+      ['CONTEXT_LESSON_EXCLUDED', 'info'],
     ]);
     assert.equal(
       unavailable.diagnostics.find((entry) => entry.code === 'CONTEXT_EVIDENCE_UNAVAILABLE')!
@@ -616,6 +640,11 @@ test('missing Brain is one nonfatal warning and unavailable evidence stays optio
       'service-unavailable',
     );
     assert.equal(unavailable.plan.definitions.length, 4);
+    // D3 #4 pairing on the unavailable arm: 0-by-absence beside the mandatory,
+    // never-budget-droppable CONTEXT_EVIDENCE_UNAVAILABLE. Zero is never
+    // ambiguous because the state bit is always present.
+    assert.equal(unavailable.budget.evidence_prefiltered, 0);
+    assert.equal(unavailable.budget.retrieval_report_omitted, 0);
 
     const invalid = failure(() => assemble(fx.root, DEFAULT_REQUEST, deepFreeze({
       status: 'unavailable' as const,
@@ -623,6 +652,43 @@ test('missing Brain is one nonfatal warning and unavailable evidence stays optio
       report: reportFor([]),
     })));
     assert.equal(invalid.code, 'CONTEXT_EVIDENCE_INVALID');
+
+    // D8 #4 (i) — an ADVERSARIAL unavailable envelope carrying nonzero filtered
+    // counts is refused. Without this guard the pre-#355 validation admitted it
+    // (it checks only candidates and required-selector matches), and the counts
+    // would have looked like a measurement retrieval never took.
+    const unavailableWithCounts = failure(() => assemble(fx.root, DEFAULT_REQUEST, deepFreeze({
+      status: 'unavailable' as const,
+      candidates: [],
+      report: { ...reportFor([]), filtered: { ...reportFor([]).filtered, tombstoned: 7 } },
+    })));
+    assert.equal(unavailableWithCounts.code, 'CONTEXT_EVIDENCE_INVALID');
+
+    // D8 #4 (ii) — the six-reason sum cap. At the cap the envelope is admitted
+    // and the scalar carries the exact total; one over, it is refused. That is
+    // what makes the 928-byte reserve exact over the FULL accepted domain.
+    const atCap = assemble(fx.root, DEFAULT_REQUEST, deepFreeze({
+      status: 'available' as const,
+      candidates: [],
+      report: {
+        ...reportFor([]),
+        filtered: { ...reportFor([]).filtered, tombstoned: MAX_CONTEXT_EVIDENCE_PREFILTERED },
+      },
+    }));
+    assert.equal(atCap.budget.evidence_prefiltered, MAX_CONTEXT_EVIDENCE_PREFILTERED);
+    const overCap = failure(() => assemble(fx.root, DEFAULT_REQUEST, deepFreeze({
+      status: 'available' as const,
+      candidates: [],
+      report: {
+        ...reportFor([]),
+        filtered: {
+          ...reportFor([]).filtered,
+          tombstoned: MAX_CONTEXT_EVIDENCE_PREFILTERED,
+          superseded: 1,
+        },
+      },
+    })));
+    assert.equal(overCap.code, 'CONTEXT_EVIDENCE_INVALID');
   } finally {
     fx.cleanup();
   }
@@ -691,21 +757,21 @@ test('closed seed objects reject unknown candidate, scope, and citation fields w
     const unknownCandidate = {
       ...candidate('unknown-candidate'),
       [secretKey]: secretValue,
-    } as unknown as SeedBrainCandidate;
+    } as unknown as ContextBrainCandidate;
     const unknownScope = {
       ...candidate('unknown-scope'),
       scope: {
         ...candidate('unknown-scope').scope,
         secret_scope_key: secretValue,
       },
-    } as unknown as SeedBrainCandidate;
+    } as unknown as ContextBrainCandidate;
     const unknownCitation = {
       ...candidate('unknown-citation'),
       citation: {
         ...candidate('unknown-citation').citation,
         secret_citation_key: secretValue,
       },
-    } as unknown as SeedBrainCandidate;
+    } as unknown as ContextBrainCandidate;
     const result = assemble(
       fx.root,
       DEFAULT_REQUEST,
@@ -745,14 +811,14 @@ test('candidate prose preserves multiline tabs byte-for-byte but rejects unsafe 
 test('oversized scope and citation IDs fail before ranking without value egress', () => {
   const fx = buildSocialManagerContextFixture();
   try {
-    const cases: Array<[string, SeedBrainCandidate]> = [
+    const cases: Array<[string, ContextBrainCandidate]> = [
       ['scope-id-canary', {
         ...candidate('oversized-scope'),
         scope: {
           workspace: 'social-manager-context',
           function: `scope-id-canary-${'x'.repeat(256)}`,
         },
-      } as unknown as SeedBrainCandidate],
+      } as unknown as ContextBrainCandidate],
       ['citation-source-canary', {
         ...candidate('oversized-citation-source'),
         citation: {
@@ -1066,14 +1132,14 @@ test('Brain candidate scopes require complete ancestry and never borrow matching
         workspace: 'social-manager-context',
         plan: 'opportunity-discovery',
       },
-    } as unknown as SeedBrainCandidate;
+    } as unknown as ContextBrainCandidate;
     const agentWithoutFunction = {
       ...candidate('agent-without-function'),
       scope: {
         workspace: 'social-manager-context',
         agent: 'social-manager',
       },
-    } as unknown as SeedBrainCandidate;
+    } as unknown as ContextBrainCandidate;
     const foreignAncestry = candidate('foreign-ancestry', {
       scope: {
         workspace: 'social-manager-context',
@@ -1317,6 +1383,10 @@ test('production context terminally verifies every contributing local record cla
     'functions/gtm/agents/social-manager/guidelines/discovery-policy.md',
     'functions/gtm/agents/social-manager/playbook/root-prior.md',
     'functions/gtm/agents/social-manager/plans/scan-linkedin.yaml',
+    // #355 D4.1: the bundle now REPORTS on the out-of-closure lesson, so
+    // revalidation must cover it too — every record a bundle makes a claim
+    // about is re-verified, not only the ones it includes.
+    'functions/gtm/agents/social-manager/playbook/sibling-prior.md',
   ];
   for (const relativePath of selectedPaths) {
     const fx = buildSocialManagerContextFixture();
@@ -1645,6 +1715,15 @@ test('budget reserve, exact mandatory fit, rounding, and reachable retry are exa
     required_selectors_unmatched: 4_096,
     required_selectors_truncated: 4_096,
     candidate_diagnostics_omitted: 4_096,
+    lessons_scope_ineligible: 4_096,
+    lessons_duplicate: 4_096,
+    lesson_diagnostics_omitted: 4_096,
+    // The widest LEGAL value, not a convention: `validateRetrievalReport` caps
+    // the six-reason sum at MAX_CONTEXT_EVIDENCE_PREFILTERED, so the reserve
+    // proven here covers the full accepted numeric domain.
+    evidence_prefiltered: MAX_CONTEXT_EVIDENCE_PREFILTERED,
+    // The widest legal value of the `0 | 1` producer type.
+    retrieval_report_omitted: 1,
   };
   const reserveBytes = Buffer.byteLength(JSON.stringify({ budget: widestBudget }), 'utf8');
   assert.equal(BUDGET_BLOCK_RESERVE_BYTES, reserveBytes);
@@ -1690,6 +1769,11 @@ test('budget reserve, exact mandatory fit, rounding, and reachable retry are exa
       'required_selectors_unmatched',
       'required_selectors_truncated',
       'candidate_diagnostics_omitted',
+      'lessons_scope_ineligible',
+      'lessons_duplicate',
+      'lesson_diagnostics_omitted',
+      'evidence_prefiltered',
+      'retrieval_report_omitted',
     ]);
 
     const overflow = failure(() => assemble(
@@ -2156,9 +2240,13 @@ test('pure assembler instrumentation counts each optional serialization once', (
     const evidence = frozenEvidence([candidate('one'), candidate('two')]);
     const result = assemble(fx.root, DEFAULT_REQUEST, evidence, instrumentation);
     const optionalPool = 3 + evidence.candidates.length;
-    // +1: the retrieval echo diagnostic is serialized once for its own admission.
-    assert.equal(instrumentation.optional_content_serializations, optionalPool + 1);
+    // +2: the retrieval echo and the one out-of-closure lesson diagnostic are
+    // each serialized exactly once for their own admission.
+    assert.equal(instrumentation.optional_content_serializations, optionalPool + 2);
     assert.equal(instrumentation.optional_provenance_serializations, optionalPool);
+    // Still 3, not 4: the scope-ineligible lesson is partitioned from RECORD
+    // fields and never parsed, so it costs no tokenization and can introduce no
+    // new fatal parse path (D4.1).
     assert.equal(instrumentation.lesson_term_tokenizations, 3);
     assert.equal(instrumentation.complete_domain_serializations, 1);
     assert.equal(result.budget.total_tokens <= result.budget.limit_tokens, true);
@@ -2313,16 +2401,16 @@ function matrixFixture(required: readonly string[], optional: readonly string[] 
   return fx;
 }
 
-function matrixCandidate(id: string, selectors: readonly string[]): SeedBrainCandidate {
+function matrixCandidate(id: string, selectors: readonly string[]): ContextBrainCandidate {
   return candidate(id, { selectors: [...selectors].sort(compareUnicodeCodePoints) });
 }
 
 function matrixEvidence(
-  candidates: readonly SeedBrainCandidate[],
+  candidates: readonly ContextBrainCandidate[],
   matchedRequired: readonly string[],
 ): ContextEvidenceInput {
   return rawEvidence(deepFreeze({
-    status: 'seeded' as const,
+    status: 'available' as const,
     candidates: [...candidates],
     report: reportFor(candidates, {
       required_selectors_with_matches: [...matchedRequired].sort(compareUnicodeCodePoints),
@@ -2545,8 +2633,8 @@ test('M10..M13 — V1 to V4 reject an incoherent report before the partition run
     // V1: unsorted, and duplicated.
     for (const claimed of [['sel-b', 'sel-a'], ['sel-a', 'sel-a']]) {
       const invalid = failure(() => assemble(fx.root, DEFAULT_REQUEST, rawEvidence(deepFreeze({
-        status: 'seeded' as const,
-        candidates: [] as SeedBrainCandidate[],
+        status: 'available' as const,
+        candidates: [] as ContextBrainCandidate[],
         report: reportFor([], { required_selectors_with_matches: claimed }),
       }))));
       assert.equal(invalid.code, 'CONTEXT_EVIDENCE_INVALID');
@@ -2554,7 +2642,7 @@ test('M10..M13 — V1 to V4 reject an incoherent report before the partition run
     // V4: a non-seeded envelope may claim no coverage at all.
     const v4 = failure(() => assemble(fx.root, DEFAULT_REQUEST, rawEvidence(deepFreeze({
       status: 'unavailable' as const,
-      candidates: [] as SeedBrainCandidate[],
+      candidates: [] as ContextBrainCandidate[],
       report: reportFor([], {
         required_selectors_with_matches: ['sel-a'],
         unavailable_reason: 'query-failed',
@@ -2791,7 +2879,7 @@ test('the legacy floor ranks below every verified candidate and requires an expl
     const illegal = assemble(fx.root, DEFAULT_REQUEST, matrixEvidence(
       [candidate('illegal', {
         selectors: ['sel-optional'],
-        trust: 'authored-policy' as SeedBrainCandidate['trust'],
+        trust: 'authored-policy' as ContextBrainCandidate['trust'],
       })],
       [],
     ));
@@ -2820,8 +2908,8 @@ test('the retrieval report is closed at the boundary and carries no timing field
       assert.equal(unavailable.details['reason'], reason);
     }
     const withReason = assemble(fx.root, DEFAULT_REQUEST, rawEvidence(deepFreeze({
-      status: 'seeded' as const,
-      candidates: [] as SeedBrainCandidate[],
+      status: 'available' as const,
+      candidates: [] as ContextBrainCandidate[],
       report: reportFor([], {
         modes: {
           structured: { status: 'used' },
@@ -2857,8 +2945,8 @@ test('the retrieval report is closed at the boundary and carries no timing field
 
     // An open reason string cannot reach the bundle.
     const openReason = failure(() => assemble(fx.root, DEFAULT_REQUEST, rawEvidence(deepFreeze({
-      status: 'seeded' as const,
-      candidates: [] as SeedBrainCandidate[],
+      status: 'available' as const,
+      candidates: [] as ContextBrainCandidate[],
       report: reportFor([], {
         modes: {
           structured: { status: 'used' },
@@ -2903,9 +2991,9 @@ test('the awaited resolver is byte-identical to the synchronous zero-I/O path an
     }));
     const faults: Array<() => Promise<ContextEvidenceInput>> = [
       async () => { throw new Error('adapter exploded'); },
-      async () => ({ status: 'seeded', candidates: [], report: reportFor([]) }),
+      async () => ({ status: 'available', candidates: [], report: reportFor([]) }),
       async () => rawEvidence(deepFreeze({
-        status: 'seeded' as const,
+        status: 'available' as const,
         candidates: Array.from(
           { length: MAX_CONTEXT_EVIDENCE_CANDIDATES + 1 },
           (_, index) => candidate(`over-${index}`),
@@ -2913,7 +3001,7 @@ test('the awaited resolver is byte-identical to the synchronous zero-I/O path an
         report: reportFor([]),
       })),
       async () => rawEvidence(deepFreeze({
-        status: 'seeded' as const,
+        status: 'available' as const,
         candidates: [candidateWithContent('huge', 'x'.repeat(200_000))],
         report: reportFor([]),
       })),
@@ -3029,4 +3117,402 @@ test('a wrong-typed Brain field stays an ordinary YAML failure with no discrimin
   } finally {
     fx.cleanup();
   }
+});
+
+// #355 D4. The lesson tier's three deterministic behaviors under one fixed
+// primary-reason cascade — scope-ineligible, then duplicate, then
+// budget-exhausted — mirroring the Brain tier's "one deterministic primary
+// reason each" (spec/SPEC.md:392).
+function writeLesson(root: string, options: {
+  id: string;
+  purpose: string;
+  body: string;
+  plan?: string;
+}): void {
+  // The rendered heading is derived from the ID, so the shipped renderer can
+  // never produce two byte-identical BODIES. Dedup is defined on the body
+  // alone, so the fixture authors the body directly — which is exactly the
+  // real-world shape: two ids, one piece of guidance.
+  const frontmatter = renderMarkdownDefinition(
+    'lesson',
+    options.id,
+    options.purpose,
+    {
+      function: 'gtm',
+      agent: 'social-manager',
+      ...(options.plan === undefined ? {} : { plan: options.plan }),
+    },
+  );
+  writeFileSync(
+    join(root, `functions/gtm/agents/social-manager/playbook/${options.id}.md`),
+    `${frontmatter.slice(0, frontmatter.indexOf('\n---\n') + 5)}\n${options.body}\n`,
+  );
+}
+
+function registerLessons(root: string, ids: readonly string[]): void {
+  const path = join(root, 'functions/gtm/agents/social-manager/agent.yaml');
+  const agent = YAML.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+  agent['lessons'] = [...(agent['lessons'] as string[]), ...ids];
+  writeFileSync(path, YAML.stringify(agent));
+}
+
+function lessonDiagnostics(result: WorkspaceContext): readonly Record<string, unknown>[] {
+  return result.diagnostics
+    .filter((entry) => entry.code === 'CONTEXT_LESSON_EXCLUDED')
+    .map((entry) => entry.details);
+}
+
+test('body-identical lessons deduplicate and name the comparator that actually decided', () => {
+  const fx = buildSocialManagerContextFixture();
+  try {
+    // Three independent duplicate GROUPS, one per comparator branch. The bodies
+    // differ ACROSS groups so the groups cannot collapse into each other, and
+    // are byte-identical WITHIN a group, which is the whole dedup signal:
+    // `projectMarkdown` embeds id/kind/purpose/scope and so could never collide
+    // across identities, and a reworded one-line purpose must not defeat dedup.
+    const rankBody = 'Duplicate guidance decided by scope rank.';
+    const overlapBody = 'Duplicate guidance decided by request term overlap.';
+    const lexicalBody = 'Duplicate guidance decided lexicographically.';
+
+    // scope-rank: the selected plan (rank 3) beats agent scope (rank 1).
+    writeLesson(fx.root, {
+      id: 'dup-rank-plan',
+      purpose: 'Preserve the plan-scoped copy.',
+      body: rankBody,
+      plan: 'opportunity-discovery',
+    });
+    writeLesson(fx.root, { id: 'dup-rank-agent', purpose: 'Preserve the agent-scoped copy.', body: rankBody });
+
+    // term-overlap: two DIFFERENT closure plans, so both rank 2; the purposes
+    // decide, because overlap is computed over `purpose + body`.
+    writeLesson(fx.root, {
+      id: 'dup-overlap-strong',
+      purpose: 'Preserve reliable company operations discovery shortlist guidance.',
+      body: overlapBody,
+      plan: 'scan-linkedin',
+    });
+    writeLesson(fx.root, {
+      id: 'dup-overlap-weak',
+      purpose: 'Preserve unrelated bookkeeping notes.',
+      body: overlapBody,
+      plan: 'scan-web',
+    });
+
+    // lexicographic: same rank AND same purpose, so only the registry-unique
+    // qualified id can break the tie — which makes the trichotomy total.
+    writeLesson(fx.root, {
+      id: 'dup-lex-a',
+      purpose: 'Preserve an identically worded copy.',
+      body: lexicalBody,
+      plan: 'scan-linkedin',
+    });
+    writeLesson(fx.root, {
+      id: 'dup-lex-b',
+      purpose: 'Preserve an identically worded copy.',
+      body: lexicalBody,
+      plan: 'scan-linkedin',
+    });
+
+    registerLessons(fx.root, [
+      'dup-rank-plan', 'dup-rank-agent',
+      'dup-overlap-strong', 'dup-overlap-weak',
+      'dup-lex-a', 'dup-lex-b',
+    ]);
+
+    const result = assemble(fx.root);
+    const admitted = result.lessons.map((entry) => entry.content.id);
+    assert.equal(admitted.includes('dup-rank-plan'), true);
+    assert.equal(admitted.includes('dup-rank-agent'), false);
+    assert.equal(admitted.includes('dup-overlap-strong'), true);
+    assert.equal(admitted.includes('dup-overlap-weak'), false);
+    assert.equal(admitted.includes('dup-lex-a'), true);
+    assert.equal(admitted.includes('dup-lex-b'), false);
+
+    assert.equal(result.budget.lessons_duplicate, 3);
+    assert.equal(result.budget.lessons_scope_ineligible, 1);
+    // A duplicate is excluded BEFORE budget admission, so it can never also be
+    // counted as budget-exhausted.
+    assert.equal(result.budget.lessons_budget_exhausted, 0);
+    assert.equal(result.budget.lesson_diagnostics_omitted, 0);
+
+    const details = lessonDiagnostics(result);
+    const byId = new Map(details.map((entry) => [entry['lesson_id'], entry]));
+    assert.deepEqual(byId.get('gtm/social-manager/playbook/dup-rank-agent'), {
+      lesson_id: 'gtm/social-manager/playbook/dup-rank-agent',
+      reason: 'duplicate',
+      duplicate_of: 'gtm/social-manager/playbook/dup-rank-plan',
+      comparator: 'scope-rank',
+    });
+    assert.deepEqual(byId.get('gtm/social-manager/playbook/dup-overlap-weak'), {
+      lesson_id: 'gtm/social-manager/playbook/dup-overlap-weak',
+      reason: 'duplicate',
+      duplicate_of: 'gtm/social-manager/playbook/dup-overlap-strong',
+      comparator: 'term-overlap',
+    });
+    assert.deepEqual(byId.get('gtm/social-manager/playbook/dup-lex-b'), {
+      lesson_id: 'gtm/social-manager/playbook/dup-lex-b',
+      reason: 'duplicate',
+      duplicate_of: 'gtm/social-manager/playbook/dup-lex-a',
+      comparator: 'lexicographic',
+    });
+    // The scope-ineligible family keeps its own detail shape: no comparator,
+    // and the out-of-closure plan named.
+    assert.deepEqual(byId.get('gtm/social-manager/playbook/sibling-prior'), {
+      lesson_id: 'gtm/social-manager/playbook/sibling-prior',
+      reason: 'scope-ineligible',
+      plan: 'sibling-review',
+    });
+
+    // Determinism: the same workspace resolves to the same bundle every time.
+    assert.equal(
+      JSON.stringify(assemble(fx.root)),
+      JSON.stringify(result),
+    );
+
+    // Disjointness under REAL budget pressure, not merely under a budget
+    // generous enough that nothing competes. Squeeze the budget until some
+    // SURVIVORS are dropped: the two counters must still partition cleanly —
+    // every excluded duplicate stays in `lessons_duplicate` and none of them
+    // leaks into `lessons_budget_exhausted`, because a duplicate is removed
+    // before the admission loop ever sees it.
+    // The generous run admitted every survivor (asserted above:
+    // `lessons_budget_exhausted === 0`), so its admitted count IS the survivor
+    // set the tighter runs must partition.
+    assert.equal(result.budget.lessons_budget_exhausted, 0);
+    const survivors = result.lessons.length;
+    let squeezedCounted = 0;
+    for (let drop = 1; drop <= result.lessons.length; drop += 1) {
+      const tight = fixedMandatoryBudget(fx.root) + drop * 4;
+      const squeezed = assemble(fx.root, { ...DEFAULT_REQUEST, budgetTokens: tight });
+      assert.equal(squeezed.budget.lessons_duplicate, 3, `drop ${drop}`);
+      assert.equal(squeezed.budget.lessons_scope_ineligible, 1, `drop ${drop}`);
+      // The partition: admitted + budget-exhausted accounts for exactly the
+      // survivors, never survivors + duplicates.
+      assert.equal(
+        squeezed.lessons.length + squeezed.budget.lessons_budget_exhausted,
+        survivors,
+        `drop ${drop}`,
+      );
+      // No duplicate is ever admitted, however tight the budget gets.
+      for (const admittedId of squeezed.lessons.map((entry) => entry.content.id)) {
+        assert.equal(
+          ['dup-rank-agent', 'dup-overlap-weak', 'dup-lex-b'].includes(admittedId),
+          false,
+          `drop ${drop}`,
+        );
+      }
+      if (squeezed.budget.lessons_budget_exhausted > 0) squeezedCounted += 1;
+    }
+    // The loop actually exercised budget exhaustion rather than passing
+    // vacuously on a budget that fit everything.
+    assert.equal(squeezedCounted > 0, true);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('the lesson diagnostic family is capped independently of the candidate family', () => {
+  const fx = buildSocialManagerContextFixture();
+  try {
+    const overflow = MAX_CONTEXT_OPTIONAL_DIAGNOSTICS + 8;
+    const ids: string[] = [];
+    for (let index = 0; index < overflow; index += 1) {
+      const id = `out-of-closure-${String(index).padStart(3, '0')}`;
+      writeLesson(fx.root, {
+        id,
+        purpose: `Preserve sibling-only guidance ${index}.`,
+        body: `Sibling-only body ${index}.`,
+        plan: 'sibling-review',
+      });
+      ids.push(id);
+    }
+    registerLessons(fx.root, ids);
+
+    const evidence = frozenEvidence([candidate('kept'), candidate('secret-privacy', { privacy: 'secret' })]);
+    const result = assemble(
+      fx.root,
+      { ...DEFAULT_REQUEST, budgetTokens: MAX_CONTEXT_BUDGET_TOKENS },
+      evidence,
+    );
+
+    // `sibling-prior` is in the fixture already, so the family is overflow + 1.
+    assert.equal(result.budget.lessons_scope_ineligible, overflow + 1);
+    assert.equal(lessonDiagnostics(result).length, MAX_CONTEXT_OPTIONAL_DIAGNOSTICS);
+    assert.equal(
+      result.budget.lesson_diagnostics_omitted,
+      overflow + 1 - MAX_CONTEXT_OPTIONAL_DIAGNOSTICS,
+    );
+    // The candidate family is unaffected: the two caps are independent, so a
+    // lesson-tier authoring pathology can never silence candidate accounting.
+    assert.equal(result.budget.candidate_diagnostics_omitted, 0);
+    assert.equal(
+      result.diagnostics.filter((entry) => entry.code === 'CONTEXT_EVIDENCE_EXCLUDED').length,
+      1,
+    );
+    // Deterministic: the admitted 64 are the same 64 on every run, ordered by
+    // qualified id.
+    const admittedIds = lessonDiagnostics(result).map((entry) => String(entry['lesson_id']));
+    assert.deepEqual([...admittedIds].sort(compareUnicodeCodePoints), admittedIds);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('retrieval report omission is disclosed by its own budget scalar', () => {
+  const fx = buildSocialManagerContextFixture();
+  try {
+    const evidence = frozenEvidence([candidate('one')]);
+    // Admitted: a generous budget fits the echo.
+    const admitted = assemble(fx.root, DEFAULT_REQUEST, evidence);
+    assert.equal(
+      admitted.diagnostics.some((entry) => entry.code === 'CONTEXT_EVIDENCE_FILTERED'),
+      true,
+    );
+    assert.equal(admitted.budget.retrieval_report_omitted, 0);
+
+    // Squeezed out: at the exact mandatory budget nothing optional fits, so the
+    // echo is constructed and then withheld. The scalar is the ONLY thing that
+    // says so — without it the per-reason breakdown would vanish silently.
+    const exact = fixedMandatoryBudget(fx.root, evidence);
+    const squeezed = assemble(fx.root, { ...DEFAULT_REQUEST, budgetTokens: exact }, evidence);
+    assert.equal(
+      squeezed.diagnostics.some((entry) => entry.code === 'CONTEXT_EVIDENCE_FILTERED'),
+      false,
+    );
+    assert.equal(squeezed.budget.retrieval_report_omitted, 1);
+    assert.equal(squeezed.lessons.length, 0);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// #355 D1. `roster context` deliberately does NOT route through
+// `resolveBrainActivationConfig`, and this matrix pins the divergence instead
+// of claiming an equivalence that does not hold.
+//
+// The reuse was declined for a TOCTOU reason: the helper performs its own
+// `readRegistryText`, a second unsnapshotted read of `roster.yaml` outside the
+// context read capability's session and outside `capability.verify`, which
+// would reintroduce a window between the activation decision and the bundle's
+// `workspace.source_hash`.
+//
+// The two paths then implement deliberately OPPOSITE precedence rules, each
+// shipped and each documented in code:
+//   * the helper runs the structural probe `classifyBrainDeclaration` FIRST and
+//     returns `incomplete` for any structurally partial block without
+//     strict-parsing the values that ARE present
+//     (`workspace-record.ts` — "an incomplete ACTIVATION is not a schema error");
+//   * the context path strict-parses via `parseBrainConfig`, validating every
+//     present value first and only then reporting the gap
+//     (`workspace-record.ts` — "a schema error outranks it").
+//
+// Making the two agree by construction requires one path to adopt the other's
+// precedence, which is not this ticket's call. The divergence is CONTAINED and
+// SAFE: in both divergent rows both paths refuse before contacting any store,
+// so "partial configuration contacts neither store" holds on both sides — only
+// the diagnostic code differs.
+test('the Brain activation helper and the context path agree except where they deliberately diverge', async () => {
+  const { resolveBrainActivationConfig } = await import('../src/lib/brain-activation-config.ts');
+  const COMPLETE = {
+    secrets_path: '/social-manager-context',
+    storage: { bucket: 'social-manager-context-vault', region: 'eu-central-1' },
+  };
+  const requirement = { postgres: 'runtime', objectStorage: 'declared' } as const;
+
+  const rows = [
+    {
+      label: 'no brain block',
+      brain: undefined,
+      helper: 'absent',
+      context: { kind: 'ok', code: 'BRAIN_NOT_CONFIGURED' },
+      agree: true,
+    },
+    {
+      label: 'complete, well-formed',
+      brain: COMPLETE,
+      helper: 'complete',
+      context: { kind: 'ok', code: null },
+      agree: true,
+    },
+    {
+      label: 'partial, present values well-formed',
+      brain: { secrets_path: COMPLETE.secrets_path },
+      helper: 'incomplete',
+      context: { kind: 'fail', code: 'BRAIN_CONFIGURATION_INCOMPLETE' },
+      agree: true,
+    },
+    {
+      label: 'fully present, a malformed value',
+      brain: { secrets_path: 'not-absolute', storage: COMPLETE.storage },
+      helper: 'throws:YAML_INVALID',
+      context: { kind: 'fail', code: 'YAML_INVALID' },
+      agree: true,
+    },
+    {
+      label: 'partial + malformed present value',
+      brain: { secrets_path: 'not-absolute' },
+      helper: 'incomplete',
+      context: { kind: 'fail', code: 'YAML_INVALID' },
+      agree: false,
+    },
+    {
+      label: 'partial + unknown field (the retired brain.binding)',
+      brain: { secrets_path: COMPLETE.secrets_path, binding: 'retired' },
+      helper: 'incomplete',
+      context: { kind: 'fail', code: 'UNKNOWN_FIELD' },
+      agree: false,
+    },
+  ] as const;
+
+  let divergent = 0;
+  for (const row of rows) {
+    const fx = buildSocialManagerContextFixture();
+    try {
+      const registryPath = join(fx.root, 'roster.yaml');
+      const registry = YAML.parse(readFileSync(registryPath, 'utf8')) as Record<string, unknown>;
+      if (row.brain === undefined) delete registry['brain'];
+      else registry['brain'] = row.brain;
+      writeFileSync(registryPath, YAML.stringify(registry));
+
+      if (row.helper.startsWith('throws:')) {
+        assert.equal(
+          failure(() => resolveBrainActivationConfig(fx.root, requirement)).code,
+          row.helper.slice('throws:'.length),
+          row.label,
+        );
+      } else {
+        assert.equal(
+          resolveBrainActivationConfig(fx.root, requirement).status,
+          row.helper,
+          row.label,
+        );
+      }
+
+      if (row.context.kind === 'ok') {
+        const result = resolveWorkspaceContext({ root: fx.root, ...DEFAULT_REQUEST });
+        assert.equal(result.workspace.brain_configured, row.brain !== undefined, row.label);
+        if (row.context.code !== null) {
+          assert.equal(
+            result.diagnostics.some((entry) => entry.code === row.context.code),
+            true,
+            row.label,
+          );
+        }
+      } else {
+        // The context path reports through the sanitized envelope, which is
+        // where the additive `brain_configuration` discriminator becomes the
+        // stable BRAIN_CONFIGURATION_INCOMPLETE code — and where its ABSENCE
+        // leaves the ordinary schema error visible.
+        const raised = failure(() => resolveWorkspaceContext({ root: fx.root, ...DEFAULT_REQUEST }));
+        assert.equal(sanitizeContextFailure(raised).code, row.context.code, row.label);
+      }
+
+      if (!row.agree) divergent += 1;
+    } finally {
+      fx.cleanup();
+    }
+  }
+  // Exactly two rows diverge, and both are refusals on BOTH sides — the
+  // divergence can never turn into a store contact.
+  assert.equal(divergent, 2);
 });
