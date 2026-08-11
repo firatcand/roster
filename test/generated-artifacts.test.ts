@@ -1512,6 +1512,209 @@ test('v2 update preserves a self-hashed noncanonical disabled-host shadow', () =
   }
 });
 
+// #365 characterization: the five canonical paths are governed by TWO sync
+// policies, not one. Mandatory-primary paths (ROSTER.md, .claude/CLAUDE.md,
+// AGENTS.md, .agents/skills/roster/SKILL.md) are always synchronized;
+// .claude/rules/roster.md is a conditional fallback that is synchronized only
+// when the Claude primary cannot be generated. Authored files conflict at
+// ROSTER.md and the Codex skill, and are preserved at both host primaries.
+// These pins hold the CURRENT matrix steady underneath the taxonomy split.
+
+function enableHosts(root: string, hosts: readonly ('claude' | 'codex')[]): void {
+  writeFileSync(at(root, 'roster.yaml'), [
+    'schema_version: 2',
+    'workspace_id: generated-test',
+    'tool_uses: []',
+    'functions: {}',
+    ...(hosts.length === 0 ? ['hosts: {}'] : ['hosts:', ...hosts.map((host) => `  ${host}: enabled`)]),
+    '',
+  ].join('\n'));
+}
+
+function rehashWithVersion(content: string, generatorVersion: string): string {
+  const parsed = parseGeneratedMarkdown(content);
+  assert.ok(parsed?.valid);
+  const { content_hash: _contentHash, ...header } = parsed.header;
+  const forged = renderGeneratedMarkdown(
+    { ...header, generator_version: generatorVersion },
+    parsed.body,
+    parsed.prefix,
+  );
+  assert.ok(parseGeneratedMarkdown(forged)?.valid);
+  return forged;
+}
+
+test('characterization: authored files conflict at ROSTER.md and the Codex skill', () => {
+  const fx = fixture();
+  try {
+    const authoredBootstrap = '# Authored workspace notes\n';
+    writeFileSync(at(fx.root, 'ROSTER.md'), authoredBootstrap);
+    const bootstrapUpdate = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(bootstrapUpdate.ok, false);
+    assert.equal(readFileSync(at(fx.root, 'ROSTER.md'), 'utf8'), authoredBootstrap);
+    assert.ok(bootstrapUpdate.diagnostics.some((diagnostic) =>
+      diagnostic.code === 'GENERATED_FILE_EDITED' && diagnostic.path === 'ROSTER.md'
+    ));
+
+    writeFileSync(at(fx.root, 'ROSTER.md'), renderRosterBootstrap());
+    enableHosts(fx.root, ['codex']);
+    mkdirSync(at(fx.root, '.agents/skills/roster'), { recursive: true });
+    const authoredSkill = '# Authored skill\n';
+    writeFileSync(at(fx.root, CODEX_ROSTER_SKILL_PATH), authoredSkill);
+    const skillUpdate = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(skillUpdate.ok, false);
+    assert.equal(readFileSync(at(fx.root, CODEX_ROSTER_SKILL_PATH), 'utf8'), authoredSkill);
+    const codexFiles = skillUpdate.results.find((result) => result.host === 'codex')?.files;
+    assert.equal(codexFiles?.find((file) => file.path === CODEX_ROSTER_SKILL_PATH)?.status, 'conflict');
+    assert.equal(codexFiles?.find((file) => file.path === CODEX_PROJECT_INSTRUCTIONS_PATH)?.status, 'created');
+    assert.ok(skillUpdate.diagnostics.some((diagnostic) =>
+      diagnostic.code === 'GENERATED_FILE_EDITED' && diagnostic.path === CODEX_ROSTER_SKILL_PATH
+    ));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('characterization: authored host primaries are preserved and their fallbacks engage', () => {
+  const fx = fixture();
+  try {
+    enableHosts(fx.root, ['claude', 'codex']);
+    mkdirSync(at(fx.root, '.claude'), { recursive: true });
+    const authoredClaude = '# My Claude policy\n';
+    const authoredCodex = '# Company Codex policy\n';
+    writeFileSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH), authoredClaude);
+    writeFileSync(at(fx.root, CODEX_PROJECT_INSTRUCTIONS_PATH), authoredCodex);
+
+    const updated = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(updated.ok, true);
+    assert.equal(readFileSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH), 'utf8'), authoredClaude);
+    assert.equal(readFileSync(at(fx.root, CODEX_PROJECT_INSTRUCTIONS_PATH), 'utf8'), authoredCodex);
+    const claudeFiles = updated.results.find((result) => result.host === 'claude')?.files;
+    assert.equal(
+      claudeFiles?.find((file) => file.path === CLAUDE_PROJECT_INSTRUCTIONS_PATH)?.status,
+      'preserved-authored',
+    );
+    assert.equal(claudeFiles?.find((file) => file.path === CLAUDE_PROJECT_RULE_PATH)?.status, 'created');
+    const codexFiles = updated.results.find((result) => result.host === 'codex')?.files;
+    assert.equal(
+      codexFiles?.find((file) => file.path === CODEX_PROJECT_INSTRUCTIONS_PATH)?.status,
+      'preserved-authored',
+    );
+    assert.equal(codexFiles?.find((file) => file.path === CODEX_ROSTER_SKILL_PATH)?.status, 'created');
+    assert.equal(updated.results.find((result) => result.host === 'codex')?.assurance, 'advisory-manual');
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('characterization: the Claude rule path is a conditional fallback, not a peer', () => {
+  const fx = fixture();
+  try {
+    enableHosts(fx.root, ['claude']);
+    assert.equal(updateV2ProjectActivations({ root: fx.root }).ok, true);
+    const rulePath = at(fx.root, CLAUDE_PROJECT_RULE_PATH);
+    const canonicalRule = renderClaudeProjectInstructions(
+      'claude-project-rule',
+      resolveActivationAssurance({ host: 'claude', artifact: 'claude-project-rule' }),
+    );
+    mkdirSync(at(fx.root, '.claude/rules'), { recursive: true });
+
+    writeFileSync(rulePath, canonicalRule);
+    const redundant = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(redundant.ok, true);
+    assert.equal(existsSync(rulePath), false);
+    assert.equal(redundant.results[0]?.files.some((file) =>
+      file.path === CLAUDE_PROJECT_RULE_PATH && file.status === 'removed'
+    ), true);
+
+    const staleRule = rehashWithVersion(canonicalRule, '0.0.0-prior');
+    writeFileSync(rulePath, staleRule);
+    const stale = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(stale.ok, false);
+    assert.equal(readFileSync(rulePath, 'utf8'), staleRule);
+    assert.ok(stale.diagnostics.some((diagnostic) =>
+      diagnostic.code === 'GENERATED_FILE_EDITED' &&
+      diagnostic.path === CLAUDE_PROJECT_RULE_PATH &&
+      /Redundant Claude fallback/.test(diagnostic.message)
+    ));
+
+    const editedRule = `${canonicalRule}edited\n`;
+    writeFileSync(rulePath, editedRule);
+    const edited = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(edited.ok, false);
+    assert.equal(readFileSync(rulePath, 'utf8'), editedRule);
+    assert.ok(edited.diagnostics.some((diagnostic) =>
+      diagnostic.code === 'GENERATED_FILE_EDITED' && diagnostic.path === CLAUDE_PROJECT_RULE_PATH
+    ));
+
+    const authoredRule = '# My own Claude rule\n';
+    writeFileSync(rulePath, authoredRule);
+    const authored = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(authored.ok, true);
+    assert.equal(readFileSync(rulePath, 'utf8'), authoredRule);
+    assert.equal(authored.diagnostics.some((diagnostic) =>
+      diagnostic.path === CLAUDE_PROJECT_RULE_PATH
+    ), false);
+
+    unlinkSync(rulePath);
+    unlinkSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH));
+    writeFileSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH), '# My Claude policy\n');
+    const fallback = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(fallback.ok, true);
+    assert.equal(fallback.results[0]?.files.find((file) =>
+      file.path === CLAUDE_PROJECT_RULE_PATH
+    )?.status, 'created');
+    assert.ok(parseGeneratedMarkdown(readFileSync(rulePath, 'utf8'))?.valid);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('characterization: stale mandatory primaries are replaced and hash-broken edits refused', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'codex' }).ok, true);
+    const primaries = [
+      'ROSTER.md',
+      CLAUDE_PROJECT_INSTRUCTIONS_PATH,
+      CODEX_PROJECT_INSTRUCTIONS_PATH,
+      CODEX_ROSTER_SKILL_PATH,
+    ] as const;
+    const canonical = new Map(primaries.map((path) => [path, readFileSync(at(fx.root, path), 'utf8')]));
+    for (const path of primaries) {
+      writeFileSync(at(fx.root, path), rehashWithVersion(canonical.get(path)!, '0.0.0-prior'));
+    }
+
+    const replaced = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(replaced.ok, true);
+    for (const path of primaries) {
+      assert.equal(readFileSync(at(fx.root, path), 'utf8'), canonical.get(path));
+    }
+    const replacedStatuses = replaced.results.flatMap((result) => result.files);
+    for (const path of primaries.filter((candidate) => candidate !== 'ROSTER.md')) {
+      assert.equal(replacedStatuses.find((file) => file.path === path)?.status, 'updated');
+    }
+    const idempotent = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(idempotent.ok, true);
+    assert.ok(idempotent.results.flatMap((result) => result.files)
+      .every((file) => file.status === 'unchanged'));
+
+    const edits = new Map(primaries.map((path) => [path, `${canonical.get(path)!}edited\n`]));
+    for (const path of primaries) writeFileSync(at(fx.root, path), edits.get(path)!);
+    const refused = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(refused.ok, false);
+    for (const path of primaries) {
+      assert.equal(readFileSync(at(fx.root, path), 'utf8'), edits.get(path));
+      assert.ok(refused.diagnostics.some((diagnostic) =>
+        diagnostic.code === 'GENERATED_FILE_EDITED' && diagnostic.path === path
+      ));
+    }
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test('v2 update reconstructs a missing manifest only from valid generated headers', () => {
   const fx = fixture();
   try {
