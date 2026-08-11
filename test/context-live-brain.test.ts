@@ -90,6 +90,7 @@ function contextJson(result: CliResult): Record<string, unknown> {
 
 type LiveWorkspace = Readonly<{
   root: string;
+  workspaceId: string;
   corpus: RetrievalCorpus;
   brainUrl: string;
   cleanup: () => Promise<void>;
@@ -114,6 +115,7 @@ async function liveWorkspace(): Promise<LiveWorkspace> {
   });
   return Object.freeze({
     root: fixture.root,
+    workspaceId: registry.workspace_id,
     corpus,
     brainUrl: runtimeUrlFor(corpus),
     cleanup: async () => {
@@ -123,9 +125,16 @@ async function liveWorkspace(): Promise<LiveWorkspace> {
   });
 }
 
-function planScopeLabels(): readonly { workspace: string; function: string; agent: string; plan: string }[] {
+// The workspace value is DERIVED from the same parsed registry the authority
+// was derived from, never restated. A label carrying a hardcoded workspace
+// would still satisfy the eligible-label allowlist even if the registry and the
+// authority had drifted apart, which is precisely the join this file exists to
+// prove.
+function planScopeLabels(
+  live: LiveWorkspace,
+): readonly { workspace: string; function: string; agent: string; plan: string }[] {
   return [{
-    workspace: 'social-manager-context',
+    workspace: live.workspaceId,
     function: 'gtm',
     agent: 'social-manager',
     plan: 'opportunity-discovery',
@@ -139,12 +148,12 @@ async function seedEligible(live: LiveWorkspace): Promise<{ sourceVersionId: str
     // and its authored description is what the membership predicate is built
     // from. This body has to satisfy that predicate through the real catalog.
     body: `${REQUIRED_SELECTOR_PHRASE} ${EVIDENCE_TEXT}`,
-    labels: [...planScopeLabels()],
+    labels: [...planScopeLabels(live)],
   });
   await ingestCorpusSource(live.corpus, {
     stableKey: 'live-company-positioning',
     body: `Current company positioning and target audience for reliable operations. ${EVIDENCE_TEXT}`,
-    labels: [...planScopeLabels()],
+    labels: [...planScopeLabels(live)],
   });
   return { sourceVersionId: required.sourceVersionId, sourceId: required.sourceId };
 }
@@ -215,7 +224,7 @@ test('live retrieval accounts every pre-candidate exclusion exactly', options, a
     const tombstoned = await ingestCorpusSource(live.corpus, {
       stableKey: 'live-tombstoned',
       body: `${REQUIRED_SELECTOR_PHRASE} Later withdrawn. ${EVIDENCE_TEXT}`,
-      labels: [...planScopeLabels()],
+      labels: [...planScopeLabels(live)],
     });
     const { tombstoneBrainSource } = await import('../src/lib/brain/source-lifecycle.ts');
     await tombstoneBrainSource(live.corpus.adminPool, {
@@ -229,18 +238,18 @@ test('live retrieval accounts every pre-candidate exclusion exactly', options, a
     const superseded = await ingestCorpusSource(live.corpus, {
       stableKey: 'live-superseded',
       body: `${REQUIRED_SELECTOR_PHRASE} First revision. ${EVIDENCE_TEXT}`,
-      labels: [...planScopeLabels()],
+      labels: [...planScopeLabels(live)],
     });
     await ingestCorpusSource(live.corpus, {
       stableKey: 'live-superseded',
       body: `${REQUIRED_SELECTOR_PHRASE} Second revision. ${EVIDENCE_TEXT}`,
-      labels: [...planScopeLabels()],
+      labels: [...planScopeLabels(live)],
     });
 
     const secret = await ingestCorpusSource(live.corpus, {
       stableKey: 'live-secret',
       body: `${REQUIRED_SELECTOR_PHRASE} Held at secret privacy. ${EVIDENCE_TEXT}`,
-      labels: [...planScopeLabels()],
+      labels: [...planScopeLabels(live)],
       privacy: 'secret',
     });
 
@@ -289,7 +298,7 @@ test('legacy-unverified evidence returns only under the opt-in and never gains a
     const legacy = await ingestCorpusSource(live.corpus, {
       stableKey: 'live-legacy',
       body: `${REQUIRED_SELECTOR_PHRASE} Imported from a legacy archive. ${EVIDENCE_TEXT}`,
-      labels: [...planScopeLabels()],
+      labels: [...planScopeLabels(live)],
       trust: 'legacy-unverified',
     });
 

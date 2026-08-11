@@ -22,6 +22,7 @@ import {
   validateWorkspace,
 } from '../src/lib/workspace-registry.ts';
 import { isWorkspaceFailure } from '../src/lib/workspace-diagnostics.ts';
+import { resolveWorkspaceContext } from '../src/lib/workspace-context.ts';
 import { realWorkspaceDurabilityFs, replaceWorkspaceFile } from '../src/lib/workspace-io.ts';
 import {
   buildVendorSkillMap,
@@ -945,6 +946,23 @@ test('a duplicate lesson identity is refused before any workspace output exists'
       const validation = validateWorkspace(fx.root, {});
       assert.equal(validation.ok, false);
       assert.equal(validation.diagnostics.some((diagnostic) => diagnostic.code === entry.code), true);
+
+      // Context is the surface that would otherwise have to RESOLVE the
+      // ambiguity, so it is the one that most needs to refuse. It does, before
+      // any bundle exists — no partial context is ever emitted for a workspace
+      // whose lesson identities do not resolve uniquely.
+      assert.equal(
+        failureCode(() => resolveWorkspaceContext({
+          root: fx.root,
+          target: 'gtm/social-manager',
+          query: 'Confirm the duplicate identity refusal reaches context.',
+          stepHint: null,
+          budgetTokens: 12_000,
+          explain: false,
+          includeLegacyUnverified: false,
+        })),
+        entry.code,
+      );
     } finally {
       fx.cleanup();
     }

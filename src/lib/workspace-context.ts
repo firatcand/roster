@@ -2103,10 +2103,14 @@ type LessonExclusion =
 function lessonDiagnostic(exclusion: LessonExclusion): WorkspaceDiagnostic {
   return workspaceDiagnostic(
     'CONTEXT_LESSON_EXCLUDED',
-    'An applicable-scope lesson was excluded from the optional bundle.',
+    exclusion.reason === 'scope-ineligible'
+      ? 'A lesson scoped to a plan outside the resolved closure was excluded.'
+      : 'A body-identical duplicate lesson was excluded from the optional bundle.',
     {
       severity: 'info',
-      remedy: 'Inspect the closed lesson exclusion reason and repair the authored playbook if needed.',
+      remedy: exclusion.reason === 'scope-ineligible'
+        ? 'Select the owning plan, or rescope the lesson, if it should apply here.'
+        : 'Retire the redundant lesson, or differentiate its guidance, at the authored source.',
       details: exclusion.reason === 'scope-ineligible'
         ? { lesson_id: exclusion.qualifiedId, reason: exclusion.reason, plan: exclusion.plan }
         : {

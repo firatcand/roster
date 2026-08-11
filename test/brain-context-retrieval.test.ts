@@ -1887,6 +1887,14 @@ test('embedding parity — the adapter arm agrees with the TypeScript oracle', o
 // truncated, blind to structured-only matches, and over-approximated by folding
 // the request text into membership. The replacement mirrors the arms' own
 // per-selector / per-jsonpath membership under a deduplicating UNION.
+//
+// Each subtest below is built to FAIL against the old bounded form. That takes
+// care, because two obvious constructions do not discriminate at all:
+//   * a "structured-only" row whose structured identity IS a selector id also
+//     matches LEXICALLY, because the structured renderer writes that identity
+//     into the chunk text and lexical membership includes the selector id;
+//   * a matching selector at the HEAD of a 4,096-entry catalog survives the old
+//     global rebounding, because `boundedText` halves by taking a PREFIX.
 test('acceptance 9 — pre-filter accounting is exact, deduplicated, and selector-complete', options, async (t) => {
   const corpus = await createRetrievalCorpus();
   try {
@@ -1897,24 +1905,33 @@ test('acceptance 9 — pre-filter accounting is exact, deduplicated, and selecto
       plan: TARGET.planId,
     }] as const;
 
-    // (a) A tombstoned source matching ONLY the structured predicate. The old
-    // lexical-only membership could not see it at all.
+    const tombstone = async (sourceId: string, key: string): Promise<void> => {
+      await tombstoneBrainSource(corpus.adminPool, {
+        sourceId,
+        requestKey: key,
+        actor: { actorId: 'retrieval-corpus', assurance: 'host-attested', host: 'codex', sessionId: 'x' },
+        reason: 'fixture tombstone',
+        provenance: { fixture: 'brain-context-retrieval' },
+      });
+    };
+
+    // (a) A GENUINELY structured-only row. `the` is an English stop word, so
+    // `websearch_to_tsquery('english', 'the')` is the EMPTY query and matches
+    // no row whatsoever — the selector's lexical membership is therefore
+    // provably incapable of reaching this source, and only the structured
+    // jsonpath `$.identity ? (@ == "the")` can. Its prose is nonsense words so
+    // no OTHER selector's membership (nor the old form's folded-in request
+    // text) can reach it either.
     const structuredOnly = await ingestCorpusSource(corpus, {
       stableKey: 'accounting-structured-only',
-      body: structuredRecordBody('fact', { note: 'zzqqxx unrelated prose' }, 'strong-examples'),
+      body: structuredRecordBody('fact', { note: 'zzqqxx yyppww vvnnmm' }, 'the'),
       labels: [...inScope],
       structured: true,
     });
-    await tombstoneBrainSource(corpus.adminPool, {
-      sourceId: structuredOnly.sourceId,
-      requestKey: 'tombstone-structured-only',
-      actor: { actorId: 'retrieval-corpus', assurance: 'host-attested', host: 'codex', sessionId: 'x' },
-      reason: 'fixture tombstone',
-      provenance: { fixture: 'brain-context-retrieval' },
-    });
+    await tombstone(structuredOnly.sourceId, 'tombstone-structured-only');
 
-    // (b) A tombstoned source matching BOTH arms: its structured `identity`
-    // equals a selector AND its prose carries that selector's membership words.
+    // (b) A row matching BOTH arms: its structured `identity` equals a selector
+    // AND its prose carries that selector's membership words.
     const bothArms = await ingestCorpusSource(corpus, {
       stableKey: 'accounting-both-arms',
       body: structuredRecordBody(
@@ -1925,23 +1942,65 @@ test('acceptance 9 — pre-filter accounting is exact, deduplicated, and selecto
       labels: [...inScope],
       structured: true,
     });
-    await tombstoneBrainSource(corpus.adminPool, {
-      sourceId: bothArms.sourceId,
-      requestKey: 'tombstone-both-arms',
-      actor: { actorId: 'retrieval-corpus', assurance: 'host-attested', host: 'codex', sessionId: 'x' },
-      reason: 'fixture tombstone',
-      provenance: { fixture: 'brain-context-retrieval' },
+    await tombstone(bothArms.sourceId, 'tombstone-both-arms');
+
+    // (c) A LEXICAL-ONLY row for the tail-selector test: plain inline text, so
+    // it has no structured extraction at all and the structured branch cannot
+    // mask a lost lexical selector. `zzqtail` appears nowhere else.
+    const tailOnly = await ingestCorpusSource(corpus, {
+      stableKey: 'accounting-tail-only',
+      body: 'zzqtail marker prose, deliberately unrelated to every other fixture selector.',
+      labels: [...inScope],
+    });
+    await tombstone(tailOnly.sourceId, 'tombstone-tail-only');
+
+    const STOP_WORD_SELECTOR = {
+      selector: 'the',
+      origins: ['plan-selector'] as const,
+      required: false,
+      descriptions: [] as readonly string[],
+    };
+    const TAIL_SELECTOR = {
+      selector: 'tail-selector',
+      origins: ['plan-selector'] as const,
+      required: false,
+      descriptions: ['zzqtail'] as readonly string[],
+    };
+
+    await t.test('a stop-word selector proves lexical membership cannot reach the structured row', async () => {
+      // The discriminator itself, asserted rather than assumed: the empty
+      // tsquery matches nothing, so any count attributable to `the` came from
+      // the STRUCTURED branch alone.
+      const probe = await corpus.adminPool.query<{ empty: boolean; reachable: string }>(
+        `SELECT websearch_to_tsquery('english', 'the') = ''::tsquery AS empty,
+                (SELECT count(*)::text FROM brain.source_chunks
+                  WHERE tsv @@ websearch_to_tsquery('english', 'the')) AS reachable`,
+      );
+      assert.equal(probe.rows[0]!.empty, true);
+      assert.equal(probe.rows[0]!.reachable, '0');
     });
 
-    const tombstonedChunks = structuredOnly.chunkIds.length + bothArms.chunkIds.length;
-
     await t.test('a structured-only match is counted and a both-arms match counts exactly once', async () => {
-      const evidence = await retrieveBrainContextEvidence(request(corpus), { env: env(corpus) });
-      assert.equal(evidence.status, 'available');
-      // EXACT, not `> 0`: the both-arms row is reachable through the lexical
+      // Baseline: the two authored selectors alone reach ONLY the both-arms
+      // row. EXACT, not `> 0` — that row is reachable through the lexical
       // membership AND through two structured jsonpaths, so a UNION ALL (or a
       // per-arm sum) would report it two or three times over.
-      assert.equal(evidence.report.filtered.tombstoned, tombstonedChunks);
+      const baseline = await retrieveBrainContextEvidence(request(corpus), { env: env(corpus) });
+      assert.equal(baseline.status, 'available');
+      assert.equal(baseline.report.filtered.tombstoned, bothArms.chunkIds.length);
+
+      // Adding the stop-word selector adds EXACTLY the structured-only row.
+      // Under any lexical-only membership this delta is zero.
+      const widened = await retrieveBrainContextEvidence(
+        request(corpus, {
+          selectors: [...request(corpus).selectors, STOP_WORD_SELECTOR],
+        }),
+        { env: env(corpus) },
+      );
+      assert.equal(
+        widened.report.filtered.tombstoned,
+        bothArms.chunkIds.length + structuredOnly.chunkIds.length,
+      );
     });
 
     await t.test('the union deduplicates across selectors as well as across arms', async () => {
@@ -1966,28 +2025,46 @@ test('acceptance 9 — pre-filter accounting is exact, deduplicated, and selecto
         }),
         { env: env(corpus) },
       );
-      assert.equal(evidence.report.filtered.tombstoned, tombstonedChunks);
+      assert.equal(evidence.report.filtered.tombstoned, bothArms.chunkIds.length);
     });
 
-    await t.test('a MAX_CONTEXT_SELECTORS catalog still counts exactly', async () => {
-      // The per-selector `unnest` formulation must lose no selector. A single
-      // globally joined membership string would silently drop selectors here:
-      // `boundedText` HALVES any string over MAX_QUERY_TEXT_BYTES, and 4,096
-      // selector ids are far past that bound.
-      const selectors = Array.from({ length: MAX_CONTEXT_SELECTORS }, (_unused, index) => ({
-        selector: index === 0 ? 'strong-examples' : `filler-selector-${index}`,
-        origins: ['plan-selector'] as const,
-        required: index === 0,
-        descriptions: index === 0
-          ? ['Successful replies and strong examples in one record.']
-          : [],
-      }));
+    await t.test('a MAX_CONTEXT_SELECTORS catalog loses no selector, including the last', async () => {
+      // The per-selector `unnest` formulation must lose no selector. The single
+      // globally joined membership string of the old form silently drops them:
+      // `boundedText` HALVES any string over MAX_QUERY_TEXT_BYTES by taking a
+      // PREFIX, and 4,096 selector ids are far past that bound.
+      //
+      // So the discriminating selector sits at the very END of the catalog,
+      // where a prefix-preserving rebound cannot retain it, and the row it
+      // reaches is LEXICAL-ONLY so the structured branch cannot cover for it.
+      const selectors = Array.from({ length: MAX_CONTEXT_SELECTORS }, (_unused, index) => {
+        if (index === 0) {
+          return {
+            selector: 'strong-examples',
+            origins: ['plan-selector'] as const,
+            required: true,
+            descriptions: ['Successful replies and strong examples in one record.'],
+          };
+        }
+        if (index === MAX_CONTEXT_SELECTORS - 1) return TAIL_SELECTOR;
+        return {
+          selector: `filler-selector-${index}`,
+          origins: ['plan-selector'] as const,
+          required: false,
+          descriptions: [] as readonly string[],
+        };
+      });
+      assert.equal(selectors.at(-1)!.selector, TAIL_SELECTOR.selector);
+
       const evidence = await retrieveBrainContextEvidence(
         request(corpus, { selectors }),
         { env: env(corpus) },
       );
       assert.equal(evidence.status, 'available');
-      assert.equal(evidence.report.filtered.tombstoned, tombstonedChunks);
+      assert.equal(
+        evidence.report.filtered.tombstoned,
+        bothArms.chunkIds.length + tailOnly.chunkIds.length,
+      );
     });
   } finally {
     await corpus.close();

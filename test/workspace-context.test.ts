@@ -3268,6 +3268,44 @@ test('body-identical lessons deduplicate and name the comparator that actually d
       JSON.stringify(assemble(fx.root)),
       JSON.stringify(result),
     );
+
+    // Disjointness under REAL budget pressure, not merely under a budget
+    // generous enough that nothing competes. Squeeze the budget until some
+    // SURVIVORS are dropped: the two counters must still partition cleanly —
+    // every excluded duplicate stays in `lessons_duplicate` and none of them
+    // leaks into `lessons_budget_exhausted`, because a duplicate is removed
+    // before the admission loop ever sees it.
+    // The generous run admitted every survivor (asserted above:
+    // `lessons_budget_exhausted === 0`), so its admitted count IS the survivor
+    // set the tighter runs must partition.
+    assert.equal(result.budget.lessons_budget_exhausted, 0);
+    const survivors = result.lessons.length;
+    let squeezedCounted = 0;
+    for (let drop = 1; drop <= result.lessons.length; drop += 1) {
+      const tight = fixedMandatoryBudget(fx.root) + drop * 4;
+      const squeezed = assemble(fx.root, { ...DEFAULT_REQUEST, budgetTokens: tight });
+      assert.equal(squeezed.budget.lessons_duplicate, 3, `drop ${drop}`);
+      assert.equal(squeezed.budget.lessons_scope_ineligible, 1, `drop ${drop}`);
+      // The partition: admitted + budget-exhausted accounts for exactly the
+      // survivors, never survivors + duplicates.
+      assert.equal(
+        squeezed.lessons.length + squeezed.budget.lessons_budget_exhausted,
+        survivors,
+        `drop ${drop}`,
+      );
+      // No duplicate is ever admitted, however tight the budget gets.
+      for (const admittedId of squeezed.lessons.map((entry) => entry.content.id)) {
+        assert.equal(
+          ['dup-rank-agent', 'dup-overlap-weak', 'dup-lex-b'].includes(admittedId),
+          false,
+          `drop ${drop}`,
+        );
+      }
+      if (squeezed.budget.lessons_budget_exhausted > 0) squeezedCounted += 1;
+    }
+    // The loop actually exercised budget exhaustion rather than passing
+    // vacuously on a budget that fit everything.
+    assert.equal(squeezedCounted > 0, true);
   } finally {
     fx.cleanup();
   }
