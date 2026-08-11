@@ -13,14 +13,21 @@ test('accepted search result has no array, lexical, or Brain-suffix shortcut', (
   const corpus = readJson('common/fake-search-results.json') as {
     results: Array<{ result_id: string }>;
   };
-  const oracle = readJson('../host-led-learning-oracle/expected-semantic-result.json') as {
-    turns: { discover: { selected_results: Array<{ result_id: string }> } };
-  };
+  const oracle = readJson('../host-led-learning-oracle/expected-semantic-result.json') as Record<
+    string,
+    { turns: Record<string, { selected_results?: Array<{ result_id: string }> }> }
+  >;
   const brain = readJson('common/brain-evidence.json') as {
     candidates: Array<{ candidate_id: string }>;
   };
-  const selectedIds = oracle.turns.discover.selected_results.map((entry) => entry.result_id);
-  assert.deepEqual(selectedIds, ['result-c77f']);
+  // Every scenario's shortlist-bearing turn must select the same result: the
+  // recovery path changes when the work is recorded, never what was chosen.
+  const shortlists = [
+    oracle['standard']!.turns['discover']!.selected_results,
+    oracle['recovery']!.turns['record-only']!.selected_results,
+  ];
+  for (const shortlist of shortlists) assert.deepEqual(shortlist?.map((entry) => entry.result_id), ['result-c77f']);
+  const selectedIds = shortlists[0]!.map((entry) => entry.result_id);
 
   const selectedId = selectedIds[0]!;
   const corpusIds = corpus.results.map((entry) => entry.result_id);

@@ -1,83 +1,321 @@
 {
   "schema_version": 1,
-  "fixture_id": "host-led-learning",
-  "derived_query_code": "reliable-ai-content-operations-practitioner",
-  "candidate_semantics": {
-    "recommendation_code": "prefer-attributable-practitioner-operational-problems",
-    "falsifier_code": "reject-if-reviewed-outcomes-contradict"
-  },
-  "turns": {
-    "discover": {
-      "schema_version": 1,
-      "phase": "awaiting_human",
-      "target": {
-        "qualified_id": "gtm/social-manager",
-        "record_hash": "sha256:827de136facce1cd49417068c9be7d6b9689db055ed6c3bd9bf0a46db22426c1"
-      },
-      "plan": {
-        "qualified_id": "gtm/social-manager#opportunity-discovery",
-        "definition_hashes": [
-          "sha256:2c28df816ef8f4006fa478dd8d13442fddc697a29bd1aa0ef508357f73dda25d",
-          "sha256:7055ab0e8302c40f0556908c9107fb78ceaf3bff652110a6c670e6ce6501704d",
-          "sha256:704d78bc2abf2666be228c3dcdc45a0ce21f4b8125ef33c2294513678b4e80ed",
-          "sha256:a8549d1011dccae005b0bcba9a9044e4e78139a06b7473d73b1c4ff86a583494"
+  "standard": {
+    "schema_version": 1,
+    "fixture_id": "host-led-learning",
+    "scenario": "standard",
+    "derived_query_code": "reliable-ai-content-operations-practitioner",
+    "candidate_semantics": {
+      "recommendation_code": "prefer-attributable-practitioner-operational-problems",
+      "falsifier_code": "reject-if-reviewed-outcomes-contradict"
+    },
+    "turns": {
+      "discover": {
+        "schema_version": 1,
+        "phase": "awaiting_human",
+        "target": {
+          "qualified_id": "gtm/social-manager",
+          "record_hash": "sha256:827de136facce1cd49417068c9be7d6b9689db055ed6c3bd9bf0a46db22426c1"
+        },
+        "plan": {
+          "qualified_id": "gtm/social-manager#opportunity-discovery",
+          "definition_hashes": [
+            "sha256:2c28df816ef8f4006fa478dd8d13442fddc697a29bd1aa0ef508357f73dda25d",
+            "sha256:7055ab0e8302c40f0556908c9107fb78ceaf3bff652110a6c670e6ce6501704d",
+            "sha256:704d78bc2abf2666be228c3dcdc45a0ce21f4b8125ef33c2294513678b4e80ed",
+            "sha256:a8549d1011dccae005b0bcba9a9044e4e78139a06b7473d73b1c4ff86a583494"
+          ],
+          "interpreted_step_ids": [
+            "gtm/social-manager#opportunity-discovery:prepare",
+            "gtm/social-manager#opportunity-discovery:scan-linkedin",
+            "gtm/social-manager#opportunity-discovery:scan-web",
+            "gtm/social-manager#opportunity-discovery:search",
+            "gtm/social-manager#opportunity-discovery:return",
+            "gtm/social-manager#scan-linkedin:score",
+            "gtm/social-manager#scan-web:score",
+            "gtm/social-manager#score-opportunities:transition"
+          ]
+        },
+        "tool_use": {
+          "qualified_id": "gtm/social-manager#opportunity-discovery/tools/social-search",
+          "semantic_hash": "sha256:5747c209b45552021aabc4d88dc8e624deb283af125a3ae2a66174329e673a9b"
+        },
+        "selected_results": [
+          {
+            "result_id": "result-c77f",
+            "canonical_url": "https://social.example.test/posts/reliable-ai-content-review",
+            "relevance_code": "attributable-practitioner-problem"
+          }
         ],
-        "interpreted_step_ids": [
-          "gtm/social-manager#opportunity-discovery:prepare",
-          "gtm/social-manager#opportunity-discovery:scan-linkedin",
-          "gtm/social-manager#opportunity-discovery:scan-web",
-          "gtm/social-manager#opportunity-discovery:search",
-          "gtm/social-manager#opportunity-discovery:return",
-          "gtm/social-manager#scan-linkedin:score",
-          "gtm/social-manager#scan-web:score",
-          "gtm/social-manager#score-opportunities:transition"
-        ]
-      },
-      "tool_use": {
-        "qualified_id": "gtm/social-manager#opportunity-discovery/tools/social-search",
-        "semantic_hash": "sha256:5747c209b45552021aabc4d88dc8e624deb283af125a3ae2a66174329e673a9b"
-      },
-      "selected_results": [
-        {
-          "result_id": "result-c77f",
-          "canonical_url": "https://social.example.test/posts/reliable-ai-content-review",
-          "relevance_code": "attributable-practitioner-problem"
-        }
-      ],
-      "rejected_results": [
-        {
-          "result_id": "result-b62c",
-          "policy_code": "profile-or-homepage"
+        "rejected_results": [
+          {
+            "result_id": "result-b62c",
+            "policy_code": "profile-or-homepage"
+          },
+          {
+            "result_id": "result-c04d",
+            "policy_code": "cryptocurrency"
+          },
+          {
+            "result_id": "result-d91e",
+            "policy_code": "previously-used"
+          },
+          {
+            "result_id": "result-e38a",
+            "policy_code": "untrusted-instruction"
+          }
+        ],
+        "brain_citation_ids": [
+          "brain-record-a17f",
+          "brain-record-b62c",
+          "brain-record-d91e"
+        ],
+        "context_diagnostics": [
+          {
+            "reason": "low-trust",
+            "count": 1
+          }
+        ],
+        "evidence": {
+          "run_id": "run-opportunity-discovery-001",
+          "feedback_id": "feedback-opportunity-discovery-001"
         },
-        {
-          "result_id": "result-c04d",
-          "policy_code": "cryptocurrency"
+        "learning": {
+          "watermark": "sha256:4f9398682c2bfd9afff34219b909c637d7a0024e8c80e190d2ba5e2bace6041b",
+          "candidate": {
+            "candidate_id": "candidate-opportunity-discovery-001",
+            "lesson_id": "prefer-practitioner-operational-reject-contradict",
+            "meaning": {
+              "disposition": "prefer",
+              "source_kind": "attributable-practitioner",
+              "topic_kind": "operational-problem",
+              "falsifier_action": "reject",
+              "falsifier_observation": "reviewed-outcomes-contradict"
+            },
+            "recommendation": "Prefer attributable practitioner sources that describe concrete operational problems.",
+            "falsifiable_by": "Reject this recommendation if reviewed outcomes contradict it.",
+            "candidate_content_hash": "sha256:c8ca1ec94de21e55839d269bb42fef06bda91e063948fd78ae748c4ae449464d",
+            "citation_ids": [
+              "feedback-opportunity-discovery-001",
+              "run-opportunity-discovery-001"
+            ]
+          },
+          "baseline_lesson_ids": [
+            "general-prior",
+            "nested-prior",
+            "root-prior"
+          ]
         },
-        {
-          "result_id": "result-d91e",
-          "policy_code": "previously-used"
-        },
-        {
-          "result_id": "result-e38a",
-          "policy_code": "untrusted-instruction"
-        }
-      ],
-      "brain_citation_ids": [
-        "brain-record-a17f",
-        "brain-record-b62c",
-        "brain-record-d91e"
-      ],
-      "context_diagnostics": [
-        {
-          "reason": "low-trust",
-          "count": 1
-        }
-      ],
-      "evidence": {
-        "run_id": "run-opportunity-discovery-001",
-        "feedback_id": "feedback-opportunity-discovery-001"
+        "external_write_performed": false
       },
-      "learning": {
+      "approve": {
+        "schema_version": 1,
+        "phase": "promoted",
+        "target": {
+          "qualified_id": "gtm/social-manager",
+          "record_hash": "sha256:cff6c8053197b910e357601d45750417cf3729e93c48e8d19b1115e9195dd736"
+        },
+        "plan": {
+          "qualified_id": "gtm/social-manager#opportunity-discovery",
+          "definition_hashes": [
+            "sha256:2c28df816ef8f4006fa478dd8d13442fddc697a29bd1aa0ef508357f73dda25d",
+            "sha256:7055ab0e8302c40f0556908c9107fb78ceaf3bff652110a6c670e6ce6501704d",
+            "sha256:704d78bc2abf2666be228c3dcdc45a0ce21f4b8125ef33c2294513678b4e80ed",
+            "sha256:a8549d1011dccae005b0bcba9a9044e4e78139a06b7473d73b1c4ff86a583494"
+          ],
+          "interpreted_step_ids": [
+            "gtm/social-manager#opportunity-discovery:prepare",
+            "gtm/social-manager#opportunity-discovery:scan-linkedin",
+            "gtm/social-manager#opportunity-discovery:scan-web",
+            "gtm/social-manager#opportunity-discovery:search",
+            "gtm/social-manager#opportunity-discovery:return",
+            "gtm/social-manager#scan-linkedin:score",
+            "gtm/social-manager#scan-web:score",
+            "gtm/social-manager#score-opportunities:transition"
+          ]
+        },
+        "tool_use": {
+          "qualified_id": "gtm/social-manager#opportunity-discovery/tools/social-search",
+          "semantic_hash": "sha256:5747c209b45552021aabc4d88dc8e624deb283af125a3ae2a66174329e673a9b"
+        },
+        "evidence": {
+          "run_id": "run-opportunity-discovery-001",
+          "feedback_id": "feedback-opportunity-discovery-001"
+        },
+        "learning": {
+          "watermark": "sha256:4f9398682c2bfd9afff34219b909c637d7a0024e8c80e190d2ba5e2bace6041b",
+          "candidate": {
+            "candidate_id": "candidate-opportunity-discovery-001",
+            "lesson_id": "prefer-practitioner-operational-reject-contradict",
+            "meaning": {
+              "disposition": "prefer",
+              "source_kind": "attributable-practitioner",
+              "topic_kind": "operational-problem",
+              "falsifier_action": "reject",
+              "falsifier_observation": "reviewed-outcomes-contradict"
+            },
+            "recommendation": "Prefer attributable practitioner sources that describe concrete operational problems.",
+            "falsifiable_by": "Reject this recommendation if reviewed outcomes contradict it.",
+            "candidate_content_hash": "sha256:c8ca1ec94de21e55839d269bb42fef06bda91e063948fd78ae748c4ae449464d",
+            "citation_ids": [
+              "feedback-opportunity-discovery-001",
+              "run-opportunity-discovery-001"
+            ]
+          },
+          "promoted_lesson_ids": [
+            "general-prior",
+            "nested-prior",
+            "prefer-practitioner-operational-reject-contradict",
+            "root-prior"
+          ]
+        },
+        "external_write_performed": false
+      }
+    }
+  },
+  "recovery": {
+    "schema_version": 1,
+    "fixture_id": "host-led-learning",
+    "scenario": "recovery",
+    "derived_query_code": "reliable-ai-content-operations-practitioner",
+    "candidate_semantics": {
+      "recommendation_code": "prefer-attributable-practitioner-operational-problems",
+      "falsifier_code": "reject-if-reviewed-outcomes-contradict"
+    },
+    "turns": {
+      "record-only": {
+        "schema_version": 1,
+        "phase": "recorded",
+        "target": {
+          "qualified_id": "gtm/social-manager",
+          "record_hash": "sha256:827de136facce1cd49417068c9be7d6b9689db055ed6c3bd9bf0a46db22426c1"
+        },
+        "plan": {
+          "qualified_id": "gtm/social-manager#opportunity-discovery",
+          "definition_hashes": [
+            "sha256:2c28df816ef8f4006fa478dd8d13442fddc697a29bd1aa0ef508357f73dda25d",
+            "sha256:7055ab0e8302c40f0556908c9107fb78ceaf3bff652110a6c670e6ce6501704d",
+            "sha256:704d78bc2abf2666be228c3dcdc45a0ce21f4b8125ef33c2294513678b4e80ed",
+            "sha256:a8549d1011dccae005b0bcba9a9044e4e78139a06b7473d73b1c4ff86a583494"
+          ],
+          "interpreted_step_ids": [
+            "gtm/social-manager#opportunity-discovery:prepare",
+            "gtm/social-manager#opportunity-discovery:scan-linkedin",
+            "gtm/social-manager#opportunity-discovery:scan-web",
+            "gtm/social-manager#opportunity-discovery:search",
+            "gtm/social-manager#opportunity-discovery:return",
+            "gtm/social-manager#scan-linkedin:score",
+            "gtm/social-manager#scan-web:score",
+            "gtm/social-manager#score-opportunities:transition"
+          ]
+        },
+        "tool_use": {
+          "qualified_id": "gtm/social-manager#opportunity-discovery/tools/social-search",
+          "semantic_hash": "sha256:5747c209b45552021aabc4d88dc8e624deb283af125a3ae2a66174329e673a9b"
+        },
+        "selected_results": [
+          {
+            "result_id": "result-c77f",
+            "canonical_url": "https://social.example.test/posts/reliable-ai-content-review",
+            "relevance_code": "attributable-practitioner-problem"
+          }
+        ],
+        "rejected_results": [
+          {
+            "result_id": "result-b62c",
+            "policy_code": "profile-or-homepage"
+          },
+          {
+            "result_id": "result-c04d",
+            "policy_code": "cryptocurrency"
+          },
+          {
+            "result_id": "result-d91e",
+            "policy_code": "previously-used"
+          },
+          {
+            "result_id": "result-e38a",
+            "policy_code": "untrusted-instruction"
+          }
+        ],
+        "brain_citation_ids": [
+          "brain-record-a17f",
+          "brain-record-b62c",
+          "brain-record-d91e"
+        ],
+        "context_diagnostics": [
+          {
+            "reason": "low-trust",
+            "count": 1
+          }
+        ],
+        "evidence": {
+          "run_id": "run-opportunity-discovery-001",
+          "feedback_id": "feedback-opportunity-discovery-001"
+        },
+        "external_write_performed": false
+      },
+      "recover": {
+        "schema_version": 1,
+        "phase": "awaiting_human",
+        "target": {
+          "qualified_id": "gtm/social-manager",
+          "record_hash": "sha256:827de136facce1cd49417068c9be7d6b9689db055ed6c3bd9bf0a46db22426c1"
+        },
+        "plan": {
+          "qualified_id": "gtm/social-manager#opportunity-discovery",
+          "definition_hashes": [
+            "sha256:2c28df816ef8f4006fa478dd8d13442fddc697a29bd1aa0ef508357f73dda25d",
+            "sha256:7055ab0e8302c40f0556908c9107fb78ceaf3bff652110a6c670e6ce6501704d",
+            "sha256:704d78bc2abf2666be228c3dcdc45a0ce21f4b8125ef33c2294513678b4e80ed",
+            "sha256:a8549d1011dccae005b0bcba9a9044e4e78139a06b7473d73b1c4ff86a583494"
+          ],
+          "interpreted_step_ids": [
+            "gtm/social-manager#opportunity-discovery:prepare",
+            "gtm/social-manager#opportunity-discovery:scan-linkedin",
+            "gtm/social-manager#opportunity-discovery:scan-web",
+            "gtm/social-manager#opportunity-discovery:search",
+            "gtm/social-manager#opportunity-discovery:return",
+            "gtm/social-manager#scan-linkedin:score",
+            "gtm/social-manager#scan-web:score",
+            "gtm/social-manager#score-opportunities:transition"
+          ]
+        },
+        "tool_use": {
+          "qualified_id": "gtm/social-manager#opportunity-discovery/tools/social-search",
+          "semantic_hash": "sha256:5747c209b45552021aabc4d88dc8e624deb283af125a3ae2a66174329e673a9b"
+        },
+        "evidence": {
+          "run_id": "run-opportunity-discovery-001",
+          "feedback_id": "feedback-opportunity-discovery-001"
+        },
+        "learning": {
+          "watermark": "sha256:4f9398682c2bfd9afff34219b909c637d7a0024e8c80e190d2ba5e2bace6041b",
+          "candidate": {
+            "candidate_id": "candidate-opportunity-discovery-001",
+            "lesson_id": "prefer-practitioner-operational-reject-contradict",
+            "meaning": {
+              "disposition": "prefer",
+              "source_kind": "attributable-practitioner",
+              "topic_kind": "operational-problem",
+              "falsifier_action": "reject",
+              "falsifier_observation": "reviewed-outcomes-contradict"
+            },
+            "recommendation": "Prefer attributable practitioner sources that describe concrete operational problems.",
+            "falsifiable_by": "Reject this recommendation if reviewed outcomes contradict it.",
+            "candidate_content_hash": "sha256:c8ca1ec94de21e55839d269bb42fef06bda91e063948fd78ae748c4ae449464d",
+            "citation_ids": [
+              "feedback-opportunity-discovery-001",
+              "run-opportunity-discovery-001"
+            ]
+          },
+          "baseline_lesson_ids": [
+            "general-prior",
+            "nested-prior",
+            "root-prior"
+          ]
+        },
+        "external_write_performed": false,
         "watermark": "sha256:4f9398682c2bfd9afff34219b909c637d7a0024e8c80e190d2ba5e2bace6041b",
         "candidate": {
           "candidate_id": "candidate-opportunity-discovery-001",
@@ -100,73 +338,73 @@
         "baseline_lesson_ids": [
           "general-prior",
           "nested-prior",
-          "root-prior"
-        ]
-      },
-      "external_write_performed": false
-    },
-    "approve": {
-      "schema_version": 1,
-      "phase": "promoted",
-      "target": {
-        "qualified_id": "gtm/social-manager",
-        "record_hash": "sha256:cff6c8053197b910e357601d45750417cf3729e93c48e8d19b1115e9195dd736"
-      },
-      "plan": {
-        "qualified_id": "gtm/social-manager#opportunity-discovery",
-        "definition_hashes": [
-          "sha256:2c28df816ef8f4006fa478dd8d13442fddc697a29bd1aa0ef508357f73dda25d",
-          "sha256:7055ab0e8302c40f0556908c9107fb78ceaf3bff652110a6c670e6ce6501704d",
-          "sha256:704d78bc2abf2666be228c3dcdc45a0ce21f4b8125ef33c2294513678b4e80ed",
-          "sha256:a8549d1011dccae005b0bcba9a9044e4e78139a06b7473d73b1c4ff86a583494"
-        ],
-        "interpreted_step_ids": [
-          "gtm/social-manager#opportunity-discovery:prepare",
-          "gtm/social-manager#opportunity-discovery:scan-linkedin",
-          "gtm/social-manager#opportunity-discovery:scan-web",
-          "gtm/social-manager#opportunity-discovery:search",
-          "gtm/social-manager#opportunity-discovery:return",
-          "gtm/social-manager#scan-linkedin:score",
-          "gtm/social-manager#scan-web:score",
-          "gtm/social-manager#score-opportunities:transition"
-        ]
-      },
-      "tool_use": {
-        "qualified_id": "gtm/social-manager#opportunity-discovery/tools/social-search",
-        "semantic_hash": "sha256:5747c209b45552021aabc4d88dc8e624deb283af125a3ae2a66174329e673a9b"
-      },
-      "evidence": {
-        "run_id": "run-opportunity-discovery-001",
-        "feedback_id": "feedback-opportunity-discovery-001"
-      },
-      "learning": {
-        "watermark": "sha256:4f9398682c2bfd9afff34219b909c637d7a0024e8c80e190d2ba5e2bace6041b",
-        "candidate": {
-          "candidate_id": "candidate-opportunity-discovery-001",
-          "lesson_id": "prefer-practitioner-operational-reject-contradict",
-          "meaning": {
-            "disposition": "prefer",
-            "source_kind": "attributable-practitioner",
-            "topic_kind": "operational-problem",
-            "falsifier_action": "reject",
-            "falsifier_observation": "reviewed-outcomes-contradict"
-          },
-          "recommendation": "Prefer attributable practitioner sources that describe concrete operational problems.",
-          "falsifiable_by": "Reject this recommendation if reviewed outcomes contradict it.",
-          "candidate_content_hash": "sha256:c8ca1ec94de21e55839d269bb42fef06bda91e063948fd78ae748c4ae449464d",
-          "citation_ids": [
-            "feedback-opportunity-discovery-001",
-            "run-opportunity-discovery-001"
-          ]
-        },
-        "promoted_lesson_ids": [
-          "general-prior",
-          "nested-prior",
           "prefer-practitioner-operational-reject-contradict",
           "root-prior"
         ]
       },
-      "external_write_performed": false
+      "approve": {
+        "schema_version": 1,
+        "phase": "promoted",
+        "target": {
+          "qualified_id": "gtm/social-manager",
+          "record_hash": "sha256:cff6c8053197b910e357601d45750417cf3729e93c48e8d19b1115e9195dd736"
+        },
+        "plan": {
+          "qualified_id": "gtm/social-manager#opportunity-discovery",
+          "definition_hashes": [
+            "sha256:2c28df816ef8f4006fa478dd8d13442fddc697a29bd1aa0ef508357f73dda25d",
+            "sha256:7055ab0e8302c40f0556908c9107fb78ceaf3bff652110a6c670e6ce6501704d",
+            "sha256:704d78bc2abf2666be228c3dcdc45a0ce21f4b8125ef33c2294513678b4e80ed",
+            "sha256:a8549d1011dccae005b0bcba9a9044e4e78139a06b7473d73b1c4ff86a583494"
+          ],
+          "interpreted_step_ids": [
+            "gtm/social-manager#opportunity-discovery:prepare",
+            "gtm/social-manager#opportunity-discovery:scan-linkedin",
+            "gtm/social-manager#opportunity-discovery:scan-web",
+            "gtm/social-manager#opportunity-discovery:search",
+            "gtm/social-manager#opportunity-discovery:return",
+            "gtm/social-manager#scan-linkedin:score",
+            "gtm/social-manager#scan-web:score",
+            "gtm/social-manager#score-opportunities:transition"
+          ]
+        },
+        "tool_use": {
+          "qualified_id": "gtm/social-manager#opportunity-discovery/tools/social-search",
+          "semantic_hash": "sha256:5747c209b45552021aabc4d88dc8e624deb283af125a3ae2a66174329e673a9b"
+        },
+        "evidence": {
+          "run_id": "run-opportunity-discovery-001",
+          "feedback_id": "feedback-opportunity-discovery-001"
+        },
+        "learning": {
+          "watermark": "sha256:4f9398682c2bfd9afff34219b909c637d7a0024e8c80e190d2ba5e2bace6041b",
+          "candidate": {
+            "candidate_id": "candidate-opportunity-discovery-001",
+            "lesson_id": "prefer-practitioner-operational-reject-contradict",
+            "meaning": {
+              "disposition": "prefer",
+              "source_kind": "attributable-practitioner",
+              "topic_kind": "operational-problem",
+              "falsifier_action": "reject",
+              "falsifier_observation": "reviewed-outcomes-contradict"
+            },
+            "recommendation": "Prefer attributable practitioner sources that describe concrete operational problems.",
+            "falsifiable_by": "Reject this recommendation if reviewed outcomes contradict it.",
+            "candidate_content_hash": "sha256:c8ca1ec94de21e55839d269bb42fef06bda91e063948fd78ae748c4ae449464d",
+            "citation_ids": [
+              "feedback-opportunity-discovery-001",
+              "run-opportunity-discovery-001"
+            ]
+          },
+          "promoted_lesson_ids": [
+            "general-prior",
+            "nested-prior",
+            "prefer-practitioner-operational-reject-contradict",
+            "root-prior"
+          ]
+        },
+        "external_write_performed": false
+      }
     }
   }
 }
