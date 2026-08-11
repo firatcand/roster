@@ -403,11 +403,34 @@ const EVIDENCE_RECORD_BROKERS = [
   'record_human_decision',
 ] as const;
 
+// #358: the lifecycle brokers, the filesystem-phase fence, and the read-only
+// governor verifier. `advance_dream_watermark` stays granted to NOBODY -- the
+// runtime reaches it only INSIDE decide_lesson_candidate, after the promotion
+// binding -- and `lock_key`/`lock_frame` stay internal, so the runtime can hold
+// exactly the ONE advisory frame the fence derives for its own candidate and no
+// other evidence-space lock.
+const DREAM_LIFECYCLE_BROKERS = [
+  'record_dream_candidate',
+  'decide_lesson_candidate',
+  'hold_dream_subject_lock',
+  'verify_dream_subject_governor',
+] as const;
+
+// Pure reads over relations the runtime already holds SELECT on, so granting
+// them adds no reachable state and keeps ONE implementation of the readiness
+// predicate shared by `dream status` and the brokers.
+const DREAM_READ_FUNCTIONS = [
+  'brain_evidence.dream_effective_policy(text)',
+  'brain_evidence.dream_eligible(text, timestamptz, bigint)',
+] as const;
+
 // #356: portable evidence is broker-append, not runtime-writable. The runtime
 // role gets USAGE + table SELECT + EXECUTE on exactly the four record brokers
 // and zero direct DML; promotion has no broker at all (admin path only), and the
 // validation/lock helpers stay internal to the SECURITY DEFINER context.
-// Existence-guarded so pre-013 brains keep zero brain_evidence access.
+// Existence-guarded so pre-013 brains keep zero brain_evidence access, and each
+// #358 signature is guarded on its own so a pre-015 brain keeps zero dream
+// lifecycle access instead of failing the whole grant pass.
 async function applyEvidenceGrants(client: pg.PoolClient, qrole: string): Promise<void> {
   const hasEvidence = await client.query<{ one: number }>(
     `SELECT 1 AS one FROM pg_namespace WHERE nspname = 'brain_evidence'`,
@@ -423,6 +446,18 @@ async function applyEvidenceGrants(client: pg.PoolClient, qrole: string): Promis
   await client.query(`GRANT SELECT ON ALL TABLES IN SCHEMA brain_evidence TO ${qrole}`);
   for (const broker of EVIDENCE_RECORD_BROKERS) {
     await client.query(`GRANT EXECUTE ON FUNCTION brain_evidence.${ident(broker)}(text) TO ${qrole}`);
+  }
+  const dreamSignatures = [
+    ...DREAM_LIFECYCLE_BROKERS.map((broker) => `brain_evidence.${ident(broker)}(text)`),
+    ...DREAM_READ_FUNCTIONS,
+  ];
+  for (const signature of dreamSignatures) {
+    const present = await client.query<{ p: string | null }>(
+      `SELECT to_regprocedure($1)::text AS p`,
+      [signature],
+    );
+    if (present.rows[0]?.p === null) continue;
+    await client.query(`GRANT EXECUTE ON FUNCTION ${signature} TO ${qrole}`);
   }
 }
 
