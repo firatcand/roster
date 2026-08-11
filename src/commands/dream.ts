@@ -3,13 +3,41 @@ import { openVerifiedRuntimePool } from '../lib/brain/connect.ts';
 import { isWorkspaceFailure } from '../lib/workspace-diagnostics.ts';
 import { readWorkspaceRegistry } from '../lib/workspace-registry.ts';
 import { normalizeScopeAlias } from '../lib/workspace-layout.ts';
+import { readCappedFileSync, readCappedStream } from '../lib/bounded-read.ts';
 import {
   brainNotConfiguredReadiness,
   canonicalizeDreamScope,
+  dreamWatermarkCanonical,
   type DreamReadinessResult,
 } from '../lib/brain/dream-contracts.ts';
 import { computeDreamReadiness } from '../lib/brain/dream-readiness.ts';
-import { EXIT_OK } from '../lib/errors.ts';
+import {
+  MAX_DREAM_CANDIDATE_BYTES,
+  lessonTargetScope,
+  normalizeDreamCandidate,
+  normalizeLessonDecision,
+  type DreamCandidateDraft,
+  type LessonDecisionVerb,
+} from '../lib/brain/dream-candidate-contracts.ts';
+import {
+  decideLessonCandidate,
+  dreamLifecycleError,
+  listDreamCandidates,
+  loadDreamCandidate,
+  loadHumanDecisionInstant,
+  recordDreamCandidate,
+  type DreamCandidateListRow,
+} from '../lib/brain/dream-candidates.ts';
+import {
+  assertLessonContentAdmissible,
+  isLessonLifecycleConflict,
+  materializeLesson,
+  preflightLessonTarget,
+  renderLessonContent,
+  retireLesson,
+  withSubjectFence,
+} from '../lib/brain/lesson-materialize.ts';
+import { EXIT_ERROR, EXIT_OK } from '../lib/errors.ts';
 
 export type DreamStatusOptions = {
   cwd: string;
@@ -81,4 +109,353 @@ export async function executeDreamStatus(opts: DreamStatusOptions): Promise<numb
 function emitDreamStatus(result: DreamReadinessResult, json: boolean): void {
   if (json) console.log(JSON.stringify(result, null, 2));
   else for (const line of renderDreamStatusLines(result)) console.log(line);
+}
+
+export type DreamCandidatesOptions =
+  | { cwd: string; json: boolean; verb: 'list'; state?: string; target?: string; limit?: number }
+  | { cwd: string; json: boolean; verb: 'create'; file?: string; stdin: boolean }
+  | {
+      cwd: string;
+      json: boolean;
+      verb: 'promote' | 'reject' | 'retire';
+      candidateId: string;
+      decisionId: string;
+      actionDigest: string;
+    };
+
+export function renderCandidateLines(rows: readonly DreamCandidateListRow[]): string[] {
+  if (rows.length === 0) {
+    return ['', chalk.bold('roster dream candidates'), `  ${chalk.dim('·')} no candidates recorded`, ''];
+  }
+  const lines = ['', chalk.bold('roster dream candidates')];
+  for (const row of rows) {
+    const mark = row.state === 'promoted'
+      ? chalk.green('●')
+      : row.state === 'open'
+        ? chalk.yellow('○')
+        : chalk.dim('·');
+    lines.push(`  ${mark} ${row.state.padEnd(10)} ${chalk.dim(row.candidate_id)}`);
+    lines.push(`      ${row.lesson_qualified_id}  ${chalk.dim(`(${row.lesson_scope_key} from ${row.scope_key})`)}`);
+    lines.push(`      ${row.lesson_purpose}`);
+    lines.push(`      ${chalk.dim(`drafted by ${row.drafted_by_agent_id} · ${row.privacy_class} · ${row.recorded_at}`)}`);
+    for (const warning of row.warnings) {
+      lines.push(`      ${chalk.yellow('⚠')} ${warning.code} — ${warning.detail}`);
+    }
+  }
+  lines.push('');
+  return lines;
+}
+
+function readDraftDocument(opts: { file?: string; stdin: boolean }): Promise<Buffer> {
+  if (opts.stdin) return readCappedStream(process.stdin, MAX_DREAM_CANDIDATE_BYTES);
+  const read = readCappedFileSync(opts.file!, MAX_DREAM_CANDIDATE_BYTES);
+  if (read.state === 'unreadable') {
+    throw dreamLifecycleError(
+      'BRAIN_DREAM_INPUT_INVALID',
+      `The candidate draft at '${opts.file!}' could not be read.`,
+      { file: opts.file! },
+    );
+  }
+  if (read.state === 'over-cap') {
+    throw dreamLifecycleError(
+      'BRAIN_DREAM_INPUT_INVALID',
+      `The candidate draft exceeds ${MAX_DREAM_CANDIDATE_BYTES} bytes.`,
+      { file: opts.file! },
+    );
+  }
+  return Promise.resolve(read.bytes);
+}
+
+type DraftDocument = { readiness_key?: unknown } & Record<string, unknown>;
+
+function parseDraft(bytes: Buffer): { readinessKey: string; draft: DreamCandidateDraft } {
+  if (bytes.byteLength > MAX_DREAM_CANDIDATE_BYTES) {
+    throw dreamLifecycleError(
+      'BRAIN_DREAM_INPUT_INVALID',
+      `The candidate draft exceeds ${MAX_DREAM_CANDIDATE_BYTES} bytes.`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    throw dreamLifecycleError('BRAIN_DREAM_INPUT_INVALID', 'The candidate draft is not valid JSON.');
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw dreamLifecycleError('BRAIN_DREAM_INPUT_INVALID', 'The candidate draft must be a JSON object.');
+  }
+  const document = parsed as DraftDocument;
+  const readinessKey = document.readiness_key;
+  if (typeof readinessKey !== 'string') {
+    throw dreamLifecycleError(
+      'BRAIN_DREAM_INPUT_INVALID',
+      'The candidate draft must carry the readiness_key from roster dream status.',
+    );
+  }
+  const { readiness_key: _ignored, ...rest } = document;
+  return { readinessKey, draft: rest as unknown as DreamCandidateDraft };
+}
+
+export async function executeDreamCandidates(opts: DreamCandidatesOptions): Promise<number> {
+  const workspaceId = readWorkspaceRegistry(opts.cwd).registry.workspace_id;
+  let pool;
+  try {
+    pool = openVerifiedRuntimePool(opts.cwd);
+  } catch (error) {
+    if (!isWorkspaceFailure(error) || error.code !== 'BRAIN_NOT_CONFIGURED') throw error;
+    // The list verb mirrors `dream status`'s local-only tolerance so a
+    // Brain-less workspace does not error on an ordinary host interaction. Every
+    // WRITING verb needs the durable ledger and fails closed.
+    if (opts.verb !== 'list') throw error;
+    if (opts.json) console.log(JSON.stringify({ ok: true, candidates: [], brain: 'not-configured' }, null, 2));
+    else {
+      console.log('');
+      console.log(chalk.bold('roster dream candidates'));
+      console.log(`  ${chalk.dim('·')} this workspace has no tracked Brain configuration, so no candidates exist`);
+      console.log('');
+    }
+    return EXIT_OK;
+  }
+  try {
+    if (opts.verb === 'list') return await runList(pool, opts);
+    if (opts.verb === 'create') return await runCreate(pool, workspaceId, opts);
+    return await runDecision(pool, workspaceId, opts);
+  } finally {
+    await pool.end();
+  }
+}
+
+type RuntimePool = Awaited<ReturnType<typeof openVerifiedRuntimePool>>;
+
+async function runList(
+  pool: RuntimePool,
+  opts: Extract<DreamCandidatesOptions, { verb: 'list' }>,
+): Promise<number> {
+  const rows = await listDreamCandidates(pool, {
+    ...(opts.state === undefined ? {} : { state: opts.state }),
+    ...(opts.target === undefined ? {} : { lessonAgentKey: opts.target }),
+    ...(opts.limit === undefined ? {} : { limit: opts.limit }),
+  });
+  if (opts.json) console.log(JSON.stringify({ ok: true, candidates: rows }, null, 2));
+  else for (const line of renderCandidateLines(rows)) console.log(line);
+  return EXIT_OK;
+}
+
+async function runCreate(
+  pool: RuntimePool,
+  workspaceId: string,
+  opts: Extract<DreamCandidatesOptions, { verb: 'create' }>,
+): Promise<number> {
+  const { readinessKey, draft } = parseDraft(await readDraftDocument(opts));
+  const normalized = normalizeDreamCandidate(workspaceId, readinessKey, draft);
+  assertLessonContentAdmissible(normalized.candidateId, draft.lessonPurpose, draft.lessonBody);
+  const result = await recordDreamCandidate(pool, normalized.canonical);
+  // The draft is never echoed: it carries authored prose and up to 64 citation
+  // pointers, and a candidate is reviewed through `list`, not through the write
+  // verb's own output.
+  if (opts.json) {
+    console.log(JSON.stringify({
+      ok: true,
+      status: result.status,
+      candidate_id: result.candidateId,
+      lesson_qualified_id: normalized.lessonQualifiedId,
+    }, null, 2));
+  } else {
+    console.log('');
+    console.log(chalk.bold('roster dream candidates create'));
+    console.log(`  ${chalk.green('✓')} ${result.status}  ${chalk.dim(result.candidateId)}`);
+    console.log(`  ${chalk.dim('·')} target: ${normalized.lessonQualifiedId}`);
+    console.log(`  ${chalk.dim('·')} present it to a human, record their decision, then promote or reject it`);
+    console.log('');
+  }
+  return EXIT_OK;
+}
+
+const SUPERSEDED_MESSAGE =
+  'this decision was superseded by later lifecycle activity on this lesson; no filesystem change';
+
+async function runDecision(
+  pool: RuntimePool,
+  workspaceId: string,
+  opts: Extract<DreamCandidatesOptions, { verb: 'promote' | 'reject' | 'retire' }>,
+): Promise<number> {
+  const verb: LessonDecisionVerb = opts.verb;
+  const candidate = await loadDreamCandidate(pool, opts.candidateId);
+  const decidedAt = await loadHumanDecisionInstant(pool, opts.decisionId);
+  const targetScope = lessonTargetScope(candidate.lessonScopeKey);
+  const rendered = renderLessonContent(
+    candidate.lessonId,
+    candidate.lessonPurpose,
+    candidate.lessonBody,
+    targetScope,
+  );
+  const lessonQualifiedId = `${candidate.lessonAgentKey}/playbook/${candidate.lessonId}`;
+
+  const warnings = verb === 'reject'
+    ? []
+    : preflightLessonTarget(opts.cwd, candidate.lessonAgentKey, candidate.lessonId, targetScope);
+  if (verb === 'promote') {
+    assertLessonContentAdmissible(candidate.candidateId, candidate.lessonPurpose, candidate.lessonBody);
+  }
+
+  const watermarkCanonical = verb === 'promote'
+    ? dreamWatermarkCanonical({
+      scopeKey: candidate.scopeKey,
+      cursorOrdinal: candidate.frontierOrdinal,
+      policyVersion: candidate.policyVersion,
+      reason: 'promotion',
+      consumedCompletedRuns: candidate.consumedCompletedRuns,
+      consumedFeedbackRecords: candidate.consumedFeedbackRecords,
+      actorAssurance: 'human-confirmed',
+    })
+    : null;
+  const decision = normalizeLessonDecision(workspaceId, {
+    decision: verb,
+    candidateId: candidate.candidateId,
+    humanDecisionId: opts.decisionId,
+    actionDigest: opts.actionDigest,
+    frontierOrdinal: candidate.frontierOrdinal,
+    decidedAt,
+    lessonQualifiedId: verb === 'reject' ? null : lessonQualifiedId,
+    lessonContentHash: verb === 'reject' ? null : rendered.contentHash,
+    watermarkCanonical,
+  });
+  const committed = await decideLessonCandidate(pool, decision.canonical);
+
+  if (verb === 'reject') {
+    emitDecision(opts.json, {
+      verb,
+      status: committed.status,
+      candidateId: candidate.candidateId,
+      warnings,
+      detail: 'the candidate is closed; no lesson file exists for it',
+    });
+    return EXIT_OK;
+  }
+
+  // Fence 1, a courtesy short-circuit only: the broker's verdict can stale the
+  // instant it commits, so it skips the fence transaction for the common stale
+  // replay rather than authorizing anything.
+  if (!committed.subjectCurrent) {
+    emitDecision(opts.json, {
+      verb,
+      status: committed.status,
+      candidateId: candidate.candidateId,
+      warnings,
+      detail: SUPERSEDED_MESSAGE,
+      superseded: true,
+    });
+    return EXIT_OK;
+  }
+
+  const outcome = await withSubjectFence({
+    pool,
+    root: opts.cwd,
+    candidateId: candidate.candidateId,
+    expectedDecision: verb,
+    expectedSubjectSequence: committed.subjectSequence,
+    phase: async (context) => (verb === 'promote'
+      ? await materializeLesson({ root: opts.cwd, candidate, context })
+      : await retireLesson({
+        root: opts.cwd,
+        candidate,
+        lessonContentHash: rendered.contentHash,
+      })),
+  }).catch((error: unknown) => {
+    if (isLessonLifecycleConflict(error)) return { outcome: 'conflict' as const, error };
+    throw error;
+  });
+
+  if ('error' in outcome) {
+    console.error('');
+    console.error(chalk.red(`  ✗ ${outcome.error.code}`));
+    console.error(`    ${outcome.error.message}`);
+    console.error(`    ${outcome.error.details.remedy ?? 'A human reconciles the conflict, then re-run the verb.'}`);
+    console.error('');
+    return EXIT_ERROR;
+  }
+  if (outcome.outcome === 'superseded') {
+    emitDecision(opts.json, {
+      verb,
+      status: committed.status,
+      candidateId: candidate.candidateId,
+      warnings,
+      detail: SUPERSEDED_MESSAGE,
+      superseded: true,
+    });
+    return EXIT_OK;
+  }
+  if (outcome.outcome === 'unverified') {
+    const scopeNote = outcome.stage === 'pre-phase' ? ' (no mutation performed)' : '';
+    if (opts.json) {
+      console.log(JSON.stringify({
+        ok: false,
+        status: 'UNVERIFIED',
+        stage: outcome.stage,
+        candidate_id: candidate.candidateId,
+        detail: outcome.reason,
+      }, null, 2));
+    } else {
+      console.error('');
+      console.error(chalk.red(`  ✗ UNVERIFIED${scopeNote}`));
+      console.error(`    ${outcome.reason} during the ${outcome.stage} check.`);
+      console.error('    The decision is durable — re-run the verb (it converges) and run roster brain doctor.');
+      console.error('');
+    }
+    return EXIT_ERROR;
+  }
+
+  emitDecision(opts.json, {
+    verb,
+    status: committed.status,
+    candidateId: candidate.candidateId,
+    warnings,
+    detail: verb === 'promote'
+      ? `${(outcome.value as { status: string; path: string }).status} ${(outcome.value as { path: string }).path}`
+      : `${(outcome.value as { status: string }).status} ${(outcome.value as { path: string }).path}`,
+    path: (outcome.value as { path: string }).path,
+    contentHash: rendered.contentHash,
+  });
+  return EXIT_OK;
+}
+
+function emitDecision(
+  json: boolean,
+  report: {
+    verb: LessonDecisionVerb;
+    status: 'created' | 'existing';
+    candidateId: string;
+    warnings: readonly { code: string; detail: string }[];
+    detail: string;
+    superseded?: boolean;
+    path?: string;
+    contentHash?: string;
+  },
+): void {
+  if (json) {
+    console.log(JSON.stringify({
+      ok: true,
+      verb: report.verb,
+      status: report.status,
+      candidate_id: report.candidateId,
+      superseded: report.superseded === true,
+      detail: report.detail,
+      ...(report.path === undefined ? {} : { path: report.path }),
+      ...(report.contentHash === undefined ? {} : { content_hash: report.contentHash }),
+      warnings: report.warnings,
+    }, null, 2));
+    return;
+  }
+  console.log('');
+  console.log(chalk.bold(`roster dream candidates ${report.verb}`));
+  for (const warning of report.warnings) {
+    console.log(`  ${chalk.yellow('⚠')} ${warning.code} — ${warning.detail}`);
+  }
+  const mark = report.superseded === true ? chalk.dim('·') : chalk.green('✓');
+  console.log(`  ${mark} ${report.status}  ${chalk.dim(report.candidateId)}`);
+  console.log(`  ${chalk.dim('·')} ${report.detail}`);
+  if (report.contentHash !== undefined) {
+    console.log(`  ${chalk.dim('·')} content: ${report.contentHash}`);
+  }
+  console.log('');
 }

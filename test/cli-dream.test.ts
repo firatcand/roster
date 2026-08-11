@@ -66,15 +66,14 @@ test('dream status parses its scope aliases and refuses every other verb', () =>
     scope: undefined, functionId: undefined, agent: 'gtm/manager',
   });
 
-  // #358 owns the candidate lifecycle; until it ships the usage error must name
-  // only `status`, so a host never believes a candidate surface exists here.
-  for (const verb of ['candidates', 'reflect', 'promote', 'status-all']) {
+  // The usage error names exactly the surface that exists, so a host never
+  // believes in a verb Roster does not have.
+  for (const verb of ['reflect', 'promote', 'status-all']) {
     const message = bad([verb]);
     assert.match(message, /unknown 'dream' subcommand/u, verb);
-    assert.match(message, /available: status/u, verb);
-    assert.equal(/candidate/u.test(message.replace(verb, '')), false, verb);
+    assert.match(message, /available: status \| candidates/u, verb);
   }
-  assert.match(bad([]), /missing subcommand for 'dream' \(available: status\)/u);
+  assert.match(bad([]), /missing subcommand for 'dream' \(available: status \| candidates\)/u);
   assert.match(bad(['status', '--scope']), /--scope requires a value/u);
   assert.match(bad(['status', '--function', '--json']), /--function requires a value/u);
   assert.match(bad(['status', '--force']), /unknown flag for 'dream status'/u);
@@ -156,13 +155,26 @@ test('the built CLI routes dream status and reports it in --help', () => {
     assert.equal(help.status, 0, help.stderr);
     assert.match(help.stdout, /roster dream status/u);
 
-    const unknown = spawnSync(process.execPath, [BIN, 'dream', 'candidates', '--json'], {
+    assert.match(help.stdout, /roster dream candidates/u);
+
+    const unknown = spawnSync(process.execPath, [BIN, 'dream', 'reflect', '--json'], {
       encoding: 'utf8',
       cwd: root,
       env,
     });
     assert.notEqual(unknown.status, 0);
-    assert.match(JSON.parse(unknown.stdout).message as string, /available: status/u);
+    assert.match(JSON.parse(unknown.stdout).message as string, /available: status \| candidates/u);
+
+    // The list verb mirrors `status`'s local-only tolerance: a Brain-less
+    // workspace answers with an empty list at exit 0 rather than erroring on an
+    // ordinary host interaction.
+    const list = spawnSync(process.execPath, [BIN, 'dream', 'candidates', 'list', '--json'], {
+      encoding: 'utf8',
+      cwd: root,
+      env,
+    });
+    assert.equal(list.status, 0, list.stderr);
+    assert.deepEqual(JSON.parse(list.stdout), { ok: true, candidates: [], brain: 'not-configured' });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

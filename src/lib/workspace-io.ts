@@ -1999,6 +1999,22 @@ export function withWorkspaceLock<T>(root: string, operation: () => T): T {
     let operationError: unknown;
     try {
       result = operation();
+      // The callback contract is SYNCHRONOUS: the lock is released the moment
+      // this function returns, so an async callback's remaining work would run
+      // with no lock held while its promise is silently abandoned. The signature
+      // cannot forbid it -- `T` simply infers as the promise type -- so the
+      // mistake is made loud at first execution instead. The no-op catch is
+      // attached BEFORE throwing so the abandoned promise's eventual rejection
+      // is consumed rather than surfacing as an unhandledRejection.
+      if (typeof (result as { then?: unknown } | undefined)?.then === 'function') {
+        void Promise.resolve(result as unknown).catch(() => {});
+        throw workspaceFailure(
+          'WRITE_CONFLICT',
+          `Workspace lock operation for '${lockRelative}' returned a promise.`,
+          'Make the locked operation fully synchronous; the lock is released before a promise could settle.',
+          { path: lockRelative, lockPath: lockRelative },
+        );
+      }
     } catch (error) {
       operationError = error;
     }

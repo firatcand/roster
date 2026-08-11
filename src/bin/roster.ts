@@ -73,7 +73,7 @@ import {
   redactBrainProviderFailure,
 } from '../commands/brain.ts';
 import { parseDreamArgs } from '../lib/dream-args.ts';
-import { executeDreamStatus } from '../commands/dream.ts';
+import { executeDreamCandidates, executeDreamStatus } from '../commands/dream.ts';
 import {
   EXIT_OK,
   EXIT_ERROR,
@@ -176,6 +176,7 @@ function printHelp(version: string): void {
     `  roster brain query "<text>"  ${chalk.dim('Fails closed until cited retrieval ships (#352) — use roster context for cited evidence')}`,
     `  roster brain mount|table|sql|config|reindex|gc|export|import  ${chalk.dim('Legacy spellings; recognized but fail closed until removal in #363')}`,
     `  roster dream status          ${chalk.dim('Read durable Dreamer readiness: due|not_due over observed evidence (--scope/--function/--agent, --json)')}`,
+    `  roster dream candidates      ${chalk.dim('list | create | promote | reject | retire — the human-confirmed lesson lifecycle (--json)')}`,
     `  roster ops setup             ${chalk.dim('Configure the workspace operations backend: --backend local|postgres-s3 (--database, --bucket, --new-identity, --json, --yes)')}`,
     `  roster run <verb>            ${chalk.dim('Run + artifact ledger: start|end|event|report|declare-artifact|show|list|doctor|repair (--run, --json, --allow-partial)')}`,
     `  roster migrate from-agent-team <dir>  ${chalk.dim('Migrate a legacy agent-team workspace into roster')}`,
@@ -1025,8 +1026,9 @@ async function dispatchBrain(args: readonly string[]): Promise<number> {
   throw legacyBrainCommandDisabled(parsed.subcommand);
 }
 
-// #357 ships `dream status` alone. The candidate lifecycle is #358's, so any
-// other verb is a usage error naming only `status`.
+// `status` is a pure read; `candidates` is the human-confirmed lesson lifecycle.
+// Roster never decides: promote/reject/retire each require a durable human
+// decision bound by action digest to that exact candidate.
 async function runDream(args: readonly string[]): Promise<number> {
   const parsed = parseDreamArgs(args);
   if (parsed.kind === 'err') {
@@ -1038,12 +1040,41 @@ async function runDream(args: readonly string[]): Promise<number> {
     });
   }
   try {
-    return await executeDreamStatus({
+    if (parsed.subcommand === 'status') {
+      return await executeDreamStatus({
+        cwd: process.cwd(),
+        json: parsed.json,
+        ...(parsed.scope !== undefined ? { scope: parsed.scope } : {}),
+        ...(parsed.functionId !== undefined ? { functionId: parsed.functionId } : {}),
+        ...(parsed.agent !== undefined ? { agent: parsed.agent } : {}),
+      });
+    }
+    if (parsed.verb === 'list') {
+      return await executeDreamCandidates({
+        cwd: process.cwd(),
+        json: parsed.json,
+        verb: 'list',
+        ...(parsed.state !== undefined ? { state: parsed.state } : {}),
+        ...(parsed.target !== undefined ? { target: parsed.target } : {}),
+        ...(parsed.limit !== undefined ? { limit: parsed.limit } : {}),
+      });
+    }
+    if (parsed.verb === 'create') {
+      return await executeDreamCandidates({
+        cwd: process.cwd(),
+        json: parsed.json,
+        verb: 'create',
+        stdin: parsed.stdin,
+        ...(parsed.file !== undefined ? { file: parsed.file } : {}),
+      });
+    }
+    return await executeDreamCandidates({
       cwd: process.cwd(),
       json: parsed.json,
-      ...(parsed.scope !== undefined ? { scope: parsed.scope } : {}),
-      ...(parsed.functionId !== undefined ? { functionId: parsed.functionId } : {}),
-      ...(parsed.agent !== undefined ? { agent: parsed.agent } : {}),
+      verb: parsed.verb,
+      candidateId: parsed.candidateId,
+      decisionId: parsed.decisionId,
+      actionDigest: parsed.actionDigest,
     });
   } catch (error) {
     throw redactBrainProviderFailure(error);

@@ -51,6 +51,11 @@ import {
 } from '../lib/brain/fs.ts';
 import type { FileStore } from '../lib/brain/s3.ts';
 import { EXIT_OK, EXIT_ERROR, RosterError, isRosterError } from '../lib/errors.ts';
+import {
+  auditLessonDrift,
+  notApplicableLessonDrift,
+  type LessonDriftReport,
+} from '../lib/brain/lesson-drift.ts';
 
 export type BrainInitOptions = {
   cwd: string;
@@ -119,8 +124,15 @@ export async function executeBrainDoctor(opts: BrainDoctorOptions): Promise<numb
   try {
     const roleName = resolveBrainDoctorRoleName(opts.cwd, opts.role ?? RUNTIME_ROLE);
     const report = await guardBrainProvider(() => runDoctor(pool, roleName));
+    // #358: the lesson ledger and the Git playbook are two stores, so the
+    // doctor owes a cross-store account of every materialized lesson. The audit
+    // is report-only and takes neither the fence nor a local lock; it is also
+    // the named second half of the UNVERIFIED remediation, telling the operator
+    // exactly which convergence a re-run will perform.
+    const drift = await guardBrainProvider(() => auditLessonDriftForDoctor(opts.cwd, report.pending));
+    const ok = report.ok && drift.ok;
     if (opts.json) {
-      console.log(JSON.stringify({ ...report }, null, 2));
+      console.log(JSON.stringify({ ...report, ok, lesson_drift: drift }, null, 2));
     } else if (!opts.silent) {
       console.log('');
       console.log(chalk.bold('roster brain doctor'));
@@ -128,16 +140,50 @@ export async function executeBrainDoctor(opts: BrainDoctorOptions): Promise<numb
         const mark = c.ok ? chalk.green('✓') : chalk.red('✗');
         console.log(`  ${mark} ${c.name} — ${c.detail}`);
       }
+      if (drift.applicable) {
+        const mark = drift.ok ? chalk.green('✓') : chalk.red('✗');
+        console.log(`  ${mark} lesson-drift — ${drift.ok
+          ? `${drift.subjects} materialized lesson(s) match their governing decision`
+          : `${drift.findings.length} lesson(s) drifted from the governing decision`}`);
+        for (const finding of drift.findings) {
+          console.log(`      ${chalk.red('·')} ${finding.code} ${finding.lesson_qualified_id} — ${finding.detail}`);
+          console.log(`        ${chalk.dim(finding.remedy)}`);
+        }
+      }
       console.log(`  ${chalk.dim('·')} identity: ${report.identity_state}`);
       console.log(`  ${chalk.dim('·')} tables: ${report.tables.length === 0 ? '(none)' : report.tables.join(', ')}`);
       console.log(`  ${chalk.dim('·')} pending migrations: ${report.pending.length === 0 ? '(none)' : report.pending.join(', ')}`);
       console.log('');
-      console.log(report.ok ? chalk.green('  brain healthy') : chalk.red('  brain UNHEALTHY'));
+      console.log(ok ? chalk.green('  brain healthy') : chalk.red('  brain UNHEALTHY'));
       console.log('');
     }
-    return report.ok ? EXIT_OK : EXIT_ERROR;
+    return ok ? EXIT_OK : EXIT_ERROR;
   } finally {
     await pool.end();
+  }
+}
+
+// Skipped cleanly when the lifecycle schema is not applied yet or the workspace
+// has no runtime credential: a diagnostic must never fail on state it is
+// diagnosing the absence of.
+async function auditLessonDriftForDoctor(
+  cwd: string,
+  pending: readonly string[],
+): Promise<LessonDriftReport> {
+  if (pending.length > 0) return notApplicableLessonDrift();
+  let runtime;
+  try {
+    runtime = openVerifiedRuntimePool(cwd);
+  } catch {
+    return notApplicableLessonDrift();
+  }
+  try {
+    return await auditLessonDrift(runtime, cwd);
+  } catch (error) {
+    if ((error as { code?: unknown }).code === '42P01') return notApplicableLessonDrift();
+    throw error;
+  } finally {
+    await runtime.end();
   }
 }
 

@@ -826,6 +826,31 @@ export function addYamlMembership(
   return document!.toString({ lineWidth: 0 });
 }
 
+// The twin of addYamlMembership, and the load-bearing FIRST step of retirement:
+// deregistering a lesson stops context selection immediately and downgrades the
+// file to a soft unregistered-record diagnostic, while the reverse order would
+// leave a registered-but-missing record that fails every agent load. Returns the
+// text unchanged when the id is already absent, so a re-run converges.
+export function removeYamlMembership(
+  text: string,
+  path: string,
+  field: string,
+  id: string,
+): string {
+  const { document, value } = parseYaml(text, path, MAX_AUTHORED_YAML_BYTES, true);
+  const current = requireStringArray(value[field], path, field);
+  const localId = assertRecordId(id);
+  if (!current.includes(localId)) return text;
+  const sequence = document!.getIn([field], true);
+  if (!YAML.isSeq(sequence)) schemaFailure(path, `'${field}' must remain a YAML sequence`);
+  const index = sequence.items.findIndex(
+    (item) => (YAML.isScalar(item) ? item.value : item) === localId,
+  );
+  if (index < 0) return text;
+  sequence.delete(index);
+  return document!.toString({ lineWidth: 0 });
+}
+
 export function addWorkspaceFunction(
   text: string,
   path: string,
