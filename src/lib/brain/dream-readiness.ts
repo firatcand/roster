@@ -1,16 +1,13 @@
 import { EXIT_ERROR, RosterError } from '../errors.ts';
 import type { VerifiedBrainPool } from './workspace-authority.ts';
 import {
-  DEFAULT_DREAM_POLICY,
   DREAM_SCHEMA_VERSION,
   brainNotConfiguredReadiness,
-  dreamDurationSeconds,
   dreamDurationText,
   dreamPolicyCanonical,
   dreamPolicyFingerprint,
   dreamReadinessKey,
   dreamReadinessReasons,
-  dreamScopeResolutionChain,
   dreamWatermarkCanonical,
   type DreamPolicy,
   type DreamPolicyRegistration,
@@ -107,86 +104,32 @@ type ReadinessRow = {
 // never writes: an advancing read would recreate v1's loss-of-eligibility bug
 // (host reads `due`, the read advances, the host crashes before invoking).
 //
-// Feedback carries no scope columns of its own, so every observation is joined
-// to ITS RUN -- directly for a completed-run observation, through the NOT NULL
-// feedback.run_id foreign key for a feedback observation. Feedback therefore
-// inherits scope AND exclusion from its run while keeping its own recorded_at
-// and its own ordinal for the window and the frontier.
+// #358 moved the policy resolution and the eligible-set predicate into the two
+// server-side read functions `dream_effective_policy` and `dream_eligible`, so
+// the readiness status read and the candidate brokers share ONE implementation
+// over different floors. This query is otherwise unchanged: the floor it passes
+// is the CURRENT watermark cursor, and the instant it passes is its own single
+// statement's now(). The run-join, window, scope and exclusion rules -- including
+// feedback inheriting scope AND exclusion from its NOT NULL run -- now live in
+// `dream_eligible`, pinned against this module by the parity suite.
 const READINESS_SQL = `
 WITH captured AS (
   SELECT now() AS evaluated_at
-), requested AS (
-  SELECT $1::text AS scope_key,
-         $2::text AS scope_kind,
-         $3::text AS function_id,
-         $4::text AS agent_id,
-         $5::text AS plan_id
-), policy_scopes AS (
-  SELECT chain.key, chain.rank
-    FROM unnest($6::text[]) WITH ORDINALITY AS chain(key, rank)
-), stored_policy AS (
-  SELECT resolved.*
-    FROM policy_scopes c
-    JOIN LATERAL (
-      SELECT 'brain'::text AS policy_source,
-             dp.policy_version,
-             dp.scope_key AS policy_scope_key,
-             dp.min_completed_runs,
-             dp.min_feedback_records,
-             dp.min_signal_mix,
-             dp.evidence_window,
-             dp.cooldown,
-             dp.excluded_agent_ids
-        FROM brain_evidence.dream_policies dp
-       WHERE dp.scope_key = c.key
-       ORDER BY dp.recorded_at DESC, dp.policy_version DESC
-       LIMIT 1
-    ) AS resolved ON true
-   ORDER BY c.rank
-   LIMIT 1
 ), policy AS (
-  SELECT * FROM stored_policy
-   UNION ALL
-  SELECT 'built-in'::text,
-         $7::text,
-         $8::text,
-         $9::integer,
-         $10::integer,
-         $11::integer,
-         make_interval(secs => $12::double precision),
-         make_interval(secs => $13::double precision),
-         $14::text[]
-   WHERE NOT EXISTS (SELECT 1 FROM stored_policy)
+  SELECT * FROM brain_evidence.dream_effective_policy($1::text)
 ), watermark AS (
   SELECT w.sequence, w.cursor_ordinal, w.reason, w.advanced_at, w.policy_version
-    FROM brain_evidence.dream_watermarks w, requested r
-   WHERE w.scope_key = r.scope_key
+    FROM brain_evidence.dream_watermarks w
+   WHERE w.scope_key = $1::text
    ORDER BY w.sequence DESC
    LIMIT 1
 ), floor_ordinal AS (
   SELECT coalesce((SELECT cursor_ordinal FROM watermark), 0) AS ordinal
 ), eligible AS (
-  SELECT o.ordinal, o.evidence_kind, r.outcome, f.signal
-    FROM brain_evidence.evidence_observations o
-    LEFT JOIN brain_evidence.feedback f
-      ON o.evidence_kind = 'feedback' AND f.feedback_id = o.evidence_id
-    JOIN brain_evidence.completed_runs r
-      ON r.run_id = CASE WHEN o.evidence_kind = 'completed-run' THEN o.evidence_id ELSE f.run_id END
-   CROSS JOIN captured n
-   CROSS JOIN policy p
-   CROSS JOIN requested q
+  SELECT e.ordinal, e.evidence_kind, e.outcome, e.signal
+    FROM captured n
    CROSS JOIN floor_ordinal fl
-   WHERE o.ordinal > fl.ordinal
-     AND o.recorded_at > n.evaluated_at - p.evidence_window
-     AND o.recorded_at <= n.evaluated_at
-     AND (
-       q.scope_kind = 'workspace'
-       OR (q.scope_kind = 'function' AND r.function_id = q.function_id)
-       OR (q.scope_kind = 'agent' AND r.function_id = q.function_id AND r.agent_id = q.agent_id)
-       OR (q.scope_kind = 'plan' AND r.function_id = q.function_id
-           AND r.agent_id = q.agent_id AND r.plan_id = q.plan_id)
-     )
-     AND NOT (r.agent_id = ANY (p.excluded_agent_ids))
+   CROSS JOIN LATERAL brain_evidence.dream_eligible($1::text, n.evaluated_at, fl.ordinal) e
 ), counted AS (
   SELECT coalesce(max(e.ordinal), 0) AS frontier_ordinal,
          count(*) AS eligible_observations,
@@ -251,23 +194,7 @@ export async function computeDreamReadiness(
   pool: VerifiedBrainPool,
   scope: DreamScope,
 ): Promise<DreamReadinessResult> {
-  const fallback = DEFAULT_DREAM_POLICY;
-  const rows = (await pool.query<ReadinessRow>(READINESS_SQL, [
-    scope.key,
-    scope.kind,
-    scope.functionId,
-    scope.agentId,
-    scope.planId,
-    [...dreamScopeResolutionChain(scope)],
-    fallback.policyVersion,
-    fallback.scopeKey,
-    fallback.minCompletedRuns,
-    fallback.minFeedbackRecords,
-    fallback.minSignalMix,
-    dreamDurationSeconds(fallback.evidenceWindow),
-    dreamDurationSeconds(fallback.cooldown),
-    [...fallback.excludedAgentIds],
-  ])).rows;
+  const rows = (await pool.query<ReadinessRow>(READINESS_SQL, [scope.key])).rows;
   const row = rows[0];
   if (row === undefined) {
     throw dreamError('BRAIN_DREAM_INTEGRITY', 'The Dreamer readiness query returned no snapshot.');

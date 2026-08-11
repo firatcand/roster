@@ -361,7 +361,9 @@ test('the 014 backfill reconstructs a total, deterministic, gap-free order', opt
   const files = loadMigrations(schemaDir());
   const legacy = files.filter((file) => Number.parseInt(file.filename.split('_', 1)[0]!, 10) <= 13);
   assert.equal(legacy.at(-1)!.filename, '013_evidence_core.sql');
-  assert.equal(files.at(-1)!.filename, '014_dream_readiness.sql');
+  // 014 is the migration under test; later migrations may follow it, so this
+  // pins its presence and position after 013 rather than "014 is last".
+  assert.equal(files[legacy.length]!.filename, '014_dream_readiness.sql');
 
   const staged = mkdtempSync(join(tmpdir(), 'roster-brain-013-'));
   for (const file of legacy) cpSync(join(schemaDir(), file.filename), join(staged, file.filename));
@@ -437,7 +439,9 @@ test('the 014 backfill reconstructs a total, deterministic, gap-free order', opt
         runtimeRole: roleBase,
         runtimePassword: password,
       });
-      assert.deepEqual(upgraded.migrations.applied, ['014_dream_readiness.sql']);
+      // 014 is the migration under test; every later migration applies in the
+      // same upgrade, so this pins that 014 leads the applied set.
+      assert.equal(upgraded.migrations.applied[0], '014_dream_readiness.sql');
     } finally {
       await pool.end();
     }

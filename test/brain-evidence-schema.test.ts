@@ -397,7 +397,9 @@ test('brain evidence schema installs append-only tables the runtime role can onl
         const overloadCheck = overloaded.checks.find((entry) =>
           entry.name.startsWith('brain-evidence-append-only'));
         assert.equal(overloadCheck?.ok, false, overloadCheck?.detail);
-        assert.match(overloadCheck!.detail, /record_completed_run\(jsonb\)/u);
+        // The finding renders the identity arguments, which include parameter names;
+        // the OVERLOAD is what is pinned, not the renderer's spelling.
+        assert.match(overloadCheck!.detail, /record_completed_run\([^)]*jsonb\)/u);
         await fixture.admin.query(`DROP FUNCTION brain_evidence.record_completed_run(jsonb)`);
 
         // A MISSING expected broker must read as a red finding, never a cast

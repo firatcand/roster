@@ -34,7 +34,9 @@ function assertItemWithinWorkspace(item: PendingItem, cwd: string): void {
 // Where an approved item lands. Error-class items carry an explicit
 // target_on_approve. Lesson-class items don't need one: the destination is
 // structural — a candidate in <agent>/pending/ is promoted to <agent>/playbook/
-// under the same name (conventions.md § "Lesson lifecycle", skills/dreamer).
+// under the same name (conventions.md § "Lesson lifecycle"). This is the LEGACY
+// v1 lesson path; #358's Dreamer lifecycle consumes no pending/ item at all and
+// materializes an approved lesson through `roster dream candidates promote`.
 // An explicit front-matter target still wins, and either way the result goes
 // through the same resolveWorkspaceRelativePath confinement below.
 export function resolveApproveTarget(item: PendingItem): string | null {

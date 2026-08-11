@@ -88,6 +88,16 @@ src/lib/brain/dream-readiness.ts
 src/lib/dream-args.ts
 src/commands/dream.ts
 
+# Dreamer lesson lifecycle (#358) -- the promotion binding that finally grants
+# the watermark advance, the cross-store fence the Git materialization runs
+# under, and the repair arms that may DELETE an authored file. A bug here either
+# materializes a lesson nobody approved or destroys one a human wrote.
+src/lib/brain/dream-candidate-contracts.ts
+src/lib/brain/dream-candidates.ts
+src/lib/brain/lesson-materialize.ts
+src/lib/brain/lesson-drift.ts
+src/lib/context-injection-gate.ts
+
 # Run + artifact ledger (#323) — trust taxonomy, sealed provenance, sanitized
 # index projections, and the admin-only version-id repair (mutates users' ops DB)
 src/commands/run.ts

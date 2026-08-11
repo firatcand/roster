@@ -1111,6 +1111,11 @@ test('brain evidence DML stays in the evidence store and never reaches the recor
     // the two admin-only dream state writers; the block below pins that it
     // performs no DML of its own and touches no #356 record broker.
     ['src/lib/brain/dream-readiness.ts', 'dml'],
+    // #358: the candidate lifecycle. Both read from brain_evidence and call the
+    // lifecycle brokers; neither issues INSERT/UPDATE/DELETE of its own -- every
+    // write traverses a SECURITY DEFINER broker, exactly as #356 requires.
+    ['src/lib/brain/dream-candidates.ts', 'dml'],
+    ['src/lib/brain/lesson-materialize.ts', 'dml'],
     ['src/lib/brain/roles.ts', 'schema-name-only'],
     ['src/lib/brain/doctor.ts', 'schema-name-only'],
     // Names the SQL twin of its credential scan in a comment; issues no SQL.
@@ -1134,6 +1139,16 @@ test('brain evidence DML stays in the evidence store and never reaches the recor
     }
   }
   assert.deepEqual(offenders, []);
+
+  // The lifecycle modules read and call brokers; they never write directly.
+  const writeDml = /\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+brain_evidence\./iu;
+  for (const relative of ['src/lib/brain/dream-candidates.ts', 'src/lib/brain/lesson-materialize.ts']) {
+    assert.equal(
+      writeDml.test(readFileSync(join(PROJECT_ROOT, relative), 'utf8')),
+      false,
+      `${relative} must not perform brain_evidence DML`,
+    );
+  }
 
   const storePath = join(PROJECT_ROOT, 'src/lib/brain/evidence-store.ts');
   const store = readFileSync(storePath, 'utf8');
@@ -1221,13 +1236,14 @@ test('the dream readiness surface is a pure read with a deferred, deadlock-free 
   const readinessPath = join(PROJECT_ROOT, 'src/lib/brain/dream-readiness.ts');
   const readiness = readFileSync(readinessPath, 'utf8');
   const namedRelations = [...readiness.matchAll(/brain_evidence\.([a-z_]+)/gu)].map((m) => m[1]!);
+  // #358 moved the eligible-set predicate into two server-side read functions
+  // shared by this module and the candidate brokers, so readiness no longer
+  // names the underlying evidence tables at all.
   assert.deepEqual([...new Set(namedRelations)].sort(), [
     'advance_dream_watermark',
-    'completed_runs',
-    'dream_policies',
+    'dream_effective_policy',
+    'dream_eligible',
     'dream_watermarks',
-    'evidence_observations',
-    'feedback',
     'register_dream_policy',
   ]);
   // No DML against ANY #356 evidence table: readiness reads, it never records.
@@ -1265,15 +1281,73 @@ test('the dream readiness surface is a pure read with a deferred, deadlock-free 
     }
   }
 
-  // B5-corrected: `candidate` already appears throughout src/ (pending items,
-  // task context, hitl sweep), so the "#358 was not pre-built" assertion is
-  // scoped to the new Dreamer modules and 014 alone.
-  for (const text of [...dreamModules.map((m) => readFileSync(join(PROJECT_ROOT, m), 'utf8')), migration]) {
-    const code = withoutComments(text);
-    assert.equal(/dream_candidates|dream_candidate_evidence|lesson_decisions/u.test(code), false);
-    assert.equal(/candidate/iu.test(code), false);
-    assert.equal(/promote|reject|retire/iu.test(code.replace(/reject_evidence_(?:input|mutation)/gu, '')), false);
+  // #358's POSITIVE contract, replacing the "not pre-built" assertion #357 held
+  // here: the candidate ledger is named only by the modules that own it, and
+  // readiness itself still names no candidate surface.
+  assert.equal(
+    /dream_candidates|dream_candidate_evidence|lesson_decisions/u.test(withoutComments(readiness)),
+    false,
+    'dream-readiness.ts must not reach into the candidate ledger',
+  );
+  const sourceFiles = typescriptFiles('src');
+  const lifecycleOwners = [
+    'src/lib/brain/dream-candidates.ts',
+    'src/lib/brain/lesson-materialize.ts',
+  ];
+  const brokerNames = [
+    'record_dream_candidate',
+    'decide_lesson_candidate',
+    'hold_dream_subject_lock',
+    'verify_dream_subject_governor',
+  ];
+  // The grant list and the doctor's approved-signature audit necessarily NAME
+  // the brokers; nothing else may CALL them.
+  const grantAudits = ['src/lib/brain/roles.ts', 'src/lib/brain/doctor.ts'];
+  for (const path of sourceFiles) {
+    const relative = repositoryPath(path);
+    if (!relative.startsWith('src/')) continue;
+    if (lifecycleOwners.includes(relative) || grantAudits.includes(relative)) continue;
+    const text = readFileSync(path, 'utf8');
+    for (const broker of brokerNames) {
+      assert.equal(text.includes(broker), false, `${relative} names ${broker}`);
+    }
+    assert.equal(
+      text.includes(".roster/state/locks/dream-phase"),
+      false,
+      `${relative} names the dream-phase lock path`,
+    );
+    assert.equal(
+      /SET LOCAL (?:idle_in_transaction_session_timeout|transaction_timeout)/u.test(text),
+      false,
+      `${relative} issues a fence timeout override`,
+    );
   }
+  const materialize = readFileSync(join(PROJECT_ROOT, 'src/lib/brain/lesson-materialize.ts'), 'utf8');
+  assert.match(materialize, /SET LOCAL idle_in_transaction_session_timeout = 0/u);
+  assert.match(materialize, /SET LOCAL transaction_timeout = 0/u);
+  assert.match(materialize, /server_version_num/u);
+  assert.match(materialize, /'\.roster\/state\/locks\/dream-phase'/u);
+
+  // ONE injection gate, TWO importers: a divergent second copy would let a
+  // candidate pass at promotion what the context bundle refuses at read.
+  const gateOwners = sourceFiles
+    .filter((path) => repositoryPath(path).startsWith('src/'))
+    .filter((path) => readFileSync(path, 'utf8').includes('hasHostileBrainInstruction'))
+    .map((path) => repositoryPath(path));
+  assert.deepEqual(gateOwners.sort(), [
+    'src/lib/brain/lesson-materialize.ts',
+    'src/lib/context-injection-gate.ts',
+    'src/lib/workspace-context.ts',
+  ]);
+  const gate = readFileSync(join(PROJECT_ROOT, 'src/lib/context-injection-gate.ts'), 'utf8');
+  assert.match(gate, /export function hasHostileBrainInstruction/u);
+  assert.equal(
+    /function hasHostileBrainInstruction/u.test(
+      readFileSync(join(PROJECT_ROOT, 'src/lib/workspace-context.ts'), 'utf8'),
+    ),
+    false,
+    'workspace-context.ts must re-export the gate, never redefine it',
+  );
 
   // B2: the deferral is a single keyword and the whole no-deadlock argument
   // rests on it. Both triggers are pinned by their exact declaration.

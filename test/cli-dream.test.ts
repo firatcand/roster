@@ -5,7 +5,13 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { parseDreamArgs } from '../src/lib/dream-args.ts';
-import { executeDreamStatus } from '../src/commands/dream.ts';
+import { decisionActionsFor } from '../src/lib/brain/dream-candidates.ts';
+import {
+  SUPERSEDED_MESSAGE,
+  executeDreamStatus,
+  renderCandidateLines,
+  renderUnverifiedLines,
+} from '../src/commands/dream.ts';
 import { RosterError } from '../src/lib/errors.ts';
 
 const BIN = resolve(process.cwd(), 'bin/roster.js');
@@ -66,19 +72,105 @@ test('dream status parses its scope aliases and refuses every other verb', () =>
     scope: undefined, functionId: undefined, agent: 'gtm/manager',
   });
 
-  // #358 owns the candidate lifecycle; until it ships the usage error must name
-  // only `status`, so a host never believes a candidate surface exists here.
-  for (const verb of ['candidates', 'reflect', 'promote', 'status-all']) {
+  // The usage error names exactly the surface that exists, so a host never
+  // believes in a verb Roster does not have.
+  for (const verb of ['reflect', 'promote', 'status-all']) {
     const message = bad([verb]);
     assert.match(message, /unknown 'dream' subcommand/u, verb);
-    assert.match(message, /available: status/u, verb);
-    assert.equal(/candidate/u.test(message.replace(verb, '')), false, verb);
+    assert.match(message, /available: status \| candidates/u, verb);
   }
-  assert.match(bad([]), /missing subcommand for 'dream' \(available: status\)/u);
+  assert.match(bad([]), /missing subcommand for 'dream' \(available: status \| candidates\)/u);
   assert.match(bad(['status', '--scope']), /--scope requires a value/u);
   assert.match(bad(['status', '--function', '--json']), /--function requires a value/u);
   assert.match(bad(['status', '--force']), /unknown flag for 'dream status'/u);
   assert.match(bad(['status', 'workspace']), /unexpected positional argument/u);
+});
+
+test('the candidate grammar accepts exactly the shipped surface', () => {
+  assert.deepEqual({ ...ok(['candidates', 'list']) }, {
+    kind: 'ok', subcommand: 'candidates', verb: 'list', json: false,
+    state: undefined, target: undefined, candidateId: undefined, limit: undefined,
+  });
+  assert.deepEqual({ ...ok(['candidates', 'list', '--json', '--state', 'open', '--target', 'gtm/sdr', '--limit', '5']) }, {
+    kind: 'ok', subcommand: 'candidates', verb: 'list', json: true,
+    state: 'open', target: 'gtm/sdr', candidateId: undefined, limit: 5,
+  });
+  assert.deepEqual({ ...ok(['candidates', 'list', '--candidate', 'sha256:abc']) }, {
+    kind: 'ok', subcommand: 'candidates', verb: 'list', json: false,
+    state: undefined, target: undefined, candidateId: 'sha256:abc', limit: undefined,
+  });
+  assert.deepEqual({ ...ok(['candidates', 'create', '--stdin']) }, {
+    kind: 'ok', subcommand: 'candidates', verb: 'create', json: false,
+    file: undefined, stdin: true,
+  });
+  const digest = `sha256:${'a'.repeat(64)}`;
+  for (const verb of ['promote', 'reject', 'retire'] as const) {
+    assert.deepEqual({ ...ok(['candidates', verb, 'cand-1', '--decision', 'hd-1', '--action-digest', digest]) }, {
+      kind: 'ok', subcommand: 'candidates', verb, json: false,
+      candidateId: 'cand-1', decisionId: 'hd-1', actionDigest: digest,
+    });
+  }
+
+  assert.match(bad(['candidates']), /missing verb for 'dream candidates'/u);
+  assert.match(bad(['candidates', 'approve']), /unknown 'dream candidates' verb 'approve'/u);
+  assert.match(bad(['candidates', 'list', '--state', 'nope']), /unknown --state 'nope'/u);
+  assert.match(bad(['candidates', 'list', '--limit', '0']), /--limit must be a whole number/u);
+  assert.match(bad(['candidates', 'create']), /pass exactly one of --file <path> or --stdin/u);
+  assert.match(bad(['candidates', 'create', '--file', 'a', '--stdin']), /pass exactly one of/u);
+  assert.match(bad(['candidates', 'promote']), /a candidate id is required/u);
+  assert.match(bad(['candidates', 'promote', 'c1']), /--decision <human-decision-id> is required/u);
+  assert.match(bad(['candidates', 'promote', 'c1', '--decision', 'hd']), /--action-digest <sha256:\.\.\.> is required/u);
+  assert.match(bad(['candidates', 'promote', 'c1', 'c2', '--decision', 'hd', '--action-digest', digest]), /unexpected positional/u);
+});
+
+test('the superseded, unverified, and warning reports say exactly what to do next', () => {
+  // A superseded replay is a deliberate NO-OP at exit 0: retrying is not the
+  // remedy, reading the current state is.
+  assert.match(SUPERSEDED_MESSAGE, /superseded by later lifecycle activity/u);
+  assert.match(SUPERSEDED_MESSAGE, /no filesystem change/u);
+
+  const pre = renderUnverifiedLines('pre-phase', 'the fence connection was lost').join('\n');
+  assert.match(pre, /UNVERIFIED \(no mutation performed\)/u);
+  assert.match(pre, /re-run the verb \(it converges\) and run roster brain doctor/u);
+  const post = renderUnverifiedLines('post-phase', 'the subject governor changed under the fence').join('\n');
+  assert.match(post, /UNVERIFIED/u);
+  assert.equal(/no mutation performed/u.test(post), false);
+  assert.match(post, /re-run the verb \(it converges\)/u);
+
+  // The list renderer prints the warning verbatim and never fails on one.
+  const rendered = renderCandidateLines([{
+    candidate_id: `sha256:${'a'.repeat(64)}`,
+    state: 'open',
+    scope_key: 'workspace',
+    lesson_scope_key: 'agent:gtm/sdr',
+    lesson_agent_key: 'gtm/sdr',
+    lesson_id: 'shorter-openers',
+    lesson_qualified_id: 'gtm/sdr/playbook/shorter-openers',
+    drafted_by_agent_id: 'dreamer',
+    lesson_purpose: 'Lead with the prospect.',
+    privacy_class: 'internal',
+    policy_version: 'roster.dream.default.v1',
+    readiness_key: `sha256:${'b'.repeat(64)}`,
+    watermark_ordinal: 0,
+    frontier_ordinal: 9,
+    recorded_at: '2026-08-11T09:00:00.000Z',
+    supersedes_candidate_id: null,
+    decision_action: decisionActionsFor(`sha256:${'a'.repeat(64)}`, 'agent:gtm/sdr'),
+    warnings: [{ code: 'SAME_LESSON_FILE', detail: 'both cannot be promoted — retire the promoted one first.' }],
+  }]).join('\n');
+  assert.match(rendered, /SAME_LESSON_FILE/u);
+  assert.match(rendered, /both cannot be promoted/u);
+  assert.match(rendered, /gtm\/sdr\/playbook\/shorter-openers/u);
+
+  // The list PRINTS the exact human-decision action for every verb. A host
+  // cannot derive the target: it is a grouped spelling of the candidate digest,
+  // because a bare sha256 is credential-shaped and is refused in free text.
+  for (const verb of ['promote', 'reject', 'retire']) {
+    assert.match(rendered, new RegExp(`decision action \\(${verb}\\): target=dream-candidate:aaaa-`, 'u'));
+    assert.match(rendered, new RegExp(`effect=dream-candidate-${verb} scope=agent:gtm/sdr`, 'u'));
+  }
+  assert.equal(/target=sha256:/u.test(rendered), false, 'the raw digest is never the decision target');
+  assert.deepEqual(renderCandidateLines([]).some((line) => line.includes('no candidates recorded')), true);
 });
 
 test('a workspace with no brain block answers not_due at exit 0 without a pool', async () => {
@@ -156,13 +248,26 @@ test('the built CLI routes dream status and reports it in --help', () => {
     assert.equal(help.status, 0, help.stderr);
     assert.match(help.stdout, /roster dream status/u);
 
-    const unknown = spawnSync(process.execPath, [BIN, 'dream', 'candidates', '--json'], {
+    assert.match(help.stdout, /roster dream candidates/u);
+
+    const unknown = spawnSync(process.execPath, [BIN, 'dream', 'reflect', '--json'], {
       encoding: 'utf8',
       cwd: root,
       env,
     });
     assert.notEqual(unknown.status, 0);
-    assert.match(JSON.parse(unknown.stdout).message as string, /available: status/u);
+    assert.match(JSON.parse(unknown.stdout).message as string, /available: status \| candidates/u);
+
+    // The list verb mirrors `status`'s local-only tolerance: a Brain-less
+    // workspace answers with an empty list at exit 0 rather than erroring on an
+    // ordinary host interaction.
+    const list = spawnSync(process.execPath, [BIN, 'dream', 'candidates', 'list', '--json'], {
+      encoding: 'utf8',
+      cwd: root,
+      env,
+    });
+    assert.equal(list.status, 0, list.stderr);
+    assert.deepEqual(JSON.parse(list.stdout), { ok: true, candidates: [], brain: 'not-configured' });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

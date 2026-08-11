@@ -2,6 +2,25 @@ import type pg from 'pg';
 import { RUNTIME_ROLE } from './roles.ts';
 import { pendingMigrations } from './migrate.ts';
 
+// The COMPLETE executable surface the runtime role may hold in brain_evidence:
+// #356's four record brokers, #358's two lifecycle brokers, the filesystem-phase
+// fence, the read-only governor verifier, and the two shared read functions.
+// advance_dream_watermark and register_dream_policy are deliberately absent --
+// the runtime reaches the advance only INSIDE decide_lesson_candidate -- and so
+// are lock_key/lock_frame and the assert_* validators.
+export const APPROVED_EVIDENCE_EXECUTE_SIGNATURES = Object.freeze([
+  'brain_evidence.record_completed_run(text)',
+  'brain_evidence.record_run_artifact(text)',
+  'brain_evidence.record_feedback(text)',
+  'brain_evidence.record_human_decision(text)',
+  'brain_evidence.record_dream_candidate(text)',
+  'brain_evidence.decide_lesson_candidate(text)',
+  'brain_evidence.hold_dream_subject_lock(text)',
+  'brain_evidence.verify_dream_subject_governor(text)',
+  'brain_evidence.dream_effective_policy(text)',
+  'brain_evidence.dream_eligible(text, timestamp with time zone, bigint)',
+] as const);
+
 export type DoctorCheck = {
   name: string;
   ok: boolean;
@@ -199,12 +218,20 @@ async function checksForRole(client: pg.PoolClient, roleName: string): Promise<D
   );
 
   // #356: portable evidence is broker-append. The runtime role's brain_evidence
-  // privileges must be EXACTLY schema USAGE + table SELECT + EXECUTE on the four
-  // record brokers: no direct DML at any granularity, and no EXECUTE on the
-  // promotion-adjacent helpers (validation, lock framing, workspace identity).
+  // privileges must be EXACTLY schema USAGE + relation SELECT + EXECUTE on the
+  // approved signature set: no direct DML at any granularity, and no EXECUTE on
+  // the promotion-adjacent helpers (validation, lock framing, workspace
+  // identity) or on advance_dream_watermark / register_dream_policy.
   // The broker comparison is by full SIGNATURE, not name: an added overload such
   // as record_completed_run(jsonb) is an unapproved executable surface, and a
   // MISSING expected broker must read as a finding rather than a cast error.
+  // #358: the comparison is by OID, resolved through to_regprocedure, and the
+  // reported spelling is pg_get_function_identity_arguments. Comparing rendered
+  // signature TEXT made the audit depend on how a type happens to print
+  // (`timestamptz` vs `timestamp with time zone`), so an approved function could
+  // read as unexpected purely on spelling; an OID cannot be spelled two ways.
+  // The three relation clauses cover views as well as tables, so the derived
+  // dream_candidate_state view is audited exactly like a base table.
   // #357: the generic `no-sequence-privs` audit below is scoped to nspname =
   // 'brain', so a grant on brain_evidence's commit-ordering sequence would have
   // been invisible here while this check's description still promised "exactly
@@ -220,7 +247,7 @@ async function checksForRole(client: pg.PoolClient, roleName: string): Promise<D
       await check(
         client,
         'brain-evidence-append-only',
-        'runtime role brain_evidence access is exactly USAGE + SELECT + the four record brokers',
+        'runtime role brain_evidence access is exactly USAGE + SELECT + the approved brokers and read functions',
         'runtime role brain_evidence privileges are wrong',
         `SELECT 'missing USAGE on brain_evidence'
           WHERE NOT has_schema_privilege($1, 'brain_evidence', 'USAGE')
@@ -230,57 +257,45 @@ async function checksForRole(client: pg.PoolClient, roleName: string): Promise<D
           UNION ALL
          SELECT 'missing SELECT on brain_evidence.' || c.relname
            FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-          WHERE n.nspname = 'brain_evidence' AND c.relkind = 'r'
+          WHERE n.nspname = 'brain_evidence' AND c.relkind IN ('r', 'v')
             AND NOT has_table_privilege($1, c.oid, 'SELECT')
           UNION ALL
          SELECT 'brain_evidence.' || c.relname || ' ' || p.priv
            FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
            CROSS JOIN (VALUES ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')) AS p(priv)
-          WHERE n.nspname = 'brain_evidence' AND c.relkind = 'r'
+          WHERE n.nspname = 'brain_evidence' AND c.relkind IN ('r', 'v')
             AND has_table_privilege($1, c.oid, p.priv)
           UNION ALL
          SELECT 'brain_evidence.' || c.relname || '.' || a.attname || ' ' || p.priv
            FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
            JOIN pg_attribute a ON a.attrelid = c.oid
            CROSS JOIN (VALUES ('INSERT'), ('UPDATE'), ('REFERENCES')) AS p(priv)
-          WHERE n.nspname = 'brain_evidence' AND c.relkind = 'r'
+          WHERE n.nspname = 'brain_evidence' AND c.relkind IN ('r', 'v')
             AND a.attnum > 0 AND NOT a.attisdropped
             AND has_column_privilege($1, c.oid, a.attnum, p.priv)
           UNION ALL
          SELECT 'missing EXECUTE on ' || expected.signature
-           FROM (VALUES
-             ('brain_evidence.record_completed_run(text)'),
-             ('brain_evidence.record_run_artifact(text)'),
-             ('brain_evidence.record_feedback(text)'),
-             ('brain_evidence.record_human_decision(text)')
-           ) AS expected(signature)
-          WHERE NOT EXISTS (
-            SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-             WHERE n.nspname = 'brain_evidence'
-               AND n.nspname || '.' || p.proname
-                   || '(' || pg_catalog.oidvectortypes(p.proargtypes) || ')' = expected.signature
-               AND has_function_privilege($1, p.oid, 'EXECUTE')
-          )
+           FROM unnest($2::text[]) AS expected(signature)
+          WHERE to_regprocedure(expected.signature) IS NULL
+             OR NOT has_function_privilege($1, to_regprocedure(expected.signature)::oid, 'EXECUTE')
           UNION ALL
          SELECT 'unexpected EXECUTE on ' || n.nspname || '.' || p.proname
-                || '(' || pg_catalog.oidvectortypes(p.proargtypes) || ')'
+                || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')'
            FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
           WHERE n.nspname = 'brain_evidence'
             AND has_function_privilege($1, p.oid, 'EXECUTE')
-            AND n.nspname || '.' || p.proname
-                || '(' || pg_catalog.oidvectortypes(p.proargtypes) || ')' <> ALL (ARRAY[
-                  'brain_evidence.record_completed_run(text)',
-                  'brain_evidence.record_run_artifact(text)',
-                  'brain_evidence.record_feedback(text)',
-                  'brain_evidence.record_human_decision(text)'
-                ])
+            AND p.oid <> ALL (array_remove(
+              ARRAY(SELECT to_regprocedure(approved.signature)::oid
+                      FROM unnest($2::text[]) AS approved(signature)),
+              NULL
+            ))
           UNION ALL
          SELECT 'brain_evidence.' || c.relname || ' ' || p.priv
            FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
            CROSS JOIN (VALUES ('USAGE'), ('SELECT'), ('UPDATE')) AS p(priv)
           WHERE n.nspname = 'brain_evidence' AND c.relkind = 'S'
             AND has_sequence_privilege($1, c.oid, p.priv)`,
-        [roleName],
+        [roleName, [...APPROVED_EVIDENCE_EXECUTE_SIGNATURES]],
       ),
     );
   }
