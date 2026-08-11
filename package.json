@@ -26,6 +26,7 @@
     "test": "node --test --experimental-strip-types 'test/**/*.test.ts'",
     "test:workspace-benchmark": "node --test --test-concurrency=1 --experimental-strip-types test/workspace-registry.benchmark.ts",
     "test:context-benchmark": "ROSTER_CONTEXT_BENCHMARK=1 node --test --test-concurrency=1 --test-name-pattern='context benchmark|representative built context' --experimental-strip-types test/context.benchmark.ts test/workspace-context.test.ts",
+    "eval:retrieval": "node --experimental-strip-types scripts/retrieval-eval-report.ts",
     "test:update-golden": "node --experimental-strip-types scripts/update-golden.ts",
     "test:update-golden:stub": "node --experimental-strip-types scripts/update-golden-stub.ts",
     "smoke": "bash test/smoke.sh",

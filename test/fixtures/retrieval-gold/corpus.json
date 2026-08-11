@@ -1,0 +1,3027 @@
+{
+  "schemaVersion": 1,
+  "identities": {
+    "workspaceIds": [
+      "retrieval-gold-workspace"
+    ]
+  },
+  "target": {
+    "functionId": "gtm",
+    "agentId": "social-manager",
+    "planId": "opportunity-discovery"
+  },
+  "planClosureQualifiedIds": [
+    "gtm/social-manager#opportunity-discovery"
+  ],
+  "sources": [
+    {
+      "sourceStableKey": "baseline-cobalt-dossier-1",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-cobalt-dossier-1",
+          "kind": "text",
+          "body": "The Cobalt dossier records which reply openings held attention through a full week of outreach.",
+          "rawSha256": "82441295abe5923e0bcb6753af7b2a7ac537e35feebf0e945ce2955909fd0256",
+          "expectedChunkContentSha256s": [
+            "82441295abe5923e0bcb6753af7b2a7ac537e35feebf0e945ce2955909fd0256"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-cobalt-dossier-2",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-cobalt-dossier-2",
+          "kind": "text",
+          "body": "A second Cobalt dossier entry lists the follow up notes the team kept after every answered thread.",
+          "rawSha256": "96d53e808d345386a66b514febcf852052889688f6477a4992a43b5bca084b90",
+          "expectedChunkContentSha256s": [
+            "96d53e808d345386a66b514febcf852052889688f6477a4992a43b5bca084b90"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-cobalt-dossier-distractor",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-cobalt-dossier-distractor",
+          "kind": "text",
+          "body": "An archived Cobalt dossier stub with no reply history attached to it yet.",
+          "rawSha256": "2499cbcea5915030f6462a511bd6b84fe846811d2969c52819312358c6d11c68",
+          "expectedChunkContentSha256s": [
+            "2499cbcea5915030f6462a511bd6b84fe846811d2969c52819312358c6d11c68"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-amber-ledger-1",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-amber-ledger-1",
+          "kind": "text",
+          "body": "The Amber ledger tracks every outbound post and the reply that followed it inside one channel.",
+          "rawSha256": "f6cf0abf84ddf7ce415bb205440df63d7ccf3644aa82a7ef4c9e3f3452234ca2",
+          "expectedChunkContentSha256s": [
+            "f6cf0abf84ddf7ce415bb205440df63d7ccf3644aa82a7ef4c9e3f3452234ca2"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-amber-ledger-2",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-amber-ledger-2",
+          "kind": "text",
+          "body": "An Amber ledger review lists the posts that earned a same day answer from a named owner.",
+          "rawSha256": "15e43111ae164e26b35c1704b23f4aeee0d56ccabb7452305c1590e6b007d741",
+          "expectedChunkContentSha256s": [
+            "15e43111ae164e26b35c1704b23f4aeee0d56ccabb7452305c1590e6b007d741"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-amber-ledger-distractor",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-amber-ledger-distractor",
+          "kind": "text",
+          "body": "An empty Amber ledger template kept for the next quarter of channel work.",
+          "rawSha256": "d1dafa16eba055cf4db17481542eeb0d2158d1f806ba84ba8138d9d920e52025",
+          "expectedChunkContentSha256s": [
+            "d1dafa16eba055cf4db17481542eeb0d2158d1f806ba84ba8138d9d920e52025"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-juniper-briefing-1",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-juniper-briefing-1",
+          "kind": "text",
+          "body": "The Juniper briefing summarises which partner threads produced a booked call last month.",
+          "rawSha256": "9d5f73e5bc6e65a9e2f4c89676bf933039eddb76ce67602d1fdcbf1b3d4f83e6",
+          "expectedChunkContentSha256s": [
+            "9d5f73e5bc6e65a9e2f4c89676bf933039eddb76ce67602d1fdcbf1b3d4f83e6"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-juniper-briefing-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-juniper-briefing-record",
+          "kind": "structured",
+          "record": {
+            "kind": "fact",
+            "identity": "juniper-briefing",
+            "body": {
+              "headline": "Juniper briefing structured entry for the current period",
+              "owner": "field team",
+              "status": "reviewed"
+            }
+          },
+          "rawSha256": "1cd2104f321d7f8ceaf5a6c812b6464ab89d135045dc558f807052aead8a01ae",
+          "expectedChunkContentSha256s": [
+            "2a381b60c82cb2ddf3f48e7fc83b27135993b03886cebb3ec1f89f2be4910f0e"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-juniper-briefing-distractor",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-juniper-briefing-distractor",
+          "kind": "text",
+          "body": "A Juniper briefing cover page with the agenda only and no partner detail.",
+          "rawSha256": "320dff6429f8ffc118716eef5cc156fd23878a72c8c7cf74f4b4e17117f6af82",
+          "expectedChunkContentSha256s": [
+            "320dff6429f8ffc118716eef5cc156fd23878a72c8c7cf74f4b4e17117f6af82"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-kestrel-roadmap-1",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-kestrel-roadmap-1",
+          "kind": "text",
+          "body": "The Kestrel roadmap sets the order in which the team will test new reply openings.",
+          "rawSha256": "4d000f7587b06a85dddfa089db0cf2ebaf9c3ecea8bf8b88dd4cde9cbcafe7dc",
+          "expectedChunkContentSha256s": [
+            "4d000f7587b06a85dddfa089db0cf2ebaf9c3ecea8bf8b88dd4cde9cbcafe7dc"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-kestrel-roadmap-2",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-kestrel-roadmap-2",
+          "kind": "text",
+          "body": "A Kestrel roadmap addendum names the owner for each planned test window.",
+          "rawSha256": "551cfb77e89549802226524c7c849694d73530fe2624d1bff8944f397994e146",
+          "expectedChunkContentSha256s": [
+            "551cfb77e89549802226524c7c849694d73530fe2624d1bff8944f397994e146"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-kestrel-roadmap-distractor",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-kestrel-roadmap-distractor",
+          "kind": "text",
+          "body": "An outdated Kestrel roadmap sketch that names no owner and no window.",
+          "rawSha256": "a8ec431dd34e0166ac1aa8eaaad4de815592f3f81a84746cfbcfa339a6ebb695",
+          "expectedChunkContentSha256s": [
+            "a8ec431dd34e0166ac1aa8eaaad4de815592f3f81a84746cfbcfa339a6ebb695"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-basalt-playbook-1",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-basalt-playbook-1",
+          "kind": "text",
+          "body": "The Basalt playbook describes how the team answers a cold thread without repeating itself.",
+          "rawSha256": "f8743eaabfc4b2dc64e204db48f62a6fc7919be798611cb45009808dee497196",
+          "expectedChunkContentSha256s": [
+            "f8743eaabfc4b2dc64e204db48f62a6fc7919be798611cb45009808dee497196"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-basalt-playbook-2",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-basalt-playbook-2",
+          "kind": "text",
+          "body": "A Basalt playbook appendix collects the phrasings that kept a thread alive past three replies.",
+          "rawSha256": "b94a4582bfdc134ce5f3c8d94d36a48bb4e1640665b029a3930b24a2731d42df",
+          "expectedChunkContentSha256s": [
+            "b94a4582bfdc134ce5f3c8d94d36a48bb4e1640665b029a3930b24a2731d42df"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-basalt-playbook-distractor",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-basalt-playbook-distractor",
+          "kind": "text",
+          "body": "A Basalt playbook draft header with the sections still empty.",
+          "rawSha256": "e34c3f77b26834e39234b0b139fe1285a3cb2c2078bc1431af3dd7b012d06357",
+          "expectedChunkContentSha256s": [
+            "e34c3f77b26834e39234b0b139fe1285a3cb2c2078bc1431af3dd7b012d06357"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-saffron-memo-1",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-saffron-memo-1",
+          "kind": "text",
+          "body": "The Saffron memo explains why the team moved its posting window one hour earlier.",
+          "rawSha256": "ec142b09e43d000d0dc90e9900b53345b495d1f05656ed8e3b74e4f780bf99c0",
+          "expectedChunkContentSha256s": [
+            "ec142b09e43d000d0dc90e9900b53345b495d1f05656ed8e3b74e4f780bf99c0"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-saffron-memo-2",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-saffron-memo-2",
+          "kind": "text",
+          "body": "A Saffron memo follow up records the reply counts observed after the window moved.",
+          "rawSha256": "888a6dc06857742f8371137ac38b4288139139ea0d4421e75bb1b0c53a6fbc15",
+          "expectedChunkContentSha256s": [
+            "888a6dc06857742f8371137ac38b4288139139ea0d4421e75bb1b0c53a6fbc15"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-saffron-memo-distractor",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-saffron-memo-distractor",
+          "kind": "text",
+          "body": "A Saffron memo distribution list with no body text yet.",
+          "rawSha256": "37ac56371c201fb2c860e6ac05669c5f90d5f154372cd260e737075883bed41c",
+          "expectedChunkContentSha256s": [
+            "37ac56371c201fb2c860e6ac05669c5f90d5f154372cd260e737075883bed41c"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-trellis-rollout-1",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-trellis-rollout-1",
+          "kind": "text",
+          "body": "The Trellis rollout notes which accounts received the new outreach sequence first.",
+          "rawSha256": "046a06a87c758126476c80cb77c837380c5e49169a64705364cd40bc1f17916a",
+          "expectedChunkContentSha256s": [
+            "046a06a87c758126476c80cb77c837380c5e49169a64705364cd40bc1f17916a"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-trellis-rollout-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-trellis-rollout-record",
+          "kind": "structured",
+          "record": {
+            "kind": "fact",
+            "identity": "trellis-rollout",
+            "body": {
+              "headline": "Trellis rollout structured entry for the current period",
+              "owner": "field team",
+              "status": "reviewed"
+            }
+          },
+          "rawSha256": "b41685eca20b5f952b74dda4bf9a9fbf60f62247b7879b887037ff7a2f910293",
+          "expectedChunkContentSha256s": [
+            "8e67ca2a224f000e27237900139fcaf83163ed9cf466220c2241a4a4c37b7f68"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-trellis-rollout-distractor",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-trellis-rollout-distractor",
+          "kind": "text",
+          "body": "A Trellis rollout checklist that lists no account and no sequence.",
+          "rawSha256": "a2d1f9af68a9536cd533147192df41022b604de64ee1619b6304656d53ee7c16",
+          "expectedChunkContentSha256s": [
+            "a2d1f9af68a9536cd533147192df41022b604de64ee1619b6304656d53ee7c16"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-quarry-digest-1",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-quarry-digest-1",
+          "kind": "text",
+          "body": "The Quarry digest gathers the week of replies that named a budget owner directly.",
+          "rawSha256": "1cf1c7149a84a9281d305bdc123a3a09340d9a488abc8b55e13b3dd8d1e4e1f6",
+          "expectedChunkContentSha256s": [
+            "1cf1c7149a84a9281d305bdc123a3a09340d9a488abc8b55e13b3dd8d1e4e1f6"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-quarry-digest-2",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-quarry-digest-2",
+          "kind": "text",
+          "body": "A Quarry digest annex lists the threads that stalled before any owner answered.",
+          "rawSha256": "0b389b0b7ec96d8041fca5859eee43ce7972bf44b781b8bbe81a0fd101b9e462",
+          "expectedChunkContentSha256s": [
+            "0b389b0b7ec96d8041fca5859eee43ce7972bf44b781b8bbe81a0fd101b9e462"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-quarry-digest-distractor",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-quarry-digest-distractor",
+          "kind": "text",
+          "body": "A Quarry digest masthead kept for formatting reference only.",
+          "rawSha256": "ff05b7b7d76fda8234e4ebd85be879df5b6583c61e5f540cf119151edbdbc086",
+          "expectedChunkContentSha256s": [
+            "ff05b7b7d76fda8234e4ebd85be879df5b6583c61e5f540cf119151edbdbc086"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-pergola-charter-1",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-pergola-charter-1",
+          "kind": "text",
+          "body": "The Pergola charter states which channels the team may post in without review.",
+          "rawSha256": "f5d1e68401c3206ab179669b2d5d8a674084368af614b3438c19eabd6bdc0615",
+          "expectedChunkContentSha256s": [
+            "f5d1e68401c3206ab179669b2d5d8a674084368af614b3438c19eabd6bdc0615"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-pergola-charter-2",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-pergola-charter-2",
+          "kind": "text",
+          "body": "A Pergola charter amendment adds a review step for any post naming a customer.",
+          "rawSha256": "136a96ea6a98e503d4ab997f11ad5afe95bf4b4c6fb5aa47ea07dbb3a2c2ecbb",
+          "expectedChunkContentSha256s": [
+            "136a96ea6a98e503d4ab997f11ad5afe95bf4b4c6fb5aa47ea07dbb3a2c2ecbb"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-pergola-charter-distractor",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-pergola-charter-distractor",
+          "kind": "text",
+          "body": "A Pergola charter signature page with no clauses attached.",
+          "rawSha256": "07cfe5054c985884a4599ee6b634ebace98ef019e729768cd78b44ac43bda186",
+          "expectedChunkContentSha256s": [
+            "07cfe5054c985884a4599ee6b634ebace98ef019e729768cd78b44ac43bda186"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-sorrel-bulletin-1",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-sorrel-bulletin-1",
+          "kind": "text",
+          "body": "The Sorrel bulletin reports which reply length correlated with a booked meeting.",
+          "rawSha256": "974d1cc8767684b4d2254ae309c7ac4c6e6ae78a511c182faefa2c86212eb457",
+          "expectedChunkContentSha256s": [
+            "974d1cc8767684b4d2254ae309c7ac4c6e6ae78a511c182faefa2c86212eb457"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-sorrel-bulletin-2",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-sorrel-bulletin-2",
+          "kind": "text",
+          "body": "A Sorrel bulletin correction restates the reply length figure after a recount.",
+          "rawSha256": "9f23f79fdb417b4e3206e60ab04eaf841ac6ded3e0461ceb0ed1ac62d24f0c52",
+          "expectedChunkContentSha256s": [
+            "9f23f79fdb417b4e3206e60ab04eaf841ac6ded3e0461ceb0ed1ac62d24f0c52"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-sorrel-bulletin-distractor",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-sorrel-bulletin-distractor",
+          "kind": "text",
+          "body": "A Sorrel bulletin mailing header with no reported figure.",
+          "rawSha256": "9a71ec929c322a431fb49bb6b921358bcdeeb6ded754a8308256979fdda565f0",
+          "expectedChunkContentSha256s": [
+            "9a71ec929c322a431fb49bb6b921358bcdeeb6ded754a8308256979fdda565f0"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-yarrow-protocol-1",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-yarrow-protocol-1",
+          "kind": "text",
+          "body": "The Yarrow protocol sets how the team escalates a thread that names a legal question.",
+          "rawSha256": "ab1a183cd9c93072f36a0bf1754811bc9217325522e5f8815f00a9bf957746d9",
+          "expectedChunkContentSha256s": [
+            "ab1a183cd9c93072f36a0bf1754811bc9217325522e5f8815f00a9bf957746d9"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-yarrow-protocol-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-yarrow-protocol-record",
+          "kind": "structured",
+          "record": {
+            "kind": "fact",
+            "identity": "yarrow-protocol",
+            "body": {
+              "headline": "Yarrow protocol structured entry for the current period",
+              "owner": "field team",
+              "status": "reviewed"
+            }
+          },
+          "rawSha256": "185bd3c8548c05d0dde7b11306074fc314d16dbce1dd99b3b6eb0a0b1092bda8",
+          "expectedChunkContentSha256s": [
+            "4153ecd12f6b56823cd727881b25ee956e1d089f805d8fdd4d4018aabf4d56ce"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-yarrow-protocol-distractor",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-yarrow-protocol-distractor",
+          "kind": "text",
+          "body": "A Yarrow protocol index page with the escalation steps removed.",
+          "rawSha256": "2f09822e3a351d893af55feeeb3173048c74fd35b04398fb90f8c716de0e9d0a",
+          "expectedChunkContentSha256s": [
+            "2f09822e3a351d893af55feeeb3173048c74fd35b04398fb90f8c716de0e9d0a"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-fennel-handbook-1",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-fennel-handbook-1",
+          "kind": "text",
+          "body": "The Fennel handbook collects the account research steps the team runs before any first post.",
+          "rawSha256": "1e0d1121abad1319857c573cc380bb2cfc1111ee8a8391eab39968636d6b022d",
+          "expectedChunkContentSha256s": [
+            "1e0d1121abad1319857c573cc380bb2cfc1111ee8a8391eab39968636d6b022d"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-fennel-handbook-2",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-fennel-handbook-2",
+          "kind": "text",
+          "body": "A Fennel handbook worksheet lists the research fields an owner must fill before posting.",
+          "rawSha256": "eeb73a64a4ba70ae47b6d24b31035c50c12e13a006a592db58903d40e3d33109",
+          "expectedChunkContentSha256s": [
+            "eeb73a64a4ba70ae47b6d24b31035c50c12e13a006a592db58903d40e3d33109"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "baseline-fennel-handbook-distractor",
+      "revisions": [
+        {
+          "fixtureVersionKey": "baseline-fennel-handbook-distractor",
+          "kind": "text",
+          "body": "A Fennel handbook cover with the research steps still to be written.",
+          "rawSha256": "f36b5d145d02d0f933622ecf74ebf14662f440c5351b769f6b5b52330e253964",
+          "expectedChunkContentSha256s": [
+            "f36b5d145d02d0f933622ecf74ebf14662f440c5351b769f6b5b52330e253964"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "exclusion-onyx-revision",
+      "revisions": [
+        {
+          "fixtureVersionKey": "exclusion-onyx-revision-r1",
+          "kind": "text",
+          "body": "The Onyx revision draft listed the first cut of the reply guidance before review.",
+          "rawSha256": "32e04fe7392dcaa9ad22fba22d3d8c4b66e590ccdf22754e0cdf80d75e67b388",
+          "expectedChunkContentSha256s": [
+            "32e04fe7392dcaa9ad22fba22d3d8c4b66e590ccdf22754e0cdf80d75e67b388"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        },
+        {
+          "fixtureVersionKey": "exclusion-onyx-revision-r2",
+          "kind": "text",
+          "body": "The Onyx revision final states the approved reply guidance the team follows today.",
+          "rawSha256": "45ee2087ae9eb8f8861bca195ab9f49f3c50577f0dd02772a2f0f99318ab7c9a",
+          "expectedChunkContentSha256s": [
+            "45ee2087ae9eb8f8861bca195ab9f49f3c50577f0dd02772a2f0f99318ab7c9a"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "exclusion-indigo-notice",
+      "revisions": [
+        {
+          "fixtureVersionKey": "exclusion-indigo-notice",
+          "kind": "text",
+          "body": "The Indigo notice described a channel policy that the team later withdrew entirely.",
+          "rawSha256": "e9be441fa5b9ae5a1b284591264ebae56d58c3dd131cc932591c3dd10862ce59",
+          "expectedChunkContentSha256s": [
+            "e9be441fa5b9ae5a1b284591264ebae56d58c3dd131cc932591c3dd10862ce59"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "tombstoned"
+    },
+    {
+      "sourceStableKey": "exclusion-clover-ledger",
+      "revisions": [
+        {
+          "fixtureVersionKey": "exclusion-clover-ledger",
+          "kind": "text",
+          "body": "The Clover ledger holds compensation figures that must never leave the finance channel.",
+          "rawSha256": "44b7146b46f59b797265a91b91c3a4ba49f16aeda4e654d6523040f1a9071502",
+          "expectedChunkContentSha256s": [
+            "44b7146b46f59b797265a91b91c3a4ba49f16aeda4e654d6523040f1a9071502"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "secret",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "exclusion-borage-summary",
+      "revisions": [
+        {
+          "fixtureVersionKey": "exclusion-borage-summary",
+          "kind": "text",
+          "body": "The Borage summary belongs to the finance function and describes its own invoice review.",
+          "rawSha256": "f9cd864719b192b09f68500285f3e82d39e7e4b9402e539820c17bb742922ff1",
+          "expectedChunkContentSha256s": [
+            "f9cd864719b192b09f68500285f3e82d39e7e4b9402e539820c17bb742922ff1"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace",
+              "function": "finance"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "exclusion-lichen-archive",
+      "revisions": [
+        {
+          "fixtureVersionKey": "exclusion-lichen-archive",
+          "kind": "text",
+          "body": "The Lichen archive holds imported notes whose original author was never confirmed.",
+          "rawSha256": "595c1359ee5493e89aa57698f37d8f2538e55e0f6bf909381a33bd33f0fc6ece",
+          "expectedChunkContentSha256s": [
+            "595c1359ee5493e89aa57698f37d8f2538e55e0f6bf909381a33bd33f0fc6ece"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "legacy-unverified"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "exclusion-obsidian-base",
+      "revisions": [
+        {
+          "fixtureVersionKey": "exclusion-obsidian-base",
+          "kind": "text",
+          "body": "A placeholder record kept so the injected non active extraction has a current version to attach to.",
+          "rawSha256": "a398a4cf49401aa2f1dd6ddc946c808cf9217b5c1e0d091afbec0a232500dc7c",
+          "expectedChunkContentSha256s": [
+            "a398a4cf49401aa2f1dd6ddc946c808cf9217b5c1e0d091afbec0a232500dc7c"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted",
+          "inactiveExtraction": {
+            "extractorVersion": 2,
+            "content": "The Obsidian appendix repeats the reply guidance under an extractor version the registry does not activate."
+          }
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "exclusion-cedar-shared",
+      "revisions": [
+        {
+          "fixtureVersionKey": "exclusion-cedar-shared",
+          "kind": "text",
+          "body": "The Cedar rulebook at workspace level states the shared posting hours for every function.",
+          "rawSha256": "3e2e4ca670e6e371efcb0606d6c98ff628e252aece76965b66d906e6ad449e83",
+          "expectedChunkContentSha256s": [
+            "3e2e4ca670e6e371efcb0606d6c98ff628e252aece76965b66d906e6ad449e83"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "exclusion-cedar-function",
+      "revisions": [
+        {
+          "fixtureVersionKey": "exclusion-cedar-function",
+          "kind": "text",
+          "body": "The Cedar rulebook for this function narrows the shared posting hours to the launch weeks.",
+          "rawSha256": "f2732de50c595ce803fb8c76d391cce319708a0244b4e2160ada717a8be96f40",
+          "expectedChunkContentSha256s": [
+            "f2732de50c595ce803fb8c76d391cce319708a0244b4e2160ada717a8be96f40"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace",
+              "function": "gtm"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "exclusion-cedar-agent",
+      "revisions": [
+        {
+          "fixtureVersionKey": "exclusion-cedar-agent",
+          "kind": "text",
+          "body": "The Cedar rulebook for this agent adds a review step before any post that names a customer.",
+          "rawSha256": "33d8d06c8b50cce235d26bc92204c14803729fe2949e07df48035713c1e45032",
+          "expectedChunkContentSha256s": [
+            "33d8d06c8b50cce235d26bc92204c14803729fe2949e07df48035713c1e45032"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            },
+            {
+              "workspace": "retrieval-gold-workspace",
+              "function": "gtm",
+              "agent": "social-manager"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "exclusion-cedar-plan",
+      "revisions": [
+        {
+          "fixtureVersionKey": "exclusion-cedar-plan",
+          "kind": "text",
+          "body": "The Cedar rulebook for this plan lists the three openings the plan permits during discovery.",
+          "rawSha256": "a7ddb6141d400584a13156db902f2fe839e5fee30f2c6ad8f3a13f4a880cb843",
+          "expectedChunkContentSha256s": [
+            "a7ddb6141d400584a13156db902f2fe839e5fee30f2c6ad8f3a13f4a880cb843"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace",
+              "function": "gtm",
+              "agent": "social-manager",
+              "plan": "opportunity-discovery"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "exclusion-cedar-foreign-agent",
+      "revisions": [
+        {
+          "fixtureVersionKey": "exclusion-cedar-foreign-agent",
+          "kind": "text",
+          "body": "The Cedar rulebook for another agent describes posting hours that do not apply here.",
+          "rawSha256": "fd5f2b5180383f230c46cdcdb6f245ff7dc46c2bacb2e4c6f3ec67bf57113ab5",
+          "expectedChunkContentSha256s": [
+            "fd5f2b5180383f230c46cdcdb6f245ff7dc46c2bacb2e4c6f3ec67bf57113ab5"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace",
+              "function": "gtm",
+              "agent": "other-agent"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "precedence-quartz-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "precedence-quartz-record",
+          "kind": "structured",
+          "record": {
+            "kind": "entity",
+            "identity": "quartz-anchor",
+            "body": {
+              "headline": "Quartz narrative for the anchor account and its reply history",
+              "owner": "field team",
+              "region": "north"
+            }
+          },
+          "rawSha256": "c718a9b25054ceaabb70e24f21940c81e5c469e8b74b0ffb9f2c92054a6c413c",
+          "expectedChunkContentSha256s": [
+            "263c262a3d6cab246a46ac900dad0f2c90e59248a6d5f8d793db44d90aecb349"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "precedence-garnet-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "precedence-garnet-record",
+          "kind": "structured",
+          "record": {
+            "kind": "entity",
+            "identity": "garnet-anchor",
+            "body": {
+              "headline": "Garnet narrative for a withdrawn account profile",
+              "owner": "field team",
+              "region": "south"
+            }
+          },
+          "rawSha256": "05138be0314460fd085aeca962d1f016ecce0ba90bdaa68c0878314b3f4d3b55",
+          "expectedChunkContentSha256s": [
+            "7c0aaa79f9999f187d1af71c1cbedec10b3c741d46a4113ccca367ab1bec7cb3"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "tombstoned"
+    },
+    {
+      "sourceStableKey": "precedence-topaz-shared",
+      "revisions": [
+        {
+          "fixtureVersionKey": "precedence-topaz-shared",
+          "kind": "text",
+          "body": "The Topaz register at workspace level lists the reply owners shared across functions.",
+          "rawSha256": "145e5470f661bc6bbfea679133d7fe8ade29ec9258a0aa74079e4f64e6d1cabd",
+          "expectedChunkContentSha256s": [
+            "145e5470f661bc6bbfea679133d7fe8ade29ec9258a0aa74079e4f64e6d1cabd"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "precedence-topaz-function",
+      "revisions": [
+        {
+          "fixtureVersionKey": "precedence-topaz-function",
+          "kind": "text",
+          "body": "The Topaz register for this function lists the reply owners assigned to its channels.",
+          "rawSha256": "11110c26e30acb0c0fa5bc4f3b5d477c40b6622e5ace3fb7cded9a78d068e195",
+          "expectedChunkContentSha256s": [
+            "11110c26e30acb0c0fa5bc4f3b5d477c40b6622e5ace3fb7cded9a78d068e195"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace",
+              "function": "gtm"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "precedence-topaz-agent",
+      "revisions": [
+        {
+          "fixtureVersionKey": "precedence-topaz-agent",
+          "kind": "text",
+          "body": "The Topaz register for this agent lists the reply owners it may name in a post.",
+          "rawSha256": "611c2904bc7dc75006b9ca0a4166dbe51e85d4d93a8ee84e21887b911ad15c7e",
+          "expectedChunkContentSha256s": [
+            "611c2904bc7dc75006b9ca0a4166dbe51e85d4d93a8ee84e21887b911ad15c7e"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            },
+            {
+              "workspace": "retrieval-gold-workspace",
+              "function": "gtm",
+              "agent": "social-manager"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "precedence-topaz-plan",
+      "revisions": [
+        {
+          "fixtureVersionKey": "precedence-topaz-plan",
+          "kind": "text",
+          "body": "The Topaz register for this plan lists the reply owners the discovery steps may cite.",
+          "rawSha256": "aebc437656e848de7bb9dd2ced3d58f5827ca55b36c730ef73a1d062ef91ed3d",
+          "expectedChunkContentSha256s": [
+            "aebc437656e848de7bb9dd2ced3d58f5827ca55b36c730ef73a1d062ef91ed3d"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace",
+              "function": "gtm",
+              "agent": "social-manager",
+              "plan": "opportunity-discovery"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "precedence-marble-shared",
+      "revisions": [
+        {
+          "fixtureVersionKey": "precedence-marble-shared",
+          "kind": "text",
+          "body": "The Marble compendium covers reply owners, posting hours and escalation routes in one place.",
+          "rawSha256": "26385412f1389bb404a9996609a21d9fa06f862e3dd1c9d7ddbcbe27fc352928",
+          "expectedChunkContentSha256s": [
+            "26385412f1389bb404a9996609a21d9fa06f862e3dd1c9d7ddbcbe27fc352928"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "alias-northwind-robotics-canonical",
+      "revisions": [
+        {
+          "fixtureVersionKey": "alias-northwind-robotics-canonical",
+          "kind": "text",
+          "body": "Northwind Robotics answered the second outreach thread within a single working day.",
+          "rawSha256": "bc9fb464eefc309eacf6406c76bc6e7a2dd4819bbf5f6fb70fc6edf3ff272175",
+          "expectedChunkContentSha256s": [
+            "bc9fb464eefc309eacf6406c76bc6e7a2dd4819bbf5f6fb70fc6edf3ff272175"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "alias-northwind-robotics-variant",
+      "revisions": [
+        {
+          "fixtureVersionKey": "alias-northwind-robotics-variant",
+          "kind": "text",
+          "body": "NWR answered the second outreach thread within a single working day.",
+          "rawSha256": "a0b18d4fd2c81d3b9e362dca00349c7838e8e829d4f51aec001ac2eb89a3ade3",
+          "expectedChunkContentSha256s": [
+            "a0b18d4fd2c81d3b9e362dca00349c7838e8e829d4f51aec001ac2eb89a3ade3"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "alias-meridian-freight-canonical",
+      "revisions": [
+        {
+          "fixtureVersionKey": "alias-meridian-freight-canonical",
+          "kind": "text",
+          "body": "Meridian Freight asked for a shorter reply and a named owner on the next post.",
+          "rawSha256": "d31f21975b8bf59e3573eff8ba976099785f6eee871e192b91112e8cf367c348",
+          "expectedChunkContentSha256s": [
+            "d31f21975b8bf59e3573eff8ba976099785f6eee871e192b91112e8cf367c348"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "alias-meridian-freight-variant",
+      "revisions": [
+        {
+          "fixtureVersionKey": "alias-meridian-freight-variant",
+          "kind": "text",
+          "body": "MFX asked for a shorter reply and a named owner on the next post.",
+          "rawSha256": "12e5d26564d69e46ebc96f3d94c39baa3818529c1a081d830709a4cb2c1ff3a1",
+          "expectedChunkContentSha256s": [
+            "12e5d26564d69e46ebc96f3d94c39baa3818529c1a081d830709a4cb2c1ff3a1"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "alias-longview-systems-canonical",
+      "revisions": [
+        {
+          "fixtureVersionKey": "alias-longview-systems-canonical",
+          "kind": "text",
+          "body": "Longview Systems replied to the launch post and asked about the review step.",
+          "rawSha256": "82082a2d451a55999903856f3e1420da46a46deb496dd1f8321a435c63a94c35",
+          "expectedChunkContentSha256s": [
+            "82082a2d451a55999903856f3e1420da46a46deb496dd1f8321a435c63a94c35"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "alias-longview-systems-variant",
+      "revisions": [
+        {
+          "fixtureVersionKey": "alias-longview-systems-variant",
+          "kind": "text",
+          "body": "Long-view Systems replied to the launch post and asked about the review step.",
+          "rawSha256": "192a7b65053f43dcc279d66bb07575270d0b7fa951053f2208e9ce8865aa2c13",
+          "expectedChunkContentSha256s": [
+            "192a7b65053f43dcc279d66bb07575270d0b7fa951053f2208e9ce8865aa2c13"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "alias-bluewater-labs-canonical",
+      "revisions": [
+        {
+          "fixtureVersionKey": "alias-bluewater-labs-canonical",
+          "kind": "text",
+          "body": "Bluewater Labs confirmed the meeting after the third answered thread.",
+          "rawSha256": "2f945b3b7bf846b6239df5e6345c1754f24b53b666d14339e9f4f2bbaf5ca8c4",
+          "expectedChunkContentSha256s": [
+            "2f945b3b7bf846b6239df5e6345c1754f24b53b666d14339e9f4f2bbaf5ca8c4"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "alias-bluewater-labs-variant",
+      "revisions": [
+        {
+          "fixtureVersionKey": "alias-bluewater-labs-variant",
+          "kind": "text",
+          "body": "Blue-water Labs confirmed the meeting after the third answered thread.",
+          "rawSha256": "0eebb38b2059dfe209e4cb4e49f23411776bd3074940f8663fd50caa4cb87246",
+          "expectedChunkContentSha256s": [
+            "0eebb38b2059dfe209e4cb4e49f23411776bd3074940f8663fd50caa4cb87246"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "alias-larkfield-ops-canonical",
+      "revisions": [
+        {
+          "fixtureVersionKey": "alias-larkfield-ops-canonical",
+          "kind": "text",
+          "body": "Larkfield Ops asked the team to keep the weekly summary under ten lines.",
+          "rawSha256": "4fc4519d43ff8127e03057391e0771240927ecbfea0aaeaf45aaa2b0dfc0d326",
+          "expectedChunkContentSha256s": [
+            "4fc4519d43ff8127e03057391e0771240927ecbfea0aaeaf45aaa2b0dfc0d326"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "alias-larkfield-ops-variant",
+      "revisions": [
+        {
+          "fixtureVersionKey": "alias-larkfield-ops-variant",
+          "kind": "text",
+          "body": "LarkfieldOps asked the team to keep the weekly summary under ten lines.",
+          "rawSha256": "943a3517b73be37fd56cd4f81d0df2b9a6e42844e6826e526d80c39187dd577e",
+          "expectedChunkContentSha256s": [
+            "943a3517b73be37fd56cd4f81d0df2b9a6e42844e6826e526d80c39187dd577e"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "alias-harborpoint-media-canonical",
+      "revisions": [
+        {
+          "fixtureVersionKey": "alias-harborpoint-media-canonical",
+          "kind": "text",
+          "body": "Harborpoint Media requested a single reply per thread and no repeated posts.",
+          "rawSha256": "174c1c0ad9b1e263800694302770dc865584f534ceddea80e44807529bea518b",
+          "expectedChunkContentSha256s": [
+            "174c1c0ad9b1e263800694302770dc865584f534ceddea80e44807529bea518b"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "alias-harborpoint-media-variant",
+      "revisions": [
+        {
+          "fixtureVersionKey": "alias-harborpoint-media-variant",
+          "kind": "text",
+          "body": "Harbor Point Media requested a single reply per thread and no repeated posts.",
+          "rawSha256": "2be6ad407e3c930dd2870de6f48840dc48a06427345c8536e44950a69907fb70",
+          "expectedChunkContentSha256s": [
+            "2be6ad407e3c930dd2870de6f48840dc48a06427345c8536e44950a69907fb70"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "alias-pinecrest-group-canonical",
+      "revisions": [
+        {
+          "fixtureVersionKey": "alias-pinecrest-group-canonical",
+          "kind": "text",
+          "body": "Pinecrest Group answered late but named the budget owner in the reply.",
+          "rawSha256": "aff85c76484a309282bfbc7fe51324287962fa52c59921f3b7b9a07687c08a92",
+          "expectedChunkContentSha256s": [
+            "aff85c76484a309282bfbc7fe51324287962fa52c59921f3b7b9a07687c08a92"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "alias-pinecrest-group-variant",
+      "revisions": [
+        {
+          "fixtureVersionKey": "alias-pinecrest-group-variant",
+          "kind": "text",
+          "body": "Pinecrst Group answered late but named the budget owner in the reply.",
+          "rawSha256": "5385c9aa9120fb051ff3434ab6fe3c8824573bee6d5518795b2f9434962e9a0b",
+          "expectedChunkContentSha256s": [
+            "5385c9aa9120fb051ff3434ab6fe3c8824573bee6d5518795b2f9434962e9a0b"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "alias-silverbrook-holdings-canonical",
+      "revisions": [
+        {
+          "fixtureVersionKey": "alias-silverbrook-holdings-canonical",
+          "kind": "text",
+          "body": "Silverbrook Holdings moved the call after the second answered thread.",
+          "rawSha256": "05b096e084cfff8d496d94b3c431b9771b13b8b025ed2acac239af37b92b992b",
+          "expectedChunkContentSha256s": [
+            "05b096e084cfff8d496d94b3c431b9771b13b8b025ed2acac239af37b92b992b"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "alias-silverbrook-holdings-variant",
+      "revisions": [
+        {
+          "fixtureVersionKey": "alias-silverbrook-holdings-variant",
+          "kind": "text",
+          "body": "Silverbrok Holdings moved the call after the second answered thread.",
+          "rawSha256": "e177e623d482b83a26fda71b41cb487f648faea1a6c34fe09cb769db8b256b02",
+          "expectedChunkContentSha256s": [
+            "e177e623d482b83a26fda71b41cb487f648faea1a6c34fe09cb769db8b256b02"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "alias-procurement-lead-canonical",
+      "revisions": [
+        {
+          "fixtureVersionKey": "alias-procurement-lead-canonical",
+          "kind": "text",
+          "body": "The procurement lead answered the pricing question in the first thread.",
+          "rawSha256": "a04eb761ed9863030b0d3c63e0e5ec39577a2a641f98cd4652dd8aafadb8178d",
+          "expectedChunkContentSha256s": [
+            "a04eb761ed9863030b0d3c63e0e5ec39577a2a641f98cd4652dd8aafadb8178d"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "alias-procurement-lead-variant",
+      "revisions": [
+        {
+          "fixtureVersionKey": "alias-procurement-lead-variant",
+          "kind": "text",
+          "body": "The purchasing lead answered the pricing question in the first thread.",
+          "rawSha256": "ed48d599b1fc1c0dc75a4d9342b64dc5adb8cef7ef3fac6bf974e885373bf6b4",
+          "expectedChunkContentSha256s": [
+            "ed48d599b1fc1c0dc75a4d9342b64dc5adb8cef7ef3fac6bf974e885373bf6b4"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "alias-renewal-exposure-canonical",
+      "revisions": [
+        {
+          "fixtureVersionKey": "alias-renewal-exposure-canonical",
+          "kind": "text",
+          "body": "The renewal exposure review named the three accounts that answered slowly.",
+          "rawSha256": "53b2a95d037494ace510ba865cf099e9a4fac197804d7b31132a23f7ca48eb22",
+          "expectedChunkContentSha256s": [
+            "53b2a95d037494ace510ba865cf099e9a4fac197804d7b31132a23f7ca48eb22"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "alias-renewal-exposure-variant",
+      "revisions": [
+        {
+          "fixtureVersionKey": "alias-renewal-exposure-variant",
+          "kind": "text",
+          "body": "The churn hazard review named the three accounts that answered slowly.",
+          "rawSha256": "f58b32820b78e4f5301b3fe4a39372a0986be702d8c594148edf23d5114bf4dd",
+          "expectedChunkContentSha256s": [
+            "f58b32820b78e4f5301b3fe4a39372a0986be702d8c594148edf23d5114bf4dd"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "multi-slate-anchor-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "multi-slate-anchor-record",
+          "kind": "structured",
+          "record": {
+            "kind": "entity",
+            "identity": "slate-anchor",
+            "body": {
+              "headline": "Slate anchor account review for the current outreach period",
+              "related_identity": "linked-account-north",
+              "owner": "field team"
+            }
+          },
+          "rawSha256": "fc10349a64fbb581df8180d995ad27a1c9cff9b8fca32a9686692f0fa83b1f07",
+          "expectedChunkContentSha256s": [
+            "2bf510e2a7081f004c8e4a89cfcf3fa92b1a0bbfe93e19b4cd16f27a52ff02a4"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "multi-linked-account-north-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "multi-linked-account-north-record",
+          "kind": "structured",
+          "record": {
+            "kind": "entity",
+            "identity": "linked-account-north",
+            "body": {
+              "headline": "Account profile held by the field team for the northern region",
+              "note": "The owner answers within a day and prefers a single question per message.",
+              "owner": "field team"
+            }
+          },
+          "rawSha256": "02711a6d0053d8b91e93550278830a36a6d6993fa599dcbbb143160966e8a44c",
+          "expectedChunkContentSha256s": [
+            "613f2bfe776eafff2c5c649e983b35d4ea6f59198c6d27019bb7b5dd05628933"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "multi-cinder-anchor-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "multi-cinder-anchor-record",
+          "kind": "structured",
+          "record": {
+            "kind": "entity",
+            "identity": "cinder-anchor",
+            "body": {
+              "headline": "Cinder anchor account review for the current outreach period",
+              "related_identity": "linked-account-south",
+              "owner": "field team"
+            }
+          },
+          "rawSha256": "e311b7db81c2b2dc5b5c5fef9c541f4d263b1019fd32c87a716a6a86d657e444",
+          "expectedChunkContentSha256s": [
+            "34b80c97e17c14454259c1e129803dbe5bc490f00a4c238d3db2c401363fb0cc"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "multi-linked-account-south-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "multi-linked-account-south-record",
+          "kind": "structured",
+          "record": {
+            "kind": "entity",
+            "identity": "linked-account-south",
+            "body": {
+              "headline": "Account profile held by the field team for the southern region",
+              "note": "The owner asked for a summary before any call is booked.",
+              "owner": "field team"
+            }
+          },
+          "rawSha256": "8c5c64b3d91f8d7aa26bf588d61e0d1398387973456d4869d7dc3ce0eceda202",
+          "expectedChunkContentSha256s": [
+            "3c0b8dc18149ea6da640ae12e851d106e119096444ef23ed764bea4d15684005"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "multi-willow-anchor-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "multi-willow-anchor-record",
+          "kind": "structured",
+          "record": {
+            "kind": "entity",
+            "identity": "willow-anchor",
+            "body": {
+              "headline": "Willow anchor account review for the current outreach period",
+              "related_identity": "linked-account-east",
+              "owner": "field team"
+            }
+          },
+          "rawSha256": "575ec0a0dc875a6e5f79c5eed5a49c710fd9142cf42aec886572feceb6b8bbb8",
+          "expectedChunkContentSha256s": [
+            "d036acf7f528fa2191939419e95b98379b134ec4af64bdc43d5e0cea96fd06cd"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "multi-linked-account-east-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "multi-linked-account-east-record",
+          "kind": "structured",
+          "record": {
+            "kind": "entity",
+            "identity": "linked-account-east",
+            "body": {
+              "headline": "Account profile held by the field team for the eastern region",
+              "note": "The owner reads the channel weekly and answers in one batch.",
+              "owner": "field team"
+            }
+          },
+          "rawSha256": "60dd3e7322ad642359b25cbc04f0a720997f28de4756a7a99f2d76e31f39070b",
+          "expectedChunkContentSha256s": [
+            "ebd17e5bff65183e2f0c38d6eae0276549136132fca3e495a412a992ad1a4523"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "multi-marlow-anchor-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "multi-marlow-anchor-record",
+          "kind": "structured",
+          "record": {
+            "kind": "entity",
+            "identity": "marlow-anchor",
+            "body": {
+              "headline": "Marlow anchor account review for the current outreach period",
+              "related_identity": "linked-account-west",
+              "owner": "field team"
+            }
+          },
+          "rawSha256": "3261f9b63018ef3a34e88e5bf9c21c0d650e76999f1ee0f4e4a67ec099afd242",
+          "expectedChunkContentSha256s": [
+            "392a8b148c4d8f9ff7660cf5a7d5fac4d2ecc29c643f182d1d06546924e8f15c"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "multi-linked-account-west-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "multi-linked-account-west-record",
+          "kind": "structured",
+          "record": {
+            "kind": "entity",
+            "identity": "linked-account-west",
+            "body": {
+              "headline": "Account profile held by the field team for the western region",
+              "note": "The owner forwards every message to a second reviewer first.",
+              "owner": "field team"
+            }
+          },
+          "rawSha256": "51368107021d3811c677a955e52143931853bb1e6abe6018009fe8e4a88ca4c0",
+          "expectedChunkContentSha256s": [
+            "d8aee0d1b8c42478d5f178963df78a86ccdb0bee0a10da00daf8301abcf68ca5"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "multi-brindle-anchor-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "multi-brindle-anchor-record",
+          "kind": "structured",
+          "record": {
+            "kind": "entity",
+            "identity": "brindle-anchor",
+            "body": {
+              "headline": "Brindle anchor partner review for the current outreach period",
+              "related_identity": "linked-partner-first",
+              "owner": "field team"
+            }
+          },
+          "rawSha256": "cc9a7aeed11fa97bf009ce594dc4b9a71154ec533d7b5e6b7f9d7317111a9c80",
+          "expectedChunkContentSha256s": [
+            "2f8baaf10d040ef2ec7e7ce09f97ba32e8397ce33b4462ca3df3ef27adfa193a"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "multi-linked-partner-first-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "multi-linked-partner-first-record",
+          "kind": "structured",
+          "record": {
+            "kind": "entity",
+            "identity": "linked-partner-first",
+            "body": {
+              "headline": "Partner profile held by the field team for the first tier",
+              "note": "The partner answers only after a written agenda is shared.",
+              "owner": "field team"
+            }
+          },
+          "rawSha256": "82f6677eea017b6237f949db8c6f9bedfe687b5a41667934a44a9bb8a7ce9327",
+          "expectedChunkContentSha256s": [
+            "a3975eda85057296ce30edd0bb17425c68f271b49a91e1cdc1cbcce6a64c0308"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "multi-thistle-anchor-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "multi-thistle-anchor-record",
+          "kind": "structured",
+          "record": {
+            "kind": "entity",
+            "identity": "thistle-anchor",
+            "body": {
+              "headline": "Thistle anchor partner review for the current outreach period",
+              "related_identity": "linked-partner-second",
+              "owner": "field team"
+            }
+          },
+          "rawSha256": "ce14e02f10dfd05eae37360d42e8973cf9db5257bc2c034138fe5840f3386594",
+          "expectedChunkContentSha256s": [
+            "4069c010e6c112b99089343c3721d7fd0ec9cc495f039422e95d00b40ecfbdd4"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "multi-linked-partner-second-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "multi-linked-partner-second-record",
+          "kind": "structured",
+          "record": {
+            "kind": "entity",
+            "identity": "linked-partner-second",
+            "body": {
+              "headline": "Partner profile held by the field team for the second tier",
+              "note": "The partner prefers a call before any written summary is sent.",
+              "owner": "field team"
+            }
+          },
+          "rawSha256": "43c910fc3b5abea72dd6f4bd0aff831547b69fdb3282c1981fb63ba82ff76424",
+          "expectedChunkContentSha256s": [
+            "abbb7003aa9361a722b629fade3acb5d2c96c691e07936a451feb326ae26799a"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "multi-alder-anchor-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "multi-alder-anchor-record",
+          "kind": "structured",
+          "record": {
+            "kind": "entity",
+            "identity": "alder-anchor",
+            "body": {
+              "headline": "Alder anchor channel review for the current outreach period",
+              "related_identity": "linked-channel-first",
+              "owner": "field team"
+            }
+          },
+          "rawSha256": "659aa95c4561eb92f9e1db2f6f50c2892fa706243f407a90d612d5a3b7f1e3f3",
+          "expectedChunkContentSha256s": [
+            "53f6fd1813cbe22fe431c9bbb69a67e03ca3a27c59cb62f7a139416b8b9e72fc"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "multi-linked-channel-first-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "multi-linked-channel-first-record",
+          "kind": "structured",
+          "record": {
+            "kind": "entity",
+            "identity": "linked-channel-first",
+            "body": {
+              "headline": "Channel profile held by the field team for the first tier",
+              "note": "The channel owner reviews every post that names a customer.",
+              "owner": "field team"
+            }
+          },
+          "rawSha256": "95793aa7f8923b2eca35f338df6b91f1d9b9f326fdf3e2588205cb63289e1ef6",
+          "expectedChunkContentSha256s": [
+            "16b4178c2098adaf970d006aea2d7536ead242c7e13d90865dca954d8aa73e02"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "multi-hazel-anchor-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "multi-hazel-anchor-record",
+          "kind": "structured",
+          "record": {
+            "kind": "entity",
+            "identity": "hazel-anchor",
+            "body": {
+              "headline": "Hazel anchor channel review for the current outreach period",
+              "related_identity": "linked-channel-second",
+              "owner": "field team"
+            }
+          },
+          "rawSha256": "f39e4de43e59461ab3ffb08dc44973dc8bb5d1f2b4c40d68be5e172a6c122fb9",
+          "expectedChunkContentSha256s": [
+            "9983f4d9a7b70d6c601f6054d46b9575054ce417793552ee73f319d849b1880c"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "multi-linked-channel-second-record",
+      "revisions": [
+        {
+          "fixtureVersionKey": "multi-linked-channel-second-record",
+          "kind": "structured",
+          "record": {
+            "kind": "entity",
+            "identity": "linked-channel-second",
+            "body": {
+              "headline": "Channel profile held by the field team for the second tier",
+              "note": "The channel owner batches replies at the end of each week.",
+              "owner": "field team"
+            }
+          },
+          "rawSha256": "e1653139895b2616eba0d168016432c516ff9d95fcd5ee6ab5b80550e7a59331",
+          "expectedChunkContentSha256s": [
+            "e9fd680b82b791a9da7a23cae5befe0224188a6de67c0fdbc3b4c11545b4b071"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-heron-signals-escalation",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-heron-signals-escalation",
+          "kind": "text",
+          "body": "Heron signals note covering the escalation route the owner used when the thread stalled.",
+          "rawSha256": "0d103fb83630493ca21f255508c873e8a0afb695300fb69d04429809dd072b66",
+          "expectedChunkContentSha256s": [
+            "0d103fb83630493ca21f255508c873e8a0afb695300fb69d04429809dd072b66"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-heron-signals-onboarding",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-heron-signals-onboarding",
+          "kind": "text",
+          "body": "Heron signals note covering the onboarding steps a new owner follows in the first week.",
+          "rawSha256": "47955c9bd3fce32f56a2b262345bdca97471f909e7debc58fd8a9e71fbc030a9",
+          "expectedChunkContentSha256s": [
+            "47955c9bd3fce32f56a2b262345bdca97471f909e7debc58fd8a9e71fbc030a9"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-heron-signals-invoice",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-heron-signals-invoice",
+          "kind": "text",
+          "body": "Heron signals note covering the invoice question that arrived before the second call.",
+          "rawSha256": "cd13edf9027759ce8f11ef63647513f41ca5e58388c5b31c6c979754a67a58a0",
+          "expectedChunkContentSha256s": [
+            "cd13edf9027759ce8f11ef63647513f41ca5e58388c5b31c6c979754a67a58a0"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-heron-signals-demo",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-heron-signals-demo",
+          "kind": "text",
+          "body": "Heron signals note covering the demo request that followed the first answered post.",
+          "rawSha256": "9cc0a7df2dc3a0a5cfeee119be5c3e806a715c10fb5aabc83e32e2d09f2235ad",
+          "expectedChunkContentSha256s": [
+            "9cc0a7df2dc3a0a5cfeee119be5c3e806a715c10fb5aabc83e32e2d09f2235ad"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-heron-signals-webinar",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-heron-signals-webinar",
+          "kind": "text",
+          "body": "Heron signals note covering the webinar invitation the team sent to quiet threads.",
+          "rawSha256": "86c2c4e7d65753e1c146add5793b88db08ab2e747c33781c42ed80d1f1476065",
+          "expectedChunkContentSha256s": [
+            "86c2c4e7d65753e1c146add5793b88db08ab2e747c33781c42ed80d1f1476065"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-heron-signals-referral",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-heron-signals-referral",
+          "kind": "text",
+          "body": "Heron signals note covering the referral a satisfied owner offered without being asked.",
+          "rawSha256": "c787c13e2b200ee53789074de91f58a5907d821d40635655559bc44b352e29db",
+          "expectedChunkContentSha256s": [
+            "c787c13e2b200ee53789074de91f58a5907d821d40635655559bc44b352e29db"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-heron-signals-audit",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-heron-signals-audit",
+          "kind": "text",
+          "body": "Heron signals note covering the audit request that asked for a written record of replies.",
+          "rawSha256": "e8fe248aa3af8acca1fb719f14350322febb85aa989793ede9830ee09fab793c",
+          "expectedChunkContentSha256s": [
+            "e8fe248aa3af8acca1fb719f14350322febb85aa989793ede9830ee09fab793c"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-heron-signals-sponsorship",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-heron-signals-sponsorship",
+          "kind": "text",
+          "body": "Heron signals note covering the sponsorship proposal that named a shared budget owner.",
+          "rawSha256": "3e7301f4d1f0201ad4b8f105cbac99e3a66dee3896f3f18fad7ae6847a5c9d0b",
+          "expectedChunkContentSha256s": [
+            "3e7301f4d1f0201ad4b8f105cbac99e3a66dee3896f3f18fad7ae6847a5c9d0b"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-plover-signals-escalation",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-plover-signals-escalation",
+          "kind": "text",
+          "body": "Plover signals note covering the escalation route the owner used when the thread stalled.",
+          "rawSha256": "70fadd0f873a0c0a21b468631dd8cd024c8df6e4ab13f294ef7a3619d50996e5",
+          "expectedChunkContentSha256s": [
+            "70fadd0f873a0c0a21b468631dd8cd024c8df6e4ab13f294ef7a3619d50996e5"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-plover-signals-onboarding",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-plover-signals-onboarding",
+          "kind": "text",
+          "body": "Plover signals note covering the onboarding steps a new owner follows in the first week.",
+          "rawSha256": "9250cc4ef5f18381baac5714fc8e720ab35c0a0f8253291003741711c47cb778",
+          "expectedChunkContentSha256s": [
+            "9250cc4ef5f18381baac5714fc8e720ab35c0a0f8253291003741711c47cb778"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-plover-signals-invoice",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-plover-signals-invoice",
+          "kind": "text",
+          "body": "Plover signals note covering the invoice question that arrived before the second call.",
+          "rawSha256": "17de4fc1b95799ee90c741d85351de95390473d142d3a6bd96a38c51fcaf6bbc",
+          "expectedChunkContentSha256s": [
+            "17de4fc1b95799ee90c741d85351de95390473d142d3a6bd96a38c51fcaf6bbc"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-plover-signals-demo",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-plover-signals-demo",
+          "kind": "text",
+          "body": "Plover signals note covering the demo request that followed the first answered post.",
+          "rawSha256": "98a5db854cc657c06cb62baa888a74e56e2ccf6de7c6188bfa7f02e39f00f117",
+          "expectedChunkContentSha256s": [
+            "98a5db854cc657c06cb62baa888a74e56e2ccf6de7c6188bfa7f02e39f00f117"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-plover-signals-webinar",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-plover-signals-webinar",
+          "kind": "text",
+          "body": "Plover signals note covering the webinar invitation the team sent to quiet threads.",
+          "rawSha256": "b4dfca16e88c240ee611088482665763cc904d0b02c65b7ca88d7f0fcfdf5fae",
+          "expectedChunkContentSha256s": [
+            "b4dfca16e88c240ee611088482665763cc904d0b02c65b7ca88d7f0fcfdf5fae"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-plover-signals-referral",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-plover-signals-referral",
+          "kind": "text",
+          "body": "Plover signals note covering the referral a satisfied owner offered without being asked.",
+          "rawSha256": "9fec5ee0d5271b6411e17f1b16289147faef2d9fede7769fd95797faec2595a2",
+          "expectedChunkContentSha256s": [
+            "9fec5ee0d5271b6411e17f1b16289147faef2d9fede7769fd95797faec2595a2"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-plover-signals-audit",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-plover-signals-audit",
+          "kind": "text",
+          "body": "Plover signals note covering the audit request that asked for a written record of replies.",
+          "rawSha256": "2723c2a0707c58a7a90f271287bf8a5e41543f3384b26a0e2201b8f97ab453ad",
+          "expectedChunkContentSha256s": [
+            "2723c2a0707c58a7a90f271287bf8a5e41543f3384b26a0e2201b8f97ab453ad"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-plover-signals-sponsorship",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-plover-signals-sponsorship",
+          "kind": "text",
+          "body": "Plover signals note covering the sponsorship proposal that named a shared budget owner.",
+          "rawSha256": "2afef61f4fb417cb9ac9a8ea70fbf59fabb9a0704a2a641e14bde51265d94142",
+          "expectedChunkContentSha256s": [
+            "2afef61f4fb417cb9ac9a8ea70fbf59fabb9a0704a2a641e14bde51265d94142"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-avocet-threads-escalation",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-escalation",
+          "kind": "text",
+          "body": "Avocet threads note covering the escalation route the owner used when the thread stalled.",
+          "rawSha256": "27691de9f61e08ba93e0d7e2148799999ab97d3ffe05428179622ca4fc3399dd",
+          "expectedChunkContentSha256s": [
+            "27691de9f61e08ba93e0d7e2148799999ab97d3ffe05428179622ca4fc3399dd"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-avocet-threads-onboarding",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-onboarding",
+          "kind": "text",
+          "body": "Avocet threads note covering the onboarding steps a new owner follows in the first week.",
+          "rawSha256": "ed95c892937036d9e44fa94b6265a1053684fb1942d265a40865bf502cf12e56",
+          "expectedChunkContentSha256s": [
+            "ed95c892937036d9e44fa94b6265a1053684fb1942d265a40865bf502cf12e56"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-avocet-threads-invoice",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-invoice",
+          "kind": "text",
+          "body": "Avocet threads note covering the invoice question that arrived before the second call.",
+          "rawSha256": "9c0303340229b8f04b1c392cf607b3d7f7e2e026c18e7899206e7bc2de11ccaf",
+          "expectedChunkContentSha256s": [
+            "9c0303340229b8f04b1c392cf607b3d7f7e2e026c18e7899206e7bc2de11ccaf"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-avocet-threads-demo",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-demo",
+          "kind": "text",
+          "body": "Avocet threads note covering the demo request that followed the first answered post.",
+          "rawSha256": "a60e700a868ca459cf0642874255aa2261ef51de5a23a8a3d84d827dab122807",
+          "expectedChunkContentSha256s": [
+            "a60e700a868ca459cf0642874255aa2261ef51de5a23a8a3d84d827dab122807"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-avocet-threads-webinar",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-webinar",
+          "kind": "text",
+          "body": "Avocet threads note covering the webinar invitation the team sent to quiet threads.",
+          "rawSha256": "326d7219d6363dafe2cfcac052f77ecbd5898acafc044145e200820f92383e51",
+          "expectedChunkContentSha256s": [
+            "326d7219d6363dafe2cfcac052f77ecbd5898acafc044145e200820f92383e51"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-avocet-threads-referral",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-referral",
+          "kind": "text",
+          "body": "Avocet threads note covering the referral a satisfied owner offered without being asked.",
+          "rawSha256": "b19837196eb7635bef27ce33a0732960314a42f5efd48afc5a56f1ad5c522df0",
+          "expectedChunkContentSha256s": [
+            "b19837196eb7635bef27ce33a0732960314a42f5efd48afc5a56f1ad5c522df0"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-avocet-threads-audit",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-audit",
+          "kind": "text",
+          "body": "Avocet threads note covering the audit request that asked for a written record of replies.",
+          "rawSha256": "ae936393a01bb9250ff280b295b38bf88375a6ac8e72ed034edcbf2219ef75f9",
+          "expectedChunkContentSha256s": [
+            "ae936393a01bb9250ff280b295b38bf88375a6ac8e72ed034edcbf2219ef75f9"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-avocet-threads-sponsorship",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-sponsorship",
+          "kind": "text",
+          "body": "Avocet threads note covering the sponsorship proposal that named a shared budget owner.",
+          "rawSha256": "74af1b3ab788c117b8ddb98d6b67442f24f92a7ebe671969326ab913d6308381",
+          "expectedChunkContentSha256s": [
+            "74af1b3ab788c117b8ddb98d6b67442f24f92a7ebe671969326ab913d6308381"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-curlew-threads-escalation",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-escalation",
+          "kind": "text",
+          "body": "Curlew threads note covering the escalation route the owner used when the thread stalled.",
+          "rawSha256": "62f67b187bd6b7f87d75a1aa2cc4759524e2181290df8fe0cc8be9f51de13b4c",
+          "expectedChunkContentSha256s": [
+            "62f67b187bd6b7f87d75a1aa2cc4759524e2181290df8fe0cc8be9f51de13b4c"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-curlew-threads-onboarding",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-onboarding",
+          "kind": "text",
+          "body": "Curlew threads note covering the onboarding steps a new owner follows in the first week.",
+          "rawSha256": "e20c2549c5ba5af5b3520c1d219430c145674634db7cddbda9cba6b2d5db0c0d",
+          "expectedChunkContentSha256s": [
+            "e20c2549c5ba5af5b3520c1d219430c145674634db7cddbda9cba6b2d5db0c0d"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-curlew-threads-invoice",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-invoice",
+          "kind": "text",
+          "body": "Curlew threads note covering the invoice question that arrived before the second call.",
+          "rawSha256": "7ef808679c2b8f97330c55e5bb625e558457e07cfc91550547f7d63613bddd99",
+          "expectedChunkContentSha256s": [
+            "7ef808679c2b8f97330c55e5bb625e558457e07cfc91550547f7d63613bddd99"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-curlew-threads-demo",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-demo",
+          "kind": "text",
+          "body": "Curlew threads note covering the demo request that followed the first answered post.",
+          "rawSha256": "5aecf3e9e72eaee9c27c8d8b11171a388471a1d2026182a5409cf905d6130474",
+          "expectedChunkContentSha256s": [
+            "5aecf3e9e72eaee9c27c8d8b11171a388471a1d2026182a5409cf905d6130474"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-curlew-threads-webinar",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-webinar",
+          "kind": "text",
+          "body": "Curlew threads note covering the webinar invitation the team sent to quiet threads.",
+          "rawSha256": "e30e005ae3f95cc3b521a6f78f60d3a0a72be70dd3a2738efb8791eed58b88dc",
+          "expectedChunkContentSha256s": [
+            "e30e005ae3f95cc3b521a6f78f60d3a0a72be70dd3a2738efb8791eed58b88dc"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-curlew-threads-referral",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-referral",
+          "kind": "text",
+          "body": "Curlew threads note covering the referral a satisfied owner offered without being asked.",
+          "rawSha256": "6d5eb72bef474e315c89a2077f9d86aaf21ed8409a6dc7060aefae952373e291",
+          "expectedChunkContentSha256s": [
+            "6d5eb72bef474e315c89a2077f9d86aaf21ed8409a6dc7060aefae952373e291"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-curlew-threads-audit",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-audit",
+          "kind": "text",
+          "body": "Curlew threads note covering the audit request that asked for a written record of replies.",
+          "rawSha256": "e81d83c0cec4e21a5e8494986d0fb313c6d348715910d85e98d0c2094c3ba118",
+          "expectedChunkContentSha256s": [
+            "e81d83c0cec4e21a5e8494986d0fb313c6d348715910d85e98d0c2094c3ba118"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    },
+    {
+      "sourceStableKey": "ordering-curlew-threads-sponsorship",
+      "revisions": [
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-sponsorship",
+          "kind": "text",
+          "body": "Curlew threads note covering the sponsorship proposal that named a shared budget owner.",
+          "rawSha256": "c6eb71f2d10b301bbf724559fcd0ed708ea822513f2c148e2265dd5a7a4b1829",
+          "expectedChunkContentSha256s": [
+            "c6eb71f2d10b301bbf724559fcd0ed708ea822513f2c148e2265dd5a7a4b1829"
+          ],
+          "labels": [
+            {
+              "workspace": "retrieval-gold-workspace"
+            }
+          ],
+          "privacy": "internal",
+          "trust": "brain-extract-untrusted"
+        }
+      ],
+      "finalDisposition": "current"
+    }
+  ],
+  "aliases": [
+    {
+      "entityKind": "org",
+      "canonicalSlug": "northwind-robotics",
+      "canonicalTitle": "Northwind Robotics",
+      "aliases": [
+        "NWR",
+        "Northwind Rob"
+      ]
+    },
+    {
+      "entityKind": "org",
+      "canonicalSlug": "meridian-freight",
+      "canonicalTitle": "Meridian Freight",
+      "aliases": [
+        "MFX",
+        "Meridian Frt"
+      ]
+    },
+    {
+      "entityKind": "org",
+      "canonicalSlug": "longview-systems",
+      "canonicalTitle": "Longview Systems",
+      "aliases": [
+        "Long-view Systems"
+      ]
+    },
+    {
+      "entityKind": "org",
+      "canonicalSlug": "bluewater-labs",
+      "canonicalTitle": "Bluewater Labs",
+      "aliases": [
+        "Blue-water Labs"
+      ]
+    },
+    {
+      "entityKind": "org",
+      "canonicalSlug": "larkfield-ops",
+      "canonicalTitle": "Larkfield Ops",
+      "aliases": [
+        "LarkfieldOps"
+      ]
+    },
+    {
+      "entityKind": "org",
+      "canonicalSlug": "harborpoint-media",
+      "canonicalTitle": "Harborpoint Media",
+      "aliases": [
+        "Harbor Point Media"
+      ]
+    },
+    {
+      "entityKind": "org",
+      "canonicalSlug": "pinecrest-group",
+      "canonicalTitle": "Pinecrest Group",
+      "aliases": [
+        "Pinecrst Group"
+      ]
+    },
+    {
+      "entityKind": "org",
+      "canonicalSlug": "silverbrook-holdings",
+      "canonicalTitle": "Silverbrook Holdings",
+      "aliases": [
+        "Silverbrok Holdings"
+      ]
+    },
+    {
+      "entityKind": "role",
+      "canonicalSlug": "procurement-lead",
+      "canonicalTitle": "Procurement lead",
+      "aliases": [
+        "purchasing lead"
+      ]
+    },
+    {
+      "entityKind": "topic",
+      "canonicalSlug": "renewal-exposure",
+      "canonicalTitle": "Renewal exposure",
+      "aliases": [
+        "contract exposure"
+      ]
+    }
+  ],
+  "selectorEntities": {
+    "northwind-robotics": [
+      "org/northwind-robotics"
+    ],
+    "meridian-freight": [
+      "org/meridian-freight"
+    ],
+    "longview-systems": [
+      "org/longview-systems"
+    ],
+    "bluewater-labs": [
+      "org/bluewater-labs"
+    ],
+    "larkfield-ops": [
+      "org/larkfield-ops"
+    ],
+    "harborpoint-media": [
+      "org/harborpoint-media"
+    ],
+    "pinecrest-group": [
+      "org/pinecrest-group"
+    ],
+    "silverbrook-holdings": [
+      "org/silverbrook-holdings"
+    ],
+    "procurement-lead": [
+      "role/procurement-lead"
+    ],
+    "renewal-exposure": [
+      "topic/renewal-exposure"
+    ]
+  }
+}

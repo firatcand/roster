@@ -1,0 +1,3409 @@
+{
+  "schemaVersion": 1,
+  "queries": [
+    {
+      "id": "baseline-cobalt-dossier",
+      "family": "baseline",
+      "selectors": [
+        {
+          "selector": "cobalt-dossier",
+          "descriptions": [
+            "cobalt dossier"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the cobalt dossier say about replies and owners",
+      "relevant": [
+        {
+          "fixtureVersionKey": "baseline-cobalt-dossier-1",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "cobalt-dossier"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "baseline-cobalt-dossier-2",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "cobalt-dossier"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "notes": "Vocabulary-overlapping text evidence for one selector."
+    },
+    {
+      "id": "baseline-amber-ledger",
+      "family": "baseline",
+      "selectors": [
+        {
+          "selector": "amber-ledger",
+          "descriptions": [
+            "amber ledger"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the amber ledger say about replies and owners",
+      "relevant": [
+        {
+          "fixtureVersionKey": "baseline-amber-ledger-1",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "amber-ledger"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "baseline-amber-ledger-2",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "amber-ledger"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "notes": "Vocabulary-overlapping text evidence for one selector."
+    },
+    {
+      "id": "baseline-juniper-briefing",
+      "family": "baseline",
+      "selectors": [
+        {
+          "selector": "juniper-briefing",
+          "descriptions": [
+            "juniper briefing"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the juniper briefing say about replies and owners",
+      "relevant": [
+        {
+          "fixtureVersionKey": "baseline-juniper-briefing-1",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "juniper-briefing"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "baseline-juniper-briefing-record",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "juniper-briefing"
+          ],
+          "expectedArms": [
+            "structured",
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "notes": "Vocabulary-overlapping text and structured evidence for one selector."
+    },
+    {
+      "id": "baseline-kestrel-roadmap",
+      "family": "baseline",
+      "selectors": [
+        {
+          "selector": "kestrel-roadmap",
+          "descriptions": [
+            "kestrel roadmap"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the kestrel roadmap say about replies and owners",
+      "relevant": [
+        {
+          "fixtureVersionKey": "baseline-kestrel-roadmap-1",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "kestrel-roadmap"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "baseline-kestrel-roadmap-2",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "kestrel-roadmap"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "notes": "Vocabulary-overlapping text evidence for one selector."
+    },
+    {
+      "id": "baseline-basalt-playbook",
+      "family": "baseline",
+      "selectors": [
+        {
+          "selector": "basalt-playbook",
+          "descriptions": [
+            "basalt playbook"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the basalt playbook say about replies and owners",
+      "relevant": [
+        {
+          "fixtureVersionKey": "baseline-basalt-playbook-1",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "basalt-playbook"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "baseline-basalt-playbook-2",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "basalt-playbook"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "notes": "Vocabulary-overlapping text evidence for one selector."
+    },
+    {
+      "id": "baseline-saffron-memo",
+      "family": "baseline",
+      "selectors": [
+        {
+          "selector": "saffron-memo",
+          "descriptions": [
+            "saffron memo"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the saffron memo say about replies and owners",
+      "relevant": [
+        {
+          "fixtureVersionKey": "baseline-saffron-memo-1",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "saffron-memo"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "baseline-saffron-memo-2",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "saffron-memo"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "notes": "Vocabulary-overlapping text evidence for one selector."
+    },
+    {
+      "id": "baseline-trellis-rollout",
+      "family": "baseline",
+      "selectors": [
+        {
+          "selector": "trellis-rollout",
+          "descriptions": [
+            "trellis rollout"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the trellis rollout say about replies and owners",
+      "relevant": [
+        {
+          "fixtureVersionKey": "baseline-trellis-rollout-1",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "trellis-rollout"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "baseline-trellis-rollout-record",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "trellis-rollout"
+          ],
+          "expectedArms": [
+            "structured",
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "notes": "Vocabulary-overlapping text and structured evidence for one selector."
+    },
+    {
+      "id": "baseline-quarry-digest",
+      "family": "baseline",
+      "selectors": [
+        {
+          "selector": "quarry-digest",
+          "descriptions": [
+            "quarry digest"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the quarry digest say about replies and owners",
+      "relevant": [
+        {
+          "fixtureVersionKey": "baseline-quarry-digest-1",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "quarry-digest"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "baseline-quarry-digest-2",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "quarry-digest"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "notes": "Vocabulary-overlapping text evidence for one selector."
+    },
+    {
+      "id": "baseline-pergola-charter",
+      "family": "baseline",
+      "selectors": [
+        {
+          "selector": "pergola-charter",
+          "descriptions": [
+            "pergola charter"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the pergola charter say about replies and owners",
+      "relevant": [
+        {
+          "fixtureVersionKey": "baseline-pergola-charter-1",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "pergola-charter"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "baseline-pergola-charter-2",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "pergola-charter"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "notes": "Vocabulary-overlapping text evidence for one selector."
+    },
+    {
+      "id": "baseline-sorrel-bulletin",
+      "family": "baseline",
+      "selectors": [
+        {
+          "selector": "sorrel-bulletin",
+          "descriptions": [
+            "sorrel bulletin"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the sorrel bulletin say about replies and owners",
+      "relevant": [
+        {
+          "fixtureVersionKey": "baseline-sorrel-bulletin-1",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "sorrel-bulletin"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "baseline-sorrel-bulletin-2",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "sorrel-bulletin"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "notes": "Vocabulary-overlapping text evidence for one selector."
+    },
+    {
+      "id": "baseline-yarrow-protocol",
+      "family": "baseline",
+      "selectors": [
+        {
+          "selector": "yarrow-protocol",
+          "descriptions": [
+            "yarrow protocol"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the yarrow protocol say about replies and owners",
+      "relevant": [
+        {
+          "fixtureVersionKey": "baseline-yarrow-protocol-1",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "yarrow-protocol"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "baseline-yarrow-protocol-record",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "yarrow-protocol"
+          ],
+          "expectedArms": [
+            "structured",
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "notes": "Vocabulary-overlapping text and structured evidence for one selector."
+    },
+    {
+      "id": "baseline-fennel-handbook",
+      "family": "baseline",
+      "selectors": [
+        {
+          "selector": "fennel-handbook",
+          "descriptions": [
+            "fennel handbook"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the fennel handbook say about replies and owners",
+      "relevant": [
+        {
+          "fixtureVersionKey": "baseline-fennel-handbook-1",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "fennel-handbook"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "baseline-fennel-handbook-2",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "fennel-handbook"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "notes": "Vocabulary-overlapping text evidence for one selector."
+    },
+    {
+      "id": "exclusion-superseded",
+      "family": "exclusion",
+      "selectors": [
+        {
+          "selector": "onyx-revision",
+          "descriptions": [
+            "onyx revision"
+          ],
+          "required": true
+        }
+      ],
+      "query": "which onyx revision guidance is current",
+      "relevant": [
+        {
+          "fixtureVersionKey": "exclusion-onyx-revision-r2",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "onyx-revision"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "excluded": [
+        {
+          "fixtureVersionKey": "exclusion-onyx-revision-r1",
+          "expectPolicyEligible": false,
+          "reason": "superseded"
+        }
+      ],
+      "notes": "The first revision of one logical source is superseded by the second."
+    },
+    {
+      "id": "exclusion-tombstoned",
+      "family": "exclusion",
+      "selectors": [
+        {
+          "selector": "indigo-notice",
+          "descriptions": [
+            "indigo notice"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what did the indigo notice say about channel policy",
+      "relevant": [],
+      "excluded": [
+        {
+          "fixtureVersionKey": "exclusion-indigo-notice",
+          "expectPolicyEligible": false,
+          "reason": "tombstoned"
+        }
+      ],
+      "notes": "A tombstoned source is accounted, never delivered."
+    },
+    {
+      "id": "exclusion-privacy-incompatible",
+      "family": "exclusion",
+      "selectors": [
+        {
+          "selector": "clover-ledger",
+          "descriptions": [
+            "clover ledger"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what compensation figures does the clover ledger hold",
+      "relevant": [],
+      "excluded": [
+        {
+          "fixtureVersionKey": "exclusion-clover-ledger",
+          "expectPolicyEligible": false,
+          "reason": "privacy-incompatible"
+        }
+      ],
+      "notes": "Secret-class content never reaches a candidate."
+    },
+    {
+      "id": "exclusion-scope-ineligible",
+      "family": "exclusion",
+      "selectors": [
+        {
+          "selector": "borage-summary",
+          "descriptions": [
+            "borage summary"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the borage summary record about invoice review",
+      "relevant": [],
+      "excluded": [
+        {
+          "fixtureVersionKey": "exclusion-borage-summary",
+          "expectPolicyEligible": false,
+          "reason": "scope-ineligible"
+        }
+      ],
+      "notes": "A label outside the request allowlist is scope-ineligible."
+    },
+    {
+      "id": "exclusion-legacy-unverified-default",
+      "family": "exclusion",
+      "selectors": [
+        {
+          "selector": "lichen-archive",
+          "descriptions": [
+            "lichen archive"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the lichen archive contain",
+      "relevant": [],
+      "excluded": [
+        {
+          "fixtureVersionKey": "exclusion-lichen-archive",
+          "expectPolicyEligible": false,
+          "reason": "legacy-unverified"
+        }
+      ],
+      "notes": "Without the opt-in, legacy-unverified evidence is accounted and withheld."
+    },
+    {
+      "id": "exclusion-legacy-unverified-opted-in",
+      "family": "exclusion",
+      "selectors": [
+        {
+          "selector": "lichen-archive",
+          "descriptions": [
+            "lichen archive"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the lichen archive contain",
+      "relevant": [
+        {
+          "fixtureVersionKey": "exclusion-lichen-archive",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "lichen-archive"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "includeLegacyUnverified": true,
+      "notes": "With the opt-in the same source is delivered and the accounting is empty."
+    },
+    {
+      "id": "exclusion-extractor-inactive",
+      "family": "exclusion",
+      "selectors": [
+        {
+          "selector": "obsidian-appendix",
+          "descriptions": [
+            "obsidian appendix"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the obsidian appendix say about reply guidance",
+      "relevant": [],
+      "excluded": [
+        {
+          "fixtureVersionKey": "exclusion-obsidian-base",
+          "expectPolicyEligible": false,
+          "reason": "extractor-inactive"
+        }
+      ],
+      "notes": "A complete extraction at a version the registry does not activate is accounted, never exposed."
+    },
+    {
+      "id": "exclusion-all-six-reasons",
+      "family": "exclusion",
+      "selectors": [
+        {
+          "selector": "exclusion-sweep",
+          "descriptions": [
+            "onyx revision",
+            "indigo notice",
+            "clover ledger",
+            "borage summary",
+            "lichen archive",
+            "obsidian appendix"
+          ],
+          "required": true
+        }
+      ],
+      "query": "sweep every excluded construction in one request",
+      "relevant": [
+        {
+          "fixtureVersionKey": "exclusion-onyx-revision-r2",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "exclusion-sweep"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "excluded": [
+        {
+          "fixtureVersionKey": "exclusion-onyx-revision-r1",
+          "expectPolicyEligible": false,
+          "reason": "superseded"
+        },
+        {
+          "fixtureVersionKey": "exclusion-indigo-notice",
+          "expectPolicyEligible": false,
+          "reason": "tombstoned"
+        },
+        {
+          "fixtureVersionKey": "exclusion-clover-ledger",
+          "expectPolicyEligible": false,
+          "reason": "privacy-incompatible"
+        },
+        {
+          "fixtureVersionKey": "exclusion-borage-summary",
+          "expectPolicyEligible": false,
+          "reason": "scope-ineligible"
+        },
+        {
+          "fixtureVersionKey": "exclusion-lichen-archive",
+          "expectPolicyEligible": false,
+          "reason": "legacy-unverified"
+        },
+        {
+          "fixtureVersionKey": "exclusion-obsidian-base",
+          "expectPolicyEligible": false,
+          "reason": "extractor-inactive"
+        }
+      ],
+      "notes": "One request whose accounting carries all six closed reasons at once."
+    },
+    {
+      "id": "exclusion-narrow-scope-ladder",
+      "family": "exclusion",
+      "selectors": [
+        {
+          "selector": "cedar-rulebook",
+          "descriptions": [
+            "cedar rulebook"
+          ],
+          "required": true
+        }
+      ],
+      "query": "which cedar rulebook entries apply to this agent and plan",
+      "relevant": [
+        {
+          "fixtureVersionKey": "exclusion-cedar-shared",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "cedar-rulebook"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1,
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          }
+        },
+        {
+          "fixtureVersionKey": "exclusion-cedar-function",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "cedar-rulebook"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "function:gtm"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1,
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace",
+            "function": "gtm"
+          }
+        },
+        {
+          "fixtureVersionKey": "exclusion-cedar-agent",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "cedar-rulebook"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "agent:gtm/social-manager",
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2,
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace",
+            "function": "gtm",
+            "agent": "social-manager"
+          }
+        },
+        {
+          "fixtureVersionKey": "exclusion-cedar-plan",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "cedar-rulebook"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "plan:gtm/social-manager#opportunity-discovery"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2,
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace",
+            "function": "gtm",
+            "agent": "social-manager",
+            "plan": "opportunity-discovery"
+          }
+        }
+      ],
+      "excluded": [
+        {
+          "fixtureVersionKey": "exclusion-cedar-foreign-agent",
+          "expectPolicyEligible": false,
+          "reason": "scope-ineligible"
+        }
+      ],
+      "notes": "Four eligible label levels are delivered with their derived scope; a sibling agent label is not."
+    },
+    {
+      "id": "precedence-dual-arm-delivered",
+      "family": "precedence",
+      "selectors": [
+        {
+          "selector": "quartz-anchor",
+          "descriptions": [
+            "quartz anchor"
+          ],
+          "required": true
+        },
+        {
+          "selector": "quartz-narrative",
+          "descriptions": [
+            "quartz narrative"
+          ],
+          "required": false
+        }
+      ],
+      "query": "what does the quartz anchor record say about the account",
+      "relevant": [
+        {
+          "fixtureVersionKey": "precedence-quartz-record",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "quartz-anchor",
+            "quartz-narrative"
+          ],
+          "expectedArms": [
+            "structured",
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "notes": "One delivered chunk reached by both arms through two selectors: one candidate, the sorted selector union, no filtered entry."
+    },
+    {
+      "id": "precedence-dual-arm-filtered-once",
+      "family": "precedence",
+      "selectors": [
+        {
+          "selector": "garnet-anchor",
+          "descriptions": [
+            "garnet anchor"
+          ],
+          "required": true
+        },
+        {
+          "selector": "garnet-narrative",
+          "descriptions": [
+            "garnet narrative"
+          ],
+          "required": false
+        }
+      ],
+      "query": "what did the garnet anchor record hold before it was withdrawn",
+      "relevant": [],
+      "excluded": [
+        {
+          "fixtureVersionKey": "precedence-garnet-record",
+          "expectPolicyEligible": false,
+          "reason": "tombstoned"
+        }
+      ],
+      "notes": "A dual-arm dual-selector chunk that is filtered is counted exactly once — the accounting-side UNION dedup proof."
+    },
+    {
+      "id": "precedence-structured-object-citation",
+      "family": "precedence",
+      "selectors": [
+        {
+          "selector": "quartz-anchor",
+          "descriptions": [
+            "quartz anchor"
+          ],
+          "required": true
+        }
+      ],
+      "query": "cite the quartz anchor record exactly",
+      "relevant": [
+        {
+          "fixtureVersionKey": "precedence-quartz-record",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "quartz-anchor"
+          ],
+          "expectedArms": [
+            "structured",
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "notes": "The structured citation proof: region object, the full source range, and the two-hash topology."
+    },
+    {
+      "id": "precedence-label-and-scope-exactness",
+      "family": "precedence",
+      "selectors": [
+        {
+          "selector": "topaz-register",
+          "descriptions": [
+            "topaz register"
+          ],
+          "required": true
+        }
+      ],
+      "query": "which topaz register entries name reply owners",
+      "relevant": [
+        {
+          "fixtureVersionKey": "precedence-topaz-shared",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "topaz-register"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1,
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          }
+        },
+        {
+          "fixtureVersionKey": "precedence-topaz-function",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "topaz-register"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "function:gtm"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1,
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace",
+            "function": "gtm"
+          }
+        },
+        {
+          "fixtureVersionKey": "precedence-topaz-agent",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "topaz-register"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "agent:gtm/social-manager",
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2,
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace",
+            "function": "gtm",
+            "agent": "social-manager"
+          }
+        },
+        {
+          "fixtureVersionKey": "precedence-topaz-plan",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "topaz-register"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "plan:gtm/social-manager#opportunity-discovery"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2,
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace",
+            "function": "gtm",
+            "agent": "social-manager",
+            "plan": "opportunity-discovery"
+          }
+        }
+      ],
+      "notes": "Exact label_keys and the derived narrowest scope for all four label levels."
+    },
+    {
+      "id": "precedence-cross-selector-dedup",
+      "family": "precedence",
+      "selectors": [
+        {
+          "selector": "marble-owners",
+          "descriptions": [
+            "marble compendium"
+          ],
+          "required": true
+        },
+        {
+          "selector": "marble-hours",
+          "descriptions": [
+            "marble compendium"
+          ],
+          "required": false
+        },
+        {
+          "selector": "marble-routes",
+          "descriptions": [
+            "marble compendium"
+          ],
+          "required": false
+        }
+      ],
+      "query": "what does the marble compendium cover",
+      "relevant": [
+        {
+          "fixtureVersionKey": "precedence-marble-shared",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "marble-hours",
+            "marble-owners",
+            "marble-routes"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "notes": "One chunk claimed by three selectors is delivered exactly once with the sorted selector union."
+    },
+    {
+      "id": "alias-northwind-robotics",
+      "family": "alias-variant",
+      "selectors": [
+        {
+          "selector": "northwind-robotics",
+          "descriptions": [
+            "northwind robotics"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what did Northwind Robotics say in the outreach thread",
+      "relevant": [
+        {
+          "fixtureVersionKey": "alias-northwind-robotics-canonical",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "northwind-robotics"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "membershipMisses": [
+        {
+          "fixtureVersionKey": "alias-northwind-robotics-variant",
+          "expectSelectorClaim": false,
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
+          "expectPolicyEligible": true,
+          "missClass": "abbreviation"
+        }
+      ],
+      "notes": "Canonical form is admitted; the abbreviation variant is eligible but unclaimed by any selector."
+    },
+    {
+      "id": "alias-meridian-freight",
+      "family": "alias-variant",
+      "selectors": [
+        {
+          "selector": "meridian-freight",
+          "descriptions": [
+            "meridian freight"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what did Meridian Freight say in the outreach thread",
+      "relevant": [
+        {
+          "fixtureVersionKey": "alias-meridian-freight-canonical",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "meridian-freight"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "membershipMisses": [
+        {
+          "fixtureVersionKey": "alias-meridian-freight-variant",
+          "expectSelectorClaim": false,
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
+          "expectPolicyEligible": true,
+          "missClass": "abbreviation"
+        }
+      ],
+      "notes": "Canonical form is admitted; the abbreviation variant is eligible but unclaimed by any selector."
+    },
+    {
+      "id": "alias-longview-systems",
+      "family": "alias-variant",
+      "selectors": [
+        {
+          "selector": "longview-systems",
+          "descriptions": [
+            "longview systems"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what did Longview Systems say in the outreach thread",
+      "relevant": [
+        {
+          "fixtureVersionKey": "alias-longview-systems-canonical",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "longview-systems"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "membershipMisses": [
+        {
+          "fixtureVersionKey": "alias-longview-systems-variant",
+          "expectSelectorClaim": false,
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
+          "expectPolicyEligible": true,
+          "missClass": "hyphenation"
+        }
+      ],
+      "notes": "Canonical form is admitted; the hyphenation variant is eligible but unclaimed by any selector."
+    },
+    {
+      "id": "alias-bluewater-labs",
+      "family": "alias-variant",
+      "selectors": [
+        {
+          "selector": "bluewater-labs",
+          "descriptions": [
+            "bluewater labs"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what did Bluewater Labs say in the outreach thread",
+      "relevant": [
+        {
+          "fixtureVersionKey": "alias-bluewater-labs-canonical",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "bluewater-labs"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "membershipMisses": [
+        {
+          "fixtureVersionKey": "alias-bluewater-labs-variant",
+          "expectSelectorClaim": false,
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
+          "expectPolicyEligible": true,
+          "missClass": "hyphenation"
+        }
+      ],
+      "notes": "Canonical form is admitted; the hyphenation variant is eligible but unclaimed by any selector."
+    },
+    {
+      "id": "alias-larkfield-ops",
+      "family": "alias-variant",
+      "selectors": [
+        {
+          "selector": "larkfield-ops",
+          "descriptions": [
+            "larkfield ops"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what did Larkfield Ops say in the outreach thread",
+      "relevant": [
+        {
+          "fixtureVersionKey": "alias-larkfield-ops-canonical",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "larkfield-ops"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "membershipMisses": [
+        {
+          "fixtureVersionKey": "alias-larkfield-ops-variant",
+          "expectSelectorClaim": false,
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
+          "expectPolicyEligible": true,
+          "missClass": "casing"
+        }
+      ],
+      "notes": "Canonical form is admitted; the casing variant is eligible but unclaimed by any selector."
+    },
+    {
+      "id": "alias-harborpoint-media",
+      "family": "alias-variant",
+      "selectors": [
+        {
+          "selector": "harborpoint-media",
+          "descriptions": [
+            "harborpoint media"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what did Harborpoint Media say in the outreach thread",
+      "relevant": [
+        {
+          "fixtureVersionKey": "alias-harborpoint-media-canonical",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "harborpoint-media"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "membershipMisses": [
+        {
+          "fixtureVersionKey": "alias-harborpoint-media-variant",
+          "expectSelectorClaim": false,
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
+          "expectPolicyEligible": true,
+          "missClass": "casing"
+        }
+      ],
+      "notes": "Canonical form is admitted; the casing variant is eligible but unclaimed by any selector."
+    },
+    {
+      "id": "alias-pinecrest-group",
+      "family": "alias-variant",
+      "selectors": [
+        {
+          "selector": "pinecrest-group",
+          "descriptions": [
+            "pinecrest group"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what did Pinecrest Group say in the outreach thread",
+      "relevant": [
+        {
+          "fixtureVersionKey": "alias-pinecrest-group-canonical",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "pinecrest-group"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "membershipMisses": [
+        {
+          "fixtureVersionKey": "alias-pinecrest-group-variant",
+          "expectSelectorClaim": false,
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
+          "expectPolicyEligible": true,
+          "missClass": "misspelling"
+        }
+      ],
+      "notes": "Canonical form is admitted; the misspelling variant is eligible but unclaimed by any selector."
+    },
+    {
+      "id": "alias-silverbrook-holdings",
+      "family": "alias-variant",
+      "selectors": [
+        {
+          "selector": "silverbrook-holdings",
+          "descriptions": [
+            "silverbrook holdings"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what did Silverbrook Holdings say in the outreach thread",
+      "relevant": [
+        {
+          "fixtureVersionKey": "alias-silverbrook-holdings-canonical",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "silverbrook-holdings"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "membershipMisses": [
+        {
+          "fixtureVersionKey": "alias-silverbrook-holdings-variant",
+          "expectSelectorClaim": false,
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
+          "expectPolicyEligible": true,
+          "missClass": "misspelling"
+        }
+      ],
+      "notes": "Canonical form is admitted; the misspelling variant is eligible but unclaimed by any selector."
+    },
+    {
+      "id": "alias-procurement-lead",
+      "family": "alias-variant",
+      "selectors": [
+        {
+          "selector": "procurement-lead",
+          "descriptions": [
+            "procurement lead"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what did Procurement lead say in the outreach thread",
+      "relevant": [
+        {
+          "fixtureVersionKey": "alias-procurement-lead-canonical",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "procurement-lead"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "membershipMisses": [
+        {
+          "fixtureVersionKey": "alias-procurement-lead-variant",
+          "expectSelectorClaim": false,
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
+          "expectPolicyEligible": true,
+          "missClass": "synonym"
+        }
+      ],
+      "notes": "Canonical form is admitted; the synonym variant is eligible but unclaimed by any selector."
+    },
+    {
+      "id": "alias-renewal-exposure",
+      "family": "alias-variant",
+      "selectors": [
+        {
+          "selector": "renewal-exposure",
+          "descriptions": [
+            "renewal exposure"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what did Renewal exposure say in the outreach thread",
+      "relevant": [
+        {
+          "fixtureVersionKey": "alias-renewal-exposure-canonical",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "renewal-exposure"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "membershipMisses": [
+        {
+          "fixtureVersionKey": "alias-renewal-exposure-variant",
+          "expectSelectorClaim": false,
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
+          "expectPolicyEligible": true,
+          "missClass": "synonym"
+        }
+      ],
+      "notes": "Canonical form is admitted; the synonym variant is eligible but unclaimed by any selector."
+    },
+    {
+      "id": "multi-slate-anchor",
+      "family": "multi-record",
+      "selectors": [
+        {
+          "selector": "slate-anchor",
+          "descriptions": [
+            "slate anchor"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the slate anchor review and its linked profile say",
+      "relevant": [
+        {
+          "fixtureVersionKey": "multi-slate-anchor-record",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "slate-anchor"
+          ],
+          "expectedArms": [
+            "structured",
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "membershipMisses": [
+        {
+          "fixtureVersionKey": "multi-linked-account-north-record",
+          "expectSelectorClaim": false,
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
+          "expectPolicyEligible": true,
+          "missClass": "linked-record"
+        }
+      ],
+      "notes": "The linked record is reachable only by following an identity reference inside the anchor record body."
+    },
+    {
+      "id": "multi-cinder-anchor",
+      "family": "multi-record",
+      "selectors": [
+        {
+          "selector": "cinder-anchor",
+          "descriptions": [
+            "cinder anchor"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the cinder anchor review and its linked profile say",
+      "relevant": [
+        {
+          "fixtureVersionKey": "multi-cinder-anchor-record",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "cinder-anchor"
+          ],
+          "expectedArms": [
+            "structured",
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "membershipMisses": [
+        {
+          "fixtureVersionKey": "multi-linked-account-south-record",
+          "expectSelectorClaim": false,
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
+          "expectPolicyEligible": true,
+          "missClass": "linked-record"
+        }
+      ],
+      "notes": "The linked record is reachable only by following an identity reference inside the anchor record body."
+    },
+    {
+      "id": "multi-willow-anchor",
+      "family": "multi-record",
+      "selectors": [
+        {
+          "selector": "willow-anchor",
+          "descriptions": [
+            "willow anchor"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the willow anchor review and its linked profile say",
+      "relevant": [
+        {
+          "fixtureVersionKey": "multi-willow-anchor-record",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "willow-anchor"
+          ],
+          "expectedArms": [
+            "structured",
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "membershipMisses": [
+        {
+          "fixtureVersionKey": "multi-linked-account-east-record",
+          "expectSelectorClaim": false,
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
+          "expectPolicyEligible": true,
+          "missClass": "linked-record"
+        }
+      ],
+      "notes": "The linked record is reachable only by following an identity reference inside the anchor record body."
+    },
+    {
+      "id": "multi-marlow-anchor",
+      "family": "multi-record",
+      "selectors": [
+        {
+          "selector": "marlow-anchor",
+          "descriptions": [
+            "marlow anchor"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the marlow anchor review and its linked profile say",
+      "relevant": [
+        {
+          "fixtureVersionKey": "multi-marlow-anchor-record",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "marlow-anchor"
+          ],
+          "expectedArms": [
+            "structured",
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "membershipMisses": [
+        {
+          "fixtureVersionKey": "multi-linked-account-west-record",
+          "expectSelectorClaim": false,
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
+          "expectPolicyEligible": true,
+          "missClass": "linked-record"
+        }
+      ],
+      "notes": "The linked record is reachable only by following an identity reference inside the anchor record body."
+    },
+    {
+      "id": "multi-brindle-anchor",
+      "family": "multi-record",
+      "selectors": [
+        {
+          "selector": "brindle-anchor",
+          "descriptions": [
+            "brindle anchor"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the brindle anchor review and its linked profile say",
+      "relevant": [
+        {
+          "fixtureVersionKey": "multi-brindle-anchor-record",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "brindle-anchor"
+          ],
+          "expectedArms": [
+            "structured",
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "membershipMisses": [
+        {
+          "fixtureVersionKey": "multi-linked-partner-first-record",
+          "expectSelectorClaim": false,
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
+          "expectPolicyEligible": true,
+          "missClass": "linked-record"
+        }
+      ],
+      "notes": "The linked record is reachable only by following an identity reference inside the anchor record body."
+    },
+    {
+      "id": "multi-thistle-anchor",
+      "family": "multi-record",
+      "selectors": [
+        {
+          "selector": "thistle-anchor",
+          "descriptions": [
+            "thistle anchor"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the thistle anchor review and its linked profile say",
+      "relevant": [
+        {
+          "fixtureVersionKey": "multi-thistle-anchor-record",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "thistle-anchor"
+          ],
+          "expectedArms": [
+            "structured",
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "membershipMisses": [
+        {
+          "fixtureVersionKey": "multi-linked-partner-second-record",
+          "expectSelectorClaim": false,
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
+          "expectPolicyEligible": true,
+          "missClass": "linked-record"
+        }
+      ],
+      "notes": "The linked record is reachable only by following an identity reference inside the anchor record body."
+    },
+    {
+      "id": "multi-alder-anchor",
+      "family": "multi-record",
+      "selectors": [
+        {
+          "selector": "alder-anchor",
+          "descriptions": [
+            "alder anchor"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the alder anchor review and its linked profile say",
+      "relevant": [
+        {
+          "fixtureVersionKey": "multi-alder-anchor-record",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "alder-anchor"
+          ],
+          "expectedArms": [
+            "structured",
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "membershipMisses": [
+        {
+          "fixtureVersionKey": "multi-linked-channel-first-record",
+          "expectSelectorClaim": false,
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
+          "expectPolicyEligible": true,
+          "missClass": "linked-record"
+        }
+      ],
+      "notes": "The linked record is reachable only by following an identity reference inside the anchor record body."
+    },
+    {
+      "id": "multi-hazel-anchor",
+      "family": "multi-record",
+      "selectors": [
+        {
+          "selector": "hazel-anchor",
+          "descriptions": [
+            "hazel anchor"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what does the hazel anchor review and its linked profile say",
+      "relevant": [
+        {
+          "fixtureVersionKey": "multi-hazel-anchor-record",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "hazel-anchor"
+          ],
+          "expectedArms": [
+            "structured",
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        }
+      ],
+      "membershipMisses": [
+        {
+          "fixtureVersionKey": "multi-linked-channel-second-record",
+          "expectSelectorClaim": false,
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectedScope": {
+            "workspace": "retrieval-gold-workspace"
+          },
+          "expectPolicyEligible": true,
+          "missClass": "linked-record"
+        }
+      ],
+      "notes": "The linked record is reachable only by following an identity reference inside the anchor record body."
+    },
+    {
+      "id": "ordering-escalation-audit",
+      "family": "ordering",
+      "selectors": [
+        {
+          "selector": "heron-signals",
+          "descriptions": [
+            "heron signals"
+          ],
+          "required": true
+        },
+        {
+          "selector": "plover-signals",
+          "descriptions": [
+            "plover signals"
+          ],
+          "required": true
+        }
+      ],
+      "query": "escalation route and audit request records",
+      "relevant": [
+        {
+          "fixtureVersionKey": "ordering-heron-signals-escalation",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "heron-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-heron-signals-audit",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "heron-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-heron-signals-invoice",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "heron-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        },
+        {
+          "fixtureVersionKey": "ordering-plover-signals-escalation",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "plover-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-plover-signals-audit",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "plover-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-plover-signals-invoice",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "plover-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        }
+      ],
+      "notes": "Query terms appear verbatim in the graded documents."
+    },
+    {
+      "id": "ordering-demo-referral",
+      "family": "ordering",
+      "selectors": [
+        {
+          "selector": "heron-signals",
+          "descriptions": [
+            "heron signals"
+          ],
+          "required": true
+        },
+        {
+          "selector": "plover-signals",
+          "descriptions": [
+            "plover signals"
+          ],
+          "required": true
+        }
+      ],
+      "query": "demo request and referral offer records",
+      "relevant": [
+        {
+          "fixtureVersionKey": "ordering-heron-signals-demo",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "heron-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-heron-signals-referral",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "heron-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-heron-signals-webinar",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "heron-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        },
+        {
+          "fixtureVersionKey": "ordering-plover-signals-demo",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "plover-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-plover-signals-referral",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "plover-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-plover-signals-webinar",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "plover-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        }
+      ],
+      "notes": "Query terms appear verbatim in the graded documents."
+    },
+    {
+      "id": "ordering-invoice-sponsorship",
+      "family": "ordering",
+      "selectors": [
+        {
+          "selector": "heron-signals",
+          "descriptions": [
+            "heron signals"
+          ],
+          "required": true
+        },
+        {
+          "selector": "plover-signals",
+          "descriptions": [
+            "plover signals"
+          ],
+          "required": true
+        }
+      ],
+      "query": "invoice question and sponsorship proposal records",
+      "relevant": [
+        {
+          "fixtureVersionKey": "ordering-heron-signals-invoice",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "heron-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-heron-signals-sponsorship",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "heron-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-heron-signals-onboarding",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "heron-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        },
+        {
+          "fixtureVersionKey": "ordering-plover-signals-invoice",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "plover-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-plover-signals-sponsorship",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "plover-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-plover-signals-onboarding",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "plover-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        }
+      ],
+      "notes": "Query terms appear verbatim in the graded documents."
+    },
+    {
+      "id": "ordering-onboarding-webinar",
+      "family": "ordering",
+      "selectors": [
+        {
+          "selector": "avocet-threads",
+          "descriptions": [
+            "avocet threads"
+          ],
+          "required": true
+        },
+        {
+          "selector": "curlew-threads",
+          "descriptions": [
+            "curlew threads"
+          ],
+          "required": true
+        }
+      ],
+      "query": "onboarding steps and webinar invitation records",
+      "relevant": [
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-onboarding",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "avocet-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-webinar",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "avocet-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-demo",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "avocet-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        },
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-onboarding",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "curlew-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-webinar",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "curlew-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-demo",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "curlew-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        }
+      ],
+      "notes": "Query terms appear verbatim in the graded documents."
+    },
+    {
+      "id": "ordering-audit-sponsorship",
+      "family": "ordering",
+      "selectors": [
+        {
+          "selector": "avocet-threads",
+          "descriptions": [
+            "avocet threads"
+          ],
+          "required": true
+        },
+        {
+          "selector": "curlew-threads",
+          "descriptions": [
+            "curlew threads"
+          ],
+          "required": true
+        }
+      ],
+      "query": "audit request and sponsorship proposal records",
+      "relevant": [
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-audit",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "avocet-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-sponsorship",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "avocet-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-referral",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "avocet-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        },
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-audit",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "curlew-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-sponsorship",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "curlew-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-referral",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "curlew-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        }
+      ],
+      "notes": "Query terms appear verbatim in the graded documents."
+    },
+    {
+      "id": "ordering-referral-escalation",
+      "family": "ordering",
+      "selectors": [
+        {
+          "selector": "avocet-threads",
+          "descriptions": [
+            "avocet threads"
+          ],
+          "required": true
+        },
+        {
+          "selector": "curlew-threads",
+          "descriptions": [
+            "curlew threads"
+          ],
+          "required": true
+        }
+      ],
+      "query": "referral offer and escalation route records",
+      "relevant": [
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-referral",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "avocet-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-escalation",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "avocet-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-audit",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "avocet-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        },
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-referral",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "curlew-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-escalation",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "curlew-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-audit",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "curlew-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        }
+      ],
+      "notes": "Query terms appear verbatim in the graded documents."
+    },
+    {
+      "id": "paraphrase-complaint-and-books",
+      "family": "paraphrase-ordering",
+      "selectors": [
+        {
+          "selector": "heron-signals",
+          "descriptions": [
+            "heron signals"
+          ],
+          "required": true
+        },
+        {
+          "selector": "plover-signals",
+          "descriptions": [
+            "plover signals"
+          ],
+          "required": true
+        }
+      ],
+      "query": "when a customer complained loudly and someone checked the books afterwards",
+      "relevant": [
+        {
+          "fixtureVersionKey": "ordering-heron-signals-escalation",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "heron-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-heron-signals-audit",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "heron-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-heron-signals-invoice",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "heron-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        },
+        {
+          "fixtureVersionKey": "ordering-plover-signals-escalation",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "plover-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-plover-signals-audit",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "plover-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-plover-signals-invoice",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "plover-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        }
+      ],
+      "notes": "No query term appears in the graded documents; ordering has no lexical signal."
+    },
+    {
+      "id": "paraphrase-walkthrough-and-word-of-mouth",
+      "family": "paraphrase-ordering",
+      "selectors": [
+        {
+          "selector": "heron-signals",
+          "descriptions": [
+            "heron signals"
+          ],
+          "required": true
+        },
+        {
+          "selector": "plover-signals",
+          "descriptions": [
+            "plover signals"
+          ],
+          "required": true
+        }
+      ],
+      "query": "a guided walkthrough was asked for and a happy owner recommended us",
+      "relevant": [
+        {
+          "fixtureVersionKey": "ordering-heron-signals-demo",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "heron-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-heron-signals-referral",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "heron-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-heron-signals-webinar",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "heron-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        },
+        {
+          "fixtureVersionKey": "ordering-plover-signals-demo",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "plover-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-plover-signals-referral",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "plover-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-plover-signals-webinar",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "plover-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        }
+      ],
+      "notes": "No query term appears in the graded documents; ordering has no lexical signal."
+    },
+    {
+      "id": "paraphrase-billing-and-shared-budget",
+      "family": "paraphrase-ordering",
+      "selectors": [
+        {
+          "selector": "heron-signals",
+          "descriptions": [
+            "heron signals"
+          ],
+          "required": true
+        },
+        {
+          "selector": "plover-signals",
+          "descriptions": [
+            "plover signals"
+          ],
+          "required": true
+        }
+      ],
+      "query": "a billing query arrived and a shared budget was proposed",
+      "relevant": [
+        {
+          "fixtureVersionKey": "ordering-heron-signals-invoice",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "heron-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-heron-signals-sponsorship",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "heron-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-heron-signals-onboarding",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "heron-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        },
+        {
+          "fixtureVersionKey": "ordering-plover-signals-invoice",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "plover-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-plover-signals-sponsorship",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "plover-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-plover-signals-onboarding",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "plover-signals"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        }
+      ],
+      "notes": "No query term appears in the graded documents; ordering has no lexical signal."
+    },
+    {
+      "id": "paraphrase-first-week-and-broadcast",
+      "family": "paraphrase-ordering",
+      "selectors": [
+        {
+          "selector": "avocet-threads",
+          "descriptions": [
+            "avocet threads"
+          ],
+          "required": true
+        },
+        {
+          "selector": "curlew-threads",
+          "descriptions": [
+            "curlew threads"
+          ],
+          "required": true
+        }
+      ],
+      "query": "what a new joiner does in week one and the group broadcast we sent",
+      "relevant": [
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-onboarding",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "avocet-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-webinar",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "avocet-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-demo",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "avocet-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        },
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-onboarding",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "curlew-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-webinar",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "curlew-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-demo",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "curlew-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        }
+      ],
+      "notes": "No query term appears in the graded documents; ordering has no lexical signal."
+    },
+    {
+      "id": "paraphrase-written-record-and-shared-budget",
+      "family": "paraphrase-ordering",
+      "selectors": [
+        {
+          "selector": "avocet-threads",
+          "descriptions": [
+            "avocet threads"
+          ],
+          "required": true
+        },
+        {
+          "selector": "curlew-threads",
+          "descriptions": [
+            "curlew threads"
+          ],
+          "required": true
+        }
+      ],
+      "query": "someone wanted a written record and a shared budget was proposed",
+      "relevant": [
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-audit",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "avocet-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-sponsorship",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "avocet-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-avocet-threads-referral",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "avocet-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        },
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-audit",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "curlew-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-sponsorship",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "curlew-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 2
+        },
+        {
+          "fixtureVersionKey": "ordering-curlew-threads-referral",
+          "expectSelectorClaim": true,
+          "expectedSelectors": [
+            "curlew-threads"
+          ],
+          "expectedArms": [
+            "lexical"
+          ],
+          "expectLabelScopeEligible": true,
+          "expectedLabelKeys": [
+            "workspace"
+          ],
+          "expectPolicyEligible": true,
+          "grade": 1
+        }
+      ],
+      "notes": "No query term appears in the graded documents; ordering has no lexical signal."
+    }
+  ]
+}
