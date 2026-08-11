@@ -503,6 +503,19 @@ export function normalizeLessonDecision(
   return Object.freeze({ lessonDecisionId, canonical });
 }
 
+// A human decision's `action.target` is FREE TEXT and is credential-scanned on
+// both sides (evidence-contracts.ts and 013's assert_no_credential_shape), and
+// the generic long-hex rule refuses any run of 32+ hex characters -- which a bare
+// `sha256:` candidate id is. So the decision target carries the candidate's
+// digest in a group-separated spelling: injective, still exact, and provably
+// free of a 32-character hex run. 015 recomputes the identical spelling.
+export function dreamDecisionTarget(candidateId: string): string {
+  if (!SHA256_ID.test(candidateId)) {
+    invalid('candidate_id', 'it must be a lowercase sha256 digest', { candidate_id: candidateId });
+  }
+  return `dream-candidate:${candidateId.slice('sha256:'.length).replace(/(.{4})/gu, '$1-')}`;
+}
+
 // The exact action a human decision must be bound to. Roster never asks and
 // never waits: it verifies that this exact triple was already answered.
 export function lessonDecisionAction(
@@ -511,7 +524,7 @@ export function lessonDecisionAction(
   lessonScopeKey: string,
 ): Readonly<{ target: string; effect: string; scope: string }> {
   return Object.freeze({
-    target: candidateId,
+    target: dreamDecisionTarget(candidateId),
     effect: `dream-candidate-${decision}`,
     scope: lessonScopeKey,
   });

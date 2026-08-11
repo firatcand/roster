@@ -739,10 +739,23 @@ BEGIN
              o.ordinal AS actual_ordinal,
              r.run_id AS resolved_run_id,
              r.agent_id AS run_agent_id,
+             -- The effective class is the run's, raised by the feedback's own
+             -- class for a feedback citation. A run-only citation has no
+             -- feedback row at all, so the NULL branch must rank 0 rather than
+             -- fall into the secret arm and refuse every ordinary citation.
              greatest(
-               CASE r.privacy_class WHEN 'public' THEN 1 WHEN 'internal' THEN 2 ELSE 3 END,
-               coalesce(
-                 CASE f.privacy_class WHEN 'public' THEN 1 WHEN 'internal' THEN 2 ELSE 3 END, 0)
+               CASE
+                 WHEN r.privacy_class = 'public' THEN 1
+                 WHEN r.privacy_class = 'internal' THEN 2
+                 WHEN r.privacy_class IS NULL THEN 0
+                 ELSE 3
+               END,
+               CASE
+                 WHEN f.privacy_class = 'public' THEN 1
+                 WHEN f.privacy_class = 'internal' THEN 2
+                 WHEN f.privacy_class IS NULL THEN 0
+                 ELSE 3
+               END
              ) AS privacy_rank
         FROM jsonb_array_elements(v_doc->'citations') AS c(value)
         LEFT JOIN brain_evidence.evidence_observations o
@@ -1009,7 +1022,6 @@ DECLARE
   v_state text;
   v_human record;
   v_watermark jsonb;
-  v_advance record;
   v_promote record;
   v_proof record;
   v_stored text;
@@ -1018,6 +1030,12 @@ DECLARE
   v_expected_answer text;
   v_sequence integer;
   v_subject_sequence bigint;
+  -- Held as scalars rather than read off the advance record: plpgsql substitutes
+  -- a record field as a query parameter before the CASE arm is chosen, so a
+  -- reject or retire -- which never advances -- would fault on an unassigned
+  -- record even though its branch is not taken.
+  v_watermark_scope_key text;
+  v_watermark_sequence bigint;
   v_governor_sequence bigint;
   v_inserted integer;
 BEGIN
@@ -1151,7 +1169,13 @@ BEGIN
   v_expected_answer := CASE WHEN v_decision = 'reject' THEN 'rejected' ELSE 'approved' END;
   IF v_human.actor_assurance <> 'human-confirmed'
      OR v_human.answer <> v_expected_answer
-     OR v_human.action->>'target' IS DISTINCT FROM v_candidate_id
+     -- `target` is free text and is credential-scanned on both sides, so a bare
+     -- sha256 candidate id can never be stored in it. The group-separated
+     -- spelling below is the SAME one dreamDecisionTarget renders: injective,
+     -- exact, and free of a 32-character hex run.
+     OR v_human.action->>'target' IS DISTINCT FROM (
+          'dream-candidate:' || regexp_replace(substring(v_candidate_id from 8), '(....)', '\1-', 'g')
+        )
      OR v_human.action->>'effect' IS DISTINCT FROM ('dream-candidate-' || v_decision)
      OR v_human.action->>'scope' IS DISTINCT FROM v_candidate.lesson_scope_key
      OR v_human.action_digest IS DISTINCT FROM (v_doc->>'action_digest') THEN
@@ -1275,7 +1299,7 @@ BEGIN
     -- The advance BEFORE the insert: the watermark foreign key is deliberately
     -- not deferrable, so the row it points at must already exist. 014 owns
     -- replay and monotonicity from here.
-    SELECT a.status, a.scope_key, a.sequence INTO v_advance
+    SELECT a.scope_key, a.sequence INTO v_watermark_scope_key, v_watermark_sequence
       FROM brain_evidence.advance_dream_watermark(v_doc->>'watermark_canonical') a;
   ELSE
     IF (v_doc->>'frontier_ordinal')::bigint IS DISTINCT FROM v_candidate.frontier_ordinal THEN
@@ -1329,8 +1353,8 @@ BEGIN
     v_doc->>'action_digest',
     v_doc->>'lesson_qualified_id',
     v_doc->>'lesson_content_hash',
-    CASE WHEN v_decision = 'promote' THEN v_advance.scope_key END,
-    CASE WHEN v_decision = 'promote' THEN v_advance.sequence END,
+    v_watermark_scope_key,
+    v_watermark_sequence,
     (v_doc->>'frontier_ordinal')::bigint,
     v_doc->>'actor_assurance',
     (v_doc->>'decided_at')::timestamptz
@@ -1359,8 +1383,8 @@ BEGIN
     v_sequence,
     v_subject_sequence,
     v_subject_sequence IS NOT DISTINCT FROM v_governor_sequence,
-    CASE WHEN v_decision = 'promote' THEN v_advance.scope_key END,
-    CASE WHEN v_decision = 'promote' THEN v_advance.sequence END;
+    v_watermark_scope_key,
+    v_watermark_sequence;
 EXCEPTION
   WHEN foreign_key_violation THEN
     RAISE EXCEPTION 'a referenced evidence row does not exist' USING ERRCODE = 'RBE03';
