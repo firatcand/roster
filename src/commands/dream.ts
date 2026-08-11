@@ -120,6 +120,7 @@ export type DreamCandidatesOptions =
       state?: string;
       target?: string;
       candidateId?: string;
+      readinessKey?: string;
       limit?: number;
     }
   | { cwd: string; json: boolean; verb: 'create'; file?: string; stdin: boolean }
@@ -253,6 +254,7 @@ async function runList(
     ...(opts.state === undefined ? {} : { state: opts.state }),
     ...(opts.target === undefined ? {} : { lessonAgentKey: opts.target }),
     ...(opts.candidateId === undefined ? {} : { candidateId: opts.candidateId }),
+    ...(opts.readinessKey === undefined ? {} : { readinessKey: opts.readinessKey }),
     ...(opts.limit === undefined ? {} : { limit: opts.limit }),
   });
   if (opts.json) console.log(JSON.stringify({ ok: true, candidates: rows }, null, 2));

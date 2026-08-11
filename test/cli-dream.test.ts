@@ -87,17 +87,22 @@ test('dream status parses its scope aliases and refuses every other verb', () =>
 });
 
 test('the candidate grammar accepts exactly the shipped surface', () => {
+  const readinessKey = `sha256:${'b'.repeat(64)}`;
   assert.deepEqual({ ...ok(['candidates', 'list']) }, {
     kind: 'ok', subcommand: 'candidates', verb: 'list', json: false,
-    state: undefined, target: undefined, candidateId: undefined, limit: undefined,
+    state: undefined, target: undefined, candidateId: undefined, readinessKey: undefined, limit: undefined,
   });
   assert.deepEqual({ ...ok(['candidates', 'list', '--json', '--state', 'open', '--target', 'gtm/sdr', '--limit', '5']) }, {
     kind: 'ok', subcommand: 'candidates', verb: 'list', json: true,
-    state: 'open', target: 'gtm/sdr', candidateId: undefined, limit: 5,
+    state: 'open', target: 'gtm/sdr', candidateId: undefined, readinessKey: undefined, limit: 5,
   });
   assert.deepEqual({ ...ok(['candidates', 'list', '--candidate', 'sha256:abc']) }, {
     kind: 'ok', subcommand: 'candidates', verb: 'list', json: false,
-    state: undefined, target: undefined, candidateId: 'sha256:abc', limit: undefined,
+    state: undefined, target: undefined, candidateId: 'sha256:abc', readinessKey: undefined, limit: undefined,
+  });
+  assert.deepEqual({ ...ok(['candidates', 'list', '--readiness-key', readinessKey, '--json']) }, {
+    kind: 'ok', subcommand: 'candidates', verb: 'list', json: true,
+    state: undefined, target: undefined, candidateId: undefined, readinessKey, limit: undefined,
   });
   assert.deepEqual({ ...ok(['candidates', 'create', '--stdin']) }, {
     kind: 'ok', subcommand: 'candidates', verb: 'create', json: false,
@@ -115,6 +120,10 @@ test('the candidate grammar accepts exactly the shipped surface', () => {
   assert.match(bad(['candidates', 'approve']), /unknown 'dream candidates' verb 'approve'/u);
   assert.match(bad(['candidates', 'list', '--state', 'nope']), /unknown --state 'nope'/u);
   assert.match(bad(['candidates', 'list', '--limit', '0']), /--limit must be a whole number/u);
+  assert.match(bad(['candidates', 'list', '--readiness-key', 'not-a-key']), /--readiness-key must be a readiness key/u);
+  assert.match(bad(['candidates', 'list', '--readiness-key', `sha256:${'A'.repeat(64)}`]), /--readiness-key must be a readiness key/u);
+  assert.match(bad(['candidates', 'list', '--readiness-key', `sha256:${'a'.repeat(63)}`]), /--readiness-key must be a readiness key/u);
+  assert.match(bad(['candidates', 'list', '--readiness-key']), /--readiness-key requires a value/u);
   assert.match(bad(['candidates', 'create']), /pass exactly one of --file <path> or --stdin/u);
   assert.match(bad(['candidates', 'create', '--file', 'a', '--stdin']), /pass exactly one of/u);
   assert.match(bad(['candidates', 'promote']), /a candidate id is required/u);

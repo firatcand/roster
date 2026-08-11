@@ -176,7 +176,7 @@ function printHelp(version: string): void {
     `  roster brain query "<text>"  ${chalk.dim('Fails closed until cited retrieval ships (#352) — use roster context for cited evidence')}`,
     `  roster brain mount|table|sql|config|reindex|gc|export|import  ${chalk.dim('Legacy spellings; recognized but fail closed until removal in #363')}`,
     `  roster dream status          ${chalk.dim('Read durable Dreamer readiness: due|not_due over observed evidence (--scope/--function/--agent, --json)')}`,
-    `  roster dream candidates      ${chalk.dim('list | create | promote | reject | retire — the human-confirmed lesson lifecycle (--json)')}`,
+    `  roster dream candidates      ${chalk.dim('list | create | promote | reject | retire — the human-confirmed lesson lifecycle (list takes --readiness-key <sha256:...> for the exact occasion; --json)')}`,
     `  roster ops setup             ${chalk.dim('Configure the workspace operations backend: --backend local|postgres-s3 (--database, --bucket, --new-identity, --json, --yes)')}`,
     `  roster run <verb>            ${chalk.dim('Run + artifact ledger: start|end|event|report|declare-artifact|show|list|doctor|repair (--run, --json, --allow-partial)')}`,
     `  roster migrate from-agent-team <dir>  ${chalk.dim('Migrate a legacy agent-team workspace into roster')}`,
@@ -1057,6 +1057,7 @@ async function runDream(args: readonly string[]): Promise<number> {
         ...(parsed.state !== undefined ? { state: parsed.state } : {}),
         ...(parsed.target !== undefined ? { target: parsed.target } : {}),
         ...(parsed.candidateId !== undefined ? { candidateId: parsed.candidateId } : {}),
+        ...(parsed.readinessKey !== undefined ? { readinessKey: parsed.readinessKey } : {}),
         ...(parsed.limit !== undefined ? { limit: parsed.limit } : {}),
       });
     }

@@ -372,3 +372,69 @@ test('post-rejection damping keys on the NORMALIZED subject', options, async (t)
     await fixture.close();
   }
 });
+
+test('the exact-key list filter selects one occasion and never widens', options, async () => {
+  const fixture = await createEvidenceFixture('dream-exact-key-test');
+  try {
+    await seedRuns(fixture, 6, {}, 'first');
+    const firstSnapshot = await readiness(fixture);
+    const firstOrdinal = await observationOrdinal(fixture.admin, 'completed-run', 'first-0');
+    const early = await createCandidate(fixture, firstSnapshot, [{
+      role: 'supporting',
+      evidenceKind: 'completed-run',
+      runId: 'first-0',
+      feedbackId: null,
+      observationOrdinal: firstOrdinal,
+    }], { lessonId: 'early-occasion' });
+    assert.equal(early.status, 'created');
+
+    // New evidence moves the frontier, so the next occasion carries a different
+    // readiness key -- which is what makes the filter's exactness observable.
+    await seedRuns(fixture, 6, {}, 'second');
+    const secondSnapshot = await readiness(fixture);
+    assert.notEqual(secondSnapshot.readiness_key, firstSnapshot.readiness_key);
+    const secondOrdinal = await observationOrdinal(fixture.admin, 'completed-run', 'second-0');
+    const later = await createCandidate(fixture, secondSnapshot, [{
+      role: 'supporting',
+      evidenceKind: 'completed-run',
+      runId: 'second-0',
+      feedbackId: null,
+      observationOrdinal: secondOrdinal,
+    }], { lessonId: 'later-occasion' });
+    assert.equal(later.status, 'created');
+
+    const all = await listDreamCandidates(fixture.runtime, { limit: 200 });
+    assert.equal(all.length, 2);
+
+    const atFirst = await listDreamCandidates(fixture.runtime, {
+      readinessKey: firstSnapshot.readiness_key,
+      limit: 200,
+    });
+    assert.deepEqual(atFirst.map((row) => row.candidate_id), [early.candidateId]);
+    assert.equal(atFirst[0]!.readiness_key, firstSnapshot.readiness_key);
+
+    const atSecond = await listDreamCandidates(fixture.runtime, {
+      readinessKey: secondSnapshot.readiness_key,
+      limit: 200,
+    });
+    assert.deepEqual(atSecond.map((row) => row.candidate_id), [later.candidateId]);
+
+    // An occasion with nothing drafted answers empty rather than falling back to
+    // the unfiltered listing: that is the branch the host reads as "draft one".
+    const unknown = await listDreamCandidates(fixture.runtime, {
+      readinessKey: `sha256:${'f'.repeat(64)}`,
+      limit: 200,
+    });
+    assert.deepEqual(unknown, []);
+
+    // The exact key composes with the other filters instead of replacing them.
+    const composed = await listDreamCandidates(fixture.runtime, {
+      readinessKey: firstSnapshot.readiness_key,
+      state: 'promoted',
+      limit: 200,
+    });
+    assert.deepEqual(composed, []);
+  } finally {
+    await fixture.close();
+  }
+});
