@@ -71,7 +71,15 @@ function assertTierGates(result: TierResult): void {
   assert.equal(result.citations.structured_object_proofs > 0, true, 'the @object proof must run');
   assert.equal(result.privacy.secret_candidates, 0);
   assert.equal(result.privacy.legacy_unverified_without_optin, 0);
-  assert.equal(result.graph_unavailable_everywhere, true);
+  // Graph availability is EVIDENCE, never a gate: asserting unavailability
+  // would make a future citable graph arm fail this suite, which acceptance
+  // criterion 5 forbids. Only the envelope's closed reason pair is gated, and
+  // only for queries that reported the capability unavailable.
+  assert.equal(result.graph_evidence.queries, gold.queries.length);
+  assert.equal(
+    result.graph_evidence.unavailable + result.graph_evidence.available,
+    gold.queries.length,
+  );
 
   const baseline = result.families.find((entry) => entry.family === 'baseline')!;
   assert.equal(baseline.recall_at['64'], 1, 'baseline Recall@64 must be 1.0');

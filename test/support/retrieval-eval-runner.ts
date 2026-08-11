@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -8,7 +9,7 @@ import {
   TOTAL_CANDIDATE_LIMIT,
   retrieveBrainContextEvidenceWithTelemetry,
 } from '../../src/lib/brain/context-retrieval.ts';
-import { setConfig } from '../../src/lib/brain/config.ts';
+import { loadConfig, setConfig } from '../../src/lib/brain/config.ts';
 import { deriveChunkId, deriveExtractionId } from '../../src/lib/brain/extractors.ts';
 import { deriveEmbeddingSpecId } from '../../src/lib/brain/embedding-index.ts';
 import type { EmbeddingAdapterRegistry } from '../../src/lib/brain/embedding-provider.ts';
@@ -101,6 +102,7 @@ export type QueryMeasurement = Readonly<{
   expected_filtered: Readonly<Record<ContextRetrievalFilterReason, number>>;
   exclusion_correct: boolean;
   deterministic: boolean;
+  metrics_stable: boolean;
   contract_violations: readonly string[];
 }>;
 
@@ -125,6 +127,10 @@ export type AliasOracleRow = Readonly<{
   oracle_joint_recall_at_64: number;
   delta: number;
   recovered: boolean;
+  // The counterfactual is only a ceiling while the augmented selectors stay
+  // inside the per-arm cap and nothing was truncated.
+  truncated: number;
+  within_arm_limit: boolean;
 }>;
 
 export type MultiRecordRow = Readonly<{
@@ -143,6 +149,7 @@ export type EmbeddingMechanics = Readonly<{
   bytes_embedded: number;
   embedding_arm_rows: number;
   delivered_set_changed: boolean;
+  delivered_order_changed: boolean;
   truncated: number;
 }>;
 
@@ -156,6 +163,7 @@ export type SelfCheckRow = Readonly<{
 
 export type TierResult = Readonly<{
   tier: EvalTier;
+  effective_rrf_k: number;
   ingest: Readonly<{
     logical_sources: number;
     versions: number;
@@ -178,7 +186,15 @@ export type TierResult = Readonly<{
     secret_candidates: number;
     legacy_unverified_without_optin: number;
   }>;
-  graph_unavailable_everywhere: boolean;
+  // EVIDENCE, never a gate: a future citable graph arm must not fail this
+  // suite. Only the reason pair is validated, and only for queries that DID
+  // report the capability unavailable.
+  graph_evidence: Readonly<{
+    queries: number;
+    unavailable: number;
+    available: number;
+    reason_pairs: readonly string[];
+  }>;
   // Deterministic cost proxy: how many statements one retrieval issues on each
   // family's representative query. Counted, not asserted.
   statements_per_family: Readonly<Record<string, number>>;
@@ -195,7 +211,10 @@ export type TierResult = Readonly<{
     embedding_arm_total_ms: number;
     embedding_embed_ms: number;
     p95_transaction_ms: number;
-    p95_samples: number;
+    // RAW samples, not only aggregates: the per-family five-run arrays and the
+    // thirty-run array behind the p95.
+    per_family_samples_ms: Readonly<Record<string, readonly number[]>>;
+    p95_sample_ms: readonly number[];
   }>;
 }>;
 
@@ -222,14 +241,22 @@ const EMPTY_FILTERED = (): Record<ContextRetrievalFilterReason, number> => ({
 const SELECTOR_LOCAL_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 
 // The exact pair the cited engine hard-codes at context-retrieval.ts:169 and
-// :922. The report claims graph expansion is unavailable with THESE reasons, so
-// the gate proves the reasons and not only the status.
+// :922. Unavailability itself is EVIDENCE and is never gated — gating it would
+// make a future citable graph arm fail the phase gate, which is exactly what
+// acceptance criterion 5 forbids. What IS gated is the envelope's internal
+// consistency: a query that reports `unavailable` must carry this closed pair.
 const GRAPH_UNAVAILABLE_REASONS = JSON.stringify(['no-cited-edge-relation', 'unmeasured'].sort());
 
 // Mirrors `selectorMembershipText` / `structuredJsonPaths` in
 // src/lib/brain/context-retrieval.ts (lines 235-264). The engine does not export
 // them; the authoring self-check needs the same predicates to prove a fixture is
 // reachable or unreachable BEFORE a family is trusted as evidence.
+// A printable, unambiguous map key: JSON encoding cannot collide across two
+// different (selector, descriptions) pairs, and no control byte enters source.
+function selectorKey(selector: GoldSelector): string {
+  return JSON.stringify([selector.selector, ...selector.descriptions]);
+}
+
 function membershipText(selector: GoldSelector): string {
   return [selector.selector, ...selector.descriptions]
     .map((part) => part.replace(/[\r\n]+/gu, ' ').trim())
@@ -493,6 +520,43 @@ async function proveEligibilityWithoutMembership(
   }]));
 }
 
+// Mirrors `narrowestScopeClaim` (src/lib/brain/context-retrieval.ts:601-634).
+// A deliberate membership miss is never delivered, so its scope claim has no
+// candidate to read it off; deriving it from the proven label keys is how the
+// fixture's `expectedScope` contract is checked at all.
+function narrowestScopeOf(
+  labelKeys: readonly string[],
+  allowed: ReadonlySet<string>,
+  workspaceId: string,
+): Record<string, string> {
+  let winner: string | null = null;
+  let winnerSpecificity = -1;
+  for (const labelKey of labelKeys) {
+    if (!allowed.has(labelKey)) continue;
+    const specificity = labelKey === 'workspace'
+      ? 0
+      : labelKey.startsWith('function:')
+        ? 1
+        : labelKey.startsWith('agent:') ? 2 : 3;
+    if (specificity > winnerSpecificity
+      || (specificity === winnerSpecificity && winner !== null && labelKey < winner)) {
+      winner = labelKey;
+      winnerSpecificity = specificity;
+    }
+  }
+  if (winner === null || winner === 'workspace') return { workspace: workspaceId };
+  if (winner.startsWith('function:')) {
+    return { workspace: workspaceId, function: winner.slice('function:'.length) };
+  }
+  if (winner.startsWith('agent:')) {
+    const [functionId, agentId] = winner.slice('agent:'.length).split('/');
+    return { workspace: workspaceId, function: functionId!, agent: agentId! };
+  }
+  const [owner, planId] = winner.slice('plan:'.length).split('#');
+  const [functionId, agentId] = owner!.split('/');
+  return { workspace: workspaceId, function: functionId!, agent: agentId!, plan: planId! };
+}
+
 function labelAllowlistFor(gold: GoldSet): string[] {
   const { functionId, agentId } = gold.corpus.target;
   return [
@@ -642,10 +706,6 @@ function percentile(samples: readonly number[], fraction: number): number {
   return sorted[Math.min(sorted.length - 1, Math.ceil(fraction * sorted.length) - 1)]!;
 }
 
-function evidenceFingerprint(candidates: readonly ContextBrainCandidate[], report: unknown): string {
-  return sha256Hex(JSON.stringify({ candidates, report }));
-}
-
 export type RunEvaluationOptions = Readonly<{
   tier: EvalTier;
   gold: GoldSet;
@@ -684,6 +744,14 @@ async function evaluateOnCorpus(
     gates.push({ name, ok, detail });
   };
 
+  const configClient = await corpus.adminPool.connect();
+  let effectiveRrfK: number;
+  try {
+    effectiveRrfK = (await loadConfig(configClient)).rrfK;
+  } finally {
+    configClient.release();
+  }
+
   const ingestStarted = Date.now();
   const ingested = await ingestGoldCorpus(corpus, gold);
   const entityIds = await insertAliasGroundTruth(corpus, gold);
@@ -721,7 +789,7 @@ async function evaluateOnCorpus(
   const selectorSpecs = new Map<string, GoldSelector>();
   for (const query of gold.queries) {
     for (const selector of query.selectors) {
-      selectorSpecs.set(`${selector.selector} ${selector.descriptions.join(' ')}`, selector);
+      selectorSpecs.set(selectorKey(selector), selector);
     }
   }
   const reachability = new Map<string, { lexical: Set<string>; structured: Set<string> }>();
@@ -753,7 +821,7 @@ async function evaluateOnCorpus(
   const reachableMisses: string[] = [];
   for (const query of gold.queries) {
     const reachSets = query.selectors.map((selector) => (
-      reachability.get(`${selector.selector} ${selector.descriptions.join(' ')}`)!
+      reachability.get(selectorKey(selector))!
     ));
     const anyReach = new Set<string>();
     for (const reach of reachSets) {
@@ -795,7 +863,10 @@ async function evaluateOnCorpus(
   let structuredProofs = 0;
   let secretCandidates = 0;
   let legacyWithoutOptIn = 0;
-  let graphUnavailableEverywhere = true;
+  let graphUnavailable = 0;
+  let graphAvailable = 0;
+  const graphReasonPairs = new Set<string>();
+  const graphEnvelopeProblems: string[] = [];
   const connectSamples: number[] = [];
   const evidenceByQuery = new Map<string, { candidates: readonly ContextBrainCandidate[]; report: unknown }>();
 
@@ -805,16 +876,25 @@ async function evaluateOnCorpus(
     const second = await retrieveBrainContextEvidenceWithTelemetry(request, { env });
     connectSamples.push(first.telemetry.connectMs);
     const evidence = first.evidence;
-    const deterministic = evidenceFingerprint(evidence.candidates, evidence.report)
-      === evidenceFingerprint(second.evidence.candidates, second.evidence.report);
+    // Deep structural equality, not a digest of a serialisation: a fingerprint
+    // can only ever agree with itself about key ORDER, which is not what the
+    // determinism claim is about.
+    const deterministic = isDeepStrictEqual(evidence.candidates, second.evidence.candidates)
+      && isDeepStrictEqual(evidence.report, second.evidence.report);
     evidenceByQuery.set(query.id, { candidates: evidence.candidates, report: evidence.report });
 
     if (evidence.status !== 'available' || evidence.report.unavailable_reason !== null) {
       gateFailures.push(`${query.id}: retrieval unavailable (${String(evidence.report.unavailable_reason)})`);
     }
-    if (evidence.report.graph.status !== 'unavailable'
-      || JSON.stringify([...evidence.report.graph.reasons].sort()) !== GRAPH_UNAVAILABLE_REASONS) {
-      graphUnavailableEverywhere = false;
+    if (evidence.report.graph.status === 'unavailable') {
+      graphUnavailable += 1;
+      const pair = JSON.stringify([...evidence.report.graph.reasons].sort());
+      graphReasonPairs.add(pair);
+      if (pair !== GRAPH_UNAVAILABLE_REASONS) {
+        graphEnvelopeProblems.push(`${query.id}: ${pair}`);
+      }
+    } else {
+      graphAvailable += 1;
     }
 
     const collapsed = collapseToVersions(
@@ -914,6 +994,17 @@ async function evaluateOnCorpus(
           if (JSON.stringify(proof.labelKeys) !== JSON.stringify([...item.expectedLabelKeys])) {
             violations.push(`${item.fixtureVersionKey}: miss label_keys ${proof.labelKeys.join('+')}`);
           }
+          const derivedScope = narrowestScopeOf(
+            proof.labelKeys,
+            new Set(allowedLabels),
+            corpus.authority.workspaceId,
+          );
+          if (!isDeepStrictEqual(derivedScope, { ...item.expectedScope })) {
+            violations.push(
+              `${item.fixtureVersionKey}: miss scope ${JSON.stringify(derivedScope)}`
+              + ` != ${JSON.stringify(item.expectedScope)}`,
+            );
+          }
         }
         if (collapsed.includes(versionOf(item.fixtureVersionKey))) {
           violations.push(`${item.fixtureVersionKey}: deliberate membership miss was delivered`);
@@ -938,6 +1029,21 @@ async function evaluateOnCorpus(
       gateFailures.push(`${query.id}: ordering family requires truncated=0, saw ${evidence.report.truncated}`);
     }
 
+    // The metric pipeline is a pure function of one evidence set, so computing
+    // it twice and comparing is the direct proof of the second half of the
+    // determinism claim; the rebuild gate then proves it across databases too.
+    const metricsOf = (): Record<string, unknown> => ({
+      recall_at: kRecord((k) => recallAt(collapsed, relevantVersions, k)),
+      joint_recall_at: kRecord((k) => recallAt(collapsed, jointVersions, k)),
+      precision_at: kRecord((k) => precisionAt(collapsed, relevantVersions, k)),
+      reciprocal_rank: roundMetric(reciprocalRank(collapsed, relevantVersions)),
+      ndcg_at_10: roundMetric(ndcgAt(collapsed, grades, 10)),
+      headroom_at: kRecord((k) => oracleHeadroomAt(collapsed, relevantVersions, k)),
+    });
+    const metrics = metricsOf();
+    const metricsStable = isDeepStrictEqual(metrics, metricsOf());
+    if (!metricsStable) gateFailures.push(`${query.id}: two metric computations disagreed`);
+
     measurements.push({
       id: query.id,
       family: query.family,
@@ -949,16 +1055,17 @@ async function evaluateOnCorpus(
       arm_rows: { ...first.telemetry.armRows },
       relevant: relevantVersions.size,
       membership_misses: missVersions.size,
-      recall_at: kRecord((k) => recallAt(collapsed, relevantVersions, k)),
-      joint_recall_at: kRecord((k) => recallAt(collapsed, jointVersions, k)),
-      precision_at: kRecord((k) => precisionAt(collapsed, relevantVersions, k)),
-      reciprocal_rank: roundMetric(reciprocalRank(collapsed, relevantVersions)),
-      ndcg_at_10: roundMetric(ndcgAt(collapsed, grades, 10)),
-      headroom_at: kRecord((k) => oracleHeadroomAt(collapsed, relevantVersions, k)),
+      recall_at: metrics.recall_at as Record<string, number>,
+      joint_recall_at: metrics.joint_recall_at as Record<string, number>,
+      precision_at: metrics.precision_at as Record<string, number>,
+      reciprocal_rank: metrics.reciprocal_rank as number,
+      ndcg_at_10: metrics.ndcg_at_10 as number,
+      headroom_at: metrics.headroom_at as Record<string, number>,
       filtered: { ...evidence.report.filtered },
       expected_filtered: expectedFiltered,
       exclusion_correct: exclusionCorrect,
       deterministic,
+      metrics_stable: metricsStable,
       contract_violations: violations,
     });
   }
@@ -977,11 +1084,16 @@ async function evaluateOnCorpus(
       ? `${completeCitations}/${deliveredCitations} delivered citations verified`
       : citationProblems.slice(0, 5).join(' | '),
   );
+  // Graph AVAILABILITY is never gated — see GRAPH_UNAVAILABLE_REASONS. This gate
+  // is vacuous the day a citable graph arm ships, and until then it only proves
+  // the envelope's own closed reason contract.
   gate(
-    'graph/unavailable-in-every-query',
-    graphUnavailableEverywhere,
-    'the cited engine reports graph unavailable with exactly'
-      + ' [no-cited-edge-relation, unmeasured] for every gold query',
+    'graph/unavailable-reasons-are-the-closed-pair',
+    graphEnvelopeProblems.length === 0,
+    graphEnvelopeProblems.length === 0
+      ? `${graphUnavailable} query/queries reported graph unavailable, each carrying exactly`
+        + ' [no-cited-edge-relation, unmeasured]; availability itself is evidence, not a gate'
+      : graphEnvelopeProblems.slice(0, 5).join(' | '),
   );
   gate(
     'families/gates-and-contracts',
@@ -1011,6 +1123,16 @@ async function evaluateOnCorpus(
       augmented.push({ ...selector, descriptions: [...selector.descriptions, ...aliases] });
     }
     const baseline = measurements.find((entry) => entry.id === query.id)!;
+    // The counterfactual only bounds anything while the AUGMENTED selectors stay
+    // inside the per-arm cap: a truncated augmented arm would silently drop the
+    // very document the oracle claims to recover.
+    let withinArmLimit = true;
+    for (const selector of augmented) {
+      const reach = await selectorReachability(corpus, selector);
+      if (reach.lexical.size > PER_SELECTOR_ARM_LIMIT || reach.structured.size > PER_SELECTOR_ARM_LIMIT) {
+        withinArmLimit = false;
+      }
+    }
     const oracle = await retrieveBrainContextEvidenceWithTelemetry(
       buildRequest(corpus, gold, query, augmented),
       { env },
@@ -1033,8 +1155,18 @@ async function evaluateOnCorpus(
       oracle_joint_recall_at_64: oracleRecall,
       delta: roundMetric(oracleRecall - baselineRecall),
       recovered: oracleRecall === 1,
+      truncated: oracle.evidence.report.truncated,
+      within_arm_limit: withinArmLimit,
     });
   }
+  const oracleUnbounded = aliasRows.filter((row) => !row.within_arm_limit || row.truncated !== 0);
+  gate(
+    'alias-oracle/counterfactual-is-bounded',
+    oracleUnbounded.length === 0,
+    oracleUnbounded.length === 0
+      ? 'every alias-oracle run stayed inside the per-arm cap with nothing truncated'
+      : `unbounded oracle runs: ${oracleUnbounded.map((row) => row.query).join(', ')}`,
+  );
 
   const multiRows: MultiRecordRow[] = measurements
     .filter((entry) => entry.family === 'multi-record')
@@ -1047,6 +1179,7 @@ async function evaluateOnCorpus(
 
   // --- latency (warm max-of-five per family) + statement cost ---------------
   const perFamilyMax: Record<string, number> = {};
+  const perFamilySamples: Record<string, number[]> = {};
   const statementsPerFamily: Record<string, number> = {};
   const families = [...new Set(gold.queries.map((query) => query.family))];
   for (const family of families) {
@@ -1056,12 +1189,13 @@ async function evaluateOnCorpus(
     for (let warmup = 0; warmup < 2; warmup += 1) {
       await retrieveBrainContextEvidenceWithTelemetry(request, { env });
     }
-    let worst = 0;
+    const familySamples: number[] = [];
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const { telemetry } = await retrieveBrainContextEvidenceWithTelemetry(request, { env });
-      worst = Math.max(worst, telemetry.transactionMs + telemetry.embedMs);
+      familySamples.push(telemetry.transactionMs + telemetry.embedMs);
     }
-    perFamilyMax[family] = worst;
+    perFamilySamples[family] = familySamples;
+    perFamilyMax[family] = Math.max(...familySamples);
   }
 
   // Report-only p95 over 30 warm runs of one representative query, following
@@ -1119,6 +1253,7 @@ async function evaluateOnCorpus(
 
   return Object.freeze({
     tier,
+    effective_rrf_k: effectiveRrfK,
     ingest: {
       logical_sources: gold.corpus.sources.length,
       versions: revisions.size,
@@ -1141,7 +1276,12 @@ async function evaluateOnCorpus(
       secret_candidates: secretCandidates,
       legacy_unverified_without_optin: legacyWithoutOptIn,
     },
-    graph_unavailable_everywhere: graphUnavailableEverywhere,
+    graph_evidence: {
+      queries: gold.queries.length,
+      unavailable: graphUnavailable,
+      available: graphAvailable,
+      reason_pairs: [...graphReasonPairs].sort(),
+    },
     statements_per_family: statementsPerFamily,
     alias_oracle: aliasRows,
     multi_record: multiRows,
@@ -1156,7 +1296,8 @@ async function evaluateOnCorpus(
       embedding_arm_total_ms: embeddingMechanics.totalMs,
       embedding_embed_ms: embeddingMechanics.embedMs,
       p95_transaction_ms: percentile(samples, 0.95),
-      p95_samples: samples.length,
+      per_family_samples_ms: perFamilySamples,
+      p95_sample_ms: samples,
     },
   });
 }
@@ -1182,6 +1323,7 @@ async function measureEmbeddingMechanics(
     bytes_embedded: 0,
     embedding_arm_rows: 0,
     delivered_set_changed: false,
+    delivered_order_changed: false,
     truncated: 0,
   };
   if (!supportsVector) return { mechanics: skipped, totalMs: 0, embedMs: 0 };
@@ -1237,8 +1379,10 @@ async function measureEmbeddingMechanics(
   const request = buildRequest(corpus, gold, query, query.selectors);
   const withArm = await retrieveBrainContextEvidenceWithTelemetry(request, { env, adapters });
   const before = baseline.get(query.id)!;
-  const beforeSet = [...new Set(before.candidates.map((candidate) => candidate.candidate_id))].sort();
-  const afterSet = [...new Set(withArm.evidence.candidates.map((candidate) => candidate.candidate_id))].sort();
+  const beforeOrder = before.candidates.map((candidate) => candidate.candidate_id);
+  const afterOrder = withArm.evidence.candidates.map((candidate) => candidate.candidate_id);
+  const beforeSet = [...new Set(beforeOrder)].sort();
+  const afterSet = [...new Set(afterOrder)].sort();
   return {
     mechanics: {
       status: 'measured',
@@ -1246,7 +1390,8 @@ async function measureEmbeddingMechanics(
       stored_vectors: stored,
       bytes_embedded: bytesEmbedded,
       embedding_arm_rows: withArm.telemetry.armRows.embedding,
-      delivered_set_changed: JSON.stringify(beforeSet) !== JSON.stringify(afterSet),
+      delivered_set_changed: !isDeepStrictEqual(beforeSet, afterSet),
+      delivered_order_changed: !isDeepStrictEqual(beforeOrder, afterOrder),
       truncated: withArm.evidence.report.truncated,
     },
     totalMs: withArm.telemetry.totalMs,
@@ -1309,7 +1454,9 @@ export function composeManifest(options: ComposeManifestOptions): ResultManifest
     fixture: { files: options.gold.files, sha256: options.gold.sha256 },
     harness: harnessDigests(root),
     config: {
-      rrf_k: 60,
+      // The EFFECTIVE value the retrieval transaction read from the Brain's own
+      // `brain_meta.config`, never a constant restated here.
+      rrf_k: options.tiers[0]?.effective_rrf_k ?? null,
       total_candidate_limit: TOTAL_CANDIDATE_LIMIT,
       per_selector_arm_limit: PER_SELECTOR_ARM_LIMIT,
       k_values: [...K_VALUES],
