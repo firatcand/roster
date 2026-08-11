@@ -915,7 +915,9 @@ export function deriveV2DoctorHosts(options: {
     const headerSummary = currentManifest.hosts[host];
     const hostPaths = generatedMetadata.paths.filter((entry) => entry.host === host);
     const pathDrift = hostPaths.some((entry) =>
-      entry.state === 'noncanonical-generated' || entry.state === 'unsafe'
+      entry.state === 'noncanonical-generated'
+      || entry.state === 'stale-generated'
+      || entry.state === 'unsafe'
     );
     let activationCapability: HostAdapterCapabilityStatus;
     if (pathDrift || generatedMetadata.redundant_activations.includes(host)) {

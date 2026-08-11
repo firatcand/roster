@@ -41,6 +41,7 @@ import {
 } from '../src/lib/workspace-diagnostics.ts';
 import { parseWorkspaceRegistry } from '../src/lib/workspace-record.ts';
 import { realWorkspaceDurabilityFs } from '../src/lib/workspace-io.ts';
+import { getPackageVersion } from '../src/lib/paths.ts';
 
 const passed: HostActivationAttestation = {
   schema_version: 1,
@@ -262,7 +263,7 @@ test('generated adapter metadata exposes canonical path and manifest states with
     const forgedMetadata = inspectGeneratedAdapterMetadata(fx.root).paths.find((entry) =>
       entry.path === CODEX_PROJECT_INSTRUCTIONS_PATH
     );
-    assert.equal(forgedMetadata?.state, 'noncanonical-generated');
+    assert.equal(forgedMetadata?.state, 'stale-generated');
     assert.equal(forgedMetadata?.activation_assurance, null);
     assert.equal(forgedMetadata?.supported_host_versions, null);
     assert.equal(forgedMetadata?.attestation_fixture, null);
@@ -300,16 +301,22 @@ test('doctor-only capability fields never enter generated headers or manifest sc
   try {
     assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
     const manifestText = readFileSync(at(fx.root, GENERATED_MANIFEST_PATH), 'utf8');
-    assert.doesNotMatch(manifestText, /activation_capability|lifecycle_capabilities/);
+    assert.doesNotMatch(
+      manifestText,
+      /"activation_capability"|"lifecycle_capabilities"|"recorded_generator_version"|"shadows"|"versions"/,
+    );
     const manifest = parseGeneratedManifest(manifestText);
     assert.equal(manifest?.schema_version, 1);
     assert.equal(manifest?.protocol_version, 2);
     for (const entry of manifest?.files ?? []) {
-      const parsed = parseGeneratedMarkdown(readFileSync(at(fx.root, entry.path), 'utf8'));
+      const fileText = readFileSync(at(fx.root, entry.path), 'utf8');
+      assert.doesNotMatch(fileText, /recorded_generator_version|lifecycle_capabilities/);
+      const parsed = parseGeneratedMarkdown(fileText);
       assert.equal(parsed?.header.schema_version, '1');
       assert.equal(parsed?.header.protocol_version, '2');
       assert.equal('activation_capability' in (parsed?.header ?? {}), false);
       assert.equal('lifecycle_capabilities' in (parsed?.header ?? {}), false);
+      assert.equal('recorded_generator_version' in (parsed?.header ?? {}), false);
     }
   } finally {
     fx.cleanup();
@@ -1633,7 +1640,7 @@ test('characterization: the Claude rule path is a conditional fallback, not a pe
     assert.equal(stale.ok, false);
     assert.equal(readFileSync(rulePath, 'utf8'), staleRule);
     assert.ok(stale.diagnostics.some((diagnostic) =>
-      diagnostic.code === 'GENERATED_FILE_EDITED' &&
+      diagnostic.code === 'GENERATED_FILE_STALE' &&
       diagnostic.path === CLAUDE_PROJECT_RULE_PATH &&
       /Redundant Claude fallback/.test(diagnostic.message)
     ));
@@ -1665,6 +1672,133 @@ test('characterization: the Claude rule path is a conditional fallback, not a pe
       file.path === CLAUDE_PROJECT_RULE_PATH
     )?.status, 'created');
     assert.ok(parseGeneratedMarkdown(readFileSync(rulePath, 'utf8'))?.valid);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+const MANDATORY_PRIMARY_PATHS = [
+  'ROSTER.md',
+  CLAUDE_PROJECT_INSTRUCTIONS_PATH,
+  CODEX_PROJECT_INSTRUCTIONS_PATH,
+  CODEX_ROSTER_SKILL_PATH,
+] as const;
+
+function forgeManifestFileHashes(root: string, generatorVersion?: string): void {
+  const manifestPath = at(root, GENERATED_MANIFEST_PATH);
+  const manifest = parseGeneratedManifest(readFileSync(manifestPath, 'utf8'));
+  assert.ok(manifest);
+  const { manifest_hash: _manifestHash, ...draft } = manifest;
+  writeFileSync(manifestPath, renderGeneratedManifest(createGeneratedManifest({
+    ...draft,
+    ...(generatorVersion === undefined ? {} : { generator_version: generatorVersion }),
+    files: draft.files.map((entry) => {
+      const parsed = parseGeneratedMarkdown(readFileSync(at(root, entry.path), 'utf8'));
+      assert.ok(parsed?.valid);
+      return { ...entry, content_hash: parsed.header.content_hash };
+    }),
+  })));
+}
+
+test('an old-generator workspace classifies stale-generated everywhere and update converges', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'codex' }).ok, true);
+    for (const path of MANDATORY_PRIMARY_PATHS) {
+      writeFileSync(
+        at(fx.root, path),
+        rehashWithVersion(readFileSync(at(fx.root, path), 'utf8'), '0.0.0-stale'),
+      );
+    }
+    forgeManifestFileHashes(fx.root, '0.0.0-stale');
+
+    const metadata = inspectGeneratedAdapterMetadata(fx.root);
+    for (const path of MANDATORY_PRIMARY_PATHS) {
+      const entry = metadata.paths.find((candidate) => candidate.path === path);
+      assert.equal(entry?.state, 'stale-generated');
+      assert.equal(entry?.recorded_generator_version, '0.0.0-stale');
+    }
+    assert.equal(metadata.manifest.state, 'stale-version');
+
+    const diagnostics = validateGeneratedArtifacts(fx.root);
+    for (const path of MANDATORY_PRIMARY_PATHS) {
+      const diagnostic = diagnostics.find((candidate) =>
+        candidate.code === 'GENERATED_FILE_STALE' && candidate.path === path
+      );
+      assert.ok(diagnostic, `missing stale diagnostic for ${path}`);
+      assert.equal(diagnostic.severity, 'error');
+      assert.equal(diagnostic.details['reason'], 'generator-version');
+      assert.equal(diagnostic.details['recordedGeneratorVersion'], '0.0.0-stale');
+      assert.equal(diagnostic.details['expectedGeneratorVersion'], getPackageVersion());
+    }
+    assert.ok(diagnostics.some((diagnostic) =>
+      diagnostic.code === 'GENERATED_FILE_STALE' && diagnostic.path === GENERATED_MANIFEST_PATH
+    ));
+    assert.equal(diagnostics.some((diagnostic) => diagnostic.code === 'GENERATED_FILE_EDITED'), false);
+
+    const updated = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(updated.ok, true);
+    assert.deepEqual(validateGeneratedArtifacts(fx.root), []);
+    const second = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(second.ok, true);
+    assert.ok(second.results.flatMap((result) => result.files)
+      .every((file) => file.status === 'unchanged'));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test('mixed generator versions classify only the stale path and reconverge on update', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'codex' }).ok, true);
+    const agentsPath = at(fx.root, CODEX_PROJECT_INSTRUCTIONS_PATH);
+    writeFileSync(agentsPath, rehashWithVersion(readFileSync(agentsPath, 'utf8'), '0.0.0-prior'));
+    forgeManifestFileHashes(fx.root);
+
+    const metadata = inspectGeneratedAdapterMetadata(fx.root);
+    assert.equal(
+      metadata.paths.find((entry) => entry.path === CODEX_PROJECT_INSTRUCTIONS_PATH)?.state,
+      'stale-generated',
+    );
+    assert.equal(
+      metadata.paths.find((entry) => entry.path === CODEX_PROJECT_INSTRUCTIONS_PATH)
+        ?.recorded_generator_version,
+      '0.0.0-prior',
+    );
+    for (const path of MANDATORY_PRIMARY_PATHS.filter((candidate) =>
+      candidate !== CODEX_PROJECT_INSTRUCTIONS_PATH
+    )) {
+      const entry = metadata.paths.find((candidate) => candidate.path === path);
+      assert.equal(entry?.state, 'canonical-generated');
+      assert.equal(entry?.recorded_generator_version, getPackageVersion());
+    }
+    const recorded = new Set([
+      ...metadata.paths
+        .filter((entry) =>
+          entry.state === 'canonical-generated' || entry.state === 'stale-generated')
+        .map((entry) => entry.recorded_generator_version),
+      metadata.manifest.value?.generator_version,
+    ]);
+    assert.deepEqual([...recorded].sort(), ['0.0.0-prior', getPackageVersion()].sort());
+
+    const diagnostics = validateGeneratedArtifacts(fx.root);
+    assert.ok(diagnostics.some((diagnostic) =>
+      diagnostic.code === 'GENERATED_FILE_STALE'
+      && diagnostic.path === CODEX_PROJECT_INSTRUCTIONS_PATH
+      && diagnostic.details['reason'] === 'generator-version'
+    ));
+
+    const updated = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(updated.ok, true);
+    assert.equal(
+      updated.results.find((result) => result.host === 'codex')?.files
+        .find((file) => file.path === CODEX_PROJECT_INSTRUCTIONS_PATH)?.status,
+      'updated',
+    );
+    assert.deepEqual(validateGeneratedArtifacts(fx.root), []);
   } finally {
     fx.cleanup();
   }

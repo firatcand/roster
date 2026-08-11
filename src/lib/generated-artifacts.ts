@@ -17,6 +17,7 @@ import {
 } from './workspace-io.ts';
 import {
   workspaceDiagnostic,
+  type JsonValue,
   type WorkspaceDiagnostic,
 } from './workspace-diagnostics.ts';
 import { addWorkspaceHost, enabledV2Hosts, parseWorkspaceRegistry } from './workspace-record.ts';
@@ -253,6 +254,7 @@ export type GeneratedActivationPathInspectionState =
   | 'absent'
   | 'authored'
   | 'canonical-generated'
+  | 'stale-generated'
   | 'noncanonical-generated'
   | 'unsafe';
 
@@ -264,6 +266,7 @@ export type GeneratedActivationPathInspection = Readonly<{
   activation_assurance: ActivationAssurance | null;
   supported_host_versions: string | null;
   attestation_fixture: string | null;
+  recorded_generator_version: string | null;
 }>;
 
 export type GeneratedManifestInspectionState =
@@ -1045,12 +1048,15 @@ function syncExpectedGeneratedFile(
   }
 }
 
-function inspectGeneratedPath(root: string, path: string): {
+type GeneratedPathInspection = {
   status: 'absent' | 'generated' | 'authored' | 'edited-generated' | 'unsafe';
   entry?: GeneratedManifestEntry;
   content?: string;
+  header?: GeneratedArtifactHeader;
   diagnostic?: WorkspaceDiagnostic;
-} {
+};
+
+function inspectGeneratedPath(root: string, path: string): GeneratedPathInspection {
   let bytes: Buffer | null;
   try {
     bytes = tryReadWorkspaceFile(root, path);
@@ -1060,10 +1066,47 @@ function inspectGeneratedPath(root: string, path: string): {
   if (bytes === null) return { status: 'absent' };
   const text = bytes.toString('utf8');
   const entry = entryFromGeneratedContent(path, text);
-  if (entry !== null) return { status: 'generated', entry, content: text };
+  const header = parseGeneratedMarkdown(text)?.header;
+  if (entry !== null) {
+    return { status: 'generated', entry, content: text, ...(header === undefined ? {} : { header }) };
+  }
   return hasGeneratedHeaderAtOwnedPosition(path, text)
-    ? { status: 'edited-generated' }
+    ? { status: 'edited-generated', ...(header === undefined ? {} : { header }) }
     : { status: 'authored' };
+}
+
+// The hash chain is the split: a valid header whose recomputed hash matches is
+// Roster-owned unedited content whatever version rendered it ('stale'); a
+// broken hash or invalid header is a user edit ('edited'). A forged body
+// re-hashed at the current version is indistinguishable from an old renderer's
+// genuine output, so both classify 'stale' and share the regenerate remedy.
+function classifyGeneratedDivergence(
+  inspected: Pick<GeneratedPathInspection, 'status'>,
+): 'stale' | 'edited' {
+  return inspected.status === 'generated' ? 'stale' : 'edited';
+}
+
+function staleGeneratedDetails(header: GeneratedArtifactHeader | undefined): Record<string, JsonValue> {
+  const recorded = header?.generator_version ?? null;
+  const expected = getPackageVersion();
+  return {
+    recordedGeneratorVersion: recorded,
+    expectedGeneratorVersion: expected,
+    reason: recorded !== null && recorded !== expected ? 'generator-version' : 'content',
+  };
+}
+
+function staleGeneratedDiagnostic(
+  path: string,
+  message: string,
+  header: GeneratedArtifactHeader | undefined,
+  remedy = 'Run roster update to regenerate this stale Roster-owned artifact.',
+): WorkspaceDiagnostic {
+  return workspaceDiagnostic('GENERATED_FILE_STALE', message, {
+    path,
+    remedy,
+    details: staleGeneratedDetails(header),
+  });
 }
 
 function hasRedundantGeneratedActivation(
@@ -1085,7 +1128,7 @@ export function inspectGeneratedAdapterMetadata(root: string): GeneratedAdapterM
         : renderCanonicalGeneratedEntry(inspected.entry);
       state = canonical !== null && inspected.content === canonical
         ? 'canonical-generated'
-        : 'noncanonical-generated';
+        : 'stale-generated';
     } else if (inspected.status === 'edited-generated') {
       state = 'noncanonical-generated';
     } else {
@@ -1105,10 +1148,13 @@ export function inspectGeneratedAdapterMetadata(root: string): GeneratedAdapterM
       attestation_fixture: state === 'canonical-generated'
         ? inspected.entry?.attestation_fixture ?? null
         : null,
+      recorded_generator_version: inspected.header?.generator_version ?? null,
     });
   });
   const generatedPaths = paths.filter((entry) =>
-    entry.state === 'canonical-generated' || entry.state === 'noncanonical-generated'
+    entry.state === 'canonical-generated'
+    || entry.state === 'stale-generated'
+    || entry.state === 'noncanonical-generated'
   );
   const redundantActivations = (['claude', 'codex'] as const).filter((host) =>
     hasRedundantGeneratedActivation(generatedPaths, host)
@@ -1290,13 +1336,11 @@ function syncClaudeArtifacts(options: {
       ) {
         const expectedFallback = renderCanonicalGeneratedEntry(fallbackState.entry);
         if (expectedFallback === null || fallbackState.content !== expectedFallback) {
-          diagnostics.push(workspaceDiagnostic(
-            'GENERATED_FILE_EDITED',
-            `Redundant Claude fallback '${CLAUDE_PROJECT_RULE_PATH}' is noncanonical and was preserved.`,
-            {
-              path: CLAUDE_PROJECT_RULE_PATH,
-              remedy: 'Restore its canonical generated bytes and rerun roster update, or keep it as authored policy without a Roster ownership header.',
-            },
+          diagnostics.push(staleGeneratedDiagnostic(
+            CLAUDE_PROJECT_RULE_PATH,
+            `Redundant Claude fallback '${CLAUDE_PROJECT_RULE_PATH}' is stale and was preserved.`,
+            fallbackState.header,
+            'Restore its canonical generated bytes so roster update can remove the redundant fallback, or delete the file manually.',
           ));
         } else {
           try {
@@ -1548,14 +1592,20 @@ export function inspectGeneratedActivationState(root: string): {
       && expected !== null
       && inspected.content === expected;
     if (!canonical) {
-      diagnostics.push(workspaceDiagnostic(
-        'GENERATED_FILE_EDITED',
-        `Generated artifact '${entry.path}' does not match its current canonical renderer or attestation.`,
-        {
-          path: entry.path,
-          remedy: 'Run roster update after reconciling authored or edited generated bytes.',
-        },
-      ));
+      diagnostics.push(classifyGeneratedDivergence(inspected) === 'stale'
+        ? staleGeneratedDiagnostic(
+            entry.path,
+            `Generated artifact '${entry.path}' does not match its current canonical renderer or attestation.`,
+            inspected.header,
+          )
+        : workspaceDiagnostic(
+            'GENERATED_FILE_EDITED',
+            `Generated artifact '${entry.path}' does not match its current canonical renderer or attestation.`,
+            {
+              path: entry.path,
+              remedy: 'Run roster update after reconciling authored or edited generated bytes.',
+            },
+          ));
     }
     return canonical;
   });
@@ -1873,13 +1923,10 @@ export function validateGeneratedArtifacts(root: string): WorkspaceDiagnostic[] 
       ),
     );
   } else if (bootstrap.content !== renderRosterBootstrap()) {
-    diagnostics.push(workspaceDiagnostic(
-      'GENERATED_FILE_EDITED',
+    diagnostics.push(staleGeneratedDiagnostic(
+      'ROSTER.md',
       'Generated file \'ROSTER.md\' does not match the current canonical renderer.',
-      {
-        path: 'ROSTER.md',
-        remedy: 'Run roster update to restore the current generated bootstrap bytes.',
-      },
+      bootstrap.header,
     ));
   }
 
@@ -1924,7 +1971,7 @@ export function validateGeneratedArtifacts(root: string): WorkspaceDiagnostic[] 
   }
   if (manifest.generator_version !== getPackageVersion()) {
     diagnostics.push(workspaceDiagnostic(
-      'GENERATED_FILE_EDITED',
+      'GENERATED_FILE_STALE',
       `Generated manifest was produced by version '${manifest.generator_version}', not '${getPackageVersion()}'.`,
       {
         path: GENERATED_MANIFEST_PATH,
@@ -2001,19 +2048,10 @@ export function validateGeneratedArtifacts(root: string): WorkspaceDiagnostic[] 
     }
     const expectedContent = renderCanonicalGeneratedEntry(entry);
     if (expectedContent === null || inspected.content !== expectedContent) {
-      diagnostics.push(workspaceDiagnostic(
-        'GENERATED_FILE_EDITED',
+      diagnostics.push(staleGeneratedDiagnostic(
+        entry.path,
         `Generated artifact '${entry.path}' does not match its current canonical renderer or attestation.`,
-        {
-          path: entry.path,
-          remedy: 'Preserve authored bytes, or run roster update to restore a fixture-backed generated artifact.',
-          details: {
-            artifact: entry.artifact,
-            host: entry.host,
-            assurance: entry.activation_assurance,
-            attestationFixture: entry.attestation_fixture,
-          },
-        },
+        inspected.header,
       ));
     }
   }
