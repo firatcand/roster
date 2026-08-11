@@ -4,8 +4,10 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseWorkspaceRegistry } from '../../src/lib/workspace-record.ts';
+import { CONTEXT_TRUST_CLASSES } from '../../src/lib/context-trust.ts';
 import { tombstoneBrainSource } from '../../src/lib/brain/source-lifecycle.ts';
 import {
+  CONTEXT_BRAIN_TRUST_CLASSES,
   CONTEXT_EXCLUSION_REASONS,
   CONTEXT_RETRIEVAL_FILTER_REASONS,
   type ContextRetrievalFilterReason,
@@ -472,13 +474,25 @@ function exclusionGate(
     }
     if (entry.rationale === 'product-diagnostic') {
       const expected = entry.expect as { diagnostic: string; reason: string };
+      // A brain-evidence ref is a fixtureVersionKey; the product diagnostic
+      // names the minted candidate (chunk) id, so the identity binding goes
+      // through the recorded (stableKey, fixtureVersionKey) -> chunkIds map —
+      // the excluded candidate is bound to the DECLARED revision, never to a
+      // bare count.
+      const boundCandidateIds = entry.kind === 'brain-evidence'
+        ? seedIndex?.byRevisionKey.get(entry.ref)?.chunkIds ?? []
+        : null;
       const found = diagnostics.some((diagnostic) => {
         if (diagnostic['code'] !== expected.diagnostic) return false;
         const details = diagnostic['details'] as Record<string, unknown>;
+        if (details['reason'] !== expected.reason) return false;
+        if (boundCandidateIds !== null) {
+          return boundCandidateIds.includes(String(details['candidate_id']));
+        }
         const subject = expected.diagnostic === 'CONTEXT_LESSON_EXCLUDED'
           ? details['lesson_id']
           : details['candidate_id'];
-        return subject === entry.ref && details['reason'] === expected.reason;
+        return subject === entry.ref;
       });
       if (!found) {
         failures.push(`no ${expected.diagnostic} diagnostic names '${entry.ref}' with reason '${expected.reason}'`);
@@ -589,12 +603,49 @@ function explanationGate(task: ContextGoldTask, bundle: Bundle): GateResult {
     : failures.join('; '));
 }
 
-function trustSeparationGate(bundle: Bundle): GateResult {
+// EVERY fragment is checked: authored kinds against their exact structural
+// class, Brain evidence against BOTH the closed brain-candidate vocabulary and
+// the trust class its seed DECLARED at ingest (so a promotion of untrusted
+// evidence — or of a legacy row — to any other class fails here, not only in
+// B3's floor assertion), and everything against the closed
+// CONTEXT_TRUST_CLASSES vocabulary imported from the product.
+function trustSeparationGate(bundle: Bundle, tier: TierContext): GateResult {
   const failures: string[] = [];
+  const closedClasses = new Set<string>(CONTEXT_TRUST_CLASSES);
+  const declaredBySeedVersion = new Map<string, string>();
+  if (tier.seedIndex !== null) {
+    for (const seed of tier.gold.seeds) {
+      const record = tier.seedIndex.byStableKey.get(seed.stableKey);
+      if (record === undefined) continue;
+      for (const revision of record.revisions.values()) {
+        declaredBySeedVersion.set(revision.sourceVersionId, seed.trust ?? 'brain-extract-untrusted');
+      }
+    }
+  }
   for (const fragment of bundleFragments(bundle)) {
-    if (fragment.kind === 'brain-evidence') continue;
+    if (!closedClasses.has(fragment.trust)) {
+      failures.push(`${fragment.fragment_id} carries trust '${fragment.trust}', outside CONTEXT_TRUST_CLASSES`);
+      continue;
+    }
+    if (fragment.kind === 'brain-evidence') {
+      if (!(CONTEXT_BRAIN_TRUST_CLASSES as readonly string[]).includes(fragment.trust)) {
+        failures.push(`${fragment.fragment_id} carries trust '${fragment.trust}', outside the closed brain candidate classes`);
+        continue;
+      }
+      const declared = fragment.citationSourceVersionId === undefined
+        ? undefined
+        : declaredBySeedVersion.get(fragment.citationSourceVersionId);
+      if (declared === undefined) {
+        failures.push(`${fragment.fragment_id} cites a source version no seed declared`);
+      } else if (fragment.trust !== declared) {
+        failures.push(`${fragment.fragment_id} carries trust '${fragment.trust}', its seed declared '${declared}'`);
+      }
+      continue;
+    }
     const expected = EXPECTED_TRUST_BY_KIND[fragment.kind];
-    if (expected !== undefined && fragment.trust !== expected) {
+    if (expected === undefined) {
+      failures.push(`${fragment.fragment_id} has kind '${fragment.kind}' with no structural trust expectation`);
+    } else if (fragment.trust !== expected) {
       failures.push(`${fragment.fragment_id} carries trust '${fragment.trust}', expected '${expected}'`);
     }
   }
@@ -604,7 +655,7 @@ function trustSeparationGate(bundle: Bundle): GateResult {
     }
   }
   return gate('trust-separation', failures.length === 0, failures.length === 0
-    ? 'every fragment kind carries its structural trust class'
+    ? 'every fragment carries its structural trust class, Brain evidence matching its seed-declared class'
     : failures.join('; '));
 }
 
@@ -666,24 +717,30 @@ function reductionGate(
   bundle: Bundle,
   run: CliRun,
   baselineTokens: number,
-  priorGates: readonly GateResult[],
 ): { gateResult: GateResult; measuredTokens: number; reduction: number } {
   const reported = budgetOf(bundle)['total_tokens'] as number;
   const observed = estimatedTokens(Buffer.byteLength(run.stdout.trimEnd(), 'utf8'));
   const measuredTokens = Math.max(reported, observed);
   const reduction = 1 - measuredTokens / baselineTokens;
-  // Reduction is read only after recall/exclusion/coverage pass, so the
-  // "without required-context loss" clause is structural.
-  const prerequisitesPassed = priorGates.every((entry) => entry.ok);
-  const ok = prerequisitesPassed && measuredTokens <= CONTEXT_REDUCTION_THRESHOLD * baselineTokens;
+  const ok = measuredTokens <= CONTEXT_REDUCTION_THRESHOLD * baselineTokens;
   return {
-    gateResult: gate('reduction', ok, prerequisitesPassed
-      ? `${measuredTokens} bundle tokens vs ${baselineTokens} eager tokens — ${(reduction * 100).toFixed(1)} % reduction (gate ≥ 60 %)`
-      : 'not evaluated: a recall/exclusion/accounting gate failed first'),
+    gateResult: gate('reduction', ok,
+      `${measuredTokens} bundle tokens vs ${baselineTokens} eager tokens — ${(reduction * 100).toFixed(1)} % reduction (gate ≥ 60 %)`),
     measuredTokens,
     reduction,
   };
 }
+
+// The gates whose PASSING is a precondition for ever reading a ratio: a task
+// that lost required context (or leaked an exclusion, or misaccounted) fails
+// on those gates and its ratio is never computed — the "without
+// required-context loss" clause is structural, not an ordering convention.
+const REDUCTION_PREREQUISITE_GATES: ReadonlySet<string> = new Set([
+  'cli-contract',
+  'recall',
+  'exclusion',
+  'budget-accounting',
+]);
 
 // --- L7 (A8'): the explain toggle changes explanation bytes and their derived
 // size accounting, and NOTHING else.
@@ -816,14 +873,12 @@ async function measureTask(
   task: ContextGoldTask,
   roots: ReadonlyMap<ContextGoldRegistryVariant, string>,
   tier: TierContext,
-  full: boolean,
 ): Promise<TaskMeasurement> {
   const variant = task.registryVariant ?? (task.tier === 'brain' ? 'brain' : 'local');
   const root = roots.get(variant)!;
   const args = contextArgs(task);
   const claudeEnv = taskEnv('claude', tier.brainUrl, tier.codexHome);
   const main = await spawnContext(root, args, claudeEnv);
-  if (!full) return { task, main, repeat: null, delta: null, companion: null };
   const repeat = await spawnContext(root, args, claudeEnv);
   const delta = await spawnContext(root, args, taskEnv('codex', tier.brainUrl, tier.codexHome));
   let companion: CliRun | null = null;
@@ -850,7 +905,7 @@ function mainGates(task: ContextGoldTask, main: CliRun, tier: TierContext): Gate
   gates.push(budgetAccountingGate(task, bundle, tier));
   gates.push(diagnosticsGate(task, bundle));
   gates.push(explanationGate(task, bundle));
-  gates.push(trustSeparationGate(bundle));
+  gates.push(trustSeparationGate(bundle, tier));
   gates.push(hostStructureGate(bundle));
   if (tier.tier === 'brain') {
     gates.push(citationGate(bundle));
@@ -892,11 +947,18 @@ function taskRow(
   let bundleTokens: number | null = null;
   let reduction: number | null = null;
   const ratioGated = RATIO_GATED_TASK_IDS.includes(task.id);
-  if (bundle !== null) {
-    const measured = reductionGate(bundle, main, baselineTokens, gates);
+  const prerequisitesPassed = gates
+    .filter((entry) => REDUCTION_PREREQUISITE_GATES.has(entry.name))
+    .every((entry) => entry.ok);
+  if (bundle !== null && prerequisitesPassed) {
+    const measured = reductionGate(bundle, main, baselineTokens);
     bundleTokens = measured.measuredTokens;
     reduction = Math.round(measured.reduction * 1e4) / 1e4;
     if (ratioGated) gates.push(measured.gateResult);
+  } else if (ratioGated) {
+    // The ratio is structurally unreachable here: it was never computed.
+    gates.push(gate('reduction', false,
+      'not evaluated: a recall/exclusion/accounting gate failed before the ratio was read'));
   }
   return {
     id: task.id,
@@ -1049,36 +1111,6 @@ async function materializeTier(tier: ContextGoldTier, gold: ContextGoldSet): Pro
   };
 }
 
-// The rebuild-comparison core: everything a fresh materialization (and, on the
-// brain tier, a fresh database and object namespace) must reproduce exactly.
-// Rows are keyed by task id and gate details are built from fixture-stable
-// keys, never from minted identifiers or temporary paths. Cross-run gates
-// (determinism, host-equivalence, the paired-companion contracts) are cycle-1
-// facts about REPEATED invocations, so the rebuild compares the main-run gates.
-const MAIN_GATE_NAMES: ReadonlySet<string> = new Set([
-  'cli-contract',
-  'recall',
-  'exclusion',
-  'budget-accounting',
-  'diagnostics',
-  'explanations',
-  'trust-separation',
-  'host-structure',
-  'citation',
-  'embedding-optional',
-  'reduction',
-]);
-
-function rebuildCore(rows: readonly ContextTaskRow[]): unknown {
-  return rows.map((row) => ({
-    id: row.id,
-    exit_status: row.exit_status,
-    bundle_tokens: row.bundle_tokens,
-    reduction: row.reduction,
-    gates: row.gates.filter((entry) => MAIN_GATE_NAMES.has(entry.name)),
-  }));
-}
-
 export async function runContextEvaluation(options: RunContextEvaluationOptions): Promise<ContextEvaluationOutcome> {
   const startedAt = Date.now();
   const gold = options.gold;
@@ -1086,58 +1118,78 @@ export async function runContextEvaluation(options: RunContextEvaluationOptions)
   const baselineTokens = gold.baseline.totals.tokens;
   const concurrency = options.concurrency ?? 4;
 
-  const first = await materializeTier(options.tier, gold);
-  let postgresVersion: string | null = null;
-  let rows: ContextTaskRow[];
-  let measurements: TaskMeasurement[];
-  try {
-    if (first.corpus !== null) {
-      const version = await first.corpus.adminPool.query<{ server_version: string }>('SHOW server_version');
-      postgresVersion = version.rows[0]!.server_version;
+  const runCycle = async (): Promise<{
+    outcome: ContextTierOutcome;
+    measurements: TaskMeasurement[];
+    postgresVersion: string | null;
+  }> => {
+    const cycleStartedAt = Date.now();
+    const materialized = await materializeTier(options.tier, gold);
+    try {
+      let postgresVersion: string | null = null;
+      if (materialized.corpus !== null) {
+        const version = await materialized.corpus.adminPool
+          .query<{ server_version: string }>('SHOW server_version');
+        postgresVersion = version.rows[0]!.server_version;
+      }
+      const measurements = await mapWithConcurrency(tasks, concurrency, (task) => (
+        measureTask(task, materialized.roots, materialized.tierContext)
+      ));
+      const rows = measurements.map((measurement) => (
+        taskRow(measurement, materialized.tierContext, baselineTokens)
+      ));
+      return {
+        outcome: {
+          tier: options.tier,
+          physical_store: options.tier === 'brain' ? (HAS_TEST_S3 ? 'minio' : 'in-memory') : 'none',
+          postgres: postgresVersion,
+          tasks: rows,
+          tier_gates: tierExplanationGates(measurements, materialized.tierContext),
+          timings: { evaluation_ms: Date.now() - cycleStartedAt },
+        },
+        measurements,
+        postgresVersion,
+      };
+    } finally {
+      await materialized.cleanup();
     }
-    measurements = await mapWithConcurrency(tasks, concurrency, (task) => (
-      measureTask(task, first.roots, first.tierContext, true)
-    ));
-    rows = measurements.map((measurement) => taskRow(measurement, first.tierContext, baselineTokens));
-  } finally {
-    await first.cleanup();
-  }
+  };
 
-  // Independent rebuild: a second full materialize+seed+measure cycle from
-  // scratch must reproduce the rebuild core exactly.
-  const second = await materializeTier(options.tier, gold);
-  let rebuildOk: boolean;
-  let rebuildDetail: string;
-  try {
-    const secondMeasurements = await mapWithConcurrency(tasks, concurrency, (task) => (
-      measureTask(task, second.roots, second.tierContext, false)
-    ));
-    const secondRows = secondMeasurements.map((measurement) => (
-      taskRow(measurement, second.tierContext, baselineTokens)
-    ));
-    rebuildOk = stableStringify(rebuildCore(rows)) === stableStringify(rebuildCore(secondRows));
-    rebuildDetail = rebuildOk
-      ? 'two independent materialize+seed+measure cycles agree on every task row'
-      : 'independent rebuild produced different task rows';
-  } finally {
-    await second.cleanup();
-  }
-
-  const tierGates: GateResult[] = [
-    ...tierExplanationGates(measurements, first.tierContext),
-    gate('independent-rebuild', rebuildOk, rebuildDetail),
-  ];
+  // Independent rebuild: a second COMPLETE materialize+seed+measure cycle from
+  // scratch (fresh workspace materialization; on the brain tier a fresh
+  // database, a fresh object namespace, and a full reseed). The comparison is
+  // the DECLARED one: each cycle's rows are composed into a FULL manifest and
+  // compared under contextManifestComparisonProjection — the exact pointer
+  // list the manifest itself publishes — so "everything else must compare
+  // equal" is literally what is asserted, not a reduced row core.
+  const first = await runCycle();
+  const second = await runCycle();
+  const comparisonInstant = 'rebuild-comparison';
+  const firstProjected = contextManifestComparisonProjection(composeContextManifest({
+    gold,
+    tiers: [first.outcome],
+    generatedAt: comparisonInstant,
+  }));
+  const secondProjected = contextManifestComparisonProjection(composeContextManifest({
+    gold,
+    tiers: [second.outcome],
+    generatedAt: comparisonInstant,
+  }));
+  const rebuildOk = stableStringify(firstProjected) === stableStringify(secondProjected);
+  const rebuildDetail = rebuildOk
+    ? 'two independent materialize+seed+measure cycles produce identical manifests under the declared comparison projection'
+    : 'independent rebuild produced a different manifest under the declared comparison projection';
 
   return {
     result: {
-      tier: options.tier,
-      physical_store: options.tier === 'brain' ? (HAS_TEST_S3 ? 'minio' : 'in-memory') : 'none',
-      postgres: postgresVersion,
-      tasks: rows,
-      tier_gates: tierGates,
+      ...first.outcome,
+      tier_gates: [
+        ...first.outcome.tier_gates,
+        gate('independent-rebuild', rebuildOk, rebuildDetail),
+      ],
       timings: { evaluation_ms: Date.now() - startedAt },
     },
-    postgresVersion,
+    postgresVersion: first.postgresVersion,
   };
 }
 

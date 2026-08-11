@@ -5,7 +5,7 @@ scope:
   agent: social-manager
   plan: scan-web
 purpose: Stage this scan's evidence notes with the source sweep recorded.
-skill_ref: beacon-post:queue
+skill_ref: spilloak:queue
 brain:
   write:
     - staged-evidence-note

@@ -342,7 +342,8 @@ export function validateContextGoldSet(gold: ContextGoldSet): string[] {
     }
     for (const entry of task.forbidden) {
       validateForbiddenEntry(task, entry, problems);
-      if (entry.kind === 'brain-evidence' && entry.rationale === 'prefiltered') {
+      if (entry.kind === 'brain-evidence'
+        && (entry.rationale === 'prefiltered' || entry.rationale === 'product-diagnostic')) {
         if (!revisionKeys.has(entry.ref)) {
           problems.push(`task '${task.id}' forbidden entry names unknown fixtureVersionKey '${entry.ref}'`);
         }

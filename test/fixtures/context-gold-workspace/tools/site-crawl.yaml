@@ -1,8 +1,8 @@
 schema_version: 2
-id: atlas-crawl
+id: site-crawl
 scope: {}
 purpose: Describe a cataloged site-crawl capability that no current plan selects.
-skill_ref: atlas-crawl:extract
+skill_ref: wrenlatch-crawl:extract
 when:
   - a future workflow needs full-page extraction rather than search
 filters:

@@ -60,6 +60,10 @@ const CORRECTION_HINTS: Readonly<Record<string, string>> = {
   'step-hint': 'the step hint changed the fragment set rather than only optional ordering',
   'legacy-optin': 'repair the legacy opt-in pair: absent without the flag, floored and unpromoted with it',
   reduction: 'the bundle exceeded 40 % of the frozen eager baseline; reduce closure weight or reassess the fixture composition',
+  'independent-rebuild': 'a fresh materialize+seed+measure cycle disagreed under the declared projection — a nondeterminism defect is filed as its own issue',
+  'explanation-vocabulary': 'an inclusion reason outside the closed thirteen-reason vocabulary was observed',
+  'local-reason-subset': 'a Brain-only inclusion reason surfaced on the local tier',
+  'brain-reasons-observed': 'the brain tier never observed both selector reasons; check the corpus seeding',
 };
 
 function taskTable(tier: ContextTierOutcome): string {
@@ -93,21 +97,32 @@ function failingGates(tier: ContextTierOutcome): Array<{ row: ContextTaskRow; ga
 }
 
 function correctionsSection(tiers: readonly ContextTierOutcome[]): string {
-  const failures = tiers.flatMap((tier) => failingGates(tier).map((failure) => ({ tier: tier.tier, ...failure })));
-  if (failures.length === 0) {
-    return '## Targeted corrections\n\nNone required: every gate passed on every task.';
+  const taskFailures = tiers.flatMap((tier) => failingGates(tier).map((failure) => ({ tier: tier.tier, ...failure })));
+  const tierFailures = tiers.flatMap((tier) => tier.tier_gates
+    .filter((entry) => !entry.ok)
+    .map((entry) => ({ tier: tier.tier, gateName: entry.name, detail: entry.detail })));
+  if (taskFailures.length === 0 && tierFailures.length === 0) {
+    return '## Targeted corrections\n\nNone required: every task gate and every tier gate passed.';
   }
-  const rows = failures.map((failure) => [
-    `${failure.tier}/${failure.row.id}`,
-    failure.gateName,
-    failure.detail,
-    CORRECTION_HINTS[failure.gateName] ?? 'inspect the gate detail',
-  ]);
+  const rows = [
+    ...taskFailures.map((failure) => [
+      `${failure.tier}/${failure.row.id}`,
+      failure.gateName,
+      failure.detail,
+      CORRECTION_HINTS[failure.gateName] ?? 'inspect the gate detail',
+    ]),
+    ...tierFailures.map((failure) => [
+      `${failure.tier} (tier gate)`,
+      failure.gateName,
+      failure.detail,
+      CORRECTION_HINTS[failure.gateName] ?? 'inspect the tier gate detail',
+    ]),
+  ];
   return `## Targeted corrections
 
 Failures block the representative workflow proof (#360 / P2-T12 depends on this gate).
-Each row names the task, the lost property, the closed reason observed, and the
-correction direction — never an aggregate.
+Each row names the task (or the tier-level gate), the lost property, the closed reason
+observed, and the correction direction — never an aggregate.
 
 ${table(['task', 'gate', 'observed', 'correction hint'], rows)}`;
 }

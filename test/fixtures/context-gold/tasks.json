@@ -81,12 +81,12 @@
         },
         {
           "kind": "skill-ref",
-          "ref": "harborline:search",
+          "ref": "finchglass:search",
           "inclusionReason": "tool-skill-ref"
         },
         {
           "kind": "skill-ref",
-          "ref": "beacon-post:queue",
+          "ref": "spilloak:queue",
           "inclusionReason": "tool-skill-ref"
         }
       ],
@@ -123,13 +123,13 @@
         },
         {
           "kind": "tool-use",
-          "ref": "atlas-crawl",
+          "ref": "site-crawl",
           "rationale": "outside-closure",
           "expect": "not-selectable"
         },
         {
           "kind": "skill-ref",
-          "ref": "atlas-crawl:extract",
+          "ref": "wrenlatch-crawl:extract",
           "rationale": "outside-closure",
           "expect": "not-selectable"
         }
@@ -202,7 +202,7 @@
         },
         {
           "kind": "skill-ref",
-          "ref": "harborline:search",
+          "ref": "finchglass:search",
           "rationale": "outside-closure",
           "expect": "not-selectable"
         },
@@ -400,7 +400,7 @@
         },
         {
           "kind": "skill-ref",
-          "ref": "ledgerdesk:tickets",
+          "ref": "quartzharbor-desk:tickets",
           "rationale": "outside-closure",
           "expect": "not-selectable"
         },
@@ -494,12 +494,12 @@
         },
         {
           "kind": "skill-ref",
-          "ref": "harborline:search",
+          "ref": "finchglass:search",
           "inclusionReason": "tool-skill-ref"
         },
         {
           "kind": "skill-ref",
-          "ref": "beacon-post:queue",
+          "ref": "spilloak:queue",
           "inclusionReason": "tool-skill-ref"
         }
       ],
@@ -663,13 +663,13 @@
         },
         {
           "kind": "skill-ref",
-          "ref": "harborline:search",
+          "ref": "finchglass:search",
           "rationale": "outside-closure",
           "expect": "not-selectable"
         },
         {
           "kind": "skill-ref",
-          "ref": "beacon-post:queue",
+          "ref": "spilloak:queue",
           "rationale": "outside-closure",
           "expect": "not-selectable"
         },
@@ -959,6 +959,15 @@
       "forbidden": [
         {
           "kind": "brain-evidence",
+          "ref": "bulk-archive-v1",
+          "rationale": "product-diagnostic",
+          "expect": {
+            "diagnostic": "CONTEXT_EVIDENCE_EXCLUDED",
+            "reason": "budget-exhausted"
+          }
+        },
+        {
+          "kind": "brain-evidence",
           "ref": "secret-example-v1",
           "rationale": "prefiltered",
           "expect": {
@@ -1025,7 +1034,7 @@
         },
         {
           "kind": "skill-ref",
-          "ref": "ledgerdesk:tickets",
+          "ref": "quartzharbor-desk:tickets",
           "inclusionReason": "tool-skill-ref"
         }
       ],
@@ -1121,12 +1130,12 @@
         },
         {
           "kind": "skill-ref",
-          "ref": "harborline:search",
+          "ref": "finchglass:search",
           "inclusionReason": "tool-skill-ref"
         },
         {
           "kind": "skill-ref",
-          "ref": "beacon-post:queue",
+          "ref": "spilloak:queue",
           "inclusionReason": "tool-skill-ref"
         },
         {

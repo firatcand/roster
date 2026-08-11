@@ -1,6 +1,6 @@
 schema_version: 2
 id: ops
-purpose: Keep Harborlight Analytics internal operations dependable, with vendor issues resolved before they reach customers.
+purpose: Keep Vantmoor Analytics internal operations dependable, with vendor issues resolved before they reach customers.
 agents:
   - vendor-support
 guidelines:

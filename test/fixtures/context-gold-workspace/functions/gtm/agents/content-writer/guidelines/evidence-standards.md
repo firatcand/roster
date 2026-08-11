@@ -13,7 +13,7 @@ scope:
 Published writing stands on four evidence classes, each with its own citation rule,
 and a draft states which class every load-bearing claim rests on.
 
-**Company measurements** are numbers Harborlight computed from its own systems. They
+**Company measurements** are numbers Vantmoor computed from its own systems. They
 are quoted with the measurement window, the denominator, and the method in one
 parenthetical. A measurement that cannot state its denominator is an anecdote and is
 cited as one.

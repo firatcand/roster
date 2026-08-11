@@ -2,14 +2,14 @@
 schema_version: 2
 id: audience-map
 kind: guideline
-purpose: Describe who Harborlight Analytics writes for and what each audience segment already knows.
+purpose: Describe who Vantmoor Analytics writes for and what each audience segment already knows.
 scope:
   function: gtm
 ---
 
 # Audience map
 
-Harborlight writes for three audiences, and every public artifact should know which
+Vantmoor writes for three audiences, and every public artifact should know which
 one it is for before the first sentence is drafted.
 
 **Operating practitioners** run analytics pipelines daily. They already know the

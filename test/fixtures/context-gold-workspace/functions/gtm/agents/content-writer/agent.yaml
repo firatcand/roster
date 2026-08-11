@@ -1,7 +1,7 @@
 schema_version: 2
 id: content-writer
 function: gtm
-purpose: Turn verified company findings into useful published writing for Harborlight Analytics.
+purpose: Turn verified company findings into useful published writing for Vantmoor Analytics.
 plans:
   - archive-refresh
   - case-studies

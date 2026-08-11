@@ -5,7 +5,7 @@ scope:
   agent: social-manager
   plan: opportunity-discovery
 purpose: Rank timely public conversations for this discovery request.
-skill_ref: harborline:search
+skill_ref: finchglass:search
 filters:
   - exclude URLs already presented in prior discovery runs
 brain:

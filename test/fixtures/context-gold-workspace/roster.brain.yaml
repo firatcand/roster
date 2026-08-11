@@ -14,7 +14,7 @@ hosts:
   claude: enabled
   codex: enabled
 tool_uses:
-  - atlas-crawl
+  - site-crawl
   - channel-drafts
   - signal-scan
   - ticket-search

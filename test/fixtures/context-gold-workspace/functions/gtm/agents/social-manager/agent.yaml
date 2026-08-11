@@ -1,7 +1,7 @@
 schema_version: 2
 id: social-manager
 function: gtm
-purpose: Find and qualify public conversations where Harborlight Analytics can add checkable value.
+purpose: Find and qualify public conversations where Vantmoor Analytics can add checkable value.
 plans:
   - competitor-watch
   - listening-report

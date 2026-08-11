@@ -2,7 +2,7 @@ schema_version: 2
 id: channel-drafts
 scope: {}
 purpose: Stage internal draft notes in the company staging queue without publishing anything.
-skill_ref: beacon-post:queue
+skill_ref: spilloak:queue
 rules:
   - never publish, schedule, or externally send any staged item
 effects:

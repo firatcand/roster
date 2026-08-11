@@ -1,7 +1,7 @@
 schema_version: 2
 id: opportunity-discovery
 agent: gtm/social-manager
-purpose: Produce an evidence-backed shortlist of public reply opportunities for Harborlight Analytics.
+purpose: Produce an evidence-backed shortlist of public reply opportunities for Vantmoor Analytics.
 inputs:
   request:
     description: The human request describing what kind of conversations to discover.

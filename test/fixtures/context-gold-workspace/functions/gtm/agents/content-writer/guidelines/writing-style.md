@@ -2,7 +2,7 @@
 schema_version: 2
 id: writing-style
 kind: guideline
-purpose: Define the structural standard every published Harborlight draft must meet before review.
+purpose: Define the structural standard every published Vantmoor draft must meet before review.
 scope:
   function: gtm
   agent: content-writer
@@ -10,7 +10,7 @@ scope:
 
 # Writing style
 
-A Harborlight draft is a finding delivered efficiently. Structure is not decoration;
+A Vantmoor draft is a finding delivered efficiently. Structure is not decoration;
 it is how a busy reader extracts the finding without reading twice.
 
 Every draft opens with the finding in one sentence, follows with the evidence in two

@@ -3,7 +3,7 @@ id: signal-scan
 scope:
   function: gtm
 purpose: Search for conversations that match the current company positioning.
-skill_ref: harborline:search
+skill_ref: finchglass:search
 filters:
   - exclude cryptocurrency and lottery topics entirely
 effects:

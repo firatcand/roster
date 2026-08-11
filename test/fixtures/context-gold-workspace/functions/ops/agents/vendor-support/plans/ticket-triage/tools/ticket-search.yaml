@@ -5,7 +5,7 @@ scope:
   agent: vendor-support
   plan: ticket-triage
 purpose: Search precedent for the live triage verdict with the searched strings preserved.
-skill_ref: ledgerdesk:tickets
+skill_ref: quartzharbor-desk:tickets
 how:
   - record both searched strings in the verdict so the precedent search can be rerun
 brain:

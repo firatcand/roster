@@ -14,5 +14,5 @@ scope:
 Competitor marketing activity is constant and mostly meaningless; positioning changes
 are rare and worth recording precisely. The watch notes that aged well quoted the
 before and after wording of a claim with dates, and skipped launch noise entirely.
-When in doubt, ask whether the observation would change how Harborlight describes
+When in doubt, ask whether the observation would change how Vantmoor describes
 itself — if not, it is activity, not change.

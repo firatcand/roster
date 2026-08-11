@@ -14,7 +14,7 @@ import {
 } from '../src/lib/generated-artifacts.ts';
 import { parseContextArgs } from '../src/lib/context-args.ts';
 import { lintPrivacyArtifacts } from './support/privacy-lint.ts';
-import { lintRetrievalGoldArtifacts } from './support/retrieval-gold.ts';
+import { SYNTHETIC_WORKSPACE_IDS, lintRetrievalGoldArtifacts } from './support/retrieval-gold.ts';
 import {
   CONTEXT_GOLD_LINT_TABLES,
   CONTEXT_GOLD_WORKSPACE_DIR,
@@ -99,7 +99,9 @@ function contextAdversarialRoot(files: Readonly<Record<string, string>>): string
 test('the extracted engine reproduces the #353 findings byte-identically on fixed inputs', () => {
   // One fixed input exercising the rule COMBINATION: a denylisted literal, a
   // userinfo URL, a bare private host on a listed TLD, a workspace-shaped
-  // identity, and a digest inside prose.
+  // identity, and a digest inside prose. Both consumers scan the SAME file at
+  // the SAME path, so the comparison below is over COMPLETE findings — file,
+  // rule, and detail — with nothing normalized away.
   const body = [
     'my-roster leaked here',
     'https://user:hunter22secret@internal.example.io/path',
@@ -109,20 +111,45 @@ test('the extracted engine reproduces the #353 findings byte-identically on fixe
   ].join('\n');
   const root = contextAdversarialRoot({
     'test/fixtures/retrieval-gold/note.md': body,
-    'test/fixtures/context-gold/note.md': body,
   });
-  const viaRetrievalGold = lintRetrievalGoldArtifacts(root)
-    .map((finding) => `${finding.rule}:${finding.detail}`);
+  const scannedDir = join(root, 'test', 'fixtures', 'retrieval-gold');
+  // Consumer 1: the untouched #353 public API over its own scan scope (the
+  // docs/evals/retrieval-quality half of that scope is empty here).
+  const viaPublicApi = lintRetrievalGoldArtifacts(root);
+  // Consumer 2: the extracted engine invoked directly, every closure
+  // dependency passed explicitly. A Markdown input never consults the pointer
+  // tables (they key JSON positions) and this input carries no vocabulary
+  // token, so the ONE live table is the workspace allowlist — passed as
+  // #353's own exported constant.
+  const viaEngine = lintPrivacyArtifacts({
+    root,
+    scanDirs: [scannedDir],
+    tables: {
+      digestPointers: [],
+      commitPointers: [],
+      schemaVocabulary: new Set<string>(),
+      workspaceAllowlist: SYNTHETIC_WORKSPACE_IDS,
+    },
+  });
+  assert.deepEqual(viaEngine, viaPublicApi);
+  // Consumer 3: the #371 tables over the SAME scanned directory. The input
+  // deliberately exercises only rules whose tables agree between the two gold
+  // sets (no declared digest position, no vocabulary member, and an identity
+  // outside BOTH allowlists), so the complete findings — file field included —
+  // must be byte-identical here too.
   const viaContextTables = lintPrivacyArtifacts({
     root,
-    scanDirs: [join(root, 'test', 'fixtures', 'context-gold')],
+    scanDirs: [scannedDir],
     tables: CONTEXT_GOLD_LINT_TABLES,
-  }).map((finding) => `${finding.rule}:${finding.detail}`);
-  // Same rules, same order, same details — only the scanned file differs.
-  assert.deepEqual(viaContextTables, viaRetrievalGold);
-  assert.equal(viaRetrievalGold.includes('denylisted-literal:my-roster'), true);
-  assert.equal(viaRetrievalGold.includes('non-synthetic-host:internal.acme.systems'), true);
-  assert.equal(viaRetrievalGold.some((entry) => entry.startsWith('workspace-identity:leaked-real-workspace')), true);
+  });
+  assert.deepEqual(viaContextTables, viaPublicApi);
+  const keys = viaPublicApi.map((finding) => `${finding.rule}:${finding.detail}`);
+  assert.equal(keys.includes('denylisted-literal:my-roster'), true);
+  assert.equal(keys.includes('non-synthetic-host:internal.acme.systems'), true);
+  assert.equal(keys.some((entry) => entry.startsWith('workspace-identity:leaked-real-workspace')), true);
+  for (const finding of viaPublicApi) {
+    assert.equal(finding.file, join('test', 'fixtures', 'retrieval-gold', 'note.md'));
+  }
 });
 
 test('the context lint fails a digest parked at an undeclared JSON position but passes declared ones', () => {
@@ -280,7 +307,7 @@ function fixtureFileFor(kind: string, ref: string): string | null {
 }
 
 test('every local gold ref resolves against the checked-in fixture workspace', () => {
-  const workspaceToolText = ['signal-scan', 'channel-drafts', 'ticket-search', 'atlas-crawl']
+  const workspaceToolText = ['signal-scan', 'channel-drafts', 'ticket-search', 'site-crawl']
     .map((id) => readFileSync(join(CONTEXT_GOLD_WORKSPACE_DIR, 'tools', `${id}.yaml`), 'utf8'))
     .join('\n');
   for (const task of gold.tasks) {

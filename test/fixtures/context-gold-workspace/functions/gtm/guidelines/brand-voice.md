@@ -9,7 +9,7 @@ scope:
 
 # Brand voice
 
-Harborlight Analytics earns attention by being concretely useful in public, never by
+Vantmoor Analytics earns attention by being concretely useful in public, never by
 being loud. Every published sentence should survive the question "what would a
 skeptical practitioner learn from this?"
 

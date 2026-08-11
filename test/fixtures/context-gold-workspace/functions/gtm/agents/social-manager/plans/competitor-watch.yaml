@@ -26,7 +26,7 @@ steps:
       positioning since the last watch cycle, recording only what actually changed.
   - id: assess
     kind: reasoning
-    instruction: For each observed change, assess whether it affects how Harborlight describes itself,
+    instruction: For each observed change, assess whether it affects how Vantmoor describes itself,
       and say explicitly when the honest answer is that it does not.
   - id: separate
     kind: reasoning

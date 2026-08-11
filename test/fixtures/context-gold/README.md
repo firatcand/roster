@@ -15,7 +15,7 @@ structural suite is `test/context-gold-set.test.ts`.
 
 ## The fixture workspace
 
-`context-gold-workspace` is a synthetic company ("Harborlight Analytics", fictional)
+`context-gold-workspace` is a synthetic company ("Vantmoor Analytics", fictional)
 with two functions and three agents:
 
 - `gtm/social-manager` — the representative bounded target. The closure of
@@ -183,7 +183,30 @@ both appear, and cross-tier SET identity is deliberately not asserted.
 ## Privacy contract
 
 Everything here is synthetic: fictional company, fictional vendors, fictional
-domains. The only workspace-shaped identifier is `context-gold-workspace`,
+domains.
+
+### Invented-name audit
+
+Round-1 review found that an earlier vendor name (`ledgerdesk`) collided with a
+real software/services business, falsifying the synthetic-only claim. Every
+invented proper name in the fixture was then audited against the live web and
+replaced where any real-world business or claimed product surfaced — including
+near-collisions and crowded namespaces. The verdicts:
+
+| name | role | audit verdict |
+|---|---|---|
+| `Vantmoor Analytics` | the fictional company | no real-world match found (replaced `Harborlight Analytics`, a near-collision with a real analytics consultancy and several "Harbor Light" technology businesses) |
+| `finchglass` (`finchglass:search`) | search vendor | no real-world match found (replaced `harborline`, a real lending platform / PE firm / trading business) |
+| `spilloak` (`spilloak:queue`) | staging-queue vendor | no real-world match found (replaced `beacon-post`, a real UK delivery business) |
+| `quartzharbor-desk` (`quartzharbor-desk:tickets`) | ticket-archive vendor | no real-world match found (replaced `ledgerdesk`, a real software/services business) |
+| `wrenlatch-crawl` (`wrenlatch-crawl:extract`) | catalog-only crawler vendor | no real-world match found (replaced `atlas-crawl`; no exact match existed, but the Atlas namespace is crowded with real crawler products — the tool id also renamed to the descriptive `site-crawl`) |
+
+Candidate names that DID surface anywhere were rejected during the audit (for
+example `mothgrid`, which belongs to a published fictional universe). Any future
+invented name added to this fixture carries the same obligation: search first,
+record the verdict here, and prefer improbable compounds over plausible ones.
+The audit is point-in-time; a collision that emerges later is treated like any
+other privacy finding — rename, regenerate the baseline, and update this table. The only workspace-shaped identifier is `context-gold-workspace`,
 allowlisted in `test/support/context-gold.ts` (the allowlist lives with the harness,
 not in the fixture, so a leaked identity cannot bless itself). No real hostnames,
 emails, filesystem paths, or credentials anywhere.
