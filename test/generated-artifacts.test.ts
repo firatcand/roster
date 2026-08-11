@@ -2311,6 +2311,43 @@ test('manifest reconstruction refuses while an enabled activation cannot be rege
   }
 });
 
+// Sibling of the fixture above: ROSTER.md stays canonical, so this pins the
+// OTHER hasMissingClaim arm -- an enabled host whose activation_assurance is
+// 'missing'. Both Claude activation paths must be AUTHORED: an authored
+// primary makes the rule the fallback, and syncClaudeArtifacts regenerates an
+// absent rule, so only an authored rule leaves the host with no regenerable
+// activation.
+test('manifest reconstruction refuses when the enabled host has no regenerable activation', () => {
+  const fx = fixture();
+  try {
+    assert.equal(installV2ProjectActivation({ root: fx.root, host: 'claude' }).ok, true);
+    unlinkSync(at(fx.root, GENERATED_MANIFEST_PATH));
+    const authoredPrimary = '# Authored Claude instructions\n';
+    const authoredRule = '# Authored Claude rule\n';
+    writeFileSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH), authoredPrimary);
+    mkdirSync(at(fx.root, '.claude/rules'), { recursive: true });
+    writeFileSync(at(fx.root, CLAUDE_PROJECT_RULE_PATH), authoredRule);
+
+    const updated = updateV2ProjectActivations({ root: fx.root });
+    assert.equal(updated.ok, false);
+    assert.equal(updated.manifest, null);
+    assert.equal(existsSync(at(fx.root, GENERATED_MANIFEST_PATH)), false);
+    assert.equal(readFileSync(at(fx.root, 'ROSTER.md'), 'utf8'), renderRosterBootstrap());
+    assert.equal(readFileSync(at(fx.root, CLAUDE_PROJECT_INSTRUCTIONS_PATH), 'utf8'), authoredPrimary);
+    assert.equal(readFileSync(at(fx.root, CLAUDE_PROJECT_RULE_PATH), 'utf8'), authoredRule);
+    const refusal = updated.diagnostics.find((diagnostic) =>
+      diagnostic.path === GENERATED_MANIFEST_PATH
+      && /cannot be reconstructed while an enabled host activation is missing/.test(diagnostic.message)
+    );
+    assert.ok(refusal);
+    assert.equal(refusal.code, 'GENERATED_FILE_EDITED');
+    assert.equal(refusal.severity, 'error');
+    assert.deepEqual(refusal.details['missingHosts'], ['claude']);
+  } finally {
+    fx.cleanup();
+  }
+});
+
 // DEVIATIONS entry 3 exercised directly: S4 precedence at GEMINI.md covers
 // the invalid-marker (S3) cell too -- both the unparseable-header and the
 // hash-broken variants classify unsupported-host, never edited.
