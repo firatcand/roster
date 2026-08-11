@@ -1248,6 +1248,30 @@ test('v2 doctor reports dreamer activation: a symlinked activation file is block
   }
 });
 
+test('v2 doctor reports dreamer activation: an unsafe MANIFEST is blocked, not "no instructions"', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = activatedWorkspace(h);
+    writeDreamerSkill(join(ws, '.claude', 'skills'));
+    // The manifest is not in the generated-path identity table, so an unreadable
+    // one collapses to `manifest.state = invalid` -- byte-identical, from the
+    // truth table's side, to a workspace that was simply never activated. It is
+    // not: the instructions may be perfectly current behind an unsafe path.
+    const decoy = join(h.root, 'decoy-manifest.json');
+    writeFileSync(decoy, '{}\n');
+    rmSync(join(ws, GENERATED_MANIFEST_PATH));
+    symlinkSync(decoy, join(ws, GENERATED_MANIFEST_PATH));
+    const activation = dreamerActivationOf(h, ws);
+    assert.equal(activation.instructions, 'missing');
+    assert.equal(activation.hosts.claude?.skill_files, 'present');
+    // Without the unsafe-code term this fixture reports `files-only`.
+    assert.equal(activation.structural_ok, false);
+    assert.equal(activation.verdict, 'blocked');
+  } finally {
+    h.cleanup();
+  }
+});
+
 test('v2 doctor reports dreamer activation: skill files with no instructions are files-only', () => {
   const h = makeHomes([]);
   try {

@@ -70,6 +70,7 @@ import {
   deriveDreamerActivation,
   probeDreamerSkillFiles,
   renderDreamerActivationLines,
+  UNSAFE_GENERATED_PATH_DIAGNOSTIC_CODES,
   type DreamerActivationHostReport,
   type DreamerActivationInputs,
 } from '../lib/doctor-dreamer-activation.ts';
@@ -1034,11 +1035,16 @@ async function executeV2Doctor(opts: DoctorOptions): Promise<number> {
     // every missing manifest and every hand-edited generated file, which is
     // exactly what `instructions` already reports -- folding it in here would
     // make `blocked` swallow `files-only` and `drifted` and leave both
-    // unreachable. An `unsafe` generated PATH is different: a symlinked
-    // activation file is a workspace-structure problem, not activation drift.
+    // unreachable. What survives is the UNSAFE-PATH half of that check, matched
+    // by diagnostic code rather than by per-path state: the manifest is not in
+    // the generated-path identity table, so a symlinked manifest reports only
+    // `manifest.state = invalid` and would otherwise read as "no instructions".
     structural_ok: structural.checks.every((check) =>
       check.name === 'generated-artifacts' || check.status === 'pass')
-      && !generatedMetadata.paths.some((entry) => entry.state === 'unsafe'),
+      && !generatedMetadata.paths.some((entry) => entry.state === 'unsafe')
+      && !structural.diagnostics.some((diagnostic) =>
+        diagnostic.severity === 'error'
+        && UNSAFE_GENERATED_PATH_DIAGNOSTIC_CODES.includes(diagnostic.code)),
     instructions: manifestStatus === 'missing-or-invalid'
       ? 'missing'
       : manifestStatus === 'drift' ? 'drifted' : 'current',

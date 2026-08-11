@@ -16,9 +16,13 @@ function hostSets(): Array<DreamerActivationInputs['hosts']> {
   for (const activation of ACTIVATIONS) {
     for (const skill_files of FILES) singles.push({ activation, skill_files });
   }
+  // The COMPLETE host power set: no host, either host alone, and both. Omitting
+  // the codex-only shapes would leave the single-host path proven for one host
+  // and merely assumed for the other.
   const sets: Array<DreamerActivationInputs['hosts']> = [{}];
+  for (const claude of singles) sets.push({ claude });
+  for (const codex of singles) sets.push({ codex });
   for (const claude of singles) {
-    sets.push({ claude });
     for (const codex of singles) sets.push({ claude, codex });
   }
   return sets;
@@ -39,9 +43,12 @@ function everyInput(): DreamerActivationInputs[] {
 // The table is only useful if it is TOTAL and DETERMINISTIC: every workspace
 // state reaches exactly one verdict, and reading the same state twice cannot
 // change it. Enumerating the whole input space is what proves both.
-test('every reachable input state maps to exactly one verdict, deterministically', () => {
+test('the complete input space maps to exactly one verdict, deterministically', () => {
   const inputs = everyInput();
-  assert.equal(inputs.length, 3 * 2 * 3 * (1 + 8 + 64));
+  // 3 brain states x 2 structural x 3 instruction states x 81 host shapes
+  // (empty + 8 claude-only + 8 codex-only + 64 pairs) = 1458.
+  assert.equal(inputs.length, 1458);
+  assert.equal(inputs.length, 3 * 2 * 3 * (1 + 8 + 8 + 64));
   const seen = new Set<string>();
   for (const input of inputs) {
     const report = deriveDreamerActivation(input);

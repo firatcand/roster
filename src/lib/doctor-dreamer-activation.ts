@@ -7,6 +7,23 @@ import { confinedProbeSync } from './workspace-path.ts';
 
 export type DreamerActivationHost = 'claude' | 'codex';
 
+// A generated PATH that cannot be safely read is a workspace-structure problem,
+// not activation drift, wherever it is reported from. Splitting the structural
+// signal by DIAGNOSTIC CODE rather than by which check emitted it is what keeps
+// the `.roster/generated-manifest.json` case blocking: an unsafe manifest is
+// swallowed into `manifest.state = invalid` by the inspection API, and the
+// manifest is not in the generated-path identity table at all, so neither the
+// per-path states nor the manifest state can tell "unreadable" from "malformed".
+export const UNSAFE_GENERATED_PATH_DIAGNOSTIC_CODES: readonly string[] = [
+  'SYMLINK_COMPONENT',
+  'NOT_REGULAR_FILE',
+  'PATH_ESCAPE',
+  'RESERVED_PATH',
+  'READ_LIMIT_EXCEEDED',
+  'FILESYSTEM_ACCESS_FAILED',
+  'UNSAFE_WORKSPACE_MARKER',
+];
+
 export type DreamerActivationVerdict =
   | 'blocked'
   | 'inactive'
