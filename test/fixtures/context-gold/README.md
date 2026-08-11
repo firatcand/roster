@@ -196,17 +196,25 @@ near-collisions and crowded namespaces. The verdicts:
 | name | role | audit verdict |
 |---|---|---|
 | `Vantmoor Analytics` | the fictional company | no real-world match found (replaced `Harborlight Analytics`, a near-collision with a real analytics consultancy and several "Harbor Light" technology businesses) |
-| `finchglass` (`finchglass:search`) | search vendor | no real-world match found (replaced `harborline`, a real lending platform / PE firm / trading business) |
+| `sorquith` (`sorquith:search`) | search vendor | no real-world match found in general web search AND no marketplace/username-namespace match (fiverr/github/npm-style identities). Third name for this role: `harborline` fell in round 1 (a real lending platform / PE firm / trading business) and its replacement `finchglass` fell in round 2 (an active Fiverr seller identity offering company-registration services) |
 | `spilloak` (`spilloak:queue`) | staging-queue vendor | no real-world match found (replaced `beacon-post`, a real UK delivery business) |
 | `quartzharbor-desk` (`quartzharbor-desk:tickets`) | ticket-archive vendor | no real-world match found (replaced `ledgerdesk`, a real software/services business) |
 | `wrenlatch-crawl` (`wrenlatch-crawl:extract`) | catalog-only crawler vendor | no real-world match found (replaced `atlas-crawl`; no exact match existed, but the Atlas namespace is crowded with real crawler products — the tool id also renamed to the descriptive `site-crawl`) |
 
 Candidate names that DID surface anywhere were rejected during the audit (for
-example `mothgrid`, which belongs to a published fictional universe). Any future
-invented name added to this fixture carries the same obligation: search first,
-record the verdict here, and prefer improbable compounds over plausible ones.
-The audit is point-in-time; a collision that emerges later is treated like any
-other privacy finding — rename, regenerate the baseline, and update this table. The only workspace-shaped identifier is `context-gold-workspace`,
+example `mothgrid`, which belongs to a published fictional universe, and
+`velquorn`, which embeds a real food brand as a morpheme). Round 2 widened the
+check beyond general web search to marketplace/username namespaces
+(fiverr/github/npm-style identities), because that is exactly where
+`finchglass` — clean in general search — turned out to be a live seller
+identity; the four earlier survivors (`quartzharbor`, `wrenlatch`, `spilloak`,
+`Vantmoor`) were re-verified clean under the widened check. Any future invented
+name added to this fixture carries the same obligation: search the general web
+AND the marketplace namespaces first, record the verdict here, and prefer
+invented-morpheme compounds with no dictionary-word or brand overlap — the
+pattern that failed twice was the plausible English word pair. The audit is
+point-in-time; a collision that emerges later is treated like any other privacy
+finding — rename, regenerate the baseline, and update this table. The only workspace-shaped identifier is `context-gold-workspace`,
 allowlisted in `test/support/context-gold.ts` (the allowlist lives with the harness,
 not in the fixture, so a leaked identity cannot bless itself). No real hostnames,
 emails, filesystem paths, or credentials anywhere.

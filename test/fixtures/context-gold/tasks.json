@@ -81,7 +81,7 @@
         },
         {
           "kind": "skill-ref",
-          "ref": "finchglass:search",
+          "ref": "sorquith:search",
           "inclusionReason": "tool-skill-ref"
         },
         {
@@ -202,7 +202,7 @@
         },
         {
           "kind": "skill-ref",
-          "ref": "finchglass:search",
+          "ref": "sorquith:search",
           "rationale": "outside-closure",
           "expect": "not-selectable"
         },
@@ -494,7 +494,7 @@
         },
         {
           "kind": "skill-ref",
-          "ref": "finchglass:search",
+          "ref": "sorquith:search",
           "inclusionReason": "tool-skill-ref"
         },
         {
@@ -663,7 +663,7 @@
         },
         {
           "kind": "skill-ref",
-          "ref": "finchglass:search",
+          "ref": "sorquith:search",
           "rationale": "outside-closure",
           "expect": "not-selectable"
         },
@@ -1130,7 +1130,7 @@
         },
         {
           "kind": "skill-ref",
-          "ref": "finchglass:search",
+          "ref": "sorquith:search",
           "inclusionReason": "tool-skill-ref"
         },
         {
