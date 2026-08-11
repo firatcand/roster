@@ -1153,3 +1153,181 @@ test('ROS-109: doctor --scope foo exits 1 with usage error', () => {
     h.cleanup();
   }
 });
+
+// #359 acceptance 4: the doctor answers ONE verdict per workspace state, and the
+// table is first-match-wins, so each fixture below must also prove it outranks
+// the rows beneath it. Every fixture points ROSTER_{CLAUDE,CODEX}_HOME at temp
+// scopes: the either-scope skill rule reads the user's real config otherwise.
+type DreamerActivation = {
+  verdict: string;
+  runtime_verified: boolean;
+  brain: string;
+  structural_ok: boolean;
+  instructions: string;
+  hosts: Record<string, { activation: string; skill_files: string }>;
+  detail: string;
+};
+
+function dreamerActivationOf(h: Homes, ws: string): DreamerActivation {
+  const doc = runCliInCwd(['doctor', '--json'], { ...envFor(h), PATH: '' }, ws);
+  const payload = JSON.parse(doc.stdout) as { dreamer_activation: DreamerActivation };
+  return payload.dreamer_activation;
+}
+
+function activatedWorkspace(h: Homes): string {
+  const ws = makeWorkspaceDir(h.root);
+  runCliInCwd(
+    ['install', '--tool', 'claude', '--scope', 'project', '--yes', '--silent'],
+    { ...envFor(h), PATH: '' },
+    ws,
+  );
+  return ws;
+}
+
+function writeDreamerSkill(dir: string): void {
+  mkdirSync(join(dir, 'dreamer'), { recursive: true });
+  writeFileSync(join(dir, 'dreamer', 'SKILL.md'), '# dreamer\n');
+}
+
+test('v2 doctor reports dreamer activation: a workspace enabling no host is inactive', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = makeWorkspaceDir(h.root);
+    // A canonical zero-host manifest: every other input is green, so only the
+    // empty host set can produce this verdict -- which is the point. Without the
+    // early row the vacuous quantifiers below would answer `static-coherent`.
+    runCliInCwd(['update', '--json'], { ...envFor(h), PATH: '' }, ws);
+    const activation = dreamerActivationOf(h, ws);
+    assert.equal(activation.verdict, 'inactive');
+    assert.equal(activation.instructions, 'current');
+    assert.equal(activation.structural_ok, true);
+    assert.deepEqual(activation.hosts, {});
+    assert.equal(activation.runtime_verified, false);
+    assert.match(activation.detail, /roster brain doctor/);
+    assert.match(activation.detail, /Static file audit only/);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor reports dreamer activation: a half-declared Brain is blocked', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = activatedWorkspace(h);
+    writeDreamerSkill(join(ws, '.claude', 'skills'));
+    writeFileSync(
+      join(ws, 'roster.yaml'),
+      'schema_version: 2\nworkspace_id: test\ntool_uses: []\nfunctions: {}\n'
+      + 'hosts: { claude: enabled }\nbrain:\n  secrets_path: op://vault/item\n',
+    );
+    const activation = dreamerActivationOf(h, ws);
+    assert.equal(activation.brain, 'partial');
+    assert.equal(activation.verdict, 'blocked');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor reports dreamer activation: a symlinked activation file is blocked, not drifted', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = activatedWorkspace(h);
+    writeDreamerSkill(join(ws, '.claude', 'skills'));
+    const decoy = join(h.root, 'decoy.md');
+    writeFileSync(decoy, '# decoy\n');
+    rmSync(join(ws, CLAUDE_PROJECT_INSTRUCTIONS_PATH));
+    symlinkSync(decoy, join(ws, CLAUDE_PROJECT_INSTRUCTIONS_PATH));
+    const activation = dreamerActivationOf(h, ws);
+    assert.equal(activation.structural_ok, false);
+    // The host activation IS drifted here; row 2 outranking row 4 is what makes
+    // the verdict name the workspace problem rather than its symptom.
+    assert.equal(activation.hosts.claude?.activation, 'drifted');
+    assert.equal(activation.verdict, 'blocked');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor reports dreamer activation: skill files with no instructions are files-only', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = activatedWorkspace(h);
+    writeDreamerSkill(join(ws, '.claude', 'skills'));
+    rmSync(join(ws, GENERATED_MANIFEST_PATH));
+    const activation = dreamerActivationOf(h, ws);
+    assert.equal(activation.instructions, 'missing');
+    assert.equal(activation.hosts.claude?.skill_files, 'present');
+    assert.equal(activation.verdict, 'files-only');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor reports dreamer activation: no instructions and no skill files is inactive', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = activatedWorkspace(h);
+    rmSync(join(ws, GENERATED_MANIFEST_PATH));
+    const activation = dreamerActivationOf(h, ws);
+    assert.equal(activation.instructions, 'missing');
+    assert.equal(activation.hosts.claude?.skill_files, 'absent');
+    assert.equal(activation.verdict, 'inactive');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor reports dreamer activation: a hand-edited ROSTER.md is drifted', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = activatedWorkspace(h);
+    writeDreamerSkill(join(ws, '.claude', 'skills'));
+    const rosterPath = join(ws, 'ROSTER.md');
+    writeFileSync(rosterPath, `${readFileSync(rosterPath, 'utf8')}\nForged lifecycle.\n`);
+    const activation = dreamerActivationOf(h, ws);
+    assert.equal(activation.instructions, 'drifted');
+    assert.equal(activation.hosts.claude?.skill_files, 'present');
+    assert.equal(activation.verdict, 'drifted');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor reports dreamer activation: current instructions with no skill are files-missing', () => {
+  const h = makeHomes([]);
+  try {
+    const ws = activatedWorkspace(h);
+    const activation = dreamerActivationOf(h, ws);
+    assert.equal(activation.instructions, 'current');
+    assert.equal(activation.hosts.claude?.skill_files, 'absent');
+    assert.equal(activation.verdict, 'files-missing');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('v2 doctor reports dreamer activation: static-coherent from EITHER skill scope', () => {
+  const project = makeHomes([]);
+  try {
+    const ws = activatedWorkspace(project);
+    writeDreamerSkill(join(ws, '.claude', 'skills'));
+    const activation = dreamerActivationOf(project, ws);
+    assert.equal(activation.verdict, 'static-coherent');
+    assert.equal(activation.runtime_verified, false);
+  } finally {
+    project.cleanup();
+  }
+
+  const user = makeHomes([]);
+  try {
+    const ws = activatedWorkspace(user);
+    // No project-scope skill at all: a skill installed at user scope loads for
+    // the host just the same, so either scope has to satisfy the rule.
+    writeDreamerSkill(join(user.claude, 'skills'));
+    const activation = dreamerActivationOf(user, ws);
+    assert.equal(activation.hosts.claude?.skill_files, 'present');
+    assert.equal(activation.verdict, 'static-coherent');
+  } finally {
+    user.cleanup();
+  }
+});

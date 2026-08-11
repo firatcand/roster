@@ -66,7 +66,14 @@ import {
   type HostAdapterCapabilityStatus,
 } from '../lib/generated-artifacts.ts';
 import { readWorkspaceText } from '../lib/workspace-io.ts';
-import { parseWorkspaceRegistry } from '../lib/workspace-record.ts';
+import {
+  deriveDreamerActivation,
+  probeDreamerSkillFiles,
+  renderDreamerActivationLines,
+  type DreamerActivationHostReport,
+  type DreamerActivationInputs,
+} from '../lib/doctor-dreamer-activation.ts';
+import { classifyBrainDeclaration, parseWorkspaceRegistry } from '../lib/workspace-record.ts';
 import { detectProjectHostVersions } from '../lib/install.ts';
 
 export type DoctorOptions = {
@@ -958,6 +965,17 @@ function readEnabledV2AdapterHosts(cwd: string): V2AdapterHost[] | null {
   }
 }
 
+// An unreadable registry cannot declare half a Brain, and the structural check
+// already fails loudly on it -- so this probe answers `absent` rather than
+// letting the activation verdict inherit an unrelated parse failure.
+function classifyWorkspaceBrainDeclaration(cwd: string): 'absent' | 'partial' | 'declared' {
+  try {
+    return classifyBrainDeclaration(readWorkspaceText(cwd, 'roster.yaml'), 'roster.yaml').status;
+  } catch {
+    return 'absent';
+  }
+}
+
 function manifestHostSlice(manifest: GeneratedArtifactManifest, host: V2AdapterHost): string {
   return JSON.stringify({
     neutral: manifest.files.filter((entry) => entry.host === 'neutral'),
@@ -1010,6 +1028,29 @@ async function executeV2Doctor(opts: DoctorOptions): Promise<number> {
   const currentHosts = enabledHosts === null
     ? {}
     : deriveV2DoctorHosts({ enabledHosts, generatedMetadata, currentManifest, hostVersions });
+  const dreamerActivation = deriveDreamerActivation({
+    brain: classifyWorkspaceBrainDeclaration(opts.cwd),
+    // Deliberately NOT `structural.ok`: the `generated-artifacts` check fails on
+    // every missing manifest and every hand-edited generated file, which is
+    // exactly what `instructions` already reports -- folding it in here would
+    // make `blocked` swallow `files-only` and `drifted` and leave both
+    // unreachable. An `unsafe` generated PATH is different: a symlinked
+    // activation file is a workspace-structure problem, not activation drift.
+    structural_ok: structural.checks.every((check) =>
+      check.name === 'generated-artifacts' || check.status === 'pass')
+      && !generatedMetadata.paths.some((entry) => entry.state === 'unsafe'),
+    instructions: manifestStatus === 'missing-or-invalid'
+      ? 'missing'
+      : manifestStatus === 'drift' ? 'drifted' : 'current',
+    hosts: Object.fromEntries((enabledHosts ?? []).flatMap((host) => {
+      const activation = currentHosts[host];
+      if (activation === undefined) return [];
+      return [[host, {
+        activation: activation.activation_capability,
+        skill_files: probeDreamerSkillFiles(opts.cwd, host),
+      } satisfies DreamerActivationHostReport]];
+    })) as DreamerActivationInputs['hosts'],
+  });
   const allOk = structural.ok && safety.ok && secrets.ok;
   const notApplicable = Object.fromEntries(
     V2_NOT_APPLICABLE.map((name) => [name, { status: 'not-applicable', reason: 'roster-v2-host-owned-runtime' }]),
@@ -1027,6 +1068,7 @@ async function executeV2Doctor(opts: DoctorOptions): Promise<number> {
         hosts: currentHosts,
         files: currentManifest?.files ?? [],
       },
+      dreamer_activation: dreamerActivation,
       safety,
       secrets,
       not_applicable: notApplicable,
@@ -1056,6 +1098,7 @@ async function executeV2Doctor(opts: DoctorOptions): Promise<number> {
         + chalk.dim(` (assurance: ${activation.activation_assurance})`),
       );
     }
+    for (const line of renderDreamerActivationLines(dreamerActivation)) console.log(line);
     for (const line of renderSafetySection(safety)) console.log(line);
     for (const line of renderSecretsSection(secrets)) console.log(line);
     for (const line of renderFixSection(fixOutcome)) console.log(line);
