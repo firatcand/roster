@@ -148,6 +148,21 @@ test('ROSTER.md renders one ordered lifecycle, exact context recovery, and every
     assert.ok(WORKSPACE_DIAGNOSTIC_CODES.includes(code));
     assert.match(rendered, new RegExp(code));
   }
+  // #359: the learning tail of the lifecycle is now a shipped instruction, not a
+  // "missing in this release" placeholder, and its three seams are ordered.
+  const recordOffset = rendered.indexOf('`roster brain record run`');
+  const statusOffset = rendered.indexOf('`roster dream status --json`');
+  const listOffset = rendered.indexOf('`roster dream candidates list --readiness-key <readiness_key> --json`');
+  assert.ok(recordOffset > 0 && statusOffset > recordOffset && listOffset > statusOffset);
+  assert.match(rendered, /`roster brain record feedback`/);
+  assert.match(rendered, /again at the start of the next interaction that touches this workspace/);
+  assert.match(rendered, /a check that never happened is recovered by the next one/);
+  assert.match(rendered, /do not poll it, and do not arrange for it to run on a clock/);
+  assert.match(rendered, /with no state filter so every decided candidate at that key is visible/);
+  assert.match(rendered, /present that one and do not redraft/);
+  assert.match(rendered, /`SAME_LESSON_FILE`/);
+  assert.match(rendered, /`promote`, `reject`, or `retire`/);
+  assert.doesNotMatch(rendered, /is `missing` in this release/);
   assert.match(rendered, /Do not call `roster run`.*`roster brain event` as substitutes/);
   assert.equal(
     (rendered.match(/`roster (?:run|schedule|pending|ops|brain save|brain event)`/g) ?? []).length,
