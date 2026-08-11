@@ -33,6 +33,16 @@ import {
 } from './support/seeded-learning-store.ts';
 import { resolveSeededWorkspaceContext } from './support/seeded-workspace-context.ts';
 
+// SCOPE (#359). This suite proves bounded fixture coherence and the due -> create
+// seam over the seeded store. It deliberately does NOT prove recovery or
+// no-duplicate semantics, because the seeded store cannot express them: it marks
+// a watermark processed at CREATE (seeded-learning-store.ts) and has no promote
+// verb at all, so "still due until promotion" is unrepresentable here. The real
+// lifecycle's recovery and no-reprompt behavior is owned by the DB-gated
+// cli-dream-lifecycle suite, and a host's obligation to recheck before acting is
+// owned by the host-led-learning certification. Do not "fix" the store to close
+// that gap -- processed-at-create is structural, and changing it is a store and
+// schema rewrite, not a test edit.
 const TARGET = 'gtm/social-manager#opportunity-discovery';
 const HUMAN_REQUEST = 'Find timely practitioner posts about reliable AI operations; keep $(draft) && publish=false.';
 const RETRIEVAL_QUERY = 'reliable AI operations practitioner discussions';
