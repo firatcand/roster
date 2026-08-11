@@ -221,6 +221,11 @@ const EMPTY_FILTERED = (): Record<ContextRetrievalFilterReason, number> => ({
 
 const SELECTOR_LOCAL_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 
+// The exact pair the cited engine hard-codes at context-retrieval.ts:169 and
+// :922. The report claims graph expansion is unavailable with THESE reasons, so
+// the gate proves the reasons and not only the status.
+const GRAPH_UNAVAILABLE_REASONS = JSON.stringify(['no-cited-edge-relation', 'unmeasured'].sort());
+
 // Mirrors `selectorMembershipText` / `structuredJsonPaths` in
 // src/lib/brain/context-retrieval.ts (lines 235-264). The engine does not export
 // them; the authoring self-check needs the same predicates to prove a fixture is
@@ -807,7 +812,10 @@ async function evaluateOnCorpus(
     if (evidence.status !== 'available' || evidence.report.unavailable_reason !== null) {
       gateFailures.push(`${query.id}: retrieval unavailable (${String(evidence.report.unavailable_reason)})`);
     }
-    if (evidence.report.graph.status !== 'unavailable') graphUnavailableEverywhere = false;
+    if (evidence.report.graph.status !== 'unavailable'
+      || JSON.stringify([...evidence.report.graph.reasons].sort()) !== GRAPH_UNAVAILABLE_REASONS) {
+      graphUnavailableEverywhere = false;
+    }
 
     const collapsed = collapseToVersions(
       evidence.candidates.map((candidate) => ({ sourceVersionId: candidate.citation.source_version_id })),
@@ -972,7 +980,8 @@ async function evaluateOnCorpus(
   gate(
     'graph/unavailable-in-every-query',
     graphUnavailableEverywhere,
-    'the cited engine reports graph expansion unavailable for every gold query',
+    'the cited engine reports graph unavailable with exactly'
+      + ' [no-cited-edge-relation, unmeasured] for every gold query',
   );
   gate(
     'families/gates-and-contracts',
