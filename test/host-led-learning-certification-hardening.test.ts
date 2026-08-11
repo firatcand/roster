@@ -45,6 +45,8 @@ import {
   curatedHostEnvironmentKeysSha256,
   explicitHostEnv,
   expectedHostEnvironmentKeysSha256,
+  assertRecoveryAdapterLogCoherence,
+  firstTurnCanaryOptions,
   HOST_LED_LEARNING_REPO_ROOT,
   HOST_LED_LEARNING_PASS_SCENARIOS,
   HOST_LED_LEARNING_SCENARIO_TURNS,
@@ -802,6 +804,100 @@ test('host launch contract truthfully describes transient ambient-state handling
       /exact model-free probe/iu,
     );
   }
+});
+
+test('sandbox canaries are allowed by turn INDEX, not by turn name', () => {
+  const claudeCanaries = { normalizedCommands: ['probe'] };
+  const codexCanaries = { writeCommand: 'w', networkCommand: 'n' };
+  // The pass's FIRST paid turn is where the canaries were planted -- whichever
+  // turn a scenario starts with. Gating on `turn === 'discover'` was equivalent
+  // only while every pass began with discover.
+  assert.deepEqual(
+    firstTurnCanaryOptions({ completedTurns: 0, claudeCanaries, codexCanaries }),
+    { claudeCanaries, codexCanaries },
+  );
+  assert.deepEqual(firstTurnCanaryOptions({ completedTurns: 0, claudeCanaries }), { claudeCanaries });
+  assert.deepEqual(firstTurnCanaryOptions({ completedTurns: 0, codexCanaries }), { codexCanaries });
+  assert.deepEqual(firstTurnCanaryOptions({ completedTurns: 0 }), {});
+  for (const completedTurns of [1, 2, 3]) {
+    assert.deepEqual(firstTurnCanaryOptions({ completedTurns, claudeCanaries, codexCanaries }), {});
+  }
+});
+
+test('the recovery coherence gate rejects every way the recovery claim can be faked', () => {
+  const candidate = {
+    id: 'candidate-1', watermark: `sha256:${'a'.repeat(64)}`, target: 'gtm/social-manager',
+  } as never;
+  const state = {
+    completed_runs: [{ id: 'run-1' }],
+    feedback: [{ id: 'feedback-1' }],
+    candidates: [candidate],
+    processed_watermarks: [`sha256:${'a'.repeat(64)}`],
+  } as never;
+  const log = (entries: ReadonlyArray<[string, string]>) => entries.map(([turn, category], index) => ({
+    sequence: index + 1,
+    turn,
+    log_category: category,
+  }));
+  const honest = log([
+    ['record-only', 'roster.discover'],
+    ['record-only', 'roster.context'],
+    ['record-only', 'tool.search'],
+    ['record-only', 'evidence.run-record'],
+    ['record-only', 'evidence.feedback-record'],
+    ['recover', 'learning.status'],
+    ['recover', 'learning.candidate-create'],
+    ['recover', 'roster.context'],
+    ['approve', 'learning.status'],
+    ['approve', 'learning.state-read'],
+    ['approve', 'learning.candidate-promote'],
+    ['approve', 'roster.context'],
+  ]);
+  const requestHash = `sha256:${'b'.repeat(64)}`;
+  // The honest log still fails on the state-read projection (this unit forges no
+  // real hash); every earlier rule must fail with its OWN message first.
+  assert.throws(
+    () => assertRecoveryAdapterLogCoherence(honest, state, requestHash),
+    /persisted pending candidate projection|attested request hash/iu,
+  );
+
+  const checkedTooEarly = honest.map((entry) => (
+    entry.turn === 'record-only' && entry.log_category === 'tool.search'
+      ? { ...entry, log_category: 'learning.status' }
+      : entry
+  ));
+  assert.throws(
+    () => assertRecoveryAdapterLogCoherence(checkedTooEarly, state, requestHash),
+    /forbidden to touch/iu,
+  );
+
+  const draftedTwice = [...honest, { sequence: 13, turn: 'approve', log_category: 'learning.candidate-create' }];
+  assert.throws(
+    () => assertRecoveryAdapterLogCoherence(draftedTwice, state, requestHash),
+    /draft exactly once/iu,
+  );
+
+  const promotedBeforeChecking = honest.map((entry) => {
+    if (entry.turn !== 'approve') return entry;
+    if (entry.log_category === 'learning.status') return { ...entry, sequence: 99 };
+    return entry;
+  });
+  assert.throws(
+    () => assertRecoveryAdapterLogCoherence(promotedBeforeChecking, state, requestHash),
+    /re-check readiness before promoting/iu,
+  );
+
+  const neverPromoted = honest.filter((entry) => entry.log_category !== 'learning.candidate-promote');
+  assert.throws(
+    () => assertRecoveryAdapterLogCoherence(neverPromoted, state, requestHash),
+    /did not check, read, and promote/iu,
+  );
+
+  const twoCandidates = { ...(state as object), candidates: [candidate, candidate] } as never;
+  assert.throws(
+    () => assertRecoveryAdapterLogCoherence(honest, twoCandidates, requestHash),
+    /same single-candidate durable end state/iu,
+  );
 });
 
 test('the launch contract demands recovery: four turns, closed allowances, exact terminal phases', () => {
@@ -2242,9 +2338,9 @@ test('model-free rehearsal covers every output and pins prepared runtime boundar
   const outputs = summary['model_visible_json'] as Record<CertificationHost, Record<string, JsonValue>>;
   const runtime = summary['prepared_runtime'] as Record<CertificationHost, Record<string, JsonValue>>;
   for (const host of ['claude', 'codex'] as const) {
-    // 11 standard-scenario outputs (the approval recheck added one) plus the 8
-    // recovery-scenario ones.
-    assert.equal(outputs[host]!['output_count'], 19);
+    // 11 standard-scenario outputs plus 12 recovery ones: both scenarios are
+    // rehearsed COMPLETE, through their own approval turn.
+    assert.equal(outputs[host]!['output_count'], 23);
     assert.equal(typeof outputs[host]!['maximum_characters'], 'number');
     assert.ok((outputs[host]!['maximum_characters'] as number) > 0);
     assert.ok(

@@ -119,6 +119,22 @@ export function isHostLedLearningTurn(value: unknown): value is HostLedLearningT
   return typeof value === 'string' && (HOST_LED_LEARNING_TURNS as readonly string[]).includes(value);
 }
 
+// The sandbox canaries are planted for the pass's FIRST paid turn only, so the
+// allowance travels with the turn INDEX, not with a turn NAME. Gating it on
+// `turn === 'discover'` was equivalent only while every pass began with
+// discover; the recovery scenario begins with `record-only`.
+export function firstTurnCanaryOptions<Claude, Codex>(options: Readonly<{
+  completedTurns: number;
+  claudeCanaries?: Claude;
+  codexCanaries?: Codex;
+}>): Readonly<{ claudeCanaries?: Claude; codexCanaries?: Codex }> {
+  if (options.completedTurns !== 0) return Object.freeze({});
+  return Object.freeze({
+    ...(options.claudeCanaries === undefined ? {} : { claudeCanaries: options.claudeCanaries }),
+    ...(options.codexCanaries === undefined ? {} : { codexCanaries: options.codexCanaries }),
+  });
+}
+
 export function turnsForScenario(scenario: HostLedLearningScenario): readonly HostLedLearningTurn[] {
   return HOST_LED_LEARNING_SCENARIO_TURNS[scenario];
 }
@@ -5684,6 +5700,77 @@ function probePreparedRosterAdapterRuntime(
   }
 }
 
+// The recovery scenario's durable claim, asserted over the adapter log and the
+// resulting state alone -- no host, no model, no paid turn. The live run proves
+// a host DELIVERS this; this proves the fixture DEMANDS it.
+export function assertRecoveryAdapterLogCoherence(
+  records: readonly Record<string, unknown>[],
+  state: SeededLearningSnapshot,
+  requestHash: string,
+): void {
+  const inTurn = (turn: HostLedLearningTurn): readonly Record<string, unknown>[] =>
+    records.filter((entry) => entry['turn'] === turn);
+  const categories = (turn: HostLedLearningTurn): readonly string[] =>
+    inTurn(turn).map((entry) => String(entry['log_category']));
+
+  const recorded = categories('record-only');
+  if (recorded.length === 0 || recorded.some((category) => category.startsWith('learning.'))) {
+    throw new CertificationError('Recovery record-only turn read learning state it was forbidden to touch.');
+  }
+  if (!recorded.includes('evidence.run-record') || !recorded.includes('evidence.feedback-record')) {
+    throw new CertificationError('Recovery record-only turn did not record the work it did.');
+  }
+
+  const creates = records.filter((entry) => entry['log_category'] === 'learning.candidate-create');
+  if (creates.length !== 1 || creates[0]!['turn'] !== 'recover') {
+    throw new CertificationError('Recovery pass did not draft exactly once, in the recover turn.');
+  }
+  if (!categories('recover').includes('learning.status')) {
+    throw new CertificationError('Recovery turn drafted without first checking readiness.');
+  }
+
+  const approve = inTurn('approve');
+  const status = approve.find((entry) => entry['log_category'] === 'learning.status');
+  const stateRead = approve.find((entry) => entry['log_category'] === 'learning.state-read');
+  const promote = approve.find((entry) => entry['log_category'] === 'learning.candidate-promote');
+  if (status === undefined || stateRead === undefined || promote === undefined) {
+    throw new CertificationError('Recovery approval turn did not check, read, and promote.');
+  }
+  if (categories('approve').includes('learning.candidate-create')) {
+    throw new CertificationError('Recovery approval turn drafted a second candidate.');
+  }
+  if (adapterSequence(status, 'learning.status') >= adapterSequence(stateRead, 'learning.state-read')
+    || adapterSequence(stateRead, 'learning.state-read') >= adapterSequence(promote, 'learning.candidate-promote')) {
+    throw new CertificationError('Recovery approval turn did not re-check readiness before promoting.');
+  }
+
+  const candidate = state.candidates[0];
+  const run = state.completed_runs[0];
+  const feedback = state.feedback[0];
+  if (state.candidates.length !== 1 || state.completed_runs.length !== 1 || state.feedback.length !== 1
+    || state.processed_watermarks.length !== 1
+    || candidate === undefined || run === undefined || feedback === undefined) {
+    throw new CertificationError('Recovery pass did not reach the same single-candidate durable end state.');
+  }
+  const expectedStateRead = {
+    status: {
+      status: 'not_due',
+      watermark: candidate.watermark,
+      run_ids: [run.id],
+      feedback_ids: [feedback.id],
+    },
+    pending_candidate: {
+      status: 'existing',
+      record: candidate,
+      content_hash: hashSeededLearningValue(candidate),
+    },
+    reviewed_query: validatePersistedContextQuery(run, requestHash),
+  };
+  if (stateRead['output_sha256'] !== `sha256:${sha256(canonicalJson(expectedStateRead))}`) {
+    throw new CertificationError('Recovery approval did not read the exact persisted pending candidate projection.');
+  }
+}
+
 function preflightControlledModelVisibleOutputs(
   paths: CertificationPaths,
   currentPaths: HostPassPaths,
@@ -5720,7 +5807,7 @@ function preflightControlledModelVisibleOutputs(
     ROSTER_350_ROSTER_VERSION: packageVersion(paths),
   });
   const characterCounts: number[] = [];
-  const scenarioCharacters = new Map<HostLedLearningScenario, number[]>();
+  const turnCharacters = new Map<string, number[]>();
   let scenario: HostLedLearningScenario = 'standard';
   const invoke = (command: string, args: readonly string[], turn: HostLedLearningTurn): JsonValue => {
     const roots = scenarioRoots[scenario];
@@ -5735,7 +5822,7 @@ function preflightControlledModelVisibleOutputs(
     const value = parseJson(result.stdout, `model-visible ${command} output`);
     const characters = assertModelVisibleJsonLimit(value, `Model-free '${command}' output`);
     characterCounts.push(characters);
-    scenarioCharacters.set(scenario, [...(scenarioCharacters.get(scenario) ?? []), characters]);
+    turnCharacters.set(`${scenario}/${turn}`, [...(turnCharacters.get(`${scenario}/${turn}`) ?? []), characters]);
     return value;
   };
   const queryPrefix = 'reliable ai practitioners';
@@ -5795,7 +5882,7 @@ function preflightControlledModelVisibleOutputs(
     '--signal', 'useful',
   ], 'record-only');
   invoke('roster-350-fixture-dream-status', [], 'recover');
-  invoke('roster-350-fixture-candidate-create', [
+  const recoveredCandidate = invoke('roster-350-fixture-candidate-create', [
     '--run-id', 'run-opportunity-discovery-001',
     '--feedback-id', 'feedback-opportunity-discovery-001',
     '--disposition', 'prefer',
@@ -5806,12 +5893,34 @@ function preflightControlledModelVisibleOutputs(
     '--skill-challenge', challenge,
   ], 'recover');
   invoke('roster', ['context', contract.roster.target, '--query', query, '--json'], 'recover');
-  // The aggregate ceiling bounds what ONE host session can be shown, and no
-  // session ever runs two scenarios, so it is enforced per scenario. The
-  // reported total is the largest scenario -- the worst case a host can reach.
-  const scenarioTotals = [...scenarioCharacters.values()]
+  if (!isJsonObject(recoveredCandidate)) {
+    throw new CertificationError('Model-free recovered candidate output is not an object.');
+  }
+  // The recovery scenario's OWN approval turn. Without it the replay would stop
+  // one turn short and the recheck -- status before promote, no create, the
+  // exact pending projection -- would only ever run on the opt-in paid path.
+  invoke('roster-350-fixture-dream-status', [], 'approve');
+  invoke('roster-350-fixture-state-show', [], 'approve');
+  invoke('roster-350-fixture-candidate-promote', [
+    '--candidate-id', 'candidate-opportunity-discovery-001',
+    '--candidate-hash', requiredString(recoveredCandidate['content_hash'], 'recovered candidate content hash'),
+  ], 'approve');
+  invoke('roster', ['context', contract.roster.target, '--query', query, '--json'], 'approve');
+  assertRecoveryAdapterLogCoherence(
+    readAdapterLog(scenarioRoots.recovery.workspace, contract),
+    openSeededLearningStore(resolve(scenarioRoots.recovery.workspace, contract.runtime.state_path)).snapshot(),
+    requestHash,
+  );
+  // The aggregate ceiling bounds what ONE host session is shown, and a TURN is
+  // exactly one host launch with its own fresh home, config, and context -- two
+  // turns of a pass never share a session. It was previously summed over a
+  // whole (two-turn) pass, which happened to coincide; a three-turn scenario
+  // makes the difference visible, so the unit is stated explicitly here and the
+  // reported total is the largest single turn, the true worst case a session
+  // can reach. Measured headroom at this fixture iteration is roughly 2x.
+  const turnTotals = [...turnCharacters.values()]
     .map((entries) => entries.reduce((total, characters) => total + characters, 0));
-  for (const total of scenarioTotals) {
+  for (const total of turnTotals) {
     if (total > CLAUDE_CONTROLLED_RESULT_AGGREGATE_LIMIT) {
       throw new CertificationError(
         `Controlled model-visible outputs exceed the ${CLAUDE_CONTROLLED_RESULT_AGGREGATE_LIMIT}-character aggregate safety limit.`,
@@ -5820,7 +5929,7 @@ function preflightControlledModelVisibleOutputs(
   }
   return Object.freeze({
     maximum_characters: Math.max(...characterCounts),
-    total_characters: Math.max(...scenarioTotals),
+    total_characters: Math.max(...turnTotals),
     output_count: characterCounts.length,
   });
 }
@@ -6797,8 +6906,11 @@ async function runPass(options: Readonly<{
         options.contract,
         options.contract.turn_expectations[turn].forbidden_log_categories,
       ),
-      ...(turnRecords.length > 0 || claudeCanaries === undefined ? {} : { claudeCanaries }),
-      ...(turnRecords.length > 0 || codexCanaries === undefined ? {} : { codexCanaries }),
+      ...firstTurnCanaryOptions({
+        completedTurns: turnRecords.length,
+        ...(claudeCanaries === undefined ? {} : { claudeCanaries }),
+        ...(codexCanaries === undefined ? {} : { codexCanaries }),
+      }),
     });
     const adapterLog = readAdapterLog(currentPaths.workspace, options.contract);
     if (canonicalJson(adapterLog.slice(0, previousLog.length)) !== canonicalJson(previousLog)
