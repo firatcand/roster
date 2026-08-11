@@ -1954,6 +1954,26 @@ test('acceptance 9 — pre-filter accounting is exact, deduplicated, and selecto
     });
     await tombstone(tailOnly.sourceId, 'tombstone-tail-only');
 
+    // Pin the two discriminators at the DATABASE level, so a future change to
+    // the ingest helper or the extractor cannot quietly hollow this proof out
+    // while every assertion below still passes.
+    //
+    // A row that produced no chunks would make its "counted exactly" assertion
+    // vacuously true at zero, and the tail row's whole job is to be
+    // LEXICAL-ONLY — if it ever gained a structured extraction, the structured
+    // branch could cover for a lost tail selector and the test would stop
+    // discriminating.
+    assert.equal(structuredOnly.chunkIds.length > 0, true, 'the structured-only row produced no chunks');
+    assert.equal(tailOnly.chunkIds.length > 0, true, 'the tail-only row produced no chunks');
+    const shapes = await corpus.adminPool.query<{ tail_structured: number; structured_present: number }>(
+      `SELECT count(*) FILTER (WHERE source_version_id = $1 AND structured IS NOT NULL)::int AS tail_structured,
+              count(*) FILTER (WHERE source_version_id = $2 AND structured IS NOT NULL)::int AS structured_present
+         FROM brain.source_extractions`,
+      [tailOnly.sourceVersionId, structuredOnly.sourceVersionId],
+    );
+    assert.equal(shapes.rows[0]!.tail_structured, 0, 'the tail row gained a structured extraction');
+    assert.equal(shapes.rows[0]!.structured_present > 0, true, 'the structured-only row has no structured extraction');
+
     const STOP_WORD_SELECTOR = {
       selector: 'the',
       origins: ['plan-selector'] as const,
